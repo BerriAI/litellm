@@ -2488,6 +2488,11 @@ class DBSpendUpdateWriter:
                             key=f"team_membership:{dict(item.key)['user_id']}:{dict(item.key)['team_id']}"
                         )
 
+    @staticmethod
+    async def lock_charged_teams(transaction: _SpendTransaction, updates: DBSpendUpdateTransactions) -> None:
+        for team_id in _charged_team_ids(updates):
+            _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
+
     async def apply_accounting_entities(
         self,
         prisma_client: PrismaClient,
@@ -2497,8 +2502,7 @@ class DBSpendUpdateWriter:
     ) -> None:
         """Every team advisory lock is taken before the first row lock, the order the team roster writers use, so
         applying a batch of charges cannot deadlock with a concurrent roster change."""
-        for team_id in _charged_team_ids(updates):
-            _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
+        await self.lock_charged_teams(transaction, updates)
         await self._commit_spend_updates_to_db(
             prisma_client, 0, proxy_logging_obj, updates, outer_transaction=transaction
         )

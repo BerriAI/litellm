@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
+_SAVEPOINT: Final = "accounting_contribution"
+
+
 async def apply_deliveries(
     transaction: LedgerTransaction,
     deliveries: tuple[DeliveryProjection, ...],
@@ -23,10 +26,81 @@ async def apply_deliveries(
     writer: "DBSpendUpdateWriter",
     proxy_logging_obj: "ProxyLogging",
 ) -> tuple[Contribution, ...]:
-    from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
-
     contributions: Final = project_deliveries(deliveries)
     await apply_rollup_lock_timeout(transaction)
+    await _apply_contributions(
+        transaction, contributions, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
+    )
+    return contributions
+
+
+async def apply_delivery_isolated(
+    transaction: LedgerTransaction,
+    delivery: DeliveryProjection,
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> tuple[tuple[Contribution, ...], tuple[Contribution, ...]]:
+    """Applies one delivery a contribution at a time, so a value Postgres cannot index loses only its own
+    contribution. Returns the applied and the rejected contributions; any other failure propagates."""
+    contributions: Final = project_deliveries((delivery,))
+    await apply_rollup_lock_timeout(transaction)
+    await writer.lock_charged_teams(transaction, entity_transactions(contributions))
+    outcomes: Final = tuple(
+        [
+            (
+                item,
+                await _applied_within_savepoint(
+                    transaction, item, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
+                ),
+            )
+            for item in contributions
+        ]
+    )
+    applied: Final = tuple(item for item, was_applied in outcomes if was_applied)
+    rejected: Final = tuple(item for item, was_applied in outcomes if not was_applied)
+    return applied, rejected
+
+
+async def _applied_within_savepoint(
+    transaction: LedgerTransaction,
+    contribution: Contribution,
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> bool:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    await transaction.execute_raw(f"SAVEPOINT {_SAVEPOINT}")
+    try:
+        await _apply_contributions(
+            transaction,
+            (contribution,),
+            prisma_client=prisma_client,
+            writer=writer,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as error:
+        if not PrismaDBExceptionHandler.is_index_row_size_error(error):
+            raise
+        await transaction.execute_raw(f"ROLLBACK TO SAVEPOINT {_SAVEPOINT}")
+        return False
+    await transaction.execute_raw(f"RELEASE SAVEPOINT {_SAVEPOINT}")
+    return True
+
+
+async def _apply_contributions(
+    transaction: LedgerTransaction,
+    contributions: tuple[Contribution, ...],
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> None:
+    from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
+
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)
     )
@@ -57,7 +131,6 @@ async def apply_deliveries(
             )
     windows: Final = tuple(_window(item) for item in contributions if item.table == "LiteLLM_BudgetWindowSpend")
     await commit_window_spend_updates(prisma_client, windows, outer_transaction=transaction)
-    return contributions
 
 
 def _window(item: Contribution) -> WindowSpendTransaction:

@@ -55,6 +55,7 @@ _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 _STATEMENT_TIMEOUT_SQLSTATE: Final = "57014"
 _REJECTED_ROW_SQLSTATE_CLASSES: Final = frozenset({"22", "23", "54"})
+_INDEX_ROW_SIZE_MESSAGE: Final = re.compile(r"index row (?:size \d+ exceeds|requires \d+ bytes)")
 _STATEMENT_TIMEOUT_PHRASE: Final = "canceling statement due to statement timeout"
 
 
@@ -244,6 +245,18 @@ class PrismaDBExceptionHandler:
         import prisma
 
         return type(e) is prisma.errors.DataError
+
+    @staticmethod
+    def is_index_row_size_error(e: BaseException) -> bool:
+        """True iff Postgres refused a value too large for an index entry, not any other program limit (class 54)."""
+        import prisma
+
+        return any(
+            isinstance(link, _exception_types(prisma.errors.DataError))
+            and PrismaDBExceptionHandler.postgres_sqlstate(link) in ("54000", None)
+            and _INDEX_ROW_SIZE_MESSAGE.search(str(link)) is not None
+            for link in exception_chain(e)
+        )
 
     @staticmethod
     def is_rejected_row_error(e: Exception) -> bool:

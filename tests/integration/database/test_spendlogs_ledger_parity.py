@@ -1948,3 +1948,112 @@ async def test_customer_budget_reset_is_not_undone_by_an_organization_alias_load
     finally:
         release.set()
         await client.db.disconnect()
+
+
+def _unindexable(seed: int) -> str:
+    import random
+    import string
+
+    generator: Final = random.Random(seed)
+    return "".join(generator.choice(string.ascii_letters + string.digits) for _ in range(8000))
+
+
+@pytest.mark.parametrize(
+    ("field", "rejected_tables"),
+    [
+        ("request_tags", ["LiteLLM_DailyTagSpend"]),
+        ("end_user", ["LiteLLM_DailyEndUserSpend", "LiteLLM_EndUserTable"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long_identifier(
+    parity_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+    rejected_tables: list[str],
+):
+    import logging
+
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    class _Alerts:
+        def __init__(self) -> None:
+            self.messages: list[str] = []  # mutable-ok: alert sink the worker appends to
+
+        async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
+            self.messages.append(message)
+
+    token: Final = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"
+    value: Final = _unindexable(51870)
+    payload: Final = {
+        "request_id": "oversized",
+        "startTime": _NOW.isoformat(),
+        "api_key": token,
+        "model": "projection-model",
+        "model_group": "projection-model",
+        "custom_llm_provider": "openai",
+        "spend": 0.25,
+        **({"end_user": value} if field == "end_user" else {"request_tags": json.dumps([value])}),
+        "metadata": {
+            "accounting_entities": {
+                "api_key": token,
+                "user": "user",
+                "team_id": "team",
+                **({"end_user": value} if field == "end_user" else {}),
+            }
+        },
+    }
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
+            "VALUES ('oversized', 'oversized', %s::jsonb, false)",
+            (json.dumps(payload),),
+        )
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    alerts: Final = _Alerts()
+    await client.db.connect()
+    try:
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
+        with psycopg.connect(parity_database) as connection:
+            spend: Final = tuple(
+                connection.execute(query, (identity,)).fetchone()[0]
+                for query, identity in (
+                    ('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s', token),
+                    ('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id = %s', "user"),
+                    ('SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id = %s', "team"),
+                    ('SELECT COALESCE(SUM(spend), 0) FROM "LiteLLM_DailyUserSpend" WHERE user_id = %s', "user"),
+                )
+            )
+            deliveries: Final = connection.execute(
+                "SELECT delivery_id, state::text, last_error, "
+                "ARRAY(SELECT DISTINCT item->>'table' FROM jsonb_array_elements("
+                "accounting_payload->'accounting_repair'->'rejected') AS item ORDER BY 1), "
+                "position(%s in accounting_payload::text) > 0 "
+                'FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id',
+                (value,),
+            ).fetchall()
+            connection.execute(
+                "UPDATE \"LiteLLM_SpendLogDelivery\" SET applied_at = CURRENT_TIMESTAMP - INTERVAL '40 days'"
+            )
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
+        with psycopg.connect(parity_database) as connection:
+            retained: Final = connection.execute(
+                'SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery"'
+            ).fetchall()
+    finally:
+        await client.db.disconnect()
+
+    assert spend == (0.25, 0.25, 0.25, 0.25)
+    assert deliveries == [
+        ("oversized", "applied", None, [], True),
+        ("oversized:index-repair", "parked", "IndexRowSizeExceeded", rejected_tables, True),
+    ]
+    assert retained == [("oversized:index-repair", "parked")]
+    assert len(alerts.messages) == 1
+    assert ", ".join(rejected_tables) in alerts.messages[0]
+    assert ("LiteLLM_EndUserTable was not applied" in alerts.messages[0]) is (field == "end_user")
+    assert all(value not in record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING)
+    assert all(value not in message for message in alerts.messages)

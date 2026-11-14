@@ -568,7 +568,7 @@ def test_guardrail_usage_is_dated_in_utc() -> None:
         ({}, {"compression_savings": {"tokens_saved": 2**63}}),
     ],
 )
-def test_untrusted_analytics_values_never_block_the_charge(
+def test_untrusted_long_values_keep_their_projections_and_counters_stay_capped(
     untrusted: Mapping[str, str], metadata: Mapping[str, object]
 ) -> None:
     row: Final[Mapping[str, object]] = {

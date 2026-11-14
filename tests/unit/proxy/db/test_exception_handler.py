@@ -1134,3 +1134,89 @@ def test_lifecycle_error_is_seen_through_a_wrapping_exception() -> None:
     wrapped: Final = RuntimeError("spend flush failed")
     wrapped.__cause__ = _connector_error("the database system is starting up")
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(wrapped) is True
+
+
+_INDEX_ROW_SIZE: Final = 'index row size 8016 exceeds btree version 4 maximum 2704 for index "tag_idx"'
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {"error_code": "P2010", "meta": {"code": "54000", "message": _INDEX_ROW_SIZE}}
+                }
+            ),
+            True,
+        ),
+        (
+            DataError(
+                data={
+                    "user_facing_error": {
+                        "message": "Error occurred during query execution:\nConnectorError(ConnectorError { "
+                        'user_facing_error: None, kind: QueryError(PostgresError { code: "54000", '
+                        f'message: "{_INDEX_ROW_SIZE}", severity: "ERROR" }}) }})',
+                        "batch_request_idx": 0,
+                    }
+                }
+            ),
+            True,
+        ),
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2010",
+                        "meta": {"code": "54000", "message": "index row requires 9016 bytes, maximum size is 8191"},
+                    }
+                }
+            ),
+            True,
+        ),
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2010",
+                        "meta": {"code": "54001", "message": "stack depth limit exceeded"},
+                    }
+                }
+            ),
+            False,
+        ),
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2010",
+                        "meta": {"code": "54011", "message": "tables can have at most 1600 columns"},
+                    }
+                }
+            ),
+            False,
+        ),
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {"error_code": "P2010", "meta": {"code": "22001", "message": _INDEX_ROW_SIZE}}
+                }
+            ),
+            False,
+        ),
+        (ValueError(_INDEX_ROW_SIZE), False),
+        (RuntimeError("delivery failed"), False),
+    ],
+    ids=["raw", "batched", "requires", "stack-depth", "columns", "other-sqlstate", "not-prisma", "unrelated"],
+)
+def test_only_an_index_entry_too_large_counts_as_an_index_row_size_error(error: Exception, expected: bool) -> None:
+    assert PrismaDBExceptionHandler.is_index_row_size_error(error) is expected
+
+
+def test_an_index_row_size_error_is_found_behind_a_wrapping_error() -> None:
+    cause: Final = RawQueryError(
+        data={"user_facing_error": {"error_code": "P2010", "meta": {"code": "54000", "message": _INDEX_ROW_SIZE}}}
+    )
+    wrapped: Final = RuntimeError("applying the delivery failed")
+    wrapped.__cause__ = cause
+    assert PrismaDBExceptionHandler.is_index_row_size_error(wrapped) is True
