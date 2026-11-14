@@ -50,6 +50,7 @@ _BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD: Final = "amazon-bedrock-guardrailAction"
 
 
 _BEDROCK_INVOKE_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
+_BEDROCK_GUARDRAIL_REPLY_ID_PREFIX: Final = "bedrock-guardrails-"
 _BEDROCK_INVOKE_TOKEN_COUNT_FIELDS: Final = (
     "input_tokens",
     "output_tokens",
@@ -79,6 +80,11 @@ def _reports_model_run(event: Mapping[str, object]) -> bool:
     return metrics is not None and metrics.get("invocationLatency") != 0
 
 
+def _guardrail_wrote_reply(event: Mapping[str, object]) -> bool:
+    reply_id: Final = event.get("id")
+    return isinstance(reply_id, str) and reply_id.startswith(_BEDROCK_GUARDRAIL_REPLY_ID_PREFIX)
+
+
 def _intervened(payload: Mapping[str, object]) -> bool:
     return payload.get(_BEDROCK_INVOKE_GUARDRAIL_ACTION_FIELD) == "INTERVENED"
 
@@ -100,6 +106,7 @@ class BedrockInvokeStreamGuardrail:
     intervened: bool = False
     trace_actions: frozenset[str] | None = None
     model_ran: bool = False
+    guardrail_wrote_reply: bool = False
 
     def with_event(self, event: Mapping[str, object]) -> BedrockInvokeStreamGuardrail:
         actions: Final = _trace_actions(event)
@@ -107,13 +114,16 @@ class BedrockInvokeStreamGuardrail:
             intervened=self.intervened or _intervened(event),
             trace_actions=self.trace_actions if actions is None else actions | (self.trace_actions or frozenset()),
             model_ran=self.model_ran or _reports_model_run(event),
+            guardrail_wrote_reply=self.guardrail_wrote_reply or _guardrail_wrote_reply(event),
         )
 
     @property
     def blocked(self) -> bool:
         if not self.intervened:
             return False
-        return not self.model_ran if self.trace_actions is None else "BLOCKED" in self.trace_actions
+        if self.trace_actions is not None:
+            return "BLOCKED" in self.trace_actions
+        return self.guardrail_wrote_reply or not self.model_ran
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
