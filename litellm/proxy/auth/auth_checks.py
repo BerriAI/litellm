@@ -372,16 +372,6 @@ def _tag_table(repo: _PrismaTableHolder[_PrismaTagRow]) -> _PrismaAuthTable[_Pri
     return repo.table
 
 
-class _PrismaEndUserRow(Protocol):
-    user_id: str
-
-    def dict(self) -> Mapping[str, object]: ...
-
-
-def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthTable[_PrismaEndUserRow]:
-    return repo.table
-
-
 class _PrismaMaxBudgetRow(Protocol):
     @property
     def max_budget(self) -> float | None: ...
@@ -2045,27 +2035,6 @@ async def check_end_user_budget(
 _check_end_user_budget: Final = check_end_user_budget
 
 
-#: Columns whose non-null value makes an end-user row restrict something auth enforces. ``blocked``
-#: is separate: it restricts when true rather than when merely set.
-_RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_model", "object_permission_id")
-
-
-def _column_is_set(column: str) -> Mapping[str, object]:
-    """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
-    return {column: {"not": None}}
-
-
-def _array_is_not_empty(column: str) -> Mapping[str, object]:
-    """``column`` holds at least one element, as a plain dict for prisma's builder."""
-    return {column: {"is_empty": False}}
-
-
-def _restricted_end_user_where() -> Mapping[str, object]:
-    """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
-    return {"OR": [{"blocked": True}, *restrictions]}
-
-
 class _RegistryNotCached:
     """No cached registry answer, as distinct from the cached answer ``None`` (registry unusable)."""
 
@@ -2193,11 +2162,7 @@ async def _load_end_user_restricted_registry(
     """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
-            where=_restricted_end_user_where(),
-            take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
-        )
-        return tuple(row.user_id for row in restricted_rows)
+        return await EndUserRepository(prisma_client).find_restricted_ids(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)
 
     return await _load_bounded_registry(
         cache_key=end_user_restricted_registry_cache_key(),
