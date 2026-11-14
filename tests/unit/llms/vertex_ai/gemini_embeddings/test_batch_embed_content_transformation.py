@@ -11,6 +11,7 @@ Covers:
 import asyncio
 import json
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -32,7 +33,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.caching import LiteLLMCacheType
-from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
+from litellm.types.llms.vertex_ai import GeminiEmbeddingInput, VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
@@ -852,6 +853,91 @@ def test_gemini_batch_embedding_adds_nothing_to_the_logged_hidden_params() -> No
     assert len(response.item_usage) == 2
 
 
+def test_gemini_batch_embedding_gives_a_read_only_file_block_its_own_image_tokens() -> None:
+    response: Final = process_response(
+        input=["a red apple", MappingProxyType(_file_block(file_data=IMAGE_DATA_URI))],
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 261,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    assert tuple(
+        (usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+        for usage in response.item_usage
+    ) == ((3, 0), (0, 258))
+
+
+@pytest.mark.parametrize(
+    ("input", "usage_metadata", "expected"),
+    [
+        pytest.param(
+            [IMAGE_DATA_URI, _file_block(file_data=IMAGE_DATA_URI)],
+            {"promptTokenCount": 516, "promptTokenDetails": [{"modality": "IMAGE", "tokenCount": 516}]},
+            ((258, 0, 258), (258, 0, 258)),
+            id="images-only",
+        ),
+        pytest.param(
+            ["hi", "a red apple"],
+            {"promptTokenCount": 3, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 13}]},
+            ((2, 2, 0), (11, 11, 0)),
+            id="details-above-prompt-count",
+        ),
+    ],
+)
+def test_gemini_batch_embedding_gives_each_input_a_non_negative_share(
+    input: GeminiEmbeddingInput,
+    usage_metadata: Mapping[str, object],
+    expected: tuple[tuple[int, int, int], ...],
+) -> None:
+    response: Final = process_response(
+        input=input,
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": dict(usage_metadata)},
+    )
+
+    assert tuple(
+        (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+        for usage in response.item_usage
+    ) == expected
+
+
+def test_gemini_batch_embedding_keeps_a_videos_text_and_audio_tokens_on_the_video() -> None:
+    response: Final = process_response(
+        input=["a red apple", VIDEO_DATA_URI],
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 508,
+                "promptTokenDetails": [
+                    {"modality": "TEXT", "tokenCount": 53},
+                    {"modality": "AUDIO", "tokenCount": 125},
+                    {"modality": "VIDEO", "tokenCount": 330},
+                ],
+            },
+        },
+    )
+    apple_tokens: Final = litellm.token_counter(model="gemini-embedding-2", text="a red apple")
+
+    assert tuple(
+        (
+            usage.prompt_tokens,
+            usage.prompt_tokens_details.text_tokens,
+            usage.prompt_tokens_details.audio_tokens,
+            usage.prompt_tokens_details.video_tokens,
+        )
+        for usage in response.item_usage
+    ) == ((apple_tokens, apple_tokens, 0, 0), (508 - apple_tokens, 53 - apple_tokens, 125, 330))
+
+
 async def _cache_hits(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
@@ -893,13 +979,13 @@ async def _cache_hits(
                     {"modality": "IMAGE", "tokenCount": 258},
                 ],
             },
-            (("a red apple", (5, 5, 0)), (IMAGE_DATA_URI, (258, 0, 258))),
+            (("a red apple", (4, 4, 0)), (IMAGE_DATA_URI, (258, 0, 258))),
             id="modality-details",
         ),
         pytest.param(
             ("a red apple", "a green pear"),
             {"promptTokenCount": 7},
-            (("a red apple", (4, 0, 0)), ("a green pear", (3, 0, 0))),
+            (("a red apple", (3, 0, 0)), ("a green pear", (4, 0, 0))),
             id="prompt-count-only",
         ),
     ],
@@ -931,16 +1017,22 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
 
 @pytest.mark.asyncio
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "usage_metadata",
+    [
+        pytest.param(
+            {"promptTokenCount": 601, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 601}]},
+            id="modality-details",
+        ),
+        pytest.param({"promptTokenCount": 601}, id="prompt-count-only"),
+    ],
+)
 async def test_gemini_batch_embedding_cache_hits_split_text_tokens_by_each_inputs_length(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, usage_metadata: Mapping[str, object]
 ) -> None:
     long_text: Final = " ".join(("a red apple",) * 200)
     calls, (short_hit, long_hit) = await _cache_hits(
-        respx_mock,
-        monkeypatch,
-        ("hello", long_text),
-        {"promptTokenCount": 601, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 601}]},
-        ("hello", long_text),
+        respx_mock, monkeypatch, ("hello", long_text), usage_metadata, ("hello", long_text)
     )
 
     assert calls == 1
