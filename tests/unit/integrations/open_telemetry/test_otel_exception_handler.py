@@ -186,13 +186,17 @@ def test_validation_handler_puts_the_error_message_on_the_span_status(
             ),
             "RequestValidationError",
         ),
+        (
+            HTTPException(status_code=409, detail={"error": "User already exists with username: erin@example.com"}),
+            "HTTPException",
+        ),
     ],
-    ids=["auth", "validation"],
+    ids=["auth", "validation", "duplicate"],
 )
 def test_a_scim_error_keeps_the_error_type_the_route_raised_on_the_span(
     wired_otel: InMemorySpanExporter,
     server_span_factory: Callable[[str], object],
-    failure: ProxyException | RequestValidationError,
+    failure: ProxyException | RequestValidationError | HTTPException,
     error_type: str,
 ) -> None:
     path: Final = "/scim/v2/Users"

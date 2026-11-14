@@ -51,10 +51,16 @@ def _readable_detail(detail: object) -> str:
     return parsed if isinstance(parsed, str) else parsed["error"]
 
 
-def _detail_before_proxy_exception_stringified_it(exc: ProxyException) -> object:
+def _status_phrase(status_code: int) -> str:
+    return _STATUS_PHRASES.get(status_code, str(status_code))
+
+
+def _proxy_exception_detail(exc: ProxyException, status_code: int) -> object:
     origin: Final = exc.__context__
     if isinstance(origin, HTTPException) and str(origin.detail) == exc.message:
         return origin.detail
+    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        return _status_phrase(status_code)
     return exc.message
 
 
@@ -66,15 +72,13 @@ def _validation_detail(errors: tuple[ValidationErrorDetail, ...]) -> str:
     return "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors)
 
 
-def _scim_error(
-    status_code: int, detail: object, headers: Mapping[str, str] | None, traced_as: Exception | None
-) -> ScimError:
-    return ScimError(
-        status_code,
-        _readable_detail(detail) or _STATUS_PHRASES.get(status_code, str(status_code)),
-        headers,
-        traced_as,
-    )
+def _scim_error(status_code: int, detail: object, headers: Mapping[str, str] | None, traced_as: Exception) -> ScimError:
+    return ScimError(status_code, _readable_detail(detail) or _status_phrase(status_code), headers, traced_as)
+
+
+def _scim_error_from_proxy_exception(exc: ProxyException) -> ScimError:
+    status_code: Final = _proxy_exception_status_code(exc)
+    return _scim_error(status_code, _proxy_exception_detail(exc, status_code), exc.headers, exc)
 
 
 def _scim_validation_error(exc: RequestValidationError) -> ScimError:
@@ -89,11 +93,9 @@ def _scim_validation_error(exc: RequestValidationError) -> ScimError:
 def scim_error_from(exc: _ScimRouteFailure) -> ScimError:
     match exc:
         case HTTPException():
-            return _scim_error(exc.status_code, exc.detail, exc.headers, None)
+            return _scim_error(exc.status_code, exc.detail, exc.headers, exc)
         case ProxyException():
-            return _scim_error(
-                _proxy_exception_status_code(exc), _detail_before_proxy_exception_stringified_it(exc), exc.headers, exc
-            )
+            return _scim_error_from_proxy_exception(exc)
         case RequestValidationError():
             return _scim_validation_error(exc)
         case _:
@@ -102,7 +104,7 @@ def scim_error_from(exc: _ScimRouteFailure) -> ScimError:
 
 def _unexpected_scim_error(exc: Exception) -> ScimError:
     status_code: Final = _proxy_exception_status_code(handle_exception_on_proxy(exc))
-    return ScimError(status_code, _STATUS_PHRASES.get(status_code, str(status_code)), traced_as=exc)
+    return ScimError(status_code, _status_phrase(status_code), traced_as=exc)
 
 
 def scim_error_response(exc: ScimError) -> JSONResponse:

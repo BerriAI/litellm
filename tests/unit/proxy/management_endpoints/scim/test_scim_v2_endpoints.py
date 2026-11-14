@@ -7392,6 +7392,49 @@ async def test_an_unexpected_failure_before_the_handler_answers_a_scim_error_and
 
 
 @pytest.mark.asyncio
+async def test_an_unexpected_failure_inside_a_handler_answers_the_status_phrase_and_logs_what_broke(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    internals: Final = "connection to server at 10.0.4.17 port 5432 failed for user litellm_prod"
+    users: Final = MagicMock()
+    users.find_many = AsyncMock(side_effect=RuntimeError(internals))
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.get("/scim/v2/Users")
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+    assert internals not in response.text
+    assert any(internals in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    async with proxy_scim_client as client:
+        response = await client.get("/scim/v2/Users")
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "No database connected"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_key_the_proxy_does_not_know_answers_401_as_a_scim_error_with_the_auth_reason(
     proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ):

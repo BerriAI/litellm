@@ -62,10 +62,10 @@ def test_an_empty_proxy_exception_with_a_status_python_has_no_phrase_for_answers
     assert _answer(_proxy_exception("", 529)) == (529, {"schemas": [_SCIM_ERROR_URN], "status": "529", "detail": "529"})
 
 
-def test_a_proxy_exception_without_a_numeric_code_answers_500():
-    assert _answer(_proxy_exception("boom", None)) == (
+def test_a_proxy_exception_without_a_numeric_code_answers_500_with_the_status_phrase_not_its_message():
+    assert _answer(_proxy_exception("row decode failed for column metadata", None)) == (
         500,
-        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "boom"},
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
     )
 
 
