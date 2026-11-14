@@ -15,7 +15,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import AuthenticationError, Timeout, UnsupportedParamsError
 from litellm.types.decisions import DecisionsResponse
 
 
@@ -214,23 +214,35 @@ class _ProviderTypedError(Exception):
     type = "invalid_request_error"
 
 
+class _UntypedError(Exception):
+    pass
+
+
+def test_get_fallback_error_info_names_an_unsupported_params_error_by_its_class():
+    error: Final = UnsupportedParamsError(
+        message="mistral does not support parameters: ['presence_penalty']",
+        llm_provider="mistral",
+        model="mistral-large-latest",
+    )
+
+    assert get_fallback_error_info(error)["type"] == "UnsupportedParamsError"
+
+
 @pytest.mark.parametrize(
-    ("error", "expected_type"),
+    "error",
     [
-        (
-            UnsupportedParamsError(
-                message="mistral does not support parameters: ['presence_penalty']",
-                llm_provider="mistral",
-                model="mistral-large-latest",
-            ),
-            "UnsupportedParamsError",
-        ),
-        (_ProviderTypedError("bad request"), "invalid_request_error"),
+        _ProviderTypedError("bad request"),
+        Timeout(message="timed out", model="gpt-5.6", llm_provider="openai"),
+        AuthenticationError(message="bad key", llm_provider="openai", model="gpt-5.6"),
     ],
-    ids=["no-provider-type", "provider-type"],
+    ids=["provider-type", "timeout-without-provider-type", "auth-without-provider-type"],
 )
-def test_get_fallback_error_info_names_the_error_type_or_its_class(error: Exception, expected_type: str):
-    assert get_fallback_error_info(error)["type"] == expected_type
+def test_get_fallback_error_info_keeps_the_type_other_errors_carry(error: Exception):
+    assert get_fallback_error_info(error)["type"] == str(getattr(error, "type", None))
+
+
+def test_get_fallback_error_info_names_an_error_without_a_type_by_its_class():
+    assert get_fallback_error_info(_UntypedError("boom"))["type"] == "_UntypedError"
 
 
 def test_add_retry_headers_to_streaming_wrapper():
