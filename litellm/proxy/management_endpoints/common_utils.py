@@ -55,6 +55,7 @@ from litellm.proxy._types import (  # re-exported
     LiteLLM_UserTable,
     LitellmUserRoles,
     NewProjectRequest,
+    SpecialProxyStrings,
     UpdateProjectRequest,
     UserAPIKeyAuth,
     user_api_key_has_admin_view,
@@ -384,6 +385,23 @@ async def user_has_admin_privileges(
 _user_has_admin_privileges: Final = user_has_admin_privileges
 
 
+_GLOBAL_PROXY_ADMIN_ROLES: Final = frozenset(
+    {
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    }
+)
+
+
+def _is_global_proxy_admin_target(target_user_obj: LiteLLM_UserTable) -> bool:
+    """Return True when the target user holds a global proxy-admin role or is the built-in admin identity."""
+    if target_user_obj.user_id == SpecialProxyStrings.default_user_id.value:
+        return True
+    return target_user_obj.user_role in _GLOBAL_PROXY_ADMIN_ROLES
+
+
 def _org_admin_can_invite_user(
     admin_user_obj: LiteLLM_UserTable,
     target_user_obj: LiteLLM_UserTable,
@@ -399,6 +417,8 @@ def _org_admin_can_invite_user(
     Returns:
         True if target user is in an org where admin has org admin role
     """
+    if _is_global_proxy_admin_target(target_user_obj):
+        return False
     if admin_user_obj.organization_memberships is None:
         return False
     admin_org_ids: Final = {
@@ -433,6 +453,8 @@ async def _team_admin_can_invite_user(
     Returns:
         True if target user is in a team where admin has team admin role
     """
+    if _is_global_proxy_admin_target(target_user_obj):
+        return False
     if not admin_user_obj.teams or len(admin_user_obj.teams) == 0:
         return False
     if not target_user_obj.teams or len(target_user_obj.teams) == 0:
@@ -506,7 +528,7 @@ async def admin_can_invite_user(
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if target_user_obj is None:
+        if target_user_obj is None or _is_global_proxy_admin_target(target_user_obj):
             return False
 
         if _org_admin_can_invite_user(admin_user_obj, target_user_obj):
