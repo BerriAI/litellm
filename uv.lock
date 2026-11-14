@@ -5097,7 +5097,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.79.post2"
+version = "0.1.79.post3"
 source = { editable = "enterprise" }
 
 [[package]]
