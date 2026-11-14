@@ -201,7 +201,7 @@ _VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
 
 
 def _first_set(params: Mapping[str, object], names: tuple[str, ...]) -> object:
-    return next((params[name] for name in names if params.get(name) is not None), None)
+    return next((params[name] for name in names if params.get(name)), None)
 
 
 def _vertex_credential_params(

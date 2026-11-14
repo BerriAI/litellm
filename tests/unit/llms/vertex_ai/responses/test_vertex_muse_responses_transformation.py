@@ -58,9 +58,16 @@ def google_credentials(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_muse_responses_select_a_native_vertex_adapter(model: str) -> None:
+def test_muse_responses_select_a_native_vertex_adapter_only_under_the_meta_publisher(model: str) -> None:
     assert ProviderConfigManager.get_provider_responses_api_config("vertex_ai", f"meta/{model}") is not None
+    assert ProviderConfigManager.get_provider_responses_api_config("vertex_ai", model) is None
     assert ProviderConfigManager.get_provider_responses_api_config("vertex_ai", "gemini-4-argon") is None
+
+
+def test_muse_responses_websocket_uses_the_managed_http_bridge() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config("vertex_ai", "meta/muse-wonder-1.0")
+    assert config is not None
+    assert config.supports_native_websocket() is False
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -306,11 +313,11 @@ def test_muse_rejects_unsupported_tool_choices_before_contacting_vertex(
     assert not route.called
 
 
-def test_muse_accepts_nested_workload_identity_credentials(
-    respx_mock: respx.MockRouter, mocker: MockerFixture, google_credentials: Mock
-) -> None:
+def test_muse_accepts_nested_workload_identity_credentials(respx_mock: respx.MockRouter, mocker: MockerFixture) -> None:
     credential_type: Final = mocker.patch("google.auth.identity_pool.Credentials")
-    credential_type.from_info.return_value = google_credentials
+    credential_type.from_info.return_value = mocker.Mock(
+        spec=Credentials, token="wif-token", expired=False, quota_project_id=None, requires_scopes=False
+    )
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
     response: Final = litellm.responses(
         model="vertex_ai/meta/muse-wonder-1.0",
@@ -325,7 +332,7 @@ def test_muse_accepts_nested_workload_identity_credentials(
         },
         num_retries=0,
     )
-    assert route.calls.last.request.headers["authorization"] == "Bearer unit-token"
+    assert route.calls.last.request.headers["authorization"] == "Bearer wif-token"
     assert response.output_text == "Hello"
 
 
@@ -372,6 +379,22 @@ def test_muse_accepts_the_global_location(location: str | None, respx_mock: resp
         num_retries=0,
     )
     assert route.called
+
+
+@pytest.mark.parametrize("api_base", ["https://vertex-gateway.example", "https://vertex-gateway.example/v1/"])
+def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(api_base: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        ENDPOINT.replace("https://aiplatform.googleapis.com", "https://vertex-gateway.example")
+    ).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    response: Final = litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
+        input="Say hello",
+        vertex_project="unit-project",
+        api_base=api_base,
+        num_retries=0,
+    )
+    assert route.called
+    assert response.output_text == "Hello"
 
 
 def test_muse_drop_params_sends_a_regional_location_to_the_global_endpoint(respx_mock: respx.MockRouter) -> None:
@@ -507,3 +530,40 @@ def test_muse_keeps_the_routed_model_when_extra_body_names_another(respx_mock: r
     body: Final = FIELDS.validate_json(route.calls.last.request.content)
     assert body["model"] == "muse-spark-1.3"
     assert body["metadata"] == {"k": "v"}
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_muse_chat_completions_bridge_forwards_a_pdf_file_part(model: str, respx_mock: respx.MockRouter) -> None:
+    pdf: Final = {"file_data": "data:application/pdf;base64,JVBERi0xLjQK", "filename": "unit.pdf"}
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    response: Final = litellm.completion(
+        model=f"vertex_ai/meta/{model}",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize"}, {"type": "file", "file": pdf}]}],
+        vertex_project="unit-project",
+        num_retries=0,
+    )
+    assert FIELDS.validate_json(route.calls.last.request.content)["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Summarize"}, {"type": "input_file", **pdf}],
+        }
+    ]
+    assert response.choices[0].message.content == "Hello"
+
+
+def test_muse_chat_completions_bridge_falls_back_to_the_alias_when_the_project_is_blank(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT.replace("unit-project", "alias-project")).mock(
+        return_value=httpx.Response(200, json=_response("muse-ember-1.0"))
+    )
+    response: Final = litellm.completion(
+        model="vertex_ai/meta/muse-ember-1.0",
+        messages=[{"role": "user", "content": "Say hello"}],
+        vertex_project="",
+        vertex_ai_project="alias-project",
+        num_retries=0,
+    )
+    assert route.called
+    assert response.choices[0].message.content == "Hello"
