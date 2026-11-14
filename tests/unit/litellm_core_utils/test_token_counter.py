@@ -2304,6 +2304,185 @@ def test_anthropic_image_block_with_empty_base64_data():
     assert tokens > 0
 
 
+@pytest.mark.parametrize(
+    "block, expected",
+    (
+        (
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": {"status": "done"}},
+            "{'status': 'done'}",
+        ),
+        (
+            {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "release"}},
+            "web_search{'query': 'release'}",
+        ),
+        (
+            {
+                "type": "mcp_tool_use",
+                "id": "mcp_1",
+                "server_name": "notes",
+                "name": "lookup",
+                "input": {"q": "release"},
+            },
+            "lookup{'q': 'release'}",
+        ),
+        (
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srv_1",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.invalid",
+                        "title": "Release",
+                        "snippet": "Streaming added.",
+                        "encrypted_content": "opaque" * 1000,
+                        "page_age": "yesterday",
+                    }
+                ],
+            },
+            "https://example.invalidReleaseStreaming added.",
+        ),
+        (
+            {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.invalid",
+                    "retrieved_at": "metadata",
+                    "content": {
+                        "type": "document",
+                        "title": "Release",
+                        "source": {"type": "text", "media_type": "text/plain", "data": "Streaming added."},
+                    },
+                },
+            },
+            "https://example.invalidReleaseStreaming added.",
+        ),
+        (
+            {
+                "type": "code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "code_execution_result",
+                    "stdout": "42",
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [{"type": "code_execution_output", "file_id": "opaque-file-id"}],
+                },
+            },
+            "42warning",
+        ),
+        (
+            {
+                "type": "code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "encrypted_code_execution_result",
+                    "encrypted_stdout": "opaque" * 1000,
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [],
+                },
+            },
+            "warning",
+        ),
+        (
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_1",
+                "is_error": False,
+                "content": [{"type": "text", "text": "Streaming added."}],
+            },
+            "Streaming added.",
+        ),
+        (
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "42",
+                    "stderr": "warning",
+                    "return_code": 0,
+                    "content": [{"type": "bash_code_execution_output", "file_id": "opaque-file-id"}],
+                },
+            },
+            "42warning",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "text_editor_code_execution_view_result",
+                    "content": "print(42)",
+                    "file_type": "text",
+                    "num_lines": 1,
+                },
+            },
+            "print(42)",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {
+                    "type": "text_editor_code_execution_str_replace_result",
+                    "lines": ["first", "second"],
+                    "old_lines": 1,
+                    "new_lines": 2,
+                },
+            },
+            "firstsecond",
+        ),
+        (
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srv_1",
+                "content": {"type": "text_editor_code_execution_create_result", "is_file_update": False},
+            },
+            "",
+        ),
+    ),
+)
+def test_token_counter_counts_anthropic_tool_readable_content(block: Mapping[str, object], expected: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    assert _count_content_list(len, [block], False, None) == len(expected)
+
+
+def test_token_counter_bounds_nested_server_results_and_honors_the_fallback() -> None:
+    from functools import reduce
+
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    def wrap(content: Mapping[str, object], _: int) -> Mapping[str, object]:
+        return {"type": "web_fetch_result", "content": content}
+
+    leaf: Final[Mapping[str, object]] = {"type": "web_fetch_result", "url": "https://example.invalid"}
+    block: Final = reduce(wrap, range(DEFAULT_MAX_RECURSE_DEPTH + 1), leaf)
+
+    with pytest.raises(UnsupportedContentTypeError, match="nesting exceeds the token counter limit"):
+        _count_content_list(len, [block], False, None)
+    assert _count_content_list(len, [block], False, 123) == 123
+
+
+@pytest.mark.parametrize(
+    "tool", ("web_search", "web_fetch", "code_execution", "bash_code_execution", "text_editor_code_execution")
+)
+def test_token_counter_counts_server_tool_errors(tool: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    block: Final = {
+        "type": f"{tool}_tool_result",
+        "tool_use_id": "srv_1",
+        "content": {"type": f"{tool}_tool_result_error", "error_code": "unavailable"},
+    }
+    assert _count_content_list(len, [block], False, None) == len("unavailable")
+
+
 def test_token_counter_counts_anthropic_search_result_text() -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
@@ -2334,12 +2513,12 @@ def test_token_counter_counts_a_search_result_without_a_title() -> None:
     )
 
 
-@pytest.mark.parametrize("nested", (False, True))
-def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
+@pytest.mark.parametrize("container", (None, "tool_result", "web_search_tool_result"))
+def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(container: str | None) -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
     unknown: Final = {"type": "future_block"}
-    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [unknown]}] if nested else [unknown]
+    content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
     with pytest.raises(ValueError, match="Invalid content item type: future_block"):
         _count_content_list(len, content, False, None)
