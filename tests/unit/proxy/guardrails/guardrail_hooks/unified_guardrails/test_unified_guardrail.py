@@ -3342,3 +3342,68 @@ async def test_moderation_hook_lets_responses_compact_through_without_a_translat
 
     assert result is data
     assert guardrail.apply_calls == []
+
+
+class TestEnsureLitellmMetadataKeepsTheRequestBucket:
+    """A unified guardrail must not flip a chat request's metadata bucket: the spend log is
+    built from the resolved bucket, so creating ``litellm_metadata`` on a request whose
+    bucket is ``metadata`` drops the caller's ``session_id`` and ``spend_logs_metadata``."""
+
+    @staticmethod
+    def _ensure(data: dict) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            _ensure_litellm_metadata,
+        )
+
+        _ensure_litellm_metadata(data, UserAPIKeyAuth(user_id="u1", team_id="t1", api_key="sk-test-hashed"))
+
+    def test_chat_request_gets_the_key_fields_in_its_own_metadata_bucket(self):
+        data: dict = {
+            "model": "gpt-4o",
+            "metadata": {"session_id": "s-1", "spend_logs_metadata": {"run": "r-1"}},
+        }
+
+        self._ensure(data)
+
+        assert "litellm_metadata" not in data
+        assert data["metadata"]["session_id"] == "s-1"
+        assert data["metadata"]["spend_logs_metadata"] == {"run": "r-1"}
+        assert data["metadata"]["user_api_key_user_id"] == "u1"
+        assert data["metadata"]["user_api_key_team_id"] == "t1"
+
+    def test_existing_metadata_values_are_not_overwritten(self):
+        data: dict = {"metadata": {"user_api_key_user_id": "already-set"}}
+
+        self._ensure(data)
+
+        assert data["metadata"]["user_api_key_user_id"] == "already-set"
+
+    def test_request_without_a_metadata_bucket_still_gets_litellm_metadata(self):
+        data: dict = {"model": "gpt-4o"}
+
+        self._ensure(data)
+
+        assert "metadata" not in data
+        assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_keeps_session_id_in_the_chat_metadata_bucket(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+        guardrail = _AuditRecordingGuardrail()
+        data = {
+            "guardrail_to_apply": guardrail,
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"session_id": "s-1"},
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="user-1"),
+            cache=DualCache(),
+            data=data,
+            call_type=CallTypes.completion.value,
+        )
+
+        assert "litellm_metadata" not in data
+        assert data["metadata"]["session_id"] == "s-1"
+        assert data["metadata"]["user_api_key_user_id"] == "user-1"
