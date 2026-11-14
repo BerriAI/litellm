@@ -1,0 +1,102 @@
+suite: test rolling update strategy on the component deployments
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: leaves the strategy to Kubernetes defaults when unset
+    asserts:
+      - notExists:
+          path: spec.strategy
+
+  - it: renders the configured strategy on each deployment
+    set:
+      gateway.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 0
+          maxSurge: 1
+      backend.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: "25%"
+          maxSurge: 2
+      ui.strategy:
+        type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 25%
+              maxSurge: 2
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate
+        template: ui/deployment.yaml
+
+  - it: keeps a component on the cluster default when only another one sets a strategy
+    set:
+      gateway.strategy:
+        type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.strategy
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.strategy
+        template: ui/deployment.yaml
+
+  - it: leaves minReadySeconds to the Kubernetes default when unset
+    asserts:
+      - notExists:
+          path: spec.minReadySeconds
+
+  - it: renders the configured minReadySeconds on each deployment
+    set:
+      gateway.minReadySeconds: 60
+      backend.minReadySeconds: 30
+      ui.minReadySeconds: 10
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 60
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.minReadySeconds
+          value: 30
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.minReadySeconds
+          value: 10
+        template: ui/deployment.yaml
+
+  - it: renders an explicit minReadySeconds of 0 instead of dropping it
+    set:
+      gateway.minReadySeconds: 0
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 0
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.minReadySeconds
+        template: backend/deployment.yaml

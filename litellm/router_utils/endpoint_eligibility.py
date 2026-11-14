@@ -57,15 +57,23 @@ class _EndpointDeclaration(BaseModel):
         return (value,) if isinstance(value, str) else value
 
 
+def endpoint_for_call(call_type: object, module: object = None) -> str | None:
+    qualified_call: Final = f"{module}.{call_type}" if module == "litellm.interactions.main" else call_type
+    return CHAT_ENDPOINT_BY_CALL.get(qualified_call) if isinstance(qualified_call, str) else None
+
+
 @contextmanager
 def endpoint_selection(call_type: object, module: object = None, model: object = None) -> Generator[None]:
-    qualified_call: Final = f"{module}.{call_type}" if module == "litellm.interactions.main" else call_type
-    endpoint: Final = CHAT_ENDPOINT_BY_CALL.get(qualified_call) if isinstance(qualified_call, str) else None
+    endpoint: Final = endpoint_for_call(call_type, module)
     token: Final = _REQUEST_SELECTION.set((endpoint, model if isinstance(model, str) else None))
     try:
         yield
     finally:
         _REQUEST_SELECTION.reset(token)
+
+
+def selected_endpoint() -> str | None:
+    return _REQUEST_SELECTION.get()[0]
 
 
 def _enforced_endpoints(model_info: object) -> tuple[str, ...] | None:

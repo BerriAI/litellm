@@ -188,14 +188,16 @@ def rerank(
 
         model_response: Final = RerankResponse()
 
-        rerank_litellm_params: Final = {
-            "litellm_call_id": litellm_call_id,
-            "proxy_server_request": proxy_server_request,
-            "model_info": model_info,
-            "preset_cache_key": None,
-            "stream_response": {},
-            **optional_params.model_dump(exclude_unset=True),
-        }
+        rerank_litellm_params: Final = dict[str, object](
+            {
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            }
+        )
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
