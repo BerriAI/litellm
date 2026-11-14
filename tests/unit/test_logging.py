@@ -1,14 +1,18 @@
 import ast
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import logging
 import re
 import sys
+import threading
 import time
 from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
+from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Final, List
 
 import pytest
@@ -33,6 +37,7 @@ from litellm._logging import (
     _initialize_loggers_with_handler,
     _parse_env_flag,
     _plain_log_format,
+    _setup_json_exception_handlers,
     _stdout_truncation_marker,
     print_startup_message,
     print_startup_warning,
@@ -124,6 +129,146 @@ def test_json_mode_root_logger_honours_litellm_log(monkeypatch, capfd, litellm_l
         assert {r["message"] for r in info_records} == {"library info line", "root info line"}
         assert {r["component"] for r in info_records} == {"some.third.party", "root"}
     assert [r["message"] for r in records if r["level"] == "WARNING"] == ["library warning line"]
+
+
+class _UnclosedBuffer:
+    @property
+    def closed(self) -> bool:
+        return self._file.closed
+
+    def __del__(self) -> None:
+        if not self.closed:
+            pass
+
+
+class _UnrepresentableObject:
+    def __repr__(self) -> str:
+        raise AttributeError("half-built object")
+
+
+@contextlib.contextmanager
+def _json_exception_hooks() -> Iterator[asyncio.AbstractEventLoop]:
+    saved_unraisablehook: Final = sys.unraisablehook
+    saved_threading_excepthook: Final = threading.excepthook
+    saved_excepthook: Final = sys.excepthook
+    loop: Final = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        _setup_json_exception_handlers(JsonFormatter())
+        yield loop
+    finally:
+        sys.unraisablehook = saved_unraisablehook
+        threading.excepthook = saved_threading_excepthook
+        sys.excepthook = saved_excepthook
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+def _raised(error: BaseException) -> BaseException:
+    try:
+        raise error
+    except BaseException as raised:
+        return raised
+
+
+def _drop_an_object_whose_finalizer_raises(loop: asyncio.AbstractEventLoop) -> None:
+    _UnclosedBuffer()
+
+
+def _run_in_a_thread(error: BaseException) -> None:
+    def work() -> None:
+        raise error
+
+    worker: Final = threading.Thread(target=work, name="litellm-test-worker")
+    worker.start()
+    worker.join()
+
+
+def _crash_a_worker_thread(loop: asyncio.AbstractEventLoop) -> None:
+    _run_in_a_thread(RuntimeError("worker failed"))
+
+
+def _leave_an_exception_uncaught(loop: asyncio.AbstractEventLoop) -> None:
+    error: Final = _raised(RuntimeError("startup failed"))
+    sys.excepthook(type(error), error, error.__traceback__)
+
+
+def _fail_an_event_loop_callback(loop: asyncio.AbstractEventLoop) -> None:
+    loop.call_exception_handler({"message": "Exception in callback", "exception": _raised(RuntimeError("callback failed"))})
+
+
+def _report_a_finalizer_error_without_its_object(loop: asyncio.AbstractEventLoop) -> None:
+    error: Final = _raised(AttributeError("no _file"))
+    sys.unraisablehook(
+        SimpleNamespace(
+            exc_type=type(error),
+            exc_value=error,
+            exc_traceback=error.__traceback__,
+            err_msg="Exception ignored while calling deallocator <function Buffer.__del__>",
+            object=None,
+        )
+    )
+
+
+def _report_a_finalizer_error_on_an_object_repr_fails_for(loop: asyncio.AbstractEventLoop) -> None:
+    error: Final = _raised(AttributeError("no _file"))
+    sys.unraisablehook(
+        SimpleNamespace(
+            exc_type=type(error),
+            exc_value=error,
+            exc_traceback=error.__traceback__,
+            err_msg=None,
+            object=_UnrepresentableObject(),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("trigger", "message_part", "last_traceback_line"),
+    [
+        (
+            _drop_an_object_whose_finalizer_raises,
+            "_UnclosedBuffer.__del__",
+            "AttributeError: '_UnclosedBuffer' object has no attribute '_file'",
+        ),
+        (_crash_a_worker_thread, "Exception in thread litellm-test-worker", "RuntimeError: worker failed"),
+        (_leave_an_exception_uncaught, "startup failed", "RuntimeError: startup failed"),
+        (_fail_an_event_loop_callback, "callback failed", "RuntimeError: callback failed"),
+        (
+            _report_a_finalizer_error_without_its_object,
+            "Exception ignored while calling deallocator <function Buffer.__del__>",
+            "AttributeError: no _file",
+        ),
+        (
+            _report_a_finalizer_error_on_an_object_repr_fails_for,
+            "Exception ignored in: <object repr() failed>",
+            "AttributeError: no _file",
+        ),
+    ],
+)
+def test_json_mode_reports_an_exception_python_prints_itself_as_one_record(
+    capfd, trigger, message_part, last_traceback_line
+):
+    with _json_exception_hooks() as loop:
+        capfd.readouterr()
+        trigger(loop)
+        out, err = capfd.readouterr()
+
+    lines: Final = [line for line in (out + err).splitlines() if line.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert record["level"] == "ERROR"
+    assert message_part in record["message"]
+    assert record["stacktrace"].splitlines()[-1] == last_traceback_line
+
+
+def test_json_mode_stays_quiet_when_a_thread_calls_sys_exit(capfd):
+    with _json_exception_hooks():
+        capfd.readouterr()
+        _run_in_a_thread(SystemExit(0))
+        out, err = capfd.readouterr()
+
+    assert (out + err).strip() == ""
 
 
 def test_json_formatter_parses_embedded_json_message():
