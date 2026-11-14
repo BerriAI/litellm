@@ -363,19 +363,48 @@ def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
     )
 
 
-def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
+@pytest.mark.parametrize("group, route", (
+    ("openai_routes", "/chat/completions"),
+    ("skill_hub_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("management_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("anthropic_routes", "/claude-code/plugins/release-notes/downloads"),
+))
+def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(group: str, route: str) -> None:
     """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
 
     # Create a UserAPIKeyAuth with allowed_routes containing a LiteLLMRoutes member name
     valid_token = UserAPIKeyAuth(
         user_id="test_user",
-        allowed_routes=["openai_routes"],  # This is a member name in LiteLLMRoutes enum
+        allowed_routes=[group],
     )
 
     # Test that a route from the openai_routes group is allowed
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions",  # This is in LiteLLMRoutes.openai_routes.value
+        route=route,
         valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route,method",
+    [
+        ("/model/update", "POST"),
+        ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+        ("/management/v1/customer_organizations", "POST"),
+        ("/management/v1/customer_organizations/org-1/default_budgets/budget-1", "DELETE"),
+        ("/management/v1/customer_teams/team-1", "PATCH"),
+        ("/management/v1/customer_members/member-1", "GET"),
+    ],
+)
+def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["management_routes"])
+
+    result: Final = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
     )
 
     assert result is True
@@ -2299,7 +2328,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
+# (litellm/ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
@@ -2744,6 +2773,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             "..",
             "..",
             "..",
+            "litellm",
             "enterprise",
             "litellm_enterprise",
             "proxy",
@@ -5102,3 +5132,25 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         )
     except HTTPException as exc:
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
+
+
+@pytest.mark.parametrize("route", [
+    "/skill-hub/skills/{name}/versions",
+    "/skill-hub/skills/{name}/versions/{version_id}",
+    "/skill-hub/skills/{name}/versions/{version_id}/archive",
+])
+def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER.value),
+            _user_role=LitellmUserRoles.INTERNAL_USER,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER),
+            request_data={},
+        )
+    except HTTPException as exc:
+        pytest.fail(f"History visibility could not run: {exc.detail}")

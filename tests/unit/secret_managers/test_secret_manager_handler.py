@@ -75,7 +75,7 @@ class FakeAzureKeyVaultClient:
 
 FIXTURE_PATH: Path = (
     Path(__file__).parents[3]
-    / "litellm-rust/crates/secrets-azure/tests/fixtures/key_vault_parity.json"
+    / "litellm/rust/crates/secrets-azure/tests/fixtures/key_vault_parity.json"
 )
 
 

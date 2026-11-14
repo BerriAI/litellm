@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from typing import Final
 
 import pytest
 from opentelemetry.trace import NoOpTracer
@@ -774,3 +775,21 @@ def test_mixpanel_dynamic_headers_and_endpoint_routing(monkeypatch, caplog):
         )
     assert fallback == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
     assert "unknown mixpanel_region" in caplog.text
+
+
+def test_an_exporter_routed_to_a_tenants_credentials_drops_the_operators_resource_attributes() -> None:
+    cache: Final = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                owner="langfuse_otel",
+                headers="Authorization=Basic operator",
+                resource_attributes={"langfuse.environment": "operator-env"},
+            )
+        ],
+    )
+
+    (routed,) = cache._routed_config({"Authorization": "Basic tenant"}, {}).exporters
+
+    assert (routed.headers, dict(routed.resource_attributes)) == ("Authorization=Basic tenant", {})

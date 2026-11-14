@@ -11,7 +11,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -27,6 +26,8 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
+    answer_json_text,
+    decoded_answer_object,
     names_a_response_format_property,
     partial_response_format_answer,
     response_format_answer_json,
@@ -54,6 +55,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -88,9 +90,6 @@ _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
-
-
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -174,12 +173,19 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
+def _unwrapped_values_answer(arguments: str) -> str:
+    payload_object: Final = decoded_answer_object(arguments)
+    values: Final = None if payload_object is None else payload_object.get("values")
+    return arguments if values is None else answer_json_text(values, ensure_ascii=True)
+
+
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
-    try:
-        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
-    except (json.JSONDecodeError, RecursionError):
-        return held
-    contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
+    payload_object: Final = decoded_answer_object(held)
+    contents: Final = (
+        None
+        if payload_object is None
+        else response_format_envelope_contents(payload_object, schema, RESPONSE_FORMAT_TOOL_NAME)
+    )
     return held if contents is None else response_format_answer_json(contents)
 
 
@@ -734,6 +740,8 @@ class ModelResponseIterator:
         self._split_answer_blocks: tuple[str, ...] = ()
         self._withheld_answer_close: str = ""
         self._streamed_answer_keys: frozenset[str] | None = None
+        self._held_prose: str = ""
+        self._schemaless_input_started: bool = False
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -760,6 +768,8 @@ class ModelResponseIterator:
         self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
+        self._current_server_tool_name: str = ""
+        self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
         self._container_id: str | None = None
 
     @property
@@ -802,8 +812,9 @@ class ModelResponseIterator:
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
-        if usage.speed is not None:
-            self.speed = usage.speed
+        reported_speed: Final = self._cumulative_usage.get("speed")
+        if isinstance(reported_speed, str):
+            self.speed = reported_speed
         return usage
 
     def _content_block_delta_helper(
@@ -826,14 +837,18 @@ class ModelResponseIterator:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         if "text" in content_block["delta"]:
-            text = content_block["delta"]["text"]
-            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+            return (
+                self._hold_prose(content_block["delta"]["text"]),
+                tool_use,
+                thinking_blocks,
+                provider_specific_fields,
+                reasoning_content,
+            )
         self.content_blocks.append(content_block)
         if "partial_json" in content_block["delta"]:
-            # Only emit tool calls if we're in a tool_use or server_tool_use block
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
-            if self.current_content_block_type in ("tool_use", "server_tool_use"):
+            if self.current_content_block_type == "tool_use":
                 tool_use = cast(
                     ChatCompletionToolCallChunk,
                     {
@@ -932,7 +947,7 @@ class ModelResponseIterator:
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
-    def _refresh_pending_web_search_call(self, tool_use_id: str) -> bool:
+    def _refresh_pending_web_search_call(self, tool_use_id: str, tool_name: str) -> bool:
         if tool_use_id not in self._web_search_calls:
             return False
         self._web_search_calls[tool_use_id] = build_web_search_call(
@@ -940,10 +955,11 @@ class ModelResponseIterator:
             self._server_tool_inputs.get(tool_use_id, {}),
             {"content": []},
             status="in_progress",
+            tool_name=tool_name,
         )
         return True
 
-    def _complete_web_search_call(self, result: dict[str, object]) -> None:
+    def _complete_web_search_call(self, result: dict[str, object], tool_name: str) -> None:
         tool_use_id: Final = result.get("tool_use_id")
         if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
             return
@@ -951,6 +967,7 @@ class ModelResponseIterator:
             tool_id=tool_use_id,
             tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
+            tool_name=tool_name,
         )
 
     def _build_code_interpreter_results(self) -> list:
@@ -1025,12 +1042,11 @@ class ModelResponseIterator:
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
-                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
                 ):
-                    self.tool_index += 1
                     # Reverse-map the (sanitized) tool name back to the
                     # caller's original. No-op when the map is empty.
                     _stream_tool_name = content_block_start["content_block"]["name"]
@@ -1039,36 +1055,40 @@ class ModelResponseIterator:
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=_stream_tool_name,
-                            arguments="",
-                        ),
-                        index=self.tool_index,
-                    )
+                    if content_block_start["content_block"]["type"] == "tool_use":
+                        self.tool_index += 1
+                        tool_use = ChatCompletionToolCallChunk(
+                            id=content_block_start["content_block"]["id"],
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=_stream_tool_name,
+                                arguments="",
+                            ),
+                            index=self.tool_index,
+                        )
                     # Track server tool use inputs for code_interpreter_results.
                     # The initial input in content_block_start is typically {}
                     # for streaming; the full input arrives via input_json_delta
                     # and is assembled at content_block_stop.
                     if content_block_start["content_block"]["type"] == "server_tool_use":
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
+                        self._current_server_tool_name = _stream_tool_name
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
-                        if _stream_tool_name == "web_search":
+                        if _stream_tool_name in HOSTED_WEB_TOOL_NAMES:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
                                 {"content": []},
                                 status="in_progress",
+                                tool_name=_stream_tool_name,
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
-                        if caller_data:
-                            tool_use["caller"] = cast(dict[str, Any], caller_data)
+                        if caller_data and tool_use is not None:
+                            tool_use["caller"] = caller_data
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
@@ -1098,7 +1118,7 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
                         self.web_search_results.append(content_block_start["content_block"])
-                        self._complete_web_search_call(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_search")
                         provider_specific_fields["web_search_results"] = self.web_search_results
                         provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     elif content_type == "web_fetch_tool_result":
@@ -1106,7 +1126,9 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_fetch")
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                        provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
@@ -1121,7 +1143,7 @@ class ModelResponseIterator:
                 # check if tool call content block - only for tool_use and server_tool_use blocks
                 if self.current_content_block_type in ("tool_use", "server_tool_use"):
                     is_empty: Final = self.check_empty_tool_call_args()
-                    if is_empty:
+                    if is_empty and self.current_content_block_type == "tool_use":
                         tool_use = ChatCompletionToolCallChunk(
                             id=None,
                             type="function",
@@ -1145,8 +1167,24 @@ class ModelResponseIterator:
                                 self._server_tool_inputs[self._current_server_tool_id] = json.loads(args)
                             except (json.JSONDecodeError, TypeError):
                                 pass
-                        if self._refresh_pending_web_search_call(self._current_server_tool_id):
+                        server_tool_input: Final = self._server_tool_inputs.get(self._current_server_tool_id, {})
+                        if self._refresh_pending_web_search_call(
+                            self._current_server_tool_id, self._current_server_tool_name
+                        ):
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
+                        self._server_tool_calls = (
+                            *self._server_tool_calls,
+                            ChatCompletionToolCallChunk(
+                                id=self._current_server_tool_id,
+                                type="function",
+                                function=ChatCompletionToolCallFunctionChunk(
+                                    name=self._current_server_tool_name,
+                                    arguments=args or json.dumps(server_tool_input),
+                                ),
+                                index=len(self._server_tool_calls),
+                            ),
+                        )
+                        provider_specific_fields["server_tool_calls"] = list(self._server_tool_calls)
                         self._current_server_tool_id = None
                 if self.is_response_format_tool:
                     text = self._flush_response_format_buffer()
@@ -1161,7 +1199,7 @@ class ModelResponseIterator:
             elif type_chunk == "message_delta":
                 finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
                 provider_specific_fields.update(stop_reason_fields)
-                text = self._release_answer_close() + self._drain_split_answer_blocks()
+                text = self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1211,7 +1249,9 @@ class ModelResponseIterator:
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
 
-            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            text, tool_use = self._handle_json_mode_chunk(
+                text=text + self._settle_held_prose(tool_use), tool_use=tool_use
+            )
             refusal_fields: Final = refusal_params(provider_specific_fields)
 
             returned_chunk: Final = ModelResponseStream(
@@ -1282,14 +1322,18 @@ class ModelResponseIterator:
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
-                # Track that we converted a response_format tool
-                self.converted_response_format_tool = True
+            self.converted_response_format_tool = True
+            return self._stream_schemaless_fragment(tool_use), None
 
         return text, tool_use
+
+    def _stream_schemaless_fragment(self, tool_use: ChatCompletionToolCallChunk) -> str:
+        fragment: Final = tool_use.get("function", {}).get("arguments") or ""
+        if tool_use.get("id") is not None:
+            self._schemaless_input_started = False
+        is_first_piece: Final = not self._schemaless_input_started
+        self._schemaless_input_started = self._schemaless_input_started or bool(fragment.strip())
+        return _unwrapped_values_answer(fragment) if is_first_piece else fragment
 
     def _stream_response_format_fragment(
         self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema
@@ -1308,6 +1352,24 @@ class ModelResponseIterator:
         buffered: Final = self._response_format_buffer.getvalue()
         self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
         return self._withhold_answer_close(buffered) if self._response_format_verdict == "pass_through" else ""
+
+    def _hold_prose(self, text: str) -> str:
+        if not self.json_mode or self.response_format_schema is None:
+            return text
+        self._held_prose += text
+        return ""
+
+    def _settle_held_prose(self, tool_use: ChatCompletionToolCallChunk | None) -> str:
+        if tool_use is None or tool_use.get("id") is None or self.current_content_block_type != "tool_use":
+            return ""
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if tool_use.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME else held
+
+    def _release_held_prose(self) -> str:
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if self.converted_response_format_tool else held
 
     def _withhold_answer_close(self, text: str) -> str:
         pending: Final = self._withheld_answer_close + text
@@ -1362,7 +1424,9 @@ class ModelResponseIterator:
 
     def cut_stream_chunk(self) -> ModelResponseStream | None:
         unsent: Final = self._flush_response_format_buffer() if self._response_format_buffer.getvalue() else ""
-        text: Final = unsent + self._release_answer_close() + self._drain_split_answer_blocks()
+        text: Final = (
+            unsent + self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
+        )
         if not text:
             return None
         return ModelResponseStream(

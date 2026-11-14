@@ -121,7 +121,7 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
 def _redis_cache_is_available() -> bool:
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-    return user_api_key_cache.redis_cache is not None
+    return user_api_key_cache.has_redis
 
 
 def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:

@@ -2,11 +2,12 @@ import asyncio
 import copy
 import itertools
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Final, cast
 
 import pytest
+from pytest_mock import MockerFixture
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
@@ -22,6 +23,7 @@ from litellm.proxy.management_helpers.bulk_user_deletion import (
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkDeleteUserRequest
 from litellm.types.proxy.management_endpoints.team_endpoints import BulkTeamMemberDeleteRequest, TeamMemberRef
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 INTERNAL: Final = UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -695,6 +697,34 @@ async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys():
 
     assert cache.get_cache(key=doomed_global) is None and cache.get_cache(key=doomed_scoped) is None
     assert cache.get_cache(key=kept) is not None
+
+
+async def _delete_through_scim_or_user_delete(prisma: _FakePrisma, user_ids: Sequence[str]) -> object:
+    return await delete_users_from_current_teams(
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+        user_ids=user_ids,
+        user_api_key_dict=ADMIN,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=None,
+        litellm_changed_by=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete", [_delete, _delete_through_scim_or_user_delete])
+async def test_user_deletes_drop_the_committed_spend_of_the_users_they_deleted(
+    delete: Callable[[_FakePrisma, Sequence[str]], Awaitable[object]], mocker: MockerFixture
+) -> None:
+    spend: Final = FakeSpendCounters(
+        redis=None, memory={"spend:committed:user:u1": 7.0, "spend:committed:user:keep": 3.0}
+    )
+    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
+    prisma: Final = _FakePrisma(users=[_user("u1"), _user("keep")])
+
+    _ = await delete(prisma, ["u1"])
+
+    assert sorted(prisma.db.litellm_usertable.rows) == ["keep"]
+    assert spend.memory == {"spend:committed:user:keep": 3.0}
 
 
 @pytest.mark.asyncio

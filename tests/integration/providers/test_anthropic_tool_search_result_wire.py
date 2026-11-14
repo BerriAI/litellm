@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections.abc import Sequence
+from functools import reduce
 from typing import Final
 
 from integration._support.anthropic_thinking import sse_chunks
@@ -142,13 +143,8 @@ def _streamed_assistant(lines: Sequence[str]) -> dict[str, JsonValue]:
             entry["id"] = call.get("id") or entry["id"]
             entry["name"] += call["function"].get("name") or ""
             entry["arguments"] += call["function"].get("arguments") or ""
-    fields: Final = next(
-        (
-            delta["provider_specific_fields"]
-            for delta in reversed(deltas)
-            if (delta.get("provider_specific_fields") or {}).get("tool_results")
-        ),
-        {},
+    fields: Final = reduce(
+        lambda merged, delta: {**merged, **(delta.get("provider_specific_fields") or {})}, deltas, {}
     )
     return {
         "role": "assistant",

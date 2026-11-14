@@ -4,6 +4,7 @@ import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
@@ -496,6 +497,24 @@ def inbound_user_id() -> str | None:
 def request_destinations() -> 'tuple["OtelDestination", ...]':
     """The destinations resolved for this request, empty outside a proxy request."""
     return _request_destinations.get()
+
+
+# The request's flattened metadata as identity seeding last read it, kept beside the
+# destinations so the fan-out can export the extra ``metadata_keys`` a destination asked
+# for onto that destination's spans alone, never into the Baggage every exporter reads.
+_request_metadata: Final["ContextVar[Mapping[str, str]]"] = ContextVar(
+    "litellm_otel_request_metadata", default=MappingProxyType({})
+)
+
+
+def set_request_metadata(metadata: Mapping[str, str]) -> None:
+    """Record the flattened metadata of the request on this context."""
+    _request_metadata.set(metadata)
+
+
+def request_metadata() -> Mapping[str, str]:
+    """The flattened metadata seeded for this request, empty before seeding or outside one."""
+    return _request_metadata.get()
 
 
 #: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.

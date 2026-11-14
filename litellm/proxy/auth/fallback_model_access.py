@@ -16,8 +16,14 @@ from typing import Final
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_token_call_search_tool
+from litellm.proxy._types import UI_TEAM_ID, ModelAccessDeniedProxyException, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    can_token_call_search_tool,
+    check_customer_model_access,
+    dashboard_model_billing_auth,
+)
+from litellm.proxy.litellm_pre_call_utils import global_then_key_alias_target
 from litellm.router_api import RegistryReader, RoutingContext
 from litellm.search import asearch
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -88,6 +94,26 @@ def _enforced_by_general_settings() -> bool:
     return _FallbackAccessSettings.model_validate(general_settings).enforce_fallback_model_access
 
 
+def _dashboard_model_group(model: str, auth: UserAPIKeyAuth, llm_router: RegistryReader) -> str:
+    aliased: Final = global_then_key_alias_target(model, auth)
+    return llm_router.registry().resolve(aliased, kind="alias") or aliased
+
+
+async def dashboard_fallback_billing_allowed(model: str, auth: UserAPIKeyAuth, llm_router: RegistryReader) -> bool:
+    if auth.team_id != UI_TEAM_ID and not isinstance(auth.dashboard_session_origin, UserAPIKeyAuth):
+        return True
+    original: Final = auth.dashboard_session_model
+    if original is not None and _dashboard_model_group(original, auth, llm_router) == _dashboard_model_group(
+        model, auth, llm_router
+    ):
+        return True
+    try:
+        billed: Final = await dashboard_model_billing_auth(auth, model, llm_router)
+    except ModelAccessDeniedProxyException:
+        return False
+    return billed.team_id == auth.team_id
+
+
 @dataclass(frozen=True, slots=True)
 class RouterFallbackAccessCheck:
     """
@@ -104,9 +130,15 @@ class RouterFallbackAccessCheck:
             return True
         if _is_search_request(request_kwargs):
             return await is_search_tool_authorized_for_token(search_tool_name=model, valid_token=valid_token)
-        if not self.is_enforced():
-            return True
-        return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=ctx)
+        enforced: Final = self.is_enforced()
+        if enforced and not await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=ctx):
+            return False
+        if not enforced:
+            try:
+                check_customer_model_access(model=model, valid_token=valid_token, llm_router=ctx)
+            except ProxyException:
+                return False
+        return await dashboard_fallback_billing_allowed(model, valid_token, ctx)
 
 
 router_fallback_access_check: Final = RouterFallbackAccessCheck(is_enforced=_enforced_by_general_settings)
