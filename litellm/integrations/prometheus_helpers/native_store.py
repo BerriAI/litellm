@@ -492,9 +492,7 @@ class PrometheusCompanion(RustLogger):
 
     async def _recorded(self, ticket: NativeTicket, ctx: CallContext[object]) -> Stopped | None:
         try:
-            _ = await self.run_rust(
-                Hook.attempt_ended, self.subscriptions[Hook.attempt_ended].reads, ticket.view, ctx
-            )
+            _ = await self.run_rust(Hook.attempt_ended, self.subscriptions[Hook.attempt_ended].reads, ticket.view, ctx)
         except RuntimeError as error:
             return ticket.stopped(error)
         return None
