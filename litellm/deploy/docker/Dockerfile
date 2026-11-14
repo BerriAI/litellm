@@ -135,8 +135,8 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
 FROM $LITELLM_BUILD_IMAGE AS liteadmin-builder
 COPY --from=uvbin /uv /usr/local/bin/uv
 RUN apk add --no-cache python-3.13
-ADD --checksum=sha256:4fb1847e28e2be30ba76dac94f02c4903291326516a0f4ba772f6ffb8b25d05c \
-    https://github.com/BerriAI/litellm-admin-agent/archive/5661c805ce479a0cf11b842ea133cf8d22cd7e34.tar.gz /tmp/liteadmin.tar.gz
+ADD --checksum=sha256:90000f0d7be6b6ffa1898167d6a1fb7679e42f90944141c9422d2a95428d732d \
+    https://github.com/BerriAI/litellm-admin-agent/archive/a99f67a187ded8ec08bd6ad314ecd3714e388259.tar.gz /tmp/liteadmin.tar.gz
 RUN mkdir /tmp/liteadmin && tar xzf /tmp/liteadmin.tar.gz --strip-components=1 -C /tmp/liteadmin && \
     uv venv /opt/liteadmin --python python3.13 && \
     uv pip install --python /opt/liteadmin/bin/python --require-hashes -r /tmp/liteadmin/requirements.txt && \
