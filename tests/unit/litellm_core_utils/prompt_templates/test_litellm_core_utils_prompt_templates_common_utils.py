@@ -2,6 +2,7 @@ import contextlib
 import copy
 import importlib
 import json
+import tracemalloc
 import warnings
 from collections.abc import Mapping
 from typing import Final, cast
@@ -11,6 +12,7 @@ import pytest
 
 from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     TOOL_RESULT_MEDIA_BOUNDARY,
@@ -25,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -1157,7 +1160,9 @@ def test_old_path_patch_with_create_leaves_the_moved_helper_in_place() -> None:
 
 def test_overriding_a_moved_helper_through_the_old_path_warns_and_deleting_it_restores_the_released_one() -> None:
     moved_name: Final = "_attempt_json_repair"
-    with pytest.warns(DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"):
+    with pytest.warns(
+        DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"
+    ):
         setattr(common_utils, moved_name, mock.Mock(return_value={"overridden": True}))
     assert parse_tool_call_arguments('{"a": 1') == {"overridden": True}
     delattr(common_utils, moved_name)
@@ -1195,3 +1200,31 @@ def test_get_content_from_model_response_includes_server_tool_calls_before_clien
     assert get_content_from_model_response(response) == (
         "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
     )
+
+
+def _unpack_defs_peak_bytes(definition_count: int) -> int:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"p{index}": {"$ref": f"#/$defs/D{index}"} for index in range(definition_count)},
+    }
+    defs: Final = {f"D{index}": {"type": "string"} for index in range(definition_count)}
+    tracemalloc.start()
+    try:
+        unpack_defs(schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_unpack_defs_memory_grows_linearly_with_the_number_of_definitions_and_refs() -> None:
+    assert _unpack_defs_peak_bytes(2048) < 8 * _unpack_defs_peak_bytes(512)
+
+
+def test_unpack_defs_resolves_refs_under_a_property_named_ref() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"$ref": {"$ref": "#/$defs/Name"}},
+        "$defs": {"Name": {"type": "string"}},
+    }
+    unpack_defs(schema, {})
+    assert schema["properties"] == {"$ref": {"type": "string"}}
