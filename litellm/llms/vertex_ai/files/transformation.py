@@ -10,7 +10,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import IO, Any, Final, TypedDict
+from typing import IO, Final, TypedDict
 from urllib.parse import quote, unquote
 
 import httpx
@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
@@ -66,6 +66,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+    embed_content_config_fields,
     transform_openai_input_gemini_embed_content,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
@@ -103,6 +104,11 @@ _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM: Final = (
     ("outputDimensionality", "output_dimensionality"),
     ("taskType", "task_type"),
     ("title", "title"),
+)
+_EMBED_CONTENT_CONFIG_REQUEST_FIELD_BY_GEMINI_PARAM: Final = (
+    ("documentOcr", "document_ocr"),
+    ("audioTrackExtraction", "audio_track_extraction"),
+    ("autoTruncate", "auto_truncate"),
 )
 _VERTEX_BATCH_FANNED_OUT_KEY_PATTERN: Final = re.compile(r"(?P<custom_id>[^#]*)#(?P<index>\d+)/(?P<total>\d+)")
 _JSONL_NEWLINE: Final = b"\n"
@@ -659,6 +665,16 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
     return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
 
 
+def _vertex_embed_content_config(embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
+    embed_content_config: Final = embed_content_config_fields(embed_content_request)
+    config_fields: Final = {
+        request_field: embed_content_config[gemini_param]
+        for gemini_param, request_field in _EMBED_CONTENT_CONFIG_REQUEST_FIELD_BY_GEMINI_PARAM
+        if gemini_param in embed_content_config
+    }
+    return {"embed_content_config": config_fields} if config_fields else {}
+
+
 def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
     """
     One Vertex Gemini Embedding batch input row.
@@ -674,6 +690,7 @@ def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, 
             for gemini_param, request_field in _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM
             if gemini_param in embed_content_request
         },
+        **_vertex_embed_content_config(embed_content_request),
     }
     if key is None:
         return {"request": request}
@@ -694,9 +711,10 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     `GenerateContentRequest`) and that the `custom_id` round-trips through the top-level
     `key`. An `EmbedContentRequest` returns exactly one vector, so an entry whose `input`
     is an array fans out into one row per element and is reassembled on the way back.
-    The docs put the per-row config in an `embed_content_config` sibling of `request`,
-    but the API rejects that key outright and fails the whole batch job, so the config
-    fields go inside the `EmbedContentRequest` itself.
+    An `embed_content_config` sibling of `request` is rejected outright and fails the whole
+    batch job, so the config fields go inside the `EmbedContentRequest` itself. The fields
+    that only exist on its `embed_content_config` (`document_ocr`, `audio_track_extraction`)
+    go in an `embed_content_config` inside `request`, alongside `auto_truncate`.
 
     API Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/batch-prediction-genai-embeddings
     """
@@ -827,7 +845,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
 
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
-    openai_entry: dict[str, Any],
+    openai_entry: Mapping[str, object],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     batch_model: str | None = None,
     deployment_params: Mapping[str, object] = MappingProxyType({}),
@@ -842,7 +860,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
     """
-    entry_body: Final = openai_entry.get("body")
+    entry_body: Final = as_str_mapping(openai_entry.get("body"))
     model: Final = batch_model or (str(entry_body.get("model") or "") if isinstance(entry_body, dict) else "")
     is_anthropic_model: Final = is_vertex_anthropic_batch_model(model)
     if _is_embeddings_batch_entry(openai_entry):
@@ -855,11 +873,10 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
 
     if not isinstance(entry_body, dict):
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
-    openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai")
         if _is_responses_batch_entry(openai_entry)
-        else openai_request_body
+        else entry_body
     )
     chat_messages: Final = map_developer_role_to_system_role(chat_request_body.get("messages", []))
     if is_anthropic_model:
@@ -1299,7 +1316,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _map_openai_to_vertex_params(
         self,
-        openai_request_body: dict[str, Any],
+        openai_request_body: dict[str, object],
         deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """

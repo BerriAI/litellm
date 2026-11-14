@@ -12,7 +12,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypedDict, overload
 
 from typing_extensions import ReadOnly
 
@@ -23,14 +23,11 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import BaggageMappedTagsStamp, ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+    from litellm.router_api import RoutingContext
 
 
 class _TagLitellmParamsLike(Protocol):
@@ -394,18 +391,20 @@ def _resolve_constraint_only_pool(
 
 
 def _all_deployments_or_fallback(
-    llm_router_instance: LitellmRouter,
-    model: str,
+    ctx: "RoutingContext",
+    model: str | None,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
+    if model is None:  # a group of no name has no deployments, it is not a failed lookup
+        return ()
     try:
-        return llm_router_instance.get_all_deployments(model_name=model)
+        return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
         return fallback
 
 
 def _chain_tag_filtering_override(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     healthy_deployments: _DeploymentPool,
 ) -> bool | None:
@@ -418,7 +417,7 @@ def _chain_tag_filtering_override(
     # repeatedly failing that one deployment into cooldown. Falls back to
     # healthy_deployments on a lookup error, preserving today's behavior rather
     # than crashing the request.
-    all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
+    all_deployments: Final = _all_deployments_or_fallback(ctx, model, healthy_deployments)
     for d in all_deployments:
         value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
@@ -458,7 +457,7 @@ def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_pref
 
 
 def _tag_known_to_group(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     positive_tags: Sequence[str],
     routing_confirmed: frozenset[str],
@@ -467,7 +466,7 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final = llm_router_instance.get_all_deployments(model_name=model)
+        all_deployments: Final = ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
@@ -557,8 +556,9 @@ def _tag_sequence(tags: object) -> Sequence[object]:
     return typed_tags
 
 
+@renamed_router_param("llm_router_instance")
 async def get_deployments_for_tag(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,  # used to raise the correct error
     healthy_deployments: _DeploymentPool,
     request_kwargs: _RequestKwargsLike | None = None,
@@ -587,11 +587,9 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
-    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, healthy_deployments)
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(ctx, model, healthy_deployments)
     chain_default: Final = (
-        chain_enable_tag_filtering
-        if chain_enable_tag_filtering is not None
-        else llm_router_instance.enable_tag_filtering
+        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else ctx.settings().enable_tag_filtering
     )
     if request_enable_tag_filtering is not True and chain_default is not True:
         return healthy_deployments
@@ -602,8 +600,8 @@ async def get_deployments_for_tag(
         request_tags: Final = without_baggage_mapped_tags(
             _request_tags_after_router_consumption(metadata, model), metadata
         )
-        match_any: Final = llm_router_instance.tag_filtering_match_any
-        routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
+        match_any: Final = ctx.settings().tag_filtering_match_any
+        routing_prefix: Final = ctx.settings().tag_routing_prefix or ""
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
@@ -703,7 +701,7 @@ async def get_deployments_for_tag(
             if (
                 len(new_healthy_deployments) == 0
                 and positive_tags
-                and _tag_known_to_group(llm_router_instance, model, positive_tags, routing_confirmed)
+                and _tag_known_to_group(ctx, model, positive_tags, routing_confirmed)
             ):
                 return _resolve_or_fail_open(
                     request_deployments,

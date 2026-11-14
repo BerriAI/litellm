@@ -68,7 +68,7 @@ class VertexGeminiTranscriptionUsageMetadata(LiteLLMBaseModel):
 
 
 class VertexGeminiTranscriptionResponse(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     candidates: tuple[VertexGeminiTranscriptionCandidate, ...] = ()
     usageMetadata: VertexGeminiTranscriptionUsageMetadata | None = None

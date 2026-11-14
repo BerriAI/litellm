@@ -143,20 +143,33 @@ def _without_deferral(spec: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in spec.items() if key != "defer_loading"}
 
 
-def _loaded_tools(tool: Mapping[str, object]) -> tuple[_LoadedTool, ...]:
+def _loaded_tools(tool: Mapping[str, object], deferred_names: frozenset[str] = frozenset()) -> tuple[_LoadedTool, ...]:
     spec: Final = _tool_spec(tool)
     if spec is None:
         return ()
     if spec.type != "namespace":
-        return (_LoadedTool(namespace=None, namespace_description="", spec=_without_deferral(tool)),)
+        # A loaded deferred tool keeps its deferral so its calls read back as namespace == name
+        deferred: Final = spec.defer_loading is True or spec.name in deferred_names
+        loaded_spec: Final = {**_without_deferral(tool), "defer_loading": True} if deferred else _without_deferral(tool)
+        return (_LoadedTool(namespace=None, namespace_description="", spec=loaded_spec),)
     return tuple(
         _LoadedTool(namespace=spec.name, namespace_description=spec.description, spec=_without_deferral(member))
         for member in spec.tools
     )
 
 
-def _all_loaded_tools(tools: Iterable[Mapping[str, object]]) -> tuple[_LoadedTool, ...]:
-    return tuple(chain.from_iterable(map(_loaded_tools, tools)))
+def _all_loaded_tools(
+    tools: Iterable[Mapping[str, object]], deferred_names: frozenset[str] = frozenset()
+) -> tuple[_LoadedTool, ...]:
+    return tuple(chain.from_iterable(_loaded_tools(tool, deferred_names) for tool in tools))
+
+
+def _deferred_top_level_names(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(
+        spec.name
+        for tool in tools
+        if (spec := _tool_spec(tool)) is not None and spec.type != "namespace" and _is_deferred(tool)
+    )
 
 
 def _callable_names(tool: object) -> tuple[str, ...]:
@@ -256,7 +269,9 @@ def bridge_client_tool_search(
         if searches_on_client
         else existing
     )
-    loaded: Final = _all_loaded_tools((*loaded_earlier, *client_tool_search_loaded_tools(input)))
+    loaded: Final = _all_loaded_tools(
+        (*loaded_earlier, *client_tool_search_loaded_tools(input)), _deferred_top_level_names(existing)
+    )
     taken: Final = frozenset(chain.from_iterable(map(_callable_names, eager)))
     bridged_input: Final = (
         input if isinstance(input, str) else [bridged for item in input if (bridged := _bridged_item(item)) is not None]

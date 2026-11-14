@@ -39,8 +39,8 @@ requires_db: Final = pytest.mark.skipif(
 )
 
 REPO: Final = Path(__file__).resolve().parents[4]
-PACKAGE: Final = REPO / "litellm-proxy-extras" / "litellm_proxy_extras"
-PARTITION_SCRIPT: Final = REPO / "db_scripts" / "partition_spend_logs.sql"
+PACKAGE: Final = REPO / "litellm" / "proxy-extras" / "litellm_proxy_extras"
+PARTITION_SCRIPT: Final = REPO / "litellm/scripts" / "db" / "partition_spend_logs.sql"
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
@@ -1033,13 +1033,14 @@ def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
     create_index: Final = sql.SQL('CREATE INDEX "entry_probe_idx" ON "entry_probe" ({})').format(
         sql.SQL(", ").join(sql.Identifier(column) for column in index_columns)
     )
+    fitting_key: Final = secrets.token_hex(longest_fitting_key)[:longest_fitting_key]
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute('CREATE TABLE "entry_probe" ("s" TEXT, "k" TEXT, "t" TIMESTAMP(3))')
         conn.execute(
             'INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s), (%s, %s, %s)',
             (
                 s_value,
-                secrets.token_hex(longest_fitting_key)[:longest_fitting_key],
+                fitting_key,
                 t_value,
                 s_value,
                 secrets.token_hex(longest_fitting_key)[: longest_fitting_key + 1],
@@ -1051,7 +1052,8 @@ def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
         )
         with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="exceeds btree version 4 maximum 2704"):
             conn.execute(create_index)
-        conn.execute('DELETE FROM "entry_probe" WHERE octet_length("k") > %s', (longest_fitting_key,))
+        conn.execute('TRUNCATE "entry_probe"')
+        conn.execute('INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s)', (s_value, fitting_key, t_value))
         conn.execute(create_index)
 
     (finding,) = findings
@@ -1075,7 +1077,8 @@ def test_a_value_postgres_compresses_under_the_limit_is_not_counted_while_random
         )
         with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="index row size 3016 exceeds"):
             conn.execute(create_index)
-        conn.execute('DELETE FROM "compress_probe" WHERE "k" <> %s', ("a" * 3000,))
+        conn.execute('TRUNCATE "compress_probe"')
+        conn.execute('INSERT INTO "compress_probe" ("k") VALUES (%s)', ("a" * 3000,))
         conn.execute(create_index)
         stored: Final = conn.execute('SELECT octet_length("k"), pg_column_size("k") FROM "compress_probe"').fetchone()
 

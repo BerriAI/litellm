@@ -1,3 +1,5 @@
+import traceback
+
 import httpx
 import pytest
 
@@ -144,6 +146,23 @@ def test_transform_response_raises_on_error_status():
         CONFIG.transform_audio_transcription_response(raw_response=raw)
     assert exc.value.status_code == 400
     assert "Incorrect API key provided" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"text": ["sensitive"]}',
+        b'{"text": "ok", "words": [{"text": ["sensitive"]}]}',
+        b'{"text": "sensitive',
+    ],
+)
+def test_transform_response_keeps_a_malformed_body_out_of_the_error(content):
+    raw = httpx.Response(200, content=content, request=httpx.Request("POST", "https://api.x.ai/v1/stt"))
+
+    with pytest.raises(XAIAudioTranscriptionError, match="Error parsing xAI response") as exc:
+        CONFIG.transform_audio_transcription_response(raw_response=raw)
+
+    assert "sensitive" not in "".join(traceback.format_exception(exc.value))
 
 
 def test_transcription_routes_to_xai_stt(monkeypatch):

@@ -1,0 +1,394 @@
+{{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
+{{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
+{{- if $hasComponentHosts }}
+{{- if not (and $componentHosts.ui $componentHosts.backend $componentHosts.gateway) }}
+{{- fail "ingress.componentHosts.ui, backend, and gateway must all be set together" }}
+{{- end }}
+{{- if not .Values.monolith.enabled }}
+{{- if not .Values.gateway.enabled }}
+{{- fail "ingress.componentHosts requires gateway.enabled=true" }}
+{{- end }}
+{{- if not .Values.backend.enabled }}
+{{- fail "ingress.componentHosts requires backend.enabled=true" }}
+{{- end }}
+{{- if not .Values.ui.enabled }}
+{{- fail "ingress.componentHosts requires ui.enabled=true" }}
+{{- end }}
+{{- end }}
+{{- if .Values.ingress.host }}
+{{- fail "ingress.host must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if .Values.ingress.extraPaths }}
+{{- fail "ingress.extraPaths must be empty when ingress.componentHosts is configured" }}
+{{- end }}
+{{- if not .Values.monolith.enabled }}
+{{- if not (trim .Values.ui.backendUrl) }}
+{{- fail "ui.backendUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.ui.backendOrigin" . }}
+{{- if not (trim .Values.backend.gatewayUrl) }}
+{{- fail "backend.gatewayUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- $_ := include "litellm.backend.gatewayOrigin" . }}
+{{- if not (trim .Values.ui.publicUrl) }}
+{{- fail "ui.publicUrl is required when ingress.componentHosts is configured" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.ingress.enabled -}}
+{{- $monolith := .Values.monolith.enabled -}}
+{{- $gatewayName := include "litellm.gateway.fullname" . -}}
+{{- $backendName := include "litellm.backend.fullname" . -}}
+{{- $uiName := include "litellm.ui.fullname" . -}}
+{{- $gatewayPort := .Values.gateway.service.port -}}
+{{- $backendPort := .Values.backend.service.port -}}
+{{- $uiPort := .Values.ui.service.port -}}
+{{- $proxyName := include "litellm.proxy.fullname" . -}}
+{{- $controller := .Values.ingress.controller | default "alb" -}}
+{{- if not (has $controller (list "alb" "nginx")) }}
+{{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
+{{- end }}
+{{/*
+  Backends addressable from ingress.extraPaths, keyed by the `service` field.
+  In monolith mode the one proxy Service serves every component, so every
+  key resolves to it and an entry's `service` only has to be a known name.
+*/}}
+{{- $proxyBackend := dict "name" $proxyName "port" $gatewayPort -}}
+{{- $extraPathBackends := dict
+    "gateway" (ternary $proxyBackend (dict "name" $gatewayName "port" $gatewayPort) $monolith)
+    "backend" (ternary $proxyBackend (dict "name" $backendName "port" $backendPort) $monolith)
+    "ui" (ternary $proxyBackend (dict "name" $uiName "port" $uiPort) $monolith)
+-}}
+{{/*
+  UI paths (Next.js static export).
+
+  /ui/* is where the SPA serves its login + dashboard routes (e.g. /ui/login).
+  Without it, /ui/* falls into the catch-all → backend → 404.
+
+  The App Router (output: "export", basePath: "") emits the RSC/flight payload
+  for every route as a ROOT-level <route>.txt (/index.txt, /teams.txt,
+  /__next._tree.txt, ...). The client router fetches these on every soft
+  navigation / prefetch as <route>.txt?_rsc=<hash> (the query string is
+  irrelevant to path matching). They are not under /ui, /_next, or
+  /litellm-asset-prefix, so without /*.txt they fall to the backend catch-all
+  → 404 → client-side navigation never settles and the login flow spins in an
+  infinite redirect loop (/ ⇄ /ui/login). litellm/ui/nginx.conf already serves *.txt
+  from the export; the rule only routes the request to it. It needs an
+  ingress controller whose ImplementationSpecific path is a wildcard pattern
+  (AWS ALB: `*` = 0+ chars), so it is rendered for ingress.controller=alb
+  only: ingress-nginx serves ImplementationSpecific as a literal prefix
+  location, where /*.txt can never match.
+*/}}
+{{- $uiPaths := list
+    (dict "path" "/" "pathType" "Exact")
+    (dict "path" "/favicon.ico" "pathType" "Exact")
+    (dict "path" "/litellm-asset-prefix" "pathType" "Prefix")
+    (dict "path" "/_next" "pathType" "Prefix")
+    (dict "path" "/ui" "pathType" "Prefix")
+-}}
+{{- if eq $controller "alb" }}
+{{- $uiPaths = append $uiPaths (dict "path" "/*.txt" "pathType" "ImplementationSpecific") }}
+{{- end }}
+{{/*
+  Gateway data-plane prefixes — must mirror litellm/runtime/gateway/routes/allowlist.py.
+  Versioned paths are listed explicitly to avoid routing management routes
+  (e.g. /v1/access_group, /v2/key/info, /v1/tool/*, /v1/agents, /v1/workflows,
+  /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,
+  /v1/mcp/*) onto the gateway via a broad /v1 or /v2 prefix.
+*/}}
+{{- $gatewayPrefixGroups := list
+    (list "/chat" "/v1/chat") (list "/completions" "/v1/completions") (list "/embeddings" "/v1/embeddings")
+    (list "/moderations" "/v1/moderations") (list "/audio" "/v1/audio") (list "/images" "/v1/images")
+    (list "/files" "/v1/files") (list "/batches" "/v1/batches") (list "/fine_tuning" "/v1/fine_tuning")
+    (list "/fine-tuning" "/v1/fine-tuning") (list "/responses" "/v1/responses") (list "/threads" "/v1/threads")
+    (list "/assistants" "/v1/assistants") (list "/vector_stores" "/v1/vector_stores") (list "/models" "/v1/models")
+    (list "/messages" "/v1/messages") (list "/a2a" "/v1/a2a") (list "/rerank" "/v1/rerank")
+    (list "/decisions" "/v1/decisions") (list "/systemone" "/v1/systemone") (list "/extraction" "/v1/extraction")
+    (list "/ocr" "/v1/ocr") (list "/rag" "/v1/rag") (list "/video" "/v1/video")
+    (list "/videos" "/v1/videos") (list "/search" "/v1/search") (list "/containers" "/v1/containers")
+    (list "/realtime" "/v1/realtime") (list "/live/sessions" "/v1/live/sessions") (list "/v1/skills" "/v1/indexes")
+    (list "/v1/evals" "/v2/rerank") (list "/v1beta" "/v1/memory") (list "/openai" "/engines")
+    (list "/queue/chat" "/api/event_logging") (list "/toolset" "/interactions") (list "/azure" "/anthropic")
+    (list "/azure_ai" "/azure_speech") (list "/aws" "/bedrock") (list "/transcribe" "/comprehendmedical")
+    (list "/cohere" "/gemini") (list "/google" "/gigachat") (list "/vertex_ai" "/vertex-ai")
+    (list "/assemblyai" "/eu.assemblyai") (list "/fal_ai" "/deepgram") (list "/vllm" "/langfuse")
+    (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
+    (list "/cursor" "/milvus") (list "/tinyfish" "/openai_passthrough") (list "/watsonx")
+    (list "/health" "/metrics")
+-}}
+{{- $gatewayPrefixes := list -}}
+{{- range $gatewayPrefixGroups -}}
+{{- $gatewayPrefixes = concat $gatewayPrefixes . -}}
+{{- end -}}
+{{- $gatewayExactPaths := list "/test" "/debug/memory/summary" "/eu_jev/v1/systemone" -}}
+{{/*
+  /test is gateway-only as an EXACT path (GATEWAY_EXACT_PATHS), but its
+  children /test/connection and /test/tools/list are MCP-server management
+  endpoints kept only on the backend ("/test/" in BACKEND_PATH_PREFIXES).
+  A Prefix match here would route /test/* to the gateway, which trims those
+  routes at startup -> 404. So /test is rendered as a standalone Exact path
+  and /test/* falls through to the backend catch-all.
+*/}}
+{{/*
+  Every "<path>|<pathType>" this template renders on its own. An
+  ingress.extraPaths entry that repeats one of these is rejected: duplicates
+  in a single rule are resolved by position or by controller-specific tie
+  breaking, so the operator entry could take over a built-in route (an entry
+  at "/" Prefix would swallow the whole backend management API) instead of
+  adding to it.
+*/}}
+{{- $builtinPathKeys := list "/|Prefix" -}}
+{{/*
+  An ALB allows 100 listener rules and the AWS Load Balancer Controller makes
+  one per Ingress path, so on alb each $gatewayPrefixGroups entry is one rule.
+  Its first, shorter prefix is the Ingress path, which keeps any longer child
+  path ahead of it in the controller's longest-first order, and a conditions
+  annotation adds the other prefix to the same rule.
+*/}}
+{{- $albGrouping := and (eq $controller "alb") (not $monolith) -}}
+{{- $gatewayConditions := get (.Values.ingress.annotations | default dict) (printf "alb.ingress.kubernetes.io/conditions.%s" $gatewayName) | default "[]" | trim | trimPrefix "[" | trimSuffix "]" | trim -}}
+{{- if $hasComponentHosts }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $componentHosts.ui | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $extraPathBackends.ui.name }}
+                port:
+                  number: {{ $extraPathBackends.ui.port }}
+    - host: {{ $componentHosts.backend | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $extraPathBackends.backend.name }}
+                port:
+                  number: {{ $extraPathBackends.backend.port }}
+    - host: {{ $componentHosts.gateway | quote }}
+      http:
+        paths:
+          {{- if and .Values.lens.enabled .Values.lens.service.name }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lens.service.name }}
+                port:
+                  number: {{ .Values.lens.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $extraPathBackends.gateway.name }}
+                port:
+                  number: {{ $extraPathBackends.gateway.port }}
+{{- else }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- if or .Values.ingress.annotations $albGrouping }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $albGrouping }}
+    {{- range $i, $group := $gatewayPrefixGroups }}
+    alb.ingress.kubernetes.io/actions.litellm-gateway-{{ $i }}: {{ printf `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"%s","servicePort":"http"}]}}` $gatewayName | quote }}
+    {{- $conditions := compact (list $gatewayConditions (ternary (printf `{"field":"path-pattern","pathPatternConfig":{"values":["%s","%s/*"]}}` (last $group) (last $group)) "" (eq (len $group) 2))) }}
+    {{- with $conditions }}
+    alb.ingress.kubernetes.io/conditions.litellm-gateway-{{ $i }}: {{ printf "[%s]" (join "," .) | quote }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          {{- if not $monolith }}
+          # --- UI (Next.js static export) ---
+          {{- range $uiPaths }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" .pathType) }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path $pathType) }}
+          - path: {{ .path }}
+            pathType: {{ $pathType }}
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          {{- end }}
+          # --- Gateway data plane ---
+          # Exact /test only (see the $gatewayPrefixes comment above);
+          # /test/* MCP management endpoints fall to the backend catch-all.
+          # Exact /debug/memory/summary reads a serving worker's RSS (the e2e memory
+          # gate); the rest of /debug/* stays on the backend.
+          {{- range $gatewayExactPaths }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Exact" .) }}
+          - path: {{ . }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- end }}
+          {{- if $albGrouping }}
+          {{- range $i, $group := $gatewayPrefixGroups }}
+          {{- range $group }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .) }}
+          {{- end }}
+          - path: {{ first $group }}
+            pathType: Prefix
+            backend:
+              service:
+                name: litellm-gateway-{{ $i }}
+                port:
+                  name: use-annotation
+          {{- end }}
+          {{- end }}
+          {{- range (ternary list $gatewayPrefixes $albGrouping) }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
+          - path: {{ . }}
+            pathType: {{ $pathType }}
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- end }}
+          {{- end }}
+          {{- if and .Values.lens.enabled .Values.lens.service.name }}
+          {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lens.service.name }}
+                port:
+                  number: {{ .Values.lens.service.port }}
+          {{- end }}
+          {{- /*
+            --- Operator-supplied extra paths (ingress.extraPaths) ---
+            Rendered after every built-in path so an entry can never take
+            precedence over a default, and before the backend catch-all.
+            Position only decides the match on controllers that honour manifest
+            order: the AWS Load Balancer Controller (ingress.controller=alb)
+            sorts Exact paths first and Prefix paths longest-first, but keeps
+            ImplementationSpecific paths in manifest order, which is what the
+            /*.txt rule above already depends on. ingress-nginx ignores order
+            and serves the longest matching location.
+          */}}
+          {{- range $idx, $extra := .Values.ingress.extraPaths }}
+          {{- if not (kindIs "map" $extra) }}
+          {{- fail (printf "ingress.extraPaths[%d]: each entry must be a mapping with a 'path' key" $idx) }}
+          {{- end }}
+          {{- if not $extra.path }}
+          {{- fail (printf "ingress.extraPaths[%d]: 'path' is required" $idx) }}
+          {{- end }}
+          {{- $target := dict }}
+          {{- $port := dict }}
+          {{- if or (hasKey $extra "serviceName") (hasKey $extra "servicePort") }}
+          {{- if hasKey $extra "service" }}
+          {{- fail (printf "ingress.extraPaths[%d]: service cannot be combined with serviceName or servicePort" $idx) }}
+          {{- end }}
+          {{- if not (and (kindIs "string" $extra.serviceName) $extra.serviceName $extra.servicePort) }}
+          {{- fail (printf "ingress.extraPaths[%d]: a non-empty serviceName and servicePort are required for a custom Service" $idx) }}
+          {{- end }}
+          {{- $target = dict "name" $extra.serviceName }}
+          {{- if kindIs "string" $extra.servicePort }}
+          {{- $port = dict "name" $extra.servicePort }}
+          {{- else if or (kindIs "float64" $extra.servicePort) (kindIs "int64" $extra.servicePort) (kindIs "int" $extra.servicePort) }}
+          {{- if or (lt (float64 $extra.servicePort) 1.0) (gt (float64 $extra.servicePort) 65535.0) (ne (float64 $extra.servicePort) (float64 (int $extra.servicePort))) }}
+          {{- fail (printf "ingress.extraPaths[%d]: numeric servicePort must be an integer from 1 to 65535" $idx) }}
+          {{- end }}
+          {{- $port = dict "number" (int $extra.servicePort) }}
+          {{- else }}
+          {{- fail (printf "ingress.extraPaths[%d]: servicePort must be a port number or name" $idx) }}
+          {{- end }}
+          {{- else }}
+          {{- $service := $extra.service | default "gateway" }}
+          {{- $target = get $extraPathBackends $service }}
+          {{- if not $target }}
+          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown service %q, expected one of backend, gateway, ui" $idx $extra.path $service) }}
+          {{- end }}
+          {{- $port = dict "number" $target.port }}
+          {{- end }}
+          {{- $requestedPathType := $extra.pathType | default "Prefix" }}
+          {{- if not (has $requestedPathType (list "Prefix" "Exact" "ImplementationSpecific")) }}
+          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown pathType %q, expected one of Exact, ImplementationSpecific, Prefix" $idx $extra.path $requestedPathType) }}
+          {{- end }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" $extra.path "pathType" $requestedPathType) }}
+          {{- if eq $extra.path "/" }}
+          {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
+          {{- end }}
+          {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
+          {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
+          {{- end }}
+          - path: {{ $extra.path | quote }}
+            pathType: {{ $pathType }}
+            backend:
+              service:
+                name: {{ $target.name | quote }}
+                port:
+                  {{- toYaml $port | nindent 18 }}
+          {{- end }}
+          {{- if $monolith }}
+          # --- Monolith: the proxy serves the UI, the data plane and the management API ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $proxyName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- else }}
+          # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backendName }}
+                port:
+                  number: {{ $backendPort }}
+          {{- end }}
+{{- end }}
+{{- end }}

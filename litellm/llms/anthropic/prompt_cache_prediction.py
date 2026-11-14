@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, Protocol, TypeAlias
+from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
@@ -79,6 +79,10 @@ _DEPLOYMENT_OPTIONS: Final = frozenset(
         "cache_creation_input_token_cost_above_1hr",
     }
 )
+
+
+class _BaselineAnthropicMessagesConfig(AnthropicMessagesConfig):
+    _report_reasoning_drops: ClassVar[bool] = False
 
 
 class _StrictModel(LiteLLMBaseModel):
@@ -204,6 +208,7 @@ class UnsupportedCachePlan:
         "invalid_cache_ttl_order",
         "unsupported_thinking_cache_semantics",
         "token_count_unavailable",
+        "uncountable_system_or_tools_prefix",
         "inconsistent_prefix_token_count",
     ]
 
@@ -579,7 +584,10 @@ async def count_cache_plan(
     counts: Final = tuple(
         await asyncio.gather(*(token_counter(model, api_key, marker.prefix_body) for marker in plan.breakpoints))
     )
-    if any(value is None for value in counts):
+    failed: Final = tuple(marker for marker, value in zip(plan.breakpoints, counts, strict=True) if value is None)
+    if failed and all(not marker.prefix_body.get("messages") for marker in failed):
+        return UnsupportedCachePlan("uncountable_system_or_tools_prefix")
+    if failed:
         return UnsupportedCachePlan("token_count_unavailable")
     known: Final = tuple(value for value in counts if value is not None)
     if any(value < 0 for value in (total, *known)) or any(
@@ -650,18 +658,16 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
             custom_llm_provider="anthropic",
             tools=_MESSAGES.validate_python(owned.get("tools") or []),
         )
+        drop_paths: Final = TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ())
         options: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             {**owned, "system": system},
             model=resolved_model,
             custom_llm_provider="anthropic",
             drop_params=owned.get("drop_params") is True,
+            additional_drop_params=drop_paths,
         )
-        filtered: Final = reduce(
-            delete_nested_value,
-            TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
-            dict(options),
-        )
-        config: Final = AnthropicMessagesConfig()
+        filtered: Final = reduce(delete_nested_value, drop_paths, dict(options))
+        config: Final = _BaselineAnthropicMessagesConfig()
         body: Final = config.transform_anthropic_messages_request(
             model=resolved_model,
             messages=strip_provider_specific_fields_from_anthropic_messages(messages),

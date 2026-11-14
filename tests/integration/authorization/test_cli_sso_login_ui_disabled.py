@@ -695,9 +695,11 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
             key=key,
         )
         assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
-        error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
-        assert error["type"] == "budget_exceeded", refused.text
-        assert error["code"] == "422", refused.text
+        body: Final = JSON_OBJECT.validate_json(refused.content)
+        assert body["type"] == "error", refused.text
+        error: Final = object_value(body["error"])
+        assert error["type"] == "invalid_request_error", refused.text
+        assert "param" not in error and "code" not in error, refused.text
         message: Final = string_value(error["message"])
         assert "Budget has been exceeded!" in message, refused.text
         assert f"Team={team}" in message, refused.text

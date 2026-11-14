@@ -169,6 +169,31 @@ def test_null_byte_stripped_in_fallback_str():
     assert json.loads(out)["obj"] == "objrepr"
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_floats_are_written_as_json_null(value: float) -> None:
+    out = safe_dumps(
+        {"cost_breakdown": {"total_cost": value, "output_cost": 0.006}, "costs": [value]}, non_finite_as_null=True
+    )
+
+    assert json.loads(out, parse_constant=lambda token: pytest.fail(f"non-JSON token {token}")) == {
+        "cost_breakdown": {"total_cost": None, "output_cost": 0.006},
+        "costs": [None],
+    }
+
+
+def test_a_set_holding_a_non_finite_float_sorts_its_finite_members_and_puts_null_last() -> None:
+    assert json.loads(safe_dumps({"costs": {2.0, float("inf"), 1.0}}, non_finite_as_null=True)) == {
+        "costs": [1.0, 2.0, None]
+    }
+
+
+def test_non_finite_floats_keep_their_value_unless_the_caller_asks_for_null() -> None:
+    assert json.loads(safe_dumps({"timeout": float("inf"), "costs": [float("-inf")]})) == {
+        "timeout": float("inf"),
+        "costs": [float("-inf")],
+    }
+
+
 def test_clean_strings_are_not_run_through_replace():
     """Regression for LIT-3910.
 
@@ -205,9 +230,7 @@ def test_pydantic_base_model():
         inner: InnerModel
         tags: list
 
-    outer = OuterModel(
-        name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"]
-    )
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
 
     # Test a pydantic model at the top level
     result = json.loads(safe_dumps(outer))
@@ -236,3 +259,9 @@ def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
     assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
     assert type(structure["models"]) is tuple
     assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}
+
+
+def test_integer_limit_clamps_both_signs_and_leaves_bools_and_floats_alone() -> None:
+    assert safe_json_structure(
+        {"big": 10**400, "small": -(10**400), "inside": 7, "flag": True, "ratio": 1e300}, integer_limit=100
+    ) == {"big": 100, "small": -100, "inside": 7, "flag": True, "ratio": 1e300}

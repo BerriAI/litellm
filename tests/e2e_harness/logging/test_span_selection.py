@@ -8,8 +8,21 @@ helper is worth pinning here.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
-from otel_client import TTFT_TAG, JaegerTrace, one_served_genai_span, served_genai_spans
+from otel_client import (
+    TTFT_TAG,
+    CallTraces,
+    JaegerReference,
+    JaegerSpan,
+    JaegerTag,
+    JaegerTrace,
+    one_served_genai_span,
+    served_genai_spans,
+    trace_settled,
+)
+from test_otel_trace_e2e import assert_complete_trace, assert_real_ttft
 
 GENAI_SPAN = "chat claude-haiku-4-5"
 
@@ -79,3 +92,73 @@ def test_other_operations_are_not_counted() -> None:
     trace = _trace(_span("chat gpt-5.5", ttft=0.3), _span(GENAI_SPAN, ttft=0.3))
 
     assert len(served_genai_spans(trace, GENAI_SPAN)) == 1
+
+
+def _request_trace(
+    *,
+    root_name: str = "POST",
+    root_kind: str = "server",
+    route: str = "/v1/messages",
+    genai_parent: str = "root",
+    ttft: float = 0.2,
+) -> JaegerTrace:
+    parent: Final = JaegerReference(refType="CHILD_OF", traceID="request", spanID="root")
+    return JaegerTrace(
+        traceID="request",
+        spans=[
+            JaegerSpan(
+                spanID="root",
+                operationName=root_name,
+                tags=[JaegerTag(key="span.kind", value=root_kind), JaegerTag(key="http.target", value=route)],
+            ),
+            JaegerSpan(spanID="auth", operationName="auth /v1/messages", references=[parent]),
+            JaegerSpan(spanID="db", operationName="postgres.select tokens", references=[parent]),
+            JaegerSpan(
+                spanID="genai",
+                operationName=GENAI_SPAN,
+                duration=1_000_000,
+                references=[JaegerReference(refType="CHILD_OF", traceID="request", spanID=genai_parent)],
+                tags=[JaegerTag(key="span.kind", value="client"), JaegerTag(key=TTFT_TAG, value=ttft)],
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize("root_name", ("POST", "POST /v1/messages"))
+def test_connected_request_trace_is_independent_of_server_display_name(root_name: str) -> None:
+    trace: Final = _request_trace(root_name=root_name)
+    assert_complete_trace(CallTraces((trace,), ()), route="/v1/messages", genai_span=GENAI_SPAN)
+    assert_real_ttft((trace,), genai_span=GENAI_SPAN)
+    assert trace_settled(trace, {"auth /v1/messages", GENAI_SPAN}, {"postgres."})
+
+
+def test_incomplete_trace_cannot_settle_before_the_server_span_arrives() -> None:
+    trace: Final = _request_trace()
+    incomplete: Final = trace.model_copy(update={"spans": trace.spans[1:]})
+    assert not trace_settled(incomplete, {"auth /v1/messages", GENAI_SPAN}, {"postgres."})
+
+
+@pytest.mark.parametrize("route", ("/v1/responses", ""))
+def test_request_trace_must_still_identify_the_requested_route(route: str) -> None:
+    trace: Final = _request_trace(root_name="POST /v1/messages", route=route)
+    with pytest.raises(AssertionError, match="route"):
+        assert_complete_trace(CallTraces((trace,), ()), route="/v1/messages", genai_span=GENAI_SPAN)
+
+
+def test_request_trace_must_still_be_rooted_at_a_server_span() -> None:
+    trace: Final = _request_trace(root_name="POST /v1/messages", root_kind="client")
+    with pytest.raises(AssertionError, match="kind=server"):
+        assert_complete_trace(CallTraces((trace,), ()), route="/v1/messages", genai_span=GENAI_SPAN)
+
+
+def test_request_trace_must_still_connect_the_model_call_to_the_request() -> None:
+    trace: Final = _request_trace(genai_parent="absent")
+    with pytest.raises(AssertionError, match="orphaned trace"):
+        assert_complete_trace(CallTraces((trace,), ()), route="/v1/messages", genai_span=GENAI_SPAN)
+
+
+@pytest.mark.parametrize("ttft", (0.0, 1.0))
+def test_server_name_tolerance_does_not_accept_invalid_first_token_timing(ttft: float) -> None:
+    trace: Final = _request_trace(ttft=ttft)
+    with pytest.raises(AssertionError, match="TTFT"):
+        assert_real_ttft((trace,), genai_span=GENAI_SPAN)

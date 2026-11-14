@@ -393,7 +393,7 @@ def test_image_edit_spend_follows_the_vertex_location(gateway: Gateway, location
         images: Final = raw.parse()
         assert images.data is not None and [image.b64_json for image in images.data] == ["aW1n"], images
         prices: Final = _published_prices(gateway, model)
-        expected: Final = _rate(prices, "output_cost_per_image") * _uplift(prices, placed)
+        expected: Final = _standard_cost(prices) * _uplift(prices, placed)
         assert float(raw.headers["x-litellm-response-cost"]) == pytest.approx(expected), raw.headers
         (sent,) = _only_generate_calls(wire, 1)
         forwarded: Final = sent.body.decode()

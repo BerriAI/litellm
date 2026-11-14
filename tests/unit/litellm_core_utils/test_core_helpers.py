@@ -4,7 +4,7 @@ import datetime
 import json
 import logging
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Container, Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -17,24 +17,38 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
+    env_flag,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
+    json_contains,
     map_finish_reason,
     normalize_drop_params,
+    only,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
+    provider_reported_usage_cost,
     qualify_agentic_followup_model,
     qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
+    subscript,
     unbind_budget_reservation_from_callbacks,
+    without,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
+from litellm.types.utils import (
+    Delta,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TranscriptionResponse,
+)
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -256,6 +270,7 @@ class TestMapFinishReasonAnthropic:
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
+            ("pause_turn", "length"),
             ("model_context_window_exceeded", "length"),
             ("content_filtered", "content_filter"),
         ],
@@ -308,6 +323,12 @@ class TestMapFinishReasonCohere:
 
     def test_error(self):
         assert map_finish_reason("ERROR") == "stop"
+
+    def test_tool_call(self):
+        assert map_finish_reason("TOOL_CALL") == "tool_calls"
+
+    def test_stop_sequence(self):
+        assert map_finish_reason("STOP_SEQUENCE") == "stop"
 
 
 class TestMapFinishReasonHuggingFace:
@@ -476,6 +497,32 @@ def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configure
         f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", False), ("false", False), ("False", False), ("0", False), ("no", False), ("true", True), (" 1 ", True)],
+)
+def test_env_flag_parses_modify_params_as_a_bool(configured: str, expected: bool, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": configured}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is expected
+        )
+    assert caplog.text == ""
+
+
+def test_env_flag_treats_a_non_flag_value_as_on_with_a_warning(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="env-flag-test"):
+        assert (
+            env_flag({"LITELLM_MODIFY_PARAMS": "enabled"}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test"))
+            is True
+        )
+    assert "LITELLM_MODIFY_PARAMS='enabled' is not a flag value, treating it as on" in caplog.text
+
+
+def test_env_flag_is_off_when_unset():
+    assert env_flag({}, "LITELLM_MODIFY_PARAMS", logging.getLogger("env-flag-test")) is False
 
 
 class TestIsExpectedClientError:
@@ -790,6 +837,23 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
         assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
 
 
+@pytest.mark.parametrize("reported", [float("nan"), float("inf"), {"total_cost": float("nan")}])
+def test_a_non_finite_provider_reported_cost_counts_as_unreported(reported: object) -> None:
+    assert provider_reported_usage_cost({"cost": reported}, "openrouter") is None
+    assert provider_reported_usage_cost({"cost": {"total_cost": 0.25}}, "openrouter") == 0.25
+
+
+@pytest.mark.parametrize("header_cost", [float("nan"), float("inf")])
+def test_a_non_finite_response_cost_header_counts_as_unreported(header_cost: float) -> None:
+    response: Final = ModelResponse()
+    response._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: header_cost}}
+    finite: Final = ModelResponse()
+    finite._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: 0.25}}
+
+    assert response_cost_in_hidden_params(response) is None
+    assert response_cost_in_hidden_params(finite) == 0.25
+
+
 def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:
     from types import SimpleNamespace
 
@@ -819,3 +883,66 @@ def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bil
     stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
     assert unreported.usage.cost == 0.0015
     assert billed_usage_cost(unreported, "openai") is None
+
+
+def test_subscript_reads_keys_and_indexes_and_rejects_values_without_item_access() -> None:
+    assert subscript({"role": "user"}, "role") == "user"
+    assert subscript(["system", "user"], 1) == "user"
+    with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+        subscript(5, "role")
+
+
+class _IterOnly:
+    def __iter__(self) -> Iterator[object]:
+        return iter(("error",))
+
+
+class _GetItemOnly:
+    def __getitem__(self, index: int) -> object:
+        return ("error",)[index]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{"error": 1}, {"data": 1}, ["error"], "an error", "", _IterOnly(), _GetItemOnly()],
+)
+def test_json_contains_answers_what_the_in_operator_answers(value: Container[object]) -> None:
+    assert json_contains(value, "error") is ("error" in value)
+
+
+@pytest.mark.parametrize("value", [5, 1.5, None, True, object()])
+def test_json_contains_raises_the_in_operators_own_error(value: Container[object]) -> None:
+    with pytest.raises(TypeError) as native:
+        _ = "error" in value
+    with pytest.raises(TypeError) as ours:
+        json_contains(value, "error")
+    assert str(ours.value) == str(native.value)
+
+
+def test_without_drops_the_named_keys_and_keeps_the_rest_in_order() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    assert list(without(source, "b", "d").items()) == [("a", 1), ("c", 3)]
+    assert without(source, "missing") == source
+    assert without(source) == source
+
+
+def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2}
+
+    result: Final = without(source, "a")
+    result["c"] = 3
+
+    assert source == {"a": 1, "b": 2}
+    assert result == {"b": 2, "c": 3}
+
+
+def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    result: Final = only(source, "d", "b", "missing")
+    result["e"] = 5
+
+    assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
+    assert only(source) == {}
+    assert source == {"a": 1, "b": 2, "c": 3, "d": 4}

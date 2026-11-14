@@ -36,9 +36,9 @@ from litellm.proxy.proxy_server import (
 from .conftest import normalize
 
 
-def _make_request(parent_otel_span=None, path="/chat/completions"):
+def _make_request(parent_otel_span=None, path="/chat/completions", headers=()):
     return Request({
-        "type": "http", "method": "POST", "path": path, "headers": [],
+        "type": "http", "method": "POST", "path": path, "headers": list(headers),
         "state": {"parent_otel_span": parent_otel_span},
     })
 
@@ -166,6 +166,182 @@ async def test_openai_exception_handler_never_fabricates_a_call_id(monkeypatch):
 
     assert "x-litellm-call-id" not in response.headers
     assert "litellm_call_id" not in body["error"]
+
+
+def _model_access_denied_exception() -> ProxyException:
+    return ProxyException(
+        message="Team not allowed to access model. Tried to access gpt-5.6",
+        type="team_model_access_denied",
+        param="model",
+        code=403,
+    )
+
+
+_MESSAGES_ROUTES: Final = (
+    "/v1/messages",
+    "/v1/messages/count_tokens",
+    "/claude_code_gateway/v1/messages",
+    "/claude_code_gateway/v1/messages/count_tokens",
+)
+_ANTHROPIC_PASS_THROUGH_ROUTES: Final = (
+    "/anthropic/v1/messages",
+    "/anthropic/v1/messages/count_tokens",
+    "/anthropic/v1/models",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", (*_MESSAGES_ROUTES, *_ANTHROPIC_PASS_THROUGH_ROUTES))
+async def test_openai_exception_handler_answers_the_anthropic_envelope_on_the_messages_routes(path: str) -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path=path), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert body == {
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "litellm_error_type": "team_model_access_denied",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code,anthropic_type",
+    [
+        (401, "authentication_error"),
+        (403, "permission_error"),
+        (404, "not_found_error"),
+        (429, "rate_limit_error"),
+        (402, "billing_error"),
+        (409, "conflict_error"),
+        (504, "timeout_error"),
+        (405, "invalid_request_error"),
+        (408, "api_error"),
+        (502, "api_error"),
+    ],
+)
+async def test_openai_exception_handler_maps_messages_failures_to_anthropic_error_types(
+    status_code: int, anthropic_type: str
+) -> None:
+    exc: Final = ProxyException(message="denied", type="key_model_access_denied", param="model", code=status_code)
+
+    response: Final = await openai_exception_handler(request=_make_request(path="/v1/messages"), exc=exc)
+
+    assert response.status_code == status_code
+    assert json.loads(response.body)["error"]["type"] == anthropic_type
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_status_of_a_budget_failure_on_messages() -> None:
+    exc: Final = ProxyException(message="Budget exceeded", type="budget_exceeded", param=None, code=422)
+
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/messages/count_tokens"), exc=exc
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 422
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["error"]["message"] == "Budget exceeded"
+    assert body["error"]["litellm_error_type"] == "budget_exceeded"
+    assert "param" not in body["error"] and "code" not in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_openai_envelope_off_the_messages_routes() -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/chat/completions"), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert body == {
+        "error": {
+            "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "type": "team_model_access_denied",
+            "param": "model",
+            "code": "403",
+        }
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/models", "/models", "/claude_code_gateway/v1/models"))
+async def test_a_model_list_request_answers_errors_in_the_shape_its_listing_takes(path: str) -> None:
+    anthropic: Final = await openai_exception_handler(
+        request=_make_request(path=path, headers=[(b"anthropic-version", b"2023-06-01")]),
+        exc=_model_access_denied_exception(),
+    )
+    openai: Final = await openai_exception_handler(
+        request=_make_request(path=path), exc=_model_access_denied_exception()
+    )
+
+    assert json.loads(anthropic.body)["error"]["type"] == "permission_error"
+    assert json.loads(anthropic.body)["type"] == "error"
+    assert json.loads(openai.body)["error"]["type"] == "team_model_access_denied"
+    assert "type" not in json.loads(openai.body)
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_openai_envelope_on_other_anthropic_routes() -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/skills"), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert "type" not in body
+    assert body["error"]["type"] == "team_model_access_denied"
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_messages_route_copies_the_call_id_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc: Final = ProxyException(
+        message="denied",
+        type="team_model_access_denied",
+        param="model",
+        code=403,
+        headers={"x-litellm-call-id": "call-8302"},
+        provider_specific_fields={"guardrail": "keyword-block"},
+    )
+
+    response: Final = await openai_exception_handler(request=_make_request(path="/v1/messages"), exc=exc)
+    body: Final = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body["error"] == {
+        "type": "permission_error",
+        "message": "denied",
+        "provider_specific_fields": {"guardrail": "keyword-block"},
+        "litellm_error_type": "team_model_access_denied",
+        "litellm_call_id": "call-8302",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/messages", "/anthropic/v1/messages"))
+async def test_a_messages_request_with_no_key_answers_the_anthropic_authentication_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    response: Final = client.post(path, json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
+    body: Final = response.json()
+
+    assert response.status_code == 401
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "authentication_error"
+    assert "param" not in body["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +644,22 @@ async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/messages", "/claude_code_gateway/v1/messages", "/anthropic/v1/messages"))
+async def test_otel_unhandled_exception_handler_answers_the_anthropic_api_error_on_the_messages_routes(
+    path: str,
+) -> None:
+    response: Final = await otel_unhandled_exception_handler(
+        request=_make_request(path=path), exc=RuntimeError("kaboom")
+    )
+
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "Internal server error"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error():
     """ProxyException / HTTPException / RequestValidationError are re-raised
     so the dedicated handler runs."""
@@ -539,6 +731,33 @@ async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_bod
     assert response is not None
     assert response.status_code == 404
     assert json.loads(bytes(response.body)) == {"detail": "not found"}
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_claude_code_gateway_answers_the_anthropic_not_found_error() -> None:
+    request: Final = _make_request(path="/claude_code_gateway/v1/messages")
+
+    response: Final = await otlp_http_exception_handler(
+        request, HTTPException(404, "Claude Code gateway is not enabled")
+    )
+
+    assert response is not None
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {
+        "type": "error",
+        "error": {"type": "not_found_error", "message": "Claude Code gateway is not enabled"},
+    }
+
+
+def test_a_get_on_messages_answers_the_anthropic_envelope_and_keeps_the_allow_header(client: TestClient) -> None:
+    response: Final = client.get("/v1/messages")
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "Method Not Allowed"},
+    }
 
 
 @pytest.mark.asyncio

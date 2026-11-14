@@ -56,7 +56,7 @@ def _create_test_router():
 @pytest.mark.asyncio
 async def test_low_confidence_routes_to_cloud_smart():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -68,7 +68,7 @@ async def test_low_confidence_routes_to_cloud_smart():
 @pytest.mark.asyncio
 async def test_high_confidence_routes_to_deep():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -80,7 +80,7 @@ async def test_high_confidence_routes_to_deep():
 @pytest.mark.asyncio
 async def test_unverified_evidence_fallback():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -97,7 +97,7 @@ async def test_unverified_evidence_fallback():
 async def test_custom_thresholds():
     router = _create_test_router()
     custom_strategy = LAR1RoutingStrategy(
-        router,
+        router._core_ctx,
         thresholds={"low": 0.1, "medium": 0.3, "high": 0.9},
     )
 
@@ -111,7 +111,7 @@ async def test_custom_thresholds():
 @pytest.mark.asyncio
 async def test_mem_time_routes_to_cloud_fast():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -127,7 +127,7 @@ async def test_mem_time_routes_to_cloud_fast():
 @pytest.mark.asyncio
 async def test_invalid_confidence_falls_back_to_local():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -141,7 +141,7 @@ async def test_invalid_confidence_falls_back_to_local():
 @pytest.mark.asyncio
 async def test_no_metadata_defaults_to_local():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -185,7 +185,7 @@ async def test_router_init_lar1_default_thresholds():
 @pytest.mark.asyncio
 async def test_mid_confidence_routes_to_cloud_fast():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -205,7 +205,7 @@ async def test_no_router_returns_none():
 @pytest.mark.asyncio
 async def test_request_kwargs_none_uses_defaults():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -217,7 +217,7 @@ async def test_request_kwargs_none_uses_defaults():
 @pytest.mark.asyncio
 async def test_invalid_lar1_metadata_type_uses_defaults(caplog):
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     with caplog.at_level("WARNING"):
         result = await strategy.async_get_available_deployment(
@@ -232,7 +232,7 @@ async def test_invalid_lar1_metadata_type_uses_defaults(caplog):
 @pytest.mark.asyncio
 async def test_confirmed_evidence_routes_by_confidence():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -248,8 +248,8 @@ async def test_confirmed_evidence_routes_by_confidence():
 @pytest.mark.asyncio
 async def test_empty_healthy_deployments_returns_none():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
-    router.async_get_healthy_deployments = AsyncMock(return_value=[])
+    strategy = LAR1RoutingStrategy(router._core_ctx)
+    router.select = AsyncMock(return_value=[])
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -265,8 +265,8 @@ async def test_specific_deployment_dict_short_circuit():
         "litellm_params": {"model": "ollama/mythos"},
     }
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
-    router.async_get_healthy_deployments = AsyncMock(return_value=deployment)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
+    router.select = AsyncMock(return_value=deployment)
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -279,8 +279,8 @@ async def test_specific_deployment_dict_short_circuit():
 @pytest.mark.asyncio
 async def test_non_dict_healthy_deployment_returns_none():
     router = _create_test_router()
-    strategy = LAR1RoutingStrategy(router)
-    router.async_get_healthy_deployments = AsyncMock(return_value=[None])
+    strategy = LAR1RoutingStrategy(router._core_ctx)
+    router.select = AsyncMock(return_value=[None])
 
     result = await strategy.async_get_available_deployment(
         model="agent-router",
@@ -398,7 +398,7 @@ async def test_update_settings_routing_strategy_args_relinks_lar1():
 
 def test_apply_lar1_routing_strategy_wires_custom_selector():
     router = Router(model_list=_model_list(), routing_strategy="simple-shuffle")
-    apply_lar1_routing_strategy(router, {"confidence_threshold_high": 0.9})
+    apply_lar1_routing_strategy(router._core_ctx, {"confidence_threshold_high": 0.9})
     assert router.routing_strategy == "lar1"
     with pytest.raises(NotImplementedError, match="async routing"):
         router.get_available_deployment(model="agent-router")
@@ -409,7 +409,7 @@ def test_apply_lar1_invalid_thresholds_leaves_router_unchanged():
 
     with pytest.raises(ValueError, match="LAR-1 thresholds must satisfy"):
         apply_lar1_routing_strategy(
-            router,
+            router._core_ctx,
             {
                 "confidence_threshold_low": 0.9,
                 "confidence_threshold_medium": 0.5,
@@ -448,7 +448,7 @@ async def test_missing_target_type_falls_back_with_warning(caplog):
             }
         ]
     )
-    strategy = LAR1RoutingStrategy(router)
+    strategy = LAR1RoutingStrategy(router._core_ctx)
 
     with caplog.at_level("WARNING"):
         result = await strategy.async_get_available_deployment(

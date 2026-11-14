@@ -5,6 +5,7 @@ These tests validate the MoonshotChatConfig class which extends OpenAIGPTConfig.
 Moonshot AI is an OpenAI-compatible provider with minor customizations.
 """
 
+from typing import Final
 from unittest.mock import patch
 
 
@@ -12,7 +13,8 @@ import pytest
 
 import litellm
 import litellm.utils
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap, get_model_cost_map
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
@@ -713,15 +715,22 @@ class TestMoonshotReasoningEffort:
 
     @pytest.fixture(autouse=True)
     def force_local_model_cost(self, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
     @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6"])
     def test_reasoning_model_supports_reasoning_effort(self, model):
         assert "reasoning_effort" in MoonshotChatConfig().get_supported_openai_params(model)
 
-    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-latest", "kimi-k2-turbo-preview"])
+    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-k2-turbo-preview"])
     def test_non_reasoning_model_does_not_support_reasoning_effort(self, model):
         assert "reasoning_effort" not in MoonshotChatConfig().get_supported_openai_params(model)
+
+    def test_latest_alias_uses_target_supported_params(self) -> None:
+        target: Final = get_model_latest_aliases()["moonshot"]["kimi-latest"]
+        assert MoonshotChatConfig().get_supported_openai_params(
+            "kimi-latest"
+        ) == MoonshotChatConfig().get_supported_openai_params(target)
 
     @pytest.mark.parametrize("effort", ["low", "high", "max"])
     def test_declared_effort_reaches_optional_params(self, effort):

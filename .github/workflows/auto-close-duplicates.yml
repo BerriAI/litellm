@@ -16,8 +16,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/auto-close-duplicates.yml
-      - scripts/auto-close-duplicates.ts
-      - scripts/auto-close-duplicates.test.ts
+      - litellm/scripts/auto-close-duplicates.ts
+      - litellm/scripts/auto-close-duplicates.test.ts
 
 permissions: {}
 
@@ -40,7 +40,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Test the sweep
-        run: bun test scripts/auto-close-duplicates.test.ts
+        run: bun test litellm/scripts/auto-close-duplicates.test.ts
 
   sweep:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
@@ -62,7 +62,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Close unanswered duplicates, reopen ones the reporter answered
-        run: bun run scripts/auto-close-duplicates.ts
+        run: bun run litellm/scripts/auto-close-duplicates.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run == true }}

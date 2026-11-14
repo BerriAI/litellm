@@ -4,7 +4,7 @@ import os
 from collections.abc import Mapping, Sequence
 from io import BufferedRandom, BufferedReader, BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
@@ -37,6 +38,18 @@ _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]
 
 class _VertexImagenPredictResponse(TypedDict, total=False):
     predictions: ReadOnly[Sequence[object]]
+
+
+class _SupportsRead(Protocol):
+    def read(self) -> bytes | str: ...
+
+
+def _image_items(image: object) -> Sequence[object] | None:
+    return image if isinstance(image, (list, tuple)) else None
+
+
+def _image_fields(image: object) -> Mapping[object, object] | None:
+    return image if isinstance(image, dict) else None
 
 
 class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
@@ -293,30 +306,30 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         return reference_images
 
-    def _read_all_bytes(self, image: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bytes:
+    def _read_all_bytes(self, image: object, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bytes:
         if depth > max_depth:
             raise ValueError(
                 f"Max recursion depth {max_depth} reached while reading image bytes for Vertex AI Imagen image edit."
             )
 
-        if isinstance(image, (list, tuple)):
-            for item in image:
+        if (items := _image_items(image)) is not None:
+            for item in items:
                 if item is not None:
                     return self._read_all_bytes(item, depth=depth + 1, max_depth=max_depth)
             raise ValueError("Unsupported image type for Vertex AI Imagen image edit.")
 
-        if isinstance(image, dict):
+        if (fields := _image_fields(image)) is not None:
             for key in ("data", "bytes", "content"):
-                if key in image and image[key] is not None:
-                    value = image[key]
+                if key in fields and fields[key] is not None:
+                    value = fields[key]
                     if isinstance(value, str):
                         try:
                             return base64.b64decode(value)
                         except Exception:
                             continue
                     return self._read_all_bytes(value, depth=depth + 1, max_depth=max_depth)
-            if "path" in image:
-                return self._read_all_bytes(image["path"], depth=depth + 1, max_depth=max_depth)
+            if "path" in fields:
+                return self._read_all_bytes(fields["path"], depth=depth + 1, max_depth=max_depth)
 
         if isinstance(image, bytes):
             return image
@@ -350,7 +363,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 "Unsupported image input: filesystem paths are not accepted for "
                 "Vertex AI Imagen image edit. Provide image bytes or a file-like object."
             )
-        if hasattr(image, "read"):
+        if has_attributes(image, _SupportsRead, "read"):
             data = image.read()
             if isinstance(data, str):
                 data = data.encode("utf-8")

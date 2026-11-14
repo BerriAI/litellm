@@ -7,6 +7,7 @@ transformation, and model type detection.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -104,6 +105,21 @@ class TestSagemakerCohereEmbeddingConfig:
             headers={},
         )
         assert result["texts"] == ["hello"]
+
+    def test_transform_request_keeps_max_tokens_and_priority(self):
+        result: Final = self.config.transform_embedding_request(
+            model="cohere-embed-v4",
+            input=["hello"],
+            optional_params={"max_tokens": 16, "priority": 5, "truncate": "END"},
+            headers={},
+        )
+        assert result == {
+            "texts": ["hello"],
+            "input_type": "search_document",
+            "max_tokens": 16,
+            "priority": 5,
+            "truncate": "END",
+        }
 
     def test_map_openai_params_dimensions_to_output_dimension(self):
         params = self.config.map_openai_params(
@@ -626,3 +642,40 @@ class TestTEIEmbeddingResponse:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_voyage_endpoint_sends_extra_body_fields_in_the_invoke_body():
+    client = MagicMock()
+    client.invoke_endpoint.return_value = {
+        "Body": MagicMock(
+            read=MagicMock(
+                return_value=json.dumps(
+                    {
+                        "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                        "usage": {"total_tokens": 3},
+                    }
+                ).encode()
+            )
+        )
+    }
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("boto3.Session", return_value=session):
+        response = embedding(
+            model="sagemaker/voyage-3-5-endpoint",
+            input=["hello"],
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            extra_body={"input_type": "query", "truncation": False, "output_dimension": 512},
+        )
+
+    assert json.loads(client.invoke_endpoint.call_args.kwargs["Body"]) == {
+        "input": ["hello"],
+        "model": "voyage-3-5-endpoint",
+        "input_type": "query",
+        "truncation": False,
+        "output_dimension": 512,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]

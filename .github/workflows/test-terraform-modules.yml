@@ -3,16 +3,16 @@ name: Terraform Modules
 on:
   push:
     paths:
-      - "terraform/litellm/aws/**"
-      - "terraform/litellm/gcp/**"
+      - "litellm/deploy/terraform/litellm/aws/**"
+      - "litellm/deploy/terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
   pull_request:
     branches:
       - main
       - "litellm_**"
     paths:
-      - "terraform/litellm/aws/**"
-      - "terraform/litellm/gcp/**"
+      - "litellm/deploy/terraform/litellm/aws/**"
+      - "litellm/deploy/terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
         module: [aws, gcp]
     defaults:
       run:
-        working-directory: terraform/litellm/${{ matrix.module }}
+        working-directory: litellm/deploy/terraform/litellm/${{ matrix.module }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
