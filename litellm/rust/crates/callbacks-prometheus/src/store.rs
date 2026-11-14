@@ -315,6 +315,13 @@ impl Store {
         self.lock().families[id.0].kept_names.clone()
     }
 
+    pub fn display_name(&self, id: FamilyId) -> String {
+        let inner = self.lock();
+        let family = &inner.families[id.0];
+        let kind: &'static str = family.spec.kind.into();
+        format!("{kind}:{}", family.name)
+    }
+
     pub fn is_wrapped(&self, id: FamilyId) -> bool {
         self.lock().families[id.0].spec.wrapped
     }

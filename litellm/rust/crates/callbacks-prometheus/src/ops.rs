@@ -3,8 +3,10 @@ use serde_json::{Map, Value};
 
 use crate::{
     attempt::Moment,
-    emit::{Emitter, Labels, py_float},
-    labels::{LabelValues, Settings, is_py_dict, label_strings, sanitize_label_value},
+    emit::{Emitter, Labels, failed, py_float},
+    labels::{
+        LabelContext, LabelValues, Settings, is_py_dict, label_strings, sanitize_label_value,
+    },
     pyfmt::py_str,
     store::{Op, Store, StoreError},
 };
@@ -240,9 +242,15 @@ impl Ops<'_> {
         op: impl FnOnce() -> Result<Op, OpError>,
         track: bool,
     ) -> OpResult {
-        let context = values.context(self.settings);
+        let context = self.context(values)?;
         let labels = self.emit().labels(metric, &context);
         self.emit().record_with(metric, &labels, op, track)
+    }
+
+    fn context(&self, values: &LabelValues) -> Result<LabelContext, OpError> {
+        values
+            .checked_context(self.settings)
+            .map_err(|message| failed(message).into())
     }
 
     fn number(&self, key: &str) -> Result<f64, OpError> {
@@ -483,7 +491,7 @@ impl Ops<'_> {
                 py_float(rate)?
             }))
         };
-        let labels = self.emit().labels(metric, &values.context(self.settings));
+        let labels = self.emit().labels(metric, &self.context(&values)?);
         if labels.names.is_empty() {
             return self.positional_with(metric, &[], value);
         }
@@ -606,7 +614,7 @@ impl Ops<'_> {
             ),
             other => return Err(OpError::value(format!("unknown budget entity {other}"))),
         };
-        let context = values_of(self.facts).context(self.settings);
+        let context = self.context(&values_of(self.facts))?;
         let customer = entity == "customer";
         let mut labels = self.emit().labels(remaining, &context);
         if customer {
@@ -803,6 +811,27 @@ mod tests {
         assert_eq!(
             counted(&store, "litellm_deployment_failure_responses"),
             failures
+        );
+    }
+
+    #[rstest]
+    fn a_non_string_tag_under_a_wildcard_tag_setting_raises_before_counting(store: Store) {
+        let facts = json!({
+            "values": {"team": "team-1", "tags": [1]},
+            "has_exception": true,
+            "settings": {"custom_tags": ["prod-*"]},
+        });
+        assert_eq!(
+            apply(&store, "deployment_failure", &facts.to_string()),
+            Err(OpError {
+                kind: ErrorKind::Type,
+                message: "expected string or bytes-like object, got 'int'".to_owned(),
+            })
+        );
+        assert_eq!(counted(&store, "litellm_deployment_total_requests"), vec![]);
+        assert_eq!(
+            counted(&store, "litellm_deployment_failure_responses"),
+            vec![]
         );
     }
 }

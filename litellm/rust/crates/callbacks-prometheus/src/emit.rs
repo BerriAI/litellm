@@ -129,9 +129,10 @@ impl Emitter<'_> {
                 .map(|values| label_strings(&values));
         }
         if family.is_empty() {
-            return Err(failed(
-                "No label names were set when constructing the metric",
-            ));
+            return Err(failed(format!(
+                "ValueError: No label names were set when constructing {}",
+                self.store.display_name(id)
+            )));
         }
         let mut wanted = family.clone();
         let mut given = labels.names.clone();
@@ -224,7 +225,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::success::exception_text;
+    use crate::{
+        store::{FamilySpec, Kind, ManualClock},
+        success::exception_text,
+        tracker::SeriesLimits,
+    };
 
     #[rstest]
     #[case::int(json!(3), Ok(3.0))]
@@ -252,5 +257,56 @@ mod tests {
     )]
     fn type_errors_carry_the_python_text(#[case] error: CallbackError, #[case] expected: &str) {
         assert_eq!(exception_text(&error), expected);
+    }
+
+    #[rstest]
+    #[case::gauge(
+        Kind::Gauge,
+        "litellm_deployment_state",
+        "gauge:litellm_deployment_state"
+    )]
+    #[case::counter(Kind::Counter, "litellm_requests_total", "counter:litellm_requests")]
+    fn labels_on_an_unlabelled_family_raise_the_prometheus_client_value_error(
+        #[case] kind: Kind,
+        #[case] declared: &str,
+        #[case] shown: &str,
+    ) {
+        let store = Store::new(SeriesLimits::default(), Box::new(ManualClock::default()));
+        store
+            .register(FamilySpec {
+                declared: declared.to_owned(),
+                documentation: "doc".to_owned(),
+                kind,
+                labelnames: Vec::new(),
+                excluded: Vec::new(),
+                buckets: Vec::new(),
+                most_recent: false,
+                wrapped: false,
+                shares_overflow: true,
+            })
+            .unwrap_or_else(|error| panic!("{error}"));
+        let settings = Settings::default();
+        let emit = Emitter {
+            store: &store,
+            settings: &settings,
+        };
+        let labels = Labels {
+            names: vec!["model_id".to_owned()],
+            values: vec![Some("m".to_owned())],
+        };
+        let error = emit
+            .record(declared, &labels, Op::Set(1.0), false)
+            .err()
+            .unwrap_or_else(|| panic!("an unlabelled family refuses labels"));
+        let CallbackError::Failed(message) = error else {
+            panic!("expected a failed callback, got {error:?}");
+        };
+        assert_eq!(
+            named_error(&message),
+            Some((
+                "ValueError",
+                format!("No label names were set when constructing {shown}").as_str()
+            ))
+        );
     }
 }
