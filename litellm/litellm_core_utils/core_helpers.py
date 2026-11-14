@@ -109,6 +109,25 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
@@ -139,6 +158,13 @@ def without(
 ) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
     """``mapping`` without ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
     return {key: value for key, value in mapping.items() if key not in keys}
+
+
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
@@ -259,17 +285,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(

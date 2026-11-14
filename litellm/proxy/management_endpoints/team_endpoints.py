@@ -142,6 +142,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     RoutedModels,
@@ -620,7 +621,7 @@ async def refresh_cached_team(
     )
     batches: Final = active_request_redis_batches()
     if batches is not None:
-        await batches.flush_all()
+        await batches.flush_pre_call()
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
@@ -1917,6 +1918,13 @@ async def new_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
         )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None,
+            prisma_client,
+            license_first=True,
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2636,6 +2644,13 @@ async def update_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
+        await validate_guardrail_names(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            prisma_client,
+            license_first=True,
         )
 
         if data.soft_budget is not None:
@@ -5388,6 +5403,9 @@ async def _resolve_team_access_group_resources(
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
             "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "access_group_vector_store_ids": tuple(
+                dict.fromkeys(chain.from_iterable(group.access_vector_store_ids or () for group in resolved_groups))
+            ),
             "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
@@ -5397,6 +5415,7 @@ async def _resolve_team_access_group_resources(
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
                     skill_names=tuple(group.access_skill_names or ()),
+                    vector_store_ids=tuple(group.access_vector_store_ids or ()),
                 )
                 for group in resolved_groups
             ),

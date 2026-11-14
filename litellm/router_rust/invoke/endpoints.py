@@ -53,9 +53,11 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_api import RouterRegistry
     from litellm.router_rust.core import RustCore
     from litellm.router_rust.steps.selection import StrategySelectors
@@ -94,6 +96,9 @@ class EndpointCore(Protocol):
     def routing_cache(self) -> "DualCache": ...
 
     @property
+    def router_usage(self) -> "RouterUsage": ...
+
+    @property
     def selectors(self) -> "StrategySelectors": ...
 
     @property
@@ -120,6 +125,8 @@ class EndpointCore(Protocol):
     def group_deployments(self, model_name: str) -> Sequence[Mapping[str, object]] | None:
         """``_core_get_model_list(model_name=...)`` on the host registry."""
         ...
+
+    def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None: ...
 
     def routed_name(self, model: object) -> str:
         """``RustCore.routed_name``: what a ``model`` that is no string raises, or the name it routes under."""
@@ -854,6 +861,24 @@ async def compacted_attempt(
     return await compact_to_fit(ctx, deployment, call.kwargs, _compaction_surface(core, plan))
 
 
+_VECTOR_STORE_SEARCH_OPS: Final = frozenset({"vector_stores.main.asearch", "vector_stores.main.search"})
+
+
+def _deployment_params(
+    plan: Plan, deployment: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the attempt's own copy of the deployment params
+    params: Final = as_dict(deployment.get("litellm_params"))
+    return as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+
+
+def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], request: Mapping[str, object]) -> None:
+    if _handler_name(plan.host_op) not in {"decisions", "adecisions", "systemone", "asystemone"}:
+        return
+    from litellm.decisions.call import validate_router_connection
+
+    validate_router_connection(str(data.get("model")), _generic_provider(data), request)
+
+
 def attempt_call(
     core: EndpointCore,
     plan: Plan,
@@ -869,9 +894,9 @@ def attempt_call(
     shaping: Final = core.shaping
     kwargs: Final = without(request, *ROUTING_KEYS)
     named: Final = {name: kwargs.pop(name) for name in plan.named if name in kwargs}
-    data: Final = as_dict(deployment.get("litellm_params"))
+    data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
-    cache: Final = core.routing_cache
+    _validate_decisions_connection(plan, data, request)
     caching: Final = shaping.cache_responses
     # A fallback hop routes the target group in a copy of the metadata (`run_async_fallback`).
     if fallback_level > 0:
@@ -888,7 +913,9 @@ def attempt_call(
             start_silent_experiments(core, plan, silent_model, named.get("messages"), kwargs)
             if "messages" in named:
                 kwargs.setdefault("messages", named["messages"])
-            update_kwargs_with_deployment(shaping, deployment, kwargs, cache=cache, splits_stream_timeout=True)
+            update_kwargs_with_deployment(
+                shaping, deployment, kwargs, usage=core.router_usage, splits_stream_timeout=True
+            )
             kwargs.pop("silent_model", None)
             final = without_router_only_kwargs(  # rebind-ok: rebound as the Python router rebinds it
                 {
@@ -902,7 +929,7 @@ def attempt_call(
             return AttemptCall(plan.host_op, final, kwargs, str(params.get("model")), group)
         case "text" | "embedding" | "image" | "transcription" | "rerank" | "adapter":
             update_kwargs_with_deployment(
-                shaping, deployment, kwargs, cache=cache, splits_stream_timeout=plan.splits_stream_timeout
+                shaping, deployment, kwargs, usage=core.router_usage, splits_stream_timeout=plan.splits_stream_timeout
             )
             refused: Final = embedding_batch_refusal(plan, deployment, named.get("input"), kwargs, requested)
             if refused is not None:
@@ -916,7 +943,7 @@ def attempt_call(
             }
             return AttemptCall(plan.host_op, without_router_only_kwargs(final), kwargs, model_name, group)
         case "speech":
-            update_kwargs_with_deployment(shaping, deployment, kwargs, cache=cache)
+            update_kwargs_with_deployment(shaping, deployment, kwargs, usage=core.router_usage)
             voice = kwargs.pop("voice", None)  # rebind-ok: rebound as the Python router rebinds it
             final = {  # rebind-ok: rebound as the Python router rebinds it
                 **data,
@@ -930,7 +957,9 @@ def attempt_call(
             if plan.kind == "cancel_batch":
                 data.update(_resolved_credentials(core, deployment, requested))
                 data.pop("litellm_credential_name", None)
-            update_kwargs_with_deployment(shaping, deployment, kwargs, cache=cache, function_name=plan.function_name)
+            update_kwargs_with_deployment(
+                shaping, deployment, kwargs, usage=core.router_usage, function_name=plan.function_name
+            )
             final = {  # rebind-ok: rebound as the Python router rebinds it
                 **data,
                 "custom_llm_provider": _provider(core, data),
@@ -946,7 +975,7 @@ def attempt_call(
                 shaping,
                 deployment,
                 kwargs,
-                cache=cache,
+                usage=core.router_usage,
                 function_name="generic_api_call",
                 splits_stream_timeout=invoked_handler_name(core, plan) in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
             )
@@ -962,7 +991,7 @@ def attempt_call(
             }
             return AttemptCall(plan.host_op, final, kwargs, model_name, group)
         case "moderation":
-            update_kwargs_with_deployment(shaping, deployment, kwargs, cache=cache)
+            update_kwargs_with_deployment(shaping, deployment, kwargs, usage=core.router_usage)
             kwargs["model"] = model_name
             kwargs.update(data)
             return AttemptCall(plan.host_op, kwargs, kwargs, model_name, group)
@@ -993,7 +1022,7 @@ def _generic_attempt(
         core.shaping,
         deployment,
         kwargs,
-        cache=core.routing_cache,
+        usage=core.router_usage,
         function_name="_ageneric_api_call_with_fallbacks",
         splits_stream_timeout=handler in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
         opens_responses_socket=socket,
@@ -2243,7 +2272,7 @@ class RustEndpoints:
                     shaping,
                     deployment,
                     new_kwargs,  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
-                    cache=self._core.routing_cache,
+                    usage=self._core.router_usage,
                     function_name="aretrieve_batch",
                 )
                 bucket: Final = metadata_bucket(new_kwargs, metadata_variable_name)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
@@ -2328,7 +2357,7 @@ class RustEndpoints:
                 self._core.shaping,
                 deployment,
                 kwargs_copy,  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
-                cache=self._core.routing_cache,
+                usage=self._core.router_usage,
                 function_name="acreate_file",
             )
             data: Final = as_dict(deployment.get("litellm_params"))

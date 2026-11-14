@@ -21,8 +21,11 @@
   - `tests/test_litellm_rust/test_public_entries.py` marks such a route `python=None`, so dropping a route's Python changes its entries, its rules and that field together
 - A detector reads the same inputs the legacy Python path reads, so the catalog and the fallback agree on which requests need Python
   - A route's context, its target as well as its features, reads `NativeCall.resolved`, so an argument counts the same whether it came by position, by keyword or as a signature default
-  - A route's sync and async dispatches read different detector maps when the legacy handlers differ: Messages runs pre-request hooks, web search interception and interceptors only on async calls, and the sync Responses handler runs the deployment hook itself
+  - A route's sync and async dispatches read different detector maps when the legacy handlers differ, as the sync Responses handler runs the deployment hook itself. Messages reads one map for both, since Rust serves its async-only pre-request hooks, web search short-circuit and interceptors through host calls
 - A detector that raises keeps the call on Python. `PublicDispatch` logs it and never fails the call over routing
+- Messages for provider `anthropic` is `RUST_REQUIRED` and has no Python path
+  - a call the rules would send to Python (a `MESSAGES_PYTHON_FEATURES` feature or a raising detector) raises `UnsupportedParamsError` from the Python fallback in `litellm/messages/dispatch.py`, which names the detected features
+  - other Messages providers keep the Python fallback
 - `catalog.RULES` is rollout policy with no tests of its own. Tests pass the rules they need, so check these invariants by review whenever `RULES` changes
 
 # Public entries

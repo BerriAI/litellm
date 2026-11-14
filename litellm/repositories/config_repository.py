@@ -60,6 +60,7 @@ ROUTER_SETTINGS_PARAM: Final = "router_settings"
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
 _ROUTER_SETTINGS: Final = TypeAdapter(dict[str, JsonValue])
+_BOOL: Final = TypeAdapter(bool)
 
 
 def _stored_router_settings(param_value: object) -> Mapping[str, JsonValue]:
@@ -137,6 +138,13 @@ class ConfigRepository:
             },
         )
         return ConfigParam(param_name=param_name, param_value=param_value)
+
+    async def model_deprecations_enabled(self) -> bool:
+        record: Final = await self.get_param("model_deprecation_alerts_enabled")
+        return True if record is None else _BOOL.validate_python(record.param_value, strict=True)
+
+    async def set_model_deprecations_enabled(self, enabled: bool) -> None:
+        await self.set_param("model_deprecation_alerts_enabled", enabled)
 
     async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
         rows: Final = await self._writer.query_raw(

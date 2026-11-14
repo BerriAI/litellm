@@ -13,6 +13,7 @@ from litellm.proxy.rust_forward.supervisor.preflight import StartupError, gatewa
 from litellm.proxy.rust_forward.supervisor.runtime import SpawnFailed, exit_like, run
 
 OWN_COMMAND: Final = (sys.executable, *sys.orig_argv[1:])
+SERVING_WITHOUT_RUST: Final = "so Python serves the public port without Rust forwarding"
 
 
 def _nothing_to_prepare() -> None:
@@ -34,7 +35,7 @@ def supervise(
     chosen: Final = current_platform() if platform is None else platform
     checked: Final = startup_check(chosen, server, gateway_binary(chosen, scripts_dir))
     if isinstance(checked, StartupError):
-        sys.stderr.write(f"{checked.reason}, so Python serves the public port without Rust forwarding\n")
+        sys.stderr.write(f"{checked.reason}, {SERVING_WITHOUT_RUST}\n")
         return checked
     before_start()
     try:

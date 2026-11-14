@@ -10,7 +10,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm.proxy.rust_forward.mode import RUST_HOP
-from litellm.proxy.rust_forward.platform import PlatformListener, SpawnOptions
+from litellm.proxy.rust_forward.platform import ChildProcess, PlatformListener, SpawnOptions
 from litellm.proxy.rust_forward.server import Server
 from litellm.proxy.server_listener import InheritedFd
 
@@ -55,10 +55,10 @@ class PosixPlatform:
         for signum in self.relayed_signals:
             loop.add_signal_handler(signum, on_signal, signum)
 
-    def signal_child(self, process: asyncio.subprocess.Process, signum: signal.Signals) -> None:
+    def signal_child(self, process: ChildProcess, signum: signal.Signals) -> None:
         with contextlib.suppress(ProcessLookupError):
             process.send_signal(signum)
 
-    def stop_group(self, process: asyncio.subprocess.Process) -> None:
+    def stop_group(self, process: ChildProcess) -> None:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)

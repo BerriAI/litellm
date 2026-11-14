@@ -273,6 +273,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
+        include_entity_breakdown: Annotated[bool, Query(description="Include per-entity usage and key counts.")] = True,
     ) -> SpendAnalyticsPaginatedResponse:
         try:
             resolved: ResolvedScope = await _resolved_scope(
@@ -286,7 +287,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 repository,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
-                include_entity_breakdown=resolver.include_entity_breakdown,
+                include_entity_breakdown=resolver.include_entity_breakdown and include_entity_breakdown,
                 include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )
