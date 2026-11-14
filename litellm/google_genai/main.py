@@ -201,11 +201,12 @@ class GenerateContentHelper:
             kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
-            litellm_params={
-                "litellm_call_id": litellm_call_id,
-                **({"vertex_location": vertex_location} if vertex_location else {}),
-            },
-            custom_llm_provider=custom_llm_provider,
+                     litellm_params={
+             "litellm_call_id": litellm_call_id,
+             **({"vertex_location": vertex_location} if vertex_location else {}),
+             **({"model_info": kwargs["model_info"]} if kwargs.get("model_info") else {}),
+         },
+         custom_llm_provider=custom_llm_provider,
         )
 
         return GenerateContentSetupResult(
