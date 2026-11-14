@@ -85,7 +85,6 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
     ("POST", "/credentials/{credential_name:path}/user_connection/start"),
     ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
     ("DELETE", "/credentials/{credential_name:path}/user_connection"),
-    ("POST", "/v1/mcp/server/oauth/{server_id}/register"),
     ("POST", "/v1/mcp/server/{server_id}/oauth-user-credential"),
     ("DELETE", "/v1/mcp/server/{server_id}/oauth-user-credential"),
     ("POST", "/v1/mcp/server/{server_id}/user-credential"),
