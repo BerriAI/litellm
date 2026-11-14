@@ -739,7 +739,7 @@ def usage_recorder(monkeypatch: pytest.MonkeyPatch) -> _UsageRecorder:
 
 _LOGGED_AGENT_NAMES: Final = pytest.mark.parametrize(
     ("agent_name", "logged_model"),
-    [("configured-agent", "a2a_agent/configured-agent"), (None, "a2a_agent/recording-agent")],
+    [("configured-agent", "a2a_agent/configured-agent"), ("", "a2a_agent/"), (None, "a2a_agent/recording-agent")],
 )
 
 
