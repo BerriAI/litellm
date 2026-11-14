@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import copy
 import hashlib
 import json
@@ -1754,3 +1755,319 @@ async def test_an_unlisted_5xx_is_requeued_without_an_extra_attempt(
 
     assert len(logger.sink.queued_keys()) == 1
     assert len(bucket.puts()) == 1
+
+
+async def _peak_width(logger: S3LoggerV3, bucket: ScriptedBucket, events: int) -> int:
+    bucket.peak = 0
+    bucket.delay = 0.1
+    await _log_all(logger, [_payload(f"width-{index}") for index in range(events)])
+    await logger.flush_queue()
+    bucket.delay = 0.0
+    return bucket.peak
+
+
+@pytest.mark.asyncio
+async def test_configured_concurrency_is_the_fixed_limit_when_adaptive_is_off(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=64)
+
+    assert await _peak_width(logger, bucket, 128) == 64
+
+    bucket.reply("_elem-0.json", _SLOW_DOWN, (200, ""))
+    await _upload(logger, _payload("elem-0"))
+
+    assert await _peak_width(logger, bucket, 128) == 64
+
+
+@pytest.mark.asyncio
+async def test_default_upload_width_is_16(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+    from litellm.constants import DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+
+    logger: Final = _logger(monkeypatch, bucket)
+
+    assert await _peak_width(logger, bucket, 2 * DEFAULT_S3_MAX_CONCURRENT_UPLOADS) == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    assert DEFAULT_S3_MAX_CONCURRENT_UPLOADS == 16
+
+
+async def _timed_send_batch(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, size: int) -> float:
+    logger: Final = _logger(monkeypatch, bucket)
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(size)])
+    started: Final = time.perf_counter()
+    await logger.flush_queue()
+    return time.perf_counter() - started
+
+
+@pytest.mark.asyncio
+async def test_send_batch_time_grows_linearly_with_the_batch(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    baseline: Final = await _timed_send_batch(monkeypatch, bucket, 2_000)
+    quadrupled: Final = await _timed_send_batch(monkeypatch, bucket, 8_000)
+
+    assert quadrupled / baseline < 8, f"2k took {baseline:.3f}s, 8k took {quadrupled:.3f}s"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+@pytest.mark.asyncio
+async def test_repeated_failure_notifications_upload_once(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    stream: bool,
+    concurrent: bool,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    sink: Final = _logger(monkeypatch, bucket)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [sink])
+    logging_obj: Final = Logging(
+        model="openai/gpt-4o-mini",
+        messages=[],
+        stream=stream,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="synthetic-request",
+        function_id="synthetic-function",
+    )
+    error: Final = litellm.ServiceUnavailableError(
+        message="synthetic deployment-selection failure",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+
+    if concurrent:
+        await asyncio.gather(*(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3)))
+    else:
+        for _ in range(3):
+            await logging_obj.async_failure_handler(error, "synthetic traceback")
+
+    assert len(sink.sink.queued_keys()) == 1
+    await sink.flush_queue()
+    await asyncio.sleep(0)
+    assert len(bucket.puts()) == 1
+    assert all(_uploaded(put)["status"] == "failure" for put in bucket.puts())
+
+
+@pytest.fixture
+def _s3_v2_callback_params(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+
+async def _wait_for_a_queued_key(logger: S3LoggerV3) -> list[str]:
+    for _ in range(500):
+        keys = logger.sink.queued_keys()
+        if keys:
+            return keys
+        await asyncio.sleep(0.01)
+    return []
+
+
+@pytest.mark.usefixtures("_s3_v2_callback_params")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True])
+async def test_basic_s3_v2_logging(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, streaming: bool) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+            "s3_bucket_name": "load-testing-oct",
+            "s3_endpoint_url": bucket.url,
+            "s3_aws_secret_access_key": "test-secret",
+            "s3_aws_access_key_id": "test-key",
+            "s3_region_name": "us-west-2",
+        },
+    )
+
+    s3_v2_logger: Final = _logger_from_globals(monkeypatch)
+    monkeypatch.setattr(litellm, "callbacks", [s3_v2_logger])
+
+    response_id = None
+    response = await litellm.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
+        stream=streaming,
+    )
+    if streaming:
+        async for chunk in response:
+            response_id = chunk.id
+    else:
+        response_id = response.id
+
+    assert await _wait_for_a_queued_key(s3_v2_logger)
+    await s3_v2_logger.flush_queue()
+
+    uploaded_keys: Final = [unquote(put.path) for put in bucket.puts()]
+    assert len(uploaded_keys) > 0, "S3 upload was never called"
+    assert response_id is not None
+    assert any(response_id in key for key in uploaded_keys), (
+        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    )
+
+
+def _logger_from_globals(monkeypatch: pytest.MonkeyPatch) -> S3LoggerV3:
+    logger: Final = rust_s3_logger(monkeypatch)
+    _ = logger.periodic_flush_task.cancel()
+    return logger
+
+
+@pytest.mark.usefixtures("_s3_v2_callback_params")
+@pytest.mark.asyncio
+async def test_basic_s3_v2_logging_failure(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {
+            "s3_bucket_name": "test-bucket",
+            "s3_endpoint_url": bucket.url,
+            "s3_aws_secret_access_key": "test-secret",
+            "s3_aws_access_key_id": "test-key",
+            "s3_region_name": "us-west-2",
+        },
+    )
+    s3_v2_logger: Final = _logger_from_globals(monkeypatch)
+    monkeypatch.setattr(litellm, "callbacks", [s3_v2_logger])
+
+    with contextlib.suppress(Exception):
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            api_key="invalid-api-key",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response=Exception("forced failure for S3 logging test"),
+        )
+
+    assert await _wait_for_a_queued_key(s3_v2_logger)
+    await s3_v2_logger.flush_queue()
+
+    (put,) = bucket.puts()
+    assert put.path.startswith("/test-bucket/")
+    assert put.headers["content-type"] == "application/json"
+    assert '"model": "gpt-5-mini"' in put.body.decode()
+
+
+def _batch_line_items_payload() -> dict[str, object]:
+    line = {
+        "batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA",
+        "custom_id": "ok-1",
+        "status": "success",
+        "request": {"custom_id": "ok-1", "body": {"messages": [{"role": "user", "content": "hi"}]}},
+        "response": {"custom_id": "ok-1", "response": {"status_code": 200, "body": {"id": "chatcmpl-1"}}},
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        "response_cost": 0.005,
+        "model": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "metadata": {"user_api_key_hash": "hash-alice"},
+    }
+    return {
+        "batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA",
+        "finished_at": 1791494130,
+        "part": 0,
+        "lines": (line, {**line, "custom_id": "ok-2"}),
+    }
+
+
+def _s3_logger_answering(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, s3_path: str | None, content: bytes = b""
+) -> S3LoggerV3:
+    bucket.reply("/test-bucket/", (status, content.decode()))
+    return _logger(
+        monkeypatch,
+        bucket,
+        s3_path=s3_path,
+        s3_aws_access_key_id=_ACCESS_KEY,
+        s3_aws_secret_access_key=_SECRET_KEY,
+        s3_flush_interval=3600,
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_one_ndjson_object_under_the_configured_path(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _s3_logger_answering(monkeypatch, bucket, 200, "cold/")
+    payload: Final = _batch_line_items_payload()
+
+    await logger.async_log_batch_line_items(payload)
+
+    (request,) = bucket.received
+    assert request.method == "PUT"
+    assert request.path == "/test-bucket/cold/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
+    assert request.headers["content-type"] == "application/x-ndjson"
+    assert request.headers["content-disposition"] == 'inline; filename="bGl0ZWxsbV9wcm94eTtiYXRjaA-part-00000.jsonl"'
+    assert [json.loads(line) for line in request.body.decode().splitlines()] == list(payload["lines"])
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_without_an_s3_path_sit_at_the_bucket_root(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _s3_logger_answering(monkeypatch, bucket, 200, None)
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert [request.path for request in bucket.received] == [
+        "/test-bucket/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_batch_line_items_upload_is_logged_with_the_batch_id(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    logger: Final = _s3_logger_answering(monkeypatch, bucket, 400, "cold")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert len(bucket.received) == 1
+    assert any(
+        "bGl0ZWxsbV9wcm94eTtiYXRjaA" in record.getMessage() and "were not stored" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_batch_line_items_object_the_bucket_refuses_for_good_is_not_kept_in_memory(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _s3_logger_answering(
+        monkeypatch, bucket, 400, "cold", b"<Error><Code>InvalidArgument</Code></Error>"
+    )
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+    await logger.flush_queue()
+
+    assert len(bucket.received) == 1
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    import threading
+
+    logger: Final = _s3_logger_answering(monkeypatch, bucket, 200, "cold/")
+    serialize: Final = s3_v3.batch_line_items_ndjson
+    threads: Final[dict[str, threading.Thread]] = {}
+
+    def _serialize(payload: object) -> str:
+        threads["serialize"] = threading.current_thread()
+        return serialize(payload)
+
+    monkeypatch.setattr(s3_v3, "batch_line_items_ndjson", _serialize)
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert len(bucket.received) == 1
+    assert set(threads) == {"serialize"}
+    assert threading.main_thread() not in threads.values()
