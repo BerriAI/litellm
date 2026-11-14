@@ -9,7 +9,7 @@ use litellm_core_utils::{
 use litellm_llms_types::{
     formats::chat_completions::{
         ChatCompletionThinkingBlock, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
-        ChatCompletionsResponse, ChatMessage,
+        ChatCompletionsResponse, ChatMessage, ChatMessageContent,
     },
     providers::anthropic::DEFAULT_HEADERS,
 };
@@ -29,8 +29,8 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_message_accepting,
-                unsupported_param,
+                ValidatedEnvironment, unsupported_message, unsupported_message_content,
+                unsupported_message_fields, unsupported_param,
             },
         },
     },
@@ -280,13 +280,36 @@ fn unsupported_anthropic_message(message: &ChatMessage) -> Option<Decline> {
     if message.role != "assistant" {
         return unsupported_message(message);
     }
-    unsupported_message_accepting(message, ASSISTANT_REASONING_FIELDS).or_else(|| {
+    unsupported_message_fields(message, ASSISTANT_REASONING_FIELDS).or_else(|| {
         match message.extra.get(THINKING_BLOCKS_FIELD) {
-            None | Some(Value::Null) => None,
-            Some(Value::Array(blocks)) => blocks.iter().find_map(unsupported_thinking_block),
+            None | Some(Value::Null) => unsupported_message_content(message.content.as_ref()),
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .find_map(unsupported_thinking_block)
+                .or_else(|| unsupported_assistant_content(message.content.as_ref(), blocks)),
             Some(_) => Some(Decline::new("malformed thinking block")),
         }
     })
+}
+
+/// A reply cut off mid-thought comes back with no content, and Python replays
+/// it as its thinking blocks alone.
+fn unsupported_assistant_content(
+    content: Option<&ChatMessageContent>,
+    thinking_blocks: &[Value],
+) -> Option<Decline> {
+    let has_no_content = match content {
+        None => true,
+        Some(ChatMessageContent::Parts(parts)) => parts.is_empty(),
+        Some(ChatMessageContent::Text(_)) => false,
+    };
+    let replays_thinking = thinking_blocks
+        .iter()
+        .any(|block| replayable_thinking_block(block).is_some());
+    if has_no_content && replays_thinking {
+        return None;
+    }
+    unsupported_message_content(content)
 }
 
 /// Python drops `cache_control` and blank redacted blocks only under
@@ -365,6 +388,33 @@ fn content_block(block: &TurnBlock) -> Option<Value> {
     }
 }
 
+fn thinking_identity(block: &Value) -> Option<(&str, &str)> {
+    let key = match block.get("type").and_then(Value::as_str)? {
+        "thinking" => "signature",
+        "redacted_thinking" => "data",
+        _ => return None,
+    };
+    Some((key, block.get(key)?.as_str()?))
+}
+
+/// Python's `_without_repeated_thinking`: a thinking block that several merged
+/// assistant messages carry is sent once, where it first appears.
+fn without_repeated_thinking(blocks: Vec<Value>) -> Vec<Value> {
+    blocks
+        .iter()
+        .enumerate()
+        .filter(|(index, block)| {
+            thinking_identity(block).is_none_or(|identity| {
+                blocks
+                    .iter()
+                    .position(|other| thinking_identity(other) == Some(identity))
+                    == Some(*index)
+            })
+        })
+        .map(|(_, block)| block.clone())
+        .collect()
+}
+
 fn anthropic_body(
     model: &str,
     conversation: &Conversation,
@@ -376,7 +426,9 @@ fn anthropic_body(
         .map(|turn| {
             json!({
                 "role": <&'static str>::from(turn.role),
-                "content": turn.blocks.iter().filter_map(content_block).collect::<Vec<_>>(),
+                "content": without_repeated_thinking(
+                    turn.blocks.iter().filter_map(content_block).collect()
+                ),
             })
         })
         .collect();
@@ -693,7 +745,7 @@ mod tests {
             .clone()
     }
 
-    #[test]
+    #[rstest]
     fn replays_a_thinking_reply_ahead_of_its_text_without_the_stream_index() {
         assert_eq!(
             replayed_assistant_content(json!([
@@ -725,7 +777,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn unwraps_bedrock_wrapped_redacted_data_like_python() {
         assert_eq!(
             replayed_assistant_content(
@@ -738,11 +790,69 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn accepts_null_thinking_blocks() {
         assert_eq!(
             replayed_assistant_content(Value::Null),
             json!([{"type": "text", "text": "2 yes"}])
+        );
+    }
+
+    fn cut_off_reply(content: Option<Value>, thinking_blocks: Value) -> Value {
+        let reply = match content {
+            Some(content) => {
+                json!({"role": "assistant", "content": content, "thinking_blocks": thinking_blocks})
+            }
+            None => json!({"role": "assistant", "thinking_blocks": thinking_blocks}),
+        };
+        json!([{"role": "user", "content": "hi"}, reply, {"role": "user", "content": "go on"}])
+    }
+
+    #[rstest]
+    #[case::null_content(Some(Value::Null))]
+    #[case::no_content_key(None)]
+    #[case::empty_content_list(Some(json!([])))]
+    fn replays_a_reply_cut_off_mid_thought_as_its_thinking_alone(#[case] content: Option<Value>) {
+        let thinking = json!({"type": "thinking", "thinking": "", "signature": "sig"});
+        let conversation = cut_off_reply(content, json!([thinking]));
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("claude-sonnet-4-5", conversation, json!({"max_tokens": 16}))["messages"][1],
+            json!({"role": "assistant", "content": [thinking]})
+        );
+    }
+
+    #[rstest]
+    #[case::no_thinking(json!([]))]
+    #[case::only_unsigned_thinking(json!([{"type": "thinking", "thinking": "t"}]))]
+    fn declines_a_reply_with_nothing_to_replay(#[case] thinking_blocks: Value) {
+        assert_eq!(
+            reason(cut_off_reply(Some(Value::Null), thinking_blocks), json!({})),
+            Some(Decline::new("message without content"))
+        );
+    }
+
+    #[rstest]
+    fn sends_a_thinking_block_repeated_across_merged_replies_once() {
+        let thinking = json!({"type": "thinking", "thinking": "t", "signature": "sig"});
+        let redacted = json!({"type": "redacted_thinking", "data": "EmwKAhgB"});
+        let conversation = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "one", "thinking_blocks": [thinking, redacted]},
+            {"role": "assistant", "content": "two",
+             "thinking_blocks": [thinking, {"type": "redacted_thinking", "data": "RW13S0FoZ0I="}]},
+            {"role": "user", "content": "why"}
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("claude-sonnet-4-5", conversation, json!({"max_tokens": 16}))["messages"][1]
+                ["content"],
+            json!([
+                thinking,
+                redacted,
+                {"type": "text", "text": "one"},
+                {"type": "text", "text": "two"}
+            ])
         );
     }
 
@@ -773,7 +883,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn declines_reasoning_fields_outside_an_assistant_message() {
         assert_eq!(
             reason(
@@ -896,7 +1006,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn a_thinking_response_returns_reasoning_content_and_thinking_blocks_like_python() {
         let response = transform_response(json!({
             "model": "claude-sonnet-4-5",
@@ -959,7 +1069,7 @@ mod tests {
         assert_eq!(response.choices[0].finish_reason, "length");
     }
 
-    #[test]
+    #[rstest]
     fn a_text_response_carries_no_reasoning_fields() {
         let response = transform_response(json!({
             "model": "claude-sonnet-4-5",

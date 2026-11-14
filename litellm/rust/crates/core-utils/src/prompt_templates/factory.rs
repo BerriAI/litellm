@@ -164,6 +164,7 @@ pub fn build_conversation(messages: &[ChatMessage]) -> Conversation {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -186,7 +187,7 @@ mod tests {
         turn.texts().collect()
     }
 
-    #[test]
+    #[rstest]
     fn lifts_system_messages_out_of_the_turn_list() {
         let conversation = build_conversation(&messages(json!([
             {"role": "system", "content": "be terse"},
@@ -196,7 +197,7 @@ mod tests {
         assert_eq!(conversation.turns, vec![text_turn(TurnRole::User, &["hi"])]);
     }
 
-    #[test]
+    #[rstest]
     fn merges_consecutive_same_role_turns() {
         let conversation = build_conversation(&messages(json!([
             {"role": "user", "content": "one"},
@@ -214,7 +215,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn flattens_text_parts_in_order() {
         let conversation = build_conversation(&messages(json!([
             {"role": "user", "content": [
@@ -225,7 +226,7 @@ mod tests {
         assert_eq!(texts(&conversation.turns[0]), vec!["first", "second"]);
     }
 
-    #[test]
+    #[rstest]
     fn rewrites_empty_and_whitespace_only_text_to_the_python_placeholder() {
         let conversation = build_conversation(&messages(json!([
             {"role": "user", "content": ""},
@@ -238,7 +239,7 @@ mod tests {
         assert_eq!(texts(&conversation.turns[1]), vec![placeholder]);
     }
 
-    #[test]
+    #[rstest]
     fn right_strips_only_the_final_assistant_turn() {
         let conversation = build_conversation(&messages(json!([
             {"role": "user", "content": "hi"},
@@ -250,7 +251,7 @@ mod tests {
         assert_eq!(texts(&conversation.turns[3]), vec!["stripped"]);
     }
 
-    #[test]
+    #[rstest]
     fn does_not_strip_when_the_last_turn_is_a_user_turn() {
         let conversation = build_conversation(&messages(json!([
             {"role": "assistant", "content": "kept  "},
@@ -283,7 +284,7 @@ mod tests {
         assert_eq!(conversation.system, vec!["kept".to_string()]);
     }
 
-    #[test]
+    #[rstest]
     fn puts_each_assistant_messages_thinking_blocks_ahead_of_its_own_text() {
         let first = json!({"type": "thinking", "thinking": "a", "signature": "s1"});
         let second = json!({"type": "redacted_thinking", "data": "d2"});

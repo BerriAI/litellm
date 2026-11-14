@@ -127,10 +127,11 @@ pub fn unsupported_param(
 /// `{"type": "text", "text": ...}`. Tool calls, tool results, and multimodal
 /// parts decline so Python's fuller translation handles them.
 pub fn unsupported_message(message: &ChatMessage) -> Option<Decline> {
-    unsupported_message_accepting(message, &[])
+    unsupported_message_fields(message, &[])
+        .or_else(|| unsupported_message_content(message.content.as_ref()))
 }
 
-pub fn unsupported_message_accepting(
+pub fn unsupported_message_fields(
     message: &ChatMessage,
     accepted_fields: &[&str],
 ) -> Option<Decline> {
@@ -140,10 +141,12 @@ pub fn unsupported_message_accepting(
     }) {
         return Some(Decline::new("unrecognized message field"));
     }
-    if !matches!(message.role.as_str(), "system" | "user" | "assistant") {
-        return Some(Decline::new("unrecognized message role"));
-    }
-    match &message.content {
+    (!matches!(message.role.as_str(), "system" | "user" | "assistant"))
+        .then_some(Decline::new("unrecognized message role"))
+}
+
+pub fn unsupported_message_content(content: Option<&ChatMessageContent>) -> Option<Decline> {
+    match content {
         None => Some(Decline::new("message without content")),
         Some(ChatMessageContent::Text(_)) => None,
         Some(ChatMessageContent::Parts(parts)) if parts.is_empty() => {

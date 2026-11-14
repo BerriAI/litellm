@@ -67,6 +67,7 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn chat_answers_a_claude_thinking_response_with_its_reasoning() {
     let upstream = MockServer::start().await;
@@ -104,16 +105,36 @@ async fn chat_answers_a_claude_thinking_response_with_its_reasoning() {
     );
 }
 
+fn signed_thinking() -> Value {
+    json!({"type": "thinking", "thinking": "t", "signature": "sig"})
+}
+
+#[rstest]
+#[case::answered(
+    json!({"role": "assistant", "content": "2 yes", "reasoning_content": "t", "thinking_blocks": [signed_thinking()]}),
+    json!([signed_thinking(), {"type": "text", "text": "2 yes"}])
+)]
+#[case::cut_off_mid_thought(
+    json!({"role": "assistant", "content": null, "reasoning_content": "", "thinking_blocks": [signed_thinking()]}),
+    json!([signed_thinking()])
+)]
 #[tokio::test]
-async fn chat_replays_a_claude_thinking_reply_sent_back_on_the_next_turn() {
+async fn chat_replays_a_claude_thinking_reply_sent_back_on_the_next_turn(
+    #[case] reply: Value,
+    #[case] replayed_content: Value,
+) {
     let upstream = MockServer::start().await;
-    let thinking = json!({"type": "thinking", "thinking": "t", "signature": "sig"});
     Mock::given(method("POST"))
-        .and(body_partial_json(json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
-            {"role": "assistant", "content": [thinking, {"type": "text", "text": "2 yes"}]},
-            {"role": "user", "content": [{"type": "text", "text": "why"}]}
-        ]})))
+        .and(move |request: &wiremock::Request| {
+            request.body_json::<Value>().is_ok_and(|body| {
+                body["messages"]
+                    == json!([
+                        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                        {"role": "assistant", "content": replayed_content},
+                        {"role": "user", "content": [{"type": "text", "text": "why"}]}
+                    ])
+            })
+        })
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": "msg_test", "model": "test-model",
             "content": [{"type": "text", "text": "because"}],
@@ -128,8 +149,7 @@ async fn chat_replays_a_claude_thinking_reply_sent_back_on_the_next_turn() {
                 .body(Body::from(
                     json!({"model": "public/model", "max_tokens": 16, "messages": [
                         {"role": "user", "content": "hi"},
-                        {"role": "assistant", "content": "2 yes", "reasoning_content": "t",
-                         "thinking_blocks": [thinking]},
+                        reply,
                         {"role": "user", "content": "why"}
                     ]})
                     .to_string(),
