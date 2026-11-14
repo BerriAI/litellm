@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -16,6 +17,10 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import get_volcengine_base_url, get_volcengine_headers
+
+
+class _VolcengineEmbeddingFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
@@ -180,7 +185,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
             transformed_response["id"] = response_json["id"]
 
         # Create EmbeddingResponse from transformed data
-        return EmbeddingResponse(**transformed_response)
+        return EmbeddingResponse(**_VolcengineEmbeddingFields(**transformed_response))
 
     def validate_environment(
         self,
