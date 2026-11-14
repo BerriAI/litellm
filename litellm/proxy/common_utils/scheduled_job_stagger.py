@@ -207,13 +207,14 @@ def _window_for(*, job_id: str, period_seconds: int | None, settings: ScheduledJ
     return min(limit for limit in limits if limit is not None)
 
 
-def _clamped_override(*, job_id: str, requested: int) -> int:
-    horizon: Final = DEFAULT_CRON_DEDUPE_SECONDS.get(job_id)
+def _clamped_override(*, job_id: str, requested: int, period_seconds: int | None) -> int:
+    horizon: Final = (
+        period_seconds if job_id == "proxy_worker_heartbeat_job" else DEFAULT_CRON_DEDUPE_SECONDS.get(job_id)
+    )
     if horizon is None or requested < horizon:
         return requested
     verbose_proxy_logger.warning(
-        "general_settings.%s.offsets[%s]=%ss would place replicas more than %ss apart, "
-        "which is long enough for a second replica to redo the run; using %ss instead",
+        "general_settings.%s.offsets[%s]=%ss exceeds the job's %ss scheduling window; using %ss instead",
         GENERAL_SETTINGS_KEY,
         job_id,
         requested,
@@ -233,7 +234,7 @@ def _offset_for(
 ) -> int:
     override: Final = settings.offsets.get(job_id)
     if override is not None:
-        return _clamped_override(job_id=job_id, requested=max(0, override))
+        return _clamped_override(job_id=job_id, requested=max(0, override), period_seconds=period_seconds)
     if not staggerable:
         return 0
     return offset_seconds(
