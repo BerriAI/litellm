@@ -329,8 +329,14 @@ def _get_llm_provider(
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
                     elif endpoint == NADIR_DEFAULT_API_BASE:
                         custom_llm_provider = "nadir"  # rebind-ok: mirrors sibling endpoint branches
+                        # NADIR_API_KEY belongs to NADIR_API_BASE, the same scoping as the explicit nadir branch:
+                        # it reaches the hosted API only when that is the configured base.
                         dynamic_api_key = (
-                            get_secret_str("NADIR_API_KEY") if api_base.lower().startswith("https://") else None
+                            get_secret_str("NADIR_API_KEY")
+                            if api_base.lower().startswith("https://")
+                            and (get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE).rstrip("/")
+                            == NADIR_DEFAULT_API_BASE
+                            else None
                         )
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"

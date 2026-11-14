@@ -75256,6 +75256,17 @@
             "notes": "Self-hosted decision model; infrastructure costs are paid separately"
         }
     },
+    "nadir/bucket": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "nadir",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://getnadir.com/pricing",
+        "metadata": {
+            "notes": "Nadir's simple, medium or complex tier decision from POST /v1/bucket. Nadir charges $0.002 per request that carries a Nadir API key, after the first 50 requests each month; keyless requests on the rate-limited public allowance are free"
+        }
+    },
     "strands_decider/strands-decider-2B-hobson-v19": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "strands_decider",

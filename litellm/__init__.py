@@ -1782,6 +1782,9 @@ if TYPE_CHECKING:
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
+    from .llms.nadir.decisions.transformation import (
+        NadirDecisionsConfig as NadirDecisionsConfig,
+    )
     from .llms.empiriolabs.decisions.transformation import (
         EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,
     )

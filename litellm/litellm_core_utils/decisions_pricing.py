@@ -12,7 +12,7 @@ from typing import Final
 
 DECISIONS_PRICING_SUFFIX: Final = "_decisions"
 DECISIONS_CALL_TYPES: Final = frozenset({"decisions", "adecisions", "systemone", "asystemone"})
-QUERY_PRICED_DECISIONS_PROVIDERS: Final = frozenset({"parallel_ai"})
+QUERY_PRICED_DECISIONS_PROVIDERS: Final = frozenset({"nadir", "parallel_ai"})
 
 
 def is_decisions_call_type(call_type: str) -> bool:

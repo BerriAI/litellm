@@ -9,13 +9,19 @@ import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultJevClassifierConfig, fixedClassifierModels, type OssClassifierProvider } from "./jev_classifier_config";
+import {
+  acceptsClassifierInstructions,
+  defaultJevClassifierConfig,
+  fixedClassifierModels,
+  type OssClassifierProvider,
+} from "./jev_classifier_config";
 
 const providerDescriptions: Record<OssClassifierProvider, ParseKeys> = {
   jev: "addModel.jevClassifierConfig.providerDescriptions.jev",
   laya: "addModel.jevClassifierConfig.providerDescriptions.laya",
   bespoke: "addModel.jevClassifierConfig.providerDescriptions.bespoke",
   databricks: "addModel.jevClassifierConfig.providerDescriptions.databricks",
+  nadir: "addModel.jevClassifierConfig.providerDescriptions.nadir",
 };
 
 export default function JevClassifierConfig({
@@ -39,34 +45,36 @@ export default function JevClassifierConfig({
       {section !== "advanced" && !config.deployment_name && (
         <>
           <p className="text-sm text-muted-foreground">{t(providerDescriptions[config.provider ?? "jev"])}</p>
-          <div className="space-y-2">
-            <Label htmlFor={`${id}-model`}>{t("addModel.jevClassifierConfig.model.label")}</Label>
-            {models ? (
-              <Select value={config.model} onValueChange={(model) => model && update({ model })}>
-                <SelectTrigger id={`${id}-model`} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                id={`${id}-model`}
-                value={config.model}
-                placeholder={
-                  config.provider === "databricks"
-                    ? t("addModel.jevClassifierConfig.model.databricksPlaceholder")
-                    : undefined
-                }
-                onChange={(event) => update({ model: event.target.value })}
-              />
-            )}
-          </div>
+          {config.provider !== "nadir" && (
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-model`}>{t("addModel.jevClassifierConfig.model.label")}</Label>
+              {models ? (
+                <Select value={config.model} onValueChange={(model) => model && update({ model })}>
+                  <SelectTrigger id={`${id}-model`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id={`${id}-model`}
+                  value={config.model}
+                  placeholder={
+                    config.provider === "databricks"
+                      ? t("addModel.jevClassifierConfig.model.databricksPlaceholder")
+                      : undefined
+                  }
+                  onChange={(event) => update({ model: event.target.value })}
+                />
+              )}
+            </div>
+          )}
         </>
       )}
       {section !== "model" && (
@@ -91,25 +99,27 @@ export default function JevClassifierConfig({
               })
             }
           />
-          <div className="space-y-2">
-            <Label htmlFor={`${id}-instructions`}>{t("addModel.jevClassifierConfig.instructions.label")}</Label>
-            <AutoRouterAllowanceNote
-              feature="tier_or_classifier_prompt"
-              label={t("addModel.jevClassifierConfig.instructions.allowance")}
-            />
-            <Textarea
-              id={`${id}-instructions`}
-              value={config.instructions ?? ""}
-              placeholder={t("addModel.jevClassifierConfig.instructions.placeholder")}
-              onChange={(event) => update({ instructions: event.target.value || undefined })}
-            />
-            {config.instructions && (
-              <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-                {t("addModel.jevClassifierConfig.instructions.restore")}
-              </Button>
-            )}
-            <p className="text-xs text-muted-foreground">{t("addModel.jevClassifierConfig.licenseNote")}</p>
-          </div>
+          {acceptsClassifierInstructions(config.provider) && (
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-instructions`}>{t("addModel.jevClassifierConfig.instructions.label")}</Label>
+              <AutoRouterAllowanceNote
+                feature="tier_or_classifier_prompt"
+                label={t("addModel.jevClassifierConfig.instructions.allowance")}
+              />
+              <Textarea
+                id={`${id}-instructions`}
+                value={config.instructions ?? ""}
+                placeholder={t("addModel.jevClassifierConfig.instructions.placeholder")}
+                onChange={(event) => update({ instructions: event.target.value || undefined })}
+              />
+              {config.instructions && (
+                <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
+                  {t("addModel.jevClassifierConfig.instructions.restore")}
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">{t("addModel.jevClassifierConfig.licenseNote")}</p>
+            </div>
+          )}
         </>
       )}
     </div>

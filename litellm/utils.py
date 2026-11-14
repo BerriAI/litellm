@@ -10389,6 +10389,7 @@ class ProviderConfigManager:
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
         if provider in (
+            LlmProviders.NADIR,
             LlmProviders.EMPIRIOLABS,
             LlmProviders.OPENAI,
             LlmProviders.AZURE,
@@ -10398,6 +10399,7 @@ class ProviderConfigManager:
             LlmProviders.VERCEL_AI_GATEWAY,
         ):
             configs: Final = {
+                LlmProviders.NADIR: litellm.NadirDecisionsConfig,
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
