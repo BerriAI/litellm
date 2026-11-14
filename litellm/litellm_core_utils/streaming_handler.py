@@ -1074,12 +1074,8 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Don't raise StopIteration here - some providers (like OpenRouter)
-                # send usage/cost data in chunks after the finish_reason chunk.
-                # Drop choice payload from those trailers: OpenRouter repeats an empty
-                # assistant delta (often with role + finish_reason) alongside usage, and
-                # stripping usage left a no-op choice that clients saw between the
-                # terminal finish and the final usage chunk (#50156).
+                # Some providers (like OpenRouter) send usage/cost in a chunk after the finish_reason
+                # chunk, repeating an empty choice the caller must not see after the finish
                 if getattr(model_response, "usage", None) is not None:
                     return model_response.model_copy(update={"choices": []})
                 return

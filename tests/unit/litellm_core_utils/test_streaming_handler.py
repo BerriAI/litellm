@@ -1838,93 +1838,52 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
 
 
 @pytest.mark.asyncio
-async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(logging_obj: Logging):
+@pytest.mark.parametrize("iteration", ["sync", "async"])
+@pytest.mark.parametrize("stream_options", [{"include_usage": True}, None])
+async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
+    logging_obj: Logging, iteration: str, stream_options: dict | None
+):
     """
-    OpenRouter's accounting trailer repeats an empty assistant delta (with role and
-    finish_reason) on the same chunk as usage. After usage is retained for cost
-    tracking, that leftover choice must not be emitted between the terminal finish
-    chunk and the final usage chunk (issue #50156).
+    OpenRouter repeats an empty assistant delta and the finish reason on its usage
+    trailer. Nothing but usage may reach the caller after the finish chunk (#50156).
     """
     from litellm.utils import ModelResponseListIterator
 
-    chunk1 = ModelResponseStream(
-        id="chatcmpl-or",
-        created=1742056047,
-        model="openrouter/openai/gpt-4.1-mini",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(content="OK", role="assistant"),
-            )
-        ],
-        usage=None,
-    )
-    chunk2 = ModelResponseStream(
-        id="chatcmpl-or",
-        created=1742056048,
-        model="openrouter/openai/gpt-4.1-mini",
-        choices=[
-            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
-        ],
-        usage=None,
-    )
-    # Real OpenRouter trailer shape: empty content + role + repeated finish + usage.
-    chunk3 = ModelResponseStream(
-        id="chatcmpl-or",
-        created=1742056049,
-        model="openrouter/openai/gpt-4.1-mini",
-        choices=[
-            StreamingChoices(
-                finish_reason="stop",
-                index=0,
-                delta=Delta(content="", role="assistant"),
-            )
-        ],
-        usage=Usage(
-            completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088
+    model = "openrouter/openai/gpt-4.1-mini"
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
         ),
-    )
-
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    ]
     response = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(
-            model_responses=[chunk1, chunk2, chunk3]
-        ),
-        model="openrouter/openai/gpt-4.1-mini",
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
         custom_llm_provider="openrouter",
         logging_obj=logging_obj,
-        stream_options={"include_usage": True},
+        stream_options=stream_options,
     )
 
-    collected_chunks = [chunk async for chunk in response]
+    collected_chunks = list(response) if iteration == "sync" else [chunk async for chunk in response]
 
-    finish_indexes = [
-        i
-        for i, chunk in enumerate(collected_chunks)
-        if chunk.choices and chunk.choices[0].finish_reason == "stop"
-    ]
-    assert finish_indexes, "expected a terminal finish_reason chunk"
-    first_finish = finish_indexes[0]
-
-    # Bug shape from #50156: empty assistant role after finish, before usage.
-    for i, chunk in enumerate(collected_chunks):
-        if i <= first_finish or not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        empty_post_finish_choice = (
-            getattr(delta, "role", None) == "assistant"
-            and getattr(delta, "content", None) in (None, "")
-            and getattr(chunk, "usage", None) is None
-        )
-        assert not empty_post_finish_choice, (
-            f"empty post-finish assistant choice at {i}: {chunk}"
-        )
-
-    usage_chunks = [
-        c for c in collected_chunks if getattr(c, "usage", None) is not None
-    ]
-    assert usage_chunks
-    assert usage_chunks[-1].usage.cost == 0.0000088
+    finish_index = next(
+        i for i, chunk in enumerate(collected_chunks) if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    )
+    post_finish_chunks = collected_chunks[finish_index + 1 :]
+    assert all(chunk.usage is not None for chunk in post_finish_chunks), post_finish_chunks
+    assert [chunk.usage.cost for chunk in post_finish_chunks] == ([0.0000088] if stream_options else [])
 
 
 @pytest.mark.asyncio
