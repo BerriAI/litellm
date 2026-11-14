@@ -1,0 +1,13 @@
+- Dev-only crate that starts real Redis for tests. Never a dependency outside `[dev-dependencies]`
+- Same shape as `db-testing`: one container per test, a handle that removes it on drop
+- The host port is fixed at start so `restart` keeps the same URL and a client can reconnect to it
+- `RedisCluster` runs 3 masters in one container. Each node listens on the same port inside and outside and announces 127.0.0.1, so MOVED redirects work from the test process
+- Outages come from the container (`restart`, `freeze` / `thaw`), never `DEBUG`, which the official image disables
+- No env gate that makes a test pass without Redis. A test that can't start its container fails
+- `RedisTlsServer` serves TLS with certificates `rcgen` generates per start, for `localhost`, optionally requiring a client certificate
+- `RedisSentinel` runs a primary, a replica and one sentinel in one container, all announcing 127.0.0.1. `failover()` returns once the replica is master and the old master is a replica. `start_with_password` puts `requirepass` on the primary and the replica, which the sentinel monitors with, and the CLI helpers authenticate with it
+- `TcpProxy` forwards one port from the test process. `blackhole_open_connections` stops forwarding on the connections open now while keeping their sockets open, which a container outage cannot do to one socket. `RedisCluster::announce_ports` makes the nodes announce proxy ports so a cluster client reaches them only through proxies
+- `cli` / `cli_on_every_node` run `redis-cli -e` inside the container for setup such as ACL users, so tests don't need a second client. `-e` makes an error reply fail the call, and a test whose setup changes server state also asserts that state before relying on it
+- Not `redis-test`'s server helpers, which need local `redis-server` and `openssl` binaries
+- `RedisDeployment` runs either `Topology`, so a test can take `#[values(Topology::Standalone, Topology::Cluster)]`. `clients()` returns every client connection on every node from `CLIENT LIST`, leaving out the CLI's own
+- Server fixtures only. This crate never depends on a Redis client crate, so the client crates can dev-depend on it without a cycle

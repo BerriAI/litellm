@@ -1,21 +1,18 @@
 """
-Wrapper around router cache for health-check-driven routing.
+Health-check-driven routing state, kept in the native ``DeploymentHealthStore``.
 
 Stores per-deployment health state from background health checks
 and exposes it for router candidate filtering.
 """
 
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
-from litellm._internal_context import with_service_target
-from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-
-HEALTH_CHECKS_TARGET: Final = "health_checks"
+from litellm.redis.stores.deployment_health import DeploymentHealthStates, DeploymentHealthStore
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -23,23 +20,6 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     Span = Any
-
-
-class DeploymentHealthStateValue(TypedDict):
-    is_healthy: bool
-    timestamp: float
-    reason: str
-
-
-@with_service_target(HEALTH_CHECKS_TARGET)
-def _read_shared_health_snapshot(cache: DualCache, key: str) -> object:
-    redis_cache: Final = cache.redis_cache
-    if redis_cache is None:
-        return None
-    try:
-        return redis_cache.get_cache(key)
-    except RedisCircuitBreakerOpenError:
-        return None
 
 
 class DeploymentHealthCache:
@@ -51,14 +31,11 @@ class DeploymentHealthCache:
     are treated as healthy (unknown).
     """
 
-    CACHE_KEY = "litellm:health_check:deployment_health_state"
-
-    def __init__(self, cache: DualCache, staleness_threshold: float):
-        self.cache = cache
+    def __init__(self, store: DeploymentHealthStore, staleness_threshold: float):
+        self.store: Final = store
         self.staleness_threshold = staleness_threshold
 
-    @with_service_target(HEALTH_CHECKS_TARGET)
-    def set_deployment_health_states(self, states: dict[str, DeploymentHealthStateValue]) -> None:
+    def set_deployment_health_states(self, states: DeploymentHealthStates) -> None:
         """Merge the given states into the shared cache entry, pruning expired ones.
 
         Merging instead of replacing lets writers probing different deployment
@@ -71,46 +48,46 @@ class DeploymentHealthCache:
         merge is used so peers are not erased.
         """
         try:
-            redis_raw: Final = _read_shared_health_snapshot(self.cache, self.CACHE_KEY)
-            raw: Final = redis_raw if isinstance(redis_raw, dict) else self.cache.get_cache(key=self.CACHE_KEY)
-            existing: Final = raw if isinstance(raw, dict) else {}
+            shared: Final = self.store.get_shared_sync()
+            existing: Final = shared if shared is not None else self.store.get_sync() or {}
             expiry_seconds: Final = self.staleness_threshold * 1.5
             now: Final = time.time()
-            merged: Final = {
-                model_id: state
-                for model_id, state in {**existing, **states}.items()
-                if isinstance(state, dict) and (now - state.get("timestamp", 0)) < expiry_seconds
-            }
-            self.cache.set_cache(
-                key=self.CACHE_KEY,
-                value=merged,
-                ttl=int(expiry_seconds),
-            )
+            self.store.set_sync(_unexpired({**existing, **states}, now - expiry_seconds), int(expiry_seconds))
         except Exception as e:
             verbose_logger.error(
                 "DeploymentHealthCache::set_deployment_health_states - Exception: %s",
                 str(e),
             )
 
-    def _extract_unhealthy_ids(self, raw: Any) -> set[str]:
-        """Given raw cache value, return set of non-stale unhealthy deployment IDs."""
-        if not raw or not isinstance(raw, dict):
-            return set()
+    def _extract_unhealthy_ids(self, states: DeploymentHealthStates | None) -> set[str]:
+        """The non-stale unhealthy deployment IDs."""
         now: Final = time.time()
         return {
             model_id
-            for model_id, state in raw.items()
-            if isinstance(state, dict)
-            and not state.get("is_healthy", True)
-            and (now - state.get("timestamp", 0)) < self.staleness_threshold
+            for model_id, state in (states or {}).items()
+            if not state["is_healthy"] and now - state["timestamp"] < self.staleness_threshold
         }
 
-    @with_service_target(HEALTH_CHECKS_TARGET)
+    async def async_get_states(self) -> DeploymentHealthStates | None:
+        """Every deployment's state, as the router core's health filter reads it; a failed read is None."""
+        try:
+            return await self.store.get()
+        except Exception as e:  # noqa: BLE001  # a failed read counts as no health state, as the DualCache read it replaced swallowed errors
+            verbose_logger.debug("DeploymentHealthCache::async_get_states - Exception: %s", str(e))
+            return None
+
+    def get_states(self) -> DeploymentHealthStates | None:
+        """``async_get_states`` for a sync call."""
+        try:
+            return self.store.get_sync()
+        except Exception as e:  # noqa: BLE001  # a failed read counts as no health state, as the DualCache read it replaced swallowed errors
+            verbose_logger.debug("DeploymentHealthCache::get_states - Exception: %s", str(e))
+            return None
+
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw: Final = await self.cache.async_get_cache(key=self.CACHE_KEY)
-            return self._extract_unhealthy_ids(raw)
+            return self._extract_unhealthy_ids(await self.store.get())
         except Exception as e:
             verbose_logger.debug(
                 "DeploymentHealthCache::async_get_unhealthy_deployment_ids - Exception: %s",
@@ -118,15 +95,30 @@ class DeploymentHealthCache:
             )
             return set()
 
-    @with_service_target(HEALTH_CHECKS_TARGET)
     def get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Sync version: return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw: Final = self.cache.get_cache(key=self.CACHE_KEY)
-            return self._extract_unhealthy_ids(raw)
+            return self._extract_unhealthy_ids(self.store.get_sync())
         except Exception as e:
             verbose_logger.debug(
                 "DeploymentHealthCache::get_unhealthy_deployment_ids - Exception: %s",
                 str(e),
             )
             return set()
+
+
+class DeploymentHealthCheck(TypedDict):
+    is_healthy: ReadOnly[bool]
+    timestamp: ReadOnly[float]
+
+
+def health_states_of(states: DeploymentHealthStates | None) -> Mapping[str, DeploymentHealthCheck]:
+    """The cached states as router-core reads them, which is everything but the reason."""
+    return {
+        model_id: {"is_healthy": state["is_healthy"], "timestamp": float(state["timestamp"])}
+        for model_id, state in (states or {}).items()
+    }
+
+
+def _unexpired(states: DeploymentHealthStates, cutoff: float) -> DeploymentHealthStates:
+    return {model_id: state for model_id, state in states.items() if state["timestamp"] > cutoff}
