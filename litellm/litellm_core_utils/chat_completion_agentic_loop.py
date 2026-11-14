@@ -9,7 +9,7 @@ from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm._internal_context import billed_separately, internal_sub_call
+from litellm._internal_context import billed_separately, internal_sub_call, is_internal_call
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure, rounds_served_before
@@ -62,12 +62,17 @@ _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
 )
 
 
-def _bridged_parent_logged_before_the_loop(logging_obj: object) -> bool:
+def _first_round_logged_before_the_loop(logging_obj: object) -> bool:
     return (
         isinstance(logging_obj, LiteLLMLoggingObject)
         and logging_obj.bridged_chat_request is not None
         and logging_obj.stream is not True
+        and not is_internal_call.get()
     )
+
+
+def _follow_ups_bill_themselves(logging_obj: object, request_kwargs: Mapping[str, object]) -> bool:
+    return _first_round_logged_before_the_loop(logging_obj) and not converted_stream_requested(request_kwargs)
 
 
 async def bill_first_round_on_failure(
@@ -79,10 +84,9 @@ async def bill_first_round_on_failure(
         if stream or not isinstance(logging_obj, LiteLLMLoggingObject):
             mark_agentic_followup_failure(error, rounds_served_before(error))
             raise
-        if _bridged_parent_logged_before_the_loop(logging_obj):
-            mark_agentic_followup_failure(error, ())
-            raise
-        this_round: Final = logging_obj.served_round(response)
+        this_round: Final = (
+            None if _first_round_logged_before_the_loop(logging_obj) else logging_obj.served_round(response)
+        )
         served_rounds: Final = (*rounds_served_before(error), *(() if this_round is None else (this_round,)))
         mark_agentic_followup_failure(error, served_rounds)
         logging_obj.record_served_rounds_for_failure(served_rounds)
@@ -357,8 +361,8 @@ def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _followup_billing_scope(logging_obj: object) -> AbstractContextManager[None]:
-    if _bridged_parent_logged_before_the_loop(logging_obj):
+def _followup_billing_scope(logging_obj: object, request_kwargs: Mapping[str, object]) -> AbstractContextManager[None]:
+    if _follow_ups_bill_themselves(logging_obj, request_kwargs):
         return billed_separately()
     return internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None)
 
@@ -410,7 +414,7 @@ async def _execute_chat_completion_agentic_plan(
     )
 
     try:
-        with _followup_billing_scope(logging_obj):
+        with _followup_billing_scope(logging_obj, kwargs):
             response_followup = await litellm.acompletion(
                 model=full_model_name,
                 messages=patch.messages,

@@ -34,6 +34,7 @@ from litellm.integrations.websearch_interception.handler import (
 from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
@@ -1356,12 +1357,15 @@ class _ModelSpendRowRecorder(CustomLogger):
         self.prompt_tokens: Final[list[int]] = []
         self._rows_expected: Final = rows_expected
         self.all_rows_logged: Final = asyncio.Event()
+        self.streamed_reply_logged: Final = asyncio.Event()
 
     def _record(self, kwargs: dict[str, object]) -> None:
         row: Final = TypeAdapter(_LoggedRow).validate_python(kwargs["standard_logging_object"])
         if row["call_type"] != "acompletion":
             return
         self.prompt_tokens.append(row["prompt_tokens"])
+        if kwargs.get("stream") is True:
+            self.streamed_reply_logged.set()
         if len(self.prompt_tokens) >= self._rows_expected:
             self.all_rows_logged.set()
 
@@ -1406,6 +1410,38 @@ async def test_responses_pinned_openai_chat_completion_bills_every_search_round_
     assert sorted(recorder.prompt_tokens) == [_round_input_tokens(0), _round_input_tokens(1)]
 
 
+@pytest.mark.asyncio
+async def test_streamed_responses_pinned_openai_chat_completion_bills_every_search_round_once(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+        stream=True,
+    )
+    assert isinstance(stream, litellm.CustomStreamWrapper)
+    _ = [chunk async for chunk in stream]
+    await asyncio.wait_for(recorder.streamed_reply_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert sorted(recorder.prompt_tokens) == [_round_input_tokens(0), _round_input_tokens(1)]
+
+
 def _responses_reply_failing_after(searches_that_succeed: int):
     def reply(request: httpx.Request) -> httpx.Response:
         request_input: Final = json.loads(request.content)["input"]
@@ -1418,14 +1454,16 @@ def _responses_reply_failing_after(searches_that_succeed: int):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streamed", "streamed"])
 @pytest.mark.parametrize("rounds_served", [1, 2])
 async def test_responses_pinned_openai_chat_completion_bills_each_served_round_once_when_a_follow_up_fails(
     rounds_served: int,
+    stream: bool,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
 ):
-    recorder: Final = _ModelSpendRowRecorder(rows_expected=2 * rounds_served + 1)
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=2 if stream else 2 * rounds_served + 1)
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
     )
@@ -1442,8 +1480,10 @@ async def test_responses_pinned_openai_chat_completion_bills_each_served_round_o
             api_key="sk-test",
             api_base=OPENAI_COMPATIBLE_API_BASE,
             max_agentic_loops=SEARCHES_THE_MODEL_ASKS_FOR,
+            stream=stream,
         )
     with suppress(asyncio.TimeoutError):
         await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
 
     assert sum(recorder.prompt_tokens) == sum(_round_input_tokens(served) for served in range(rounds_served))
