@@ -5,6 +5,8 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ChatCompletionUserMessage
 from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
@@ -29,6 +31,13 @@ def _exceeds_output_limit(model: str, max_tokens: object) -> bool:
     info: Final = lookup_model_info_for_registration(model=model, custom_llm_provider="zai")
     limit: Final = None if isinstance(info, ModelInfoLookupMiss) else info.get("max_output_tokens")
     return isinstance(max_tokens, int) and isinstance(limit, int) and max_tokens > limit
+
+
+def _accepted_effort(model: str, requested: object) -> object:
+    declared: Final = declared_reasoning_efforts_for_model(model, "zai")
+    if not isinstance(requested, str) or declared is None:
+        return requested
+    return nearest_declared_reasoning_effort(requested, declared)
 
 
 def _schema_without_native_support(model: str, response_format: object) -> Mapping[str, object] | None:
@@ -92,7 +101,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
 
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("thinking")
+                base_params.extend(("thinking", "reasoning_effort"))
         except Exception:
             pass
 
@@ -112,10 +121,12 @@ class ZAIChatConfig(OpenAIGPTConfig):
             (litellm.drop_params or drop_params) and _exceeds_output_limit(model, max_completion_tokens)
         )
         max_tokens: Final = sent.get("max_tokens") if falls_back_to_max_tokens else max_completion_tokens
+        reasoning_effort: Final = sent.get("reasoning_effort")
         return {
             **optional_params,
             **{param: value for param, value in sent.items() if param not in TOKEN_LIMIT_PARAMS},
             **({} if max_tokens is None else {"max_tokens": max_tokens}),
+            **({} if reasoning_effort is None else {"reasoning_effort": _accepted_effort(model, reasoning_effort)}),
         }
 
     def transform_request(

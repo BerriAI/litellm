@@ -296,3 +296,64 @@ def test_zai_glm_5v_turbo_accepts_thinking(
 
     body: Final = json.loads(respx_mock.calls[0].request.content)
     assert body["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_zai_messages_thinking_reaches_glm_as_reasoning_effort(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    response: Final = await litellm.anthropic_messages(
+        model="zai/glm-5.3",
+        max_tokens=2048,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        messages=[{"role": "user", "content": "Is 391 prime?"}],
+        api_key="test-api-key",
+    )
+
+    body: Final = json.loads(respx_mock.calls[0].request.content)
+    assert body["reasoning_effort"] in litellm.model_cost["zai/glm-5.3"]["reasoning_effort_levels"]
+    assert response["content"][-1]["text"] == "Hello! How can I help you today?"
+
+
+@pytest.mark.parametrize(
+    ("requested", "sent"),
+    [("minimal", "low"), ("low", "low"), ("medium", "high"), ("high", "high"), ("xhigh", "max"), ("max", "max")],
+)
+def test_zai_rounds_reasoning_effort_up_to_a_level_the_model_declares(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    requested: str,
+    sent: str,
+) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(model="zai/glm-5.3", messages=[{"role": "user", "content": "Hello"}], reasoning_effort=requested)
+
+    assert json.loads(respx_mock.calls[0].request.content)["reasoning_effort"] == sent
+
+
+@pytest.mark.parametrize("requested", ["none", "minimal", "medium", "xhigh"])
+def test_zai_forwards_reasoning_effort_as_sent_to_models_declaring_no_levels(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    zai_response: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    requested: str,
+) -> None:
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(model="zai/glm-5.2", messages=[{"role": "user", "content": "Hello"}], reasoning_effort=requested)
+
+    assert json.loads(respx_mock.calls[0].request.content)["reasoning_effort"] == requested
