@@ -3591,11 +3591,26 @@ def _receive_until_closed(websocket: WebSocketTestSession) -> None:
         websocket.receive_text()
 
 
-def test_realtime_websocket_team_alias_selects_restricted_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("path", "session_start"),
+    (
+        ("/v1/realtime?model=gpt-realtime", None),
+        ("/v1/realtime/translations?model=gpt-realtime", None),
+        ("/v1/live/sessions", {"type": "session.start", "session": {"model": "gpt-realtime"}}),
+    ),
+)
+def test_realtime_websocket_team_alias_selects_restricted_deployment(
+    path: str,
+    session_start: Mapping[str, object] | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from starlette.websockets import WebSocketDisconnect
 
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_realtime_websocket
+    from litellm.proxy.auth.user_api_key_auth import (
+        user_api_key_auth_live_websocket,
+        user_api_key_auth_realtime_websocket,
+    )
     from litellm.proxy._types import UserAPIKeyAuth
 
     provider_model: Final = "gpt-realtime"
@@ -3635,14 +3650,20 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(monkeypatch
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_realtime_websocket, lambda: auth)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_live_websocket, lambda: auth)
+
+    async def authorize_session_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+        return auth
+
+    _override_live_session_authorizer(monkeypatch, authorize_session_model)
     connect: Final = MagicMock(side_effect=RuntimeError("upstream selected"))
     monkeypatch.setattr("websockets.connect", connect)
 
-    with (
-        TestClient(app).websocket_connect(f"/v1/realtime?model={provider_model}") as websocket,
-        pytest.raises(WebSocketDisconnect),
-    ):
-        _receive_until_closed(websocket)
+    with TestClient(app).websocket_connect(path) as websocket:
+        if session_start is not None:
+            websocket.send_json(session_start)
+        with pytest.raises(WebSocketDisconnect):
+            _receive_until_closed(websocket)
 
     assert connect.call_args.kwargs["additional_headers"]["Authorization"] == "Bearer restricted-key"
 
