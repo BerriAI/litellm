@@ -501,7 +501,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         _anchor_transport_to(stream, self)
         return httpx.Response(
             status_code=response.status,
-            headers=response.headers,
+            headers=response.raw_headers,
             stream=stream,
             request=request,
         )
