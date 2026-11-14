@@ -781,10 +781,15 @@ FAMILIES: Final[Mapping[str, Family]] = {
         {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
         call_type="agenerate_content_stream",
     ),
+    "azure_pass_through": Family(
+        "/azure/openai/deployments/gpt-4o/chat/completions", BODY, call_type="pass_through_endpoint"
+    ),
 }
 
 
 def _route_the_family_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_API_BASE", "https://upstream.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_KEY", "sk-upstream")
     model_list: Final = [
         {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-upstream"}}
         for name, model in ROUTED_MODELS
