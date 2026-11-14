@@ -2122,9 +2122,12 @@ class HostRegistry(HostModelInfo):
         deployment: Final = self._core_get_credential_deployment(model_id=model_id, team_id=team_id)
         if deployment is None:
             return None
-        base: Final = CredentialLiteLLMParams.model_validate(
-            deployment.litellm_params.model_dump(exclude_none=True)
-        ).model_dump(exclude_none=True)
+        base: Final = {
+            **CredentialLiteLLMParams.model_validate(
+                deployment.litellm_params.model_dump(exclude_none=True)
+            ).model_dump(exclude_none=True),
+            **deployment.litellm_params.model_dump(include={"organization"}, exclude_none=True),
+        }
         credential_name: Final = deployment.litellm_params.litellm_credential_name
         resolved: Final[UntypedEntry] = dict(base)
         if credential_name is not None:

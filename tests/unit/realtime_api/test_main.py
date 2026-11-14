@@ -505,15 +505,34 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
 
 
 
-class _OpenAIWebSocketHandlers:
+class _UpstreamThatRefusesTheHandshake:
     def __init__(self) -> None:
-        self.organization: object = None
+        self.headers: Mapping[str, str] | None = None
 
-    async def async_realtime(self, **kwargs: object) -> None:
-        self.organization = kwargs["organization"]
+    def __call__(self, url: str, *, additional_headers: Mapping[str, str], **kwargs: object) -> None:
+        from websockets.datastructures import Headers
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
 
-    async def async_live_session(self, **kwargs: object) -> None:
-        self.organization = kwargs["organization"]
+        self.headers = additional_headers
+        raise InvalidStatus(Response(401, "Unauthorized", Headers()))
+
+
+class _ClientWebSocket:
+    def __init__(self) -> None:
+        self.headers: Mapping[str, str] = {}
+        self.scope: Mapping[str, object] = {"type": "websocket", "headers": []}
+        self.close_code: int | None = None
+
+    async def receive_text(self) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def send_text(self, data: str) -> None:
+        return None
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_code = code
 
 
 @pytest.mark.asyncio
@@ -529,33 +548,32 @@ class _OpenAIWebSocketHandlers:
     [
         pytest.param(None, "org-deployment", id="deployment-organization"),
         pytest.param({"OpenAI-Organization": "org-caller"}, "org-caller", id="caller-header-wins"),
+        pytest.param({"openai-organization": "org-caller"}, "org-caller", id="lowercase-caller-header-wins"),
     ],
 )
-async def test_openai_websockets_keep_the_caller_organization_header(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_openai_websockets_send_one_organization_header(
     live_session_start: Mapping[str, object] | None,
     extra_headers: Mapping[str, str] | None,
     expected_organization: str,
 ) -> None:
-    handlers: Final = _OpenAIWebSocketHandlers()
-    monkeypatch.setattr(
-        realtime_main,
-        "get_llm_provider",
-        lambda model, api_base, api_key, custom_llm_provider=None: (model, "openai", "resolved-key", None),
-    )
-    monkeypatch.setattr(realtime_main, "openai_realtime", handlers)
-    monkeypatch.setattr(realtime_main, "openai_live_sessions", handlers)
+    upstream: Final = _UpstreamThatRefusesTheHandshake()
+    websocket: Final = _ClientWebSocket()
+    with patch("websockets.connect", upstream):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-live-1" if live_session_start else "openai/gpt-realtime",
+            websocket=websocket,
+            api_key="resolved-key",
+            litellm_logging_obj=FakeLogging(),
+            live_session_start=live_session_start,
+            organization="org-deployment",
+            extra_headers=extra_headers,
+        )
 
-    await realtime_main._arealtime.__wrapped__(
-        model="gpt-live-1" if live_session_start else "gpt-realtime",
-        websocket=MagicMock(),
-        litellm_logging_obj=FakeLogging(),
-        live_session_start=live_session_start,
-        organization="org-deployment",
-        extra_headers=extra_headers,
-    )
-
-    assert handlers.organization == expected_organization
+    assert upstream.headers is not None
+    assert [value for name, value in upstream.headers.items() if name.lower() == "openai-organization"] == [
+        expected_organization
+    ]
+    assert websocket.close_code is not None
 
 
 class _ServerEvents(Protocol):
