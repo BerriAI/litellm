@@ -444,7 +444,7 @@ async def _log_virtual_mcp_tool_failure(
 
         failure_end: Final = datetime.now()  # noqa: DTZ005  # matches the logging pipeline start time
         failure_traceback: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-        failure_logging_obj.failure_handler(exc, failure_traceback, call_start, failure_end)
+        failure_logging_obj.failure_handler(exc, failure_traceback, call_start, failure_end, async_handler_follows=True)
         await failure_logging_obj.async_failure_handler(exc, failure_traceback, call_start, failure_end)
         if isinstance(exc, MCPUpstreamAuthError):
             return
@@ -2859,7 +2859,7 @@ async def _fire_mcp_tool_call_logging(
     logging_obj.mark_logging_complete(event_type="sync_success")
     logging_obj.mark_logging_complete(event_type="async_success")
     tool_error: Final = MCPToolResultError(error_message)
-    logging_obj.failure_handler(tool_error, "", start_time, end_time)
+    logging_obj.failure_handler(tool_error, "", start_time, end_time, async_handler_follows=True)
     await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
 
     if user_api_key_auth is None:
@@ -2951,7 +2951,7 @@ async def fire_mcp_tool_call_failure_logging(
     traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
     if logging_obj is not None:
         end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
-        logging_obj.failure_handler(exception, traceback_str, start_time, end_time)
+        logging_obj.failure_handler(exception, traceback_str, start_time, end_time, async_handler_follows=True)
         await logging_obj.async_failure_handler(exception, traceback_str, start_time, end_time)
 
     if isinstance(exception, MCPUpstreamAuthError) or not proxy_logging_obj or user_api_key_auth is None:

@@ -3,6 +3,7 @@ import gc
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Set
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -337,6 +338,29 @@ async def test_parallel_pre_call_checks_see_the_patches_of_the_serial_chain() ->
     assert seen == [()]
 
 
+REQUEST_STASH: ContextVar[object] = ContextVar("request_stash", default=None)
+
+
+async def test_a_blocking_v2_callback_sets_context_the_next_stage_and_the_caller_see() -> None:
+    stash = object()
+    seen: list[object] = []
+
+    async def claim(view: object, ctx: CallContext[object]) -> None:
+        _ = REQUEST_STASH.set(stash)
+
+    async def look(view: object, ctx: CallContext[object]) -> None:
+        seen.append(REQUEST_STASH.get())
+
+    scope = dispatcher(
+        v2_callback("claimer", behaviour=claim, may_abort=True),
+        v2_callback("looker", behaviour=look, may_abort=True),
+    ).open_scope(RequestSelection())
+
+    await scope.run_hook(Hook.pre_call, FIELDS, None)
+
+    assert (seen, REQUEST_STASH.get()) == ([stash], stash)
+
+
 async def test_selection_mask_removes_opted_out_v2_callbacks_and_their_reads() -> None:
     called: list[str] = []
 
@@ -382,7 +406,7 @@ async def test_a_subscription_activation_override_beats_the_instance_activation(
     assert len(scope.plan(Hook.log_prepare).stages) == 1
 
 
-async def test_off_path_v2_callbacks_are_delivered_once_per_hook_when_it_finishes_without_state() -> None:
+async def test_off_path_v2_callbacks_are_delivered_once_per_hook_with_their_request_state() -> None:
     @dataclass
     class Spans:
         open: list[str] = field(default_factory=list)
@@ -405,7 +429,8 @@ async def test_off_path_v2_callbacks_are_delivered_once_per_hook_when_it_finishe
     assert len(states) == 1
     assert isinstance(states[0], Spans)
     await sink.run_all()
-    assert states[1] is None
+    assert isinstance(states[1], Spans)
+    assert states[1] is not states[0]
 
 
 def test_sync_off_path_handler_runs_on_a_worker_thread() -> None:

@@ -428,6 +428,8 @@ def run_subscribers_sync(
 
 def kwargs_after(result: HookResult) -> object:
     match result.outcome:
+        case Abort(exception=Exception() as error):
+            raise error
         case Abort() | Respond() as terminal:
             raise V2Outcome(terminal, result.patches)
         case _:
