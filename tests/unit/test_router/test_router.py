@@ -20609,6 +20609,23 @@ def test_text_completion_calls_the_deployment_region_over_a_conflicting_router_d
     assert _called_regions(route) == [called_region]
 
 
+@_REGION_PRECEDENCE
+def test_chat_completions_create_calls_the_deployment_region_over_a_conflicting_router_default(
+    deployment_region: str | None, request_region: str | None, called_region: str
+) -> None:
+    router: Final = _bedrock_router_with_a_default_region(
+        "bedrock/converse/anthropic.claude-haiku-5-5", deployment_region
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=_BEDROCK_URL).respond(json=_BEDROCK_CONVERSE_REPLY)
+        router.chat.completions.create(
+            model="regional", messages=[{"role": "user", "content": "Say hi"}], **_request_region(request_region)
+        )
+
+    assert _called_regions(route) == [called_region]
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_router_httpx_transport")
 @_REGION_PRECEDENCE

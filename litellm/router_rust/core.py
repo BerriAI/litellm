@@ -1671,7 +1671,7 @@ class RustCore(
         if name == "chat":
             from litellm.main import Chat
 
-            self._legacy["chat"] = Chat(params=default_litellm_params(self._config), router_obj=self)  # pyright: ignore[reportArgumentType]  # Chat calls the router's endpoints, which this core serves
+            self._legacy["chat"] = Chat(params={}, router_obj=self)  # pyright: ignore[reportArgumentType]  # Chat calls the router's endpoints, which this core serves
             return self._legacy["chat"]
         return argument_attribute(self._config, name)
 
