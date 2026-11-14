@@ -1664,7 +1664,7 @@ class PrometheusLogger(CustomLogger):
             input_sequence_length_label=self._emit_input_sequence_length_label,
             now=datetime.now(timezone.utc).astimezone().replace(tzinfo=None),
         )
-        if not native_store.companion_in_line(self, litellm._async_success_callback):
+        if not native_store.companion_in_line(self, litellm.logging_callback_manager.async_event_callbacks("success")):
             await native_store.run_alone(self.v2_companion, kwargs, "success", response_obj, start_time, end_time)
 
     async def _increment_remaining_budget_metrics(
@@ -1877,7 +1877,9 @@ class PrometheusLogger(CustomLogger):
                     user_api_key_org_id,
                 ),
             )
-            if not native_store.companion_in_line(self, litellm._async_failure_callback):
+            if not native_store.companion_in_line(
+                self, litellm.logging_callback_manager.async_event_callbacks("failure")
+            ):
                 await native_store.run_alone(self.v2_companion, kwargs, "failure", response_obj, start_time, end_time)
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
