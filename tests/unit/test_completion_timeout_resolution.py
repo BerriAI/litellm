@@ -143,6 +143,75 @@ def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
     assert not isinstance(out, httpx.Timeout)
 
 
+SHARED_HTTPX_HANDLER_PROVIDERS: Final = (
+    "a2a",
+    "anthropic_text",
+    "bedrock_mantle",
+    "bytez",
+    "cloudflare",
+    "cohere",
+    "cohere_chat",
+    "cometapi",
+    "compactifai",
+    "databricks",
+    "databricks_agent",
+    "datarobot",
+    "deepseek",
+    "edenai",
+    "fal_ai",
+    "fireworks_ai",
+    "gdc",
+    "gigachat",
+    "gradient_ai",
+    "groq",
+    "heroku",
+    "hosted_vllm",
+    "huggingface",
+    "langflow",
+    "langgraph",
+    "lemonade",
+    "minimax",
+    "mistral",
+    "nadir",
+    "oci",
+    "ollama",
+    "ollama_chat",
+    "openrouter",
+    "ovhcloud",
+    "ragflow",
+    "scaledown",
+    "snowflake",
+    "text-completion-codestral",
+    "together_ai",
+    "triton",
+    "vercel_ai_gateway",
+    "watsonx_text",
+    "xai",
+)
+
+
+@pytest.mark.parametrize("provider", SHARED_HTTPX_HANDLER_PROVIDERS)
+def test_httpx_timeout_preserved_for_shared_httpx_handler_providers(provider: str) -> None:
+    """Providers dispatched to the shared httpx handler accept httpx.Timeout (issue #47822)."""
+    assert supports_httpx_timeout(provider) is True
+    t: Final = httpx.Timeout(40.0, connect=5.0)
+    resolved: Final = CompletionTimeout.resolve(
+        t,
+        {},
+        provider,
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
+    )
+    assert resolved is t
+
+
+@pytest.mark.parametrize("provider", ("azure_ai", "vertex_ai", "anthropic", "gemini", "watsonx"))
+def test_httpx_timeout_still_coerced_for_sdk_providers(provider: str) -> None:
+    """Providers on third-party SDKs keep the float coercion."""
+    assert supports_httpx_timeout(provider) is False
+
+
 def test_httpx_timeout_preserved_for_openai():
     t = httpx.Timeout(40.0, connect=5.0)
     out = CompletionTimeout.resolve(
