@@ -20,9 +20,9 @@ else:
 
 
 def _tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
-    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
 
-    return langfuse_tenant_host_refused_by_otel_v2(params)
+    return langfuse_sdk_tenant_host_refused_by_otel_v2(params)
 
 
 class LangFuseHandler:

@@ -116,9 +116,9 @@ def _params_without_model(config: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _tenant_langfuse_client(dynamic_callback_params: StandardCallbackDynamicParams) -> LangfuseClass:
-    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
 
-    if langfuse_tenant_host_refused_by_otel_v2(dynamic_callback_params):
+    if langfuse_sdk_tenant_host_refused_by_otel_v2(dynamic_callback_params):
         raise ValueError(
             "Langfuse prompt management: the key/team langfuse_host is not allowed. Add its host to "
             "`provider_url_destination_allowed_hosts` in litellm_settings."

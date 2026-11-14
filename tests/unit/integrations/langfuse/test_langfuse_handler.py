@@ -198,3 +198,26 @@ def test_key_langfuse_host_refused_by_otel_v2_gets_the_global_logger(
         is_otel_v2_enabled.cache_clear()
 
     assert (result.langfuse_host, result.public_key) == expected_destination
+
+
+@pytest.mark.parametrize("globalLangfuseLogger", ["global"], indirect=True)
+def test_bare_key_langfuse_host_is_checked_as_the_http_url_the_sdk_calls(
+    monkeypatch: pytest.MonkeyPatch, dynamic_logging_cache: DynamicLoggingCache, globalLangfuseLogger: LangFuseLogger
+) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["https://test.langfuse.com"])
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        result: Final = LangFuseHandler.get_langfuse_logger_for_request(
+            standard_callback_dynamic_params=StandardCallbackDynamicParams(
+                langfuse_public_key="test_public_key", langfuse_secret="test_secret", langfuse_host="test.langfuse.com"
+            ),
+            in_memory_dynamic_logger_cache=dynamic_logging_cache,
+            globalLangfuseLogger=globalLangfuseLogger,
+        )
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+    assert (result.langfuse_host, result.public_key) == ("https://global.langfuse.com", "global_public_key")

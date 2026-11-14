@@ -81,6 +81,22 @@ def langfuse_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParam
     return bool(params.get("langfuse_host")) and _otel_v2_enabled_or_off() and _langfuse_destination(params) is None
 
 
+def langfuse_sdk_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    """The same refusal for the Langfuse SDK clients, checked against the URL they actually call.
+
+    ``resolve_langfuse_host`` gives a bare host ``http://``, not the ``https://`` the OTel exporter uses.
+    """
+    from litellm.integrations.langfuse.langfuse import resolve_langfuse_host
+
+    tenant_host: Final = params.get("langfuse_host")
+    if not tenant_host or not _otel_v2_enabled_or_off():
+        return False
+    if _tenant_endpoint_is_allowlisted(resolve_langfuse_host(tenant_host)):
+        return False
+    _warn_host_not_allowlisted(str(tenant_host))
+    return True
+
+
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
