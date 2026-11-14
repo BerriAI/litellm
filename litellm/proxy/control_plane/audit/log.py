@@ -63,7 +63,7 @@ class AuditLog:
         trace: Callable[[], Trace] = current_trace,
         unauthenticated_records: deque[AuditRecord] | None = None,  # mutable-ok: bounded failure ring
         logger: logging.Logger = AUDIT_LOGGER,
-        known_dataplane_ids: frozenset[str] = frozenset(),
+        known_dataplane_ids: frozenset[str] | Callable[[], frozenset[str]] = frozenset(),
     ) -> None:
         self._records = records
         self._unauthenticated_records: deque[AuditRecord] = (  # mutable-ok: bounded failure ring
@@ -109,9 +109,12 @@ class AuditLog:
         safe_path: Final = _bounded_redacted(redact_path(_safe_text(path)[:MAX_AUDIT_FIELD_CHARS]))
         safe_detail: Final = None if detail is None else _bounded_redacted(_safe_text(detail))
         safe_dataplane_id: Final = _safe_text(dataplane_id)
+        known_ids: Final = (
+            self._known_dataplane_ids() if callable(self._known_dataplane_ids) else self._known_dataplane_ids
+        )
         recorded_dataplane_id: Final = (
             safe_dataplane_id[:MAX_AUDIT_FIELD_CHARS]
-            if dataplane_id in self._known_dataplane_ids
+            if dataplane_id in known_ids
             else _bounded_redacted(safe_dataplane_id)
         )
         event: Final = AuditEvent(
@@ -179,7 +182,7 @@ def build_audit_log(
     product: Product = UNKNOWN_PRODUCT,
     trace: Callable[[], Trace] = current_trace,
     stream: TextIO | None = None,
-    known_dataplane_ids: frozenset[str] = frozenset(),
+    known_dataplane_ids: frozenset[str] | Callable[[], frozenset[str]] = frozenset(),
 ) -> AuditLog:
     logger: Final = AUDIT_LOGGER if stream is None else build_audit_logger(stream)
     return AuditLog(

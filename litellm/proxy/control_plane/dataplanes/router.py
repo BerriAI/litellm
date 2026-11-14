@@ -1,11 +1,16 @@
 from http import HTTPStatus
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, Security
+from fastapi import APIRouter, Depends, Response, Security
 
 from litellm.proxy.control_plane.auth.dependencies import require_scopes
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
-from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, bad_gateway
+from litellm.proxy.control_plane.common.exceptions import (
+    ControlPlaneException,
+    ErrorBody,
+    bad_gateway,
+    service_unavailable,
+)
 from litellm.proxy.control_plane.dataplanes.client import (
     DataplaneClient,
     DataplaneReply,
@@ -21,6 +26,10 @@ from litellm.proxy.control_plane.dataplanes.dependencies import (
 )
 from litellm.proxy.control_plane.dataplanes.identity import USER_INFO_PATH, UserInfo, parse_user_info
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane, DataplaneRegistry, visible_to
+from litellm.proxy.control_plane.settings import DataplaneSpec
+from litellm.proxy.control_plane.store.dependencies import audited_write, get_runtime_config
+from litellm.proxy.control_plane.store.models import Change
+from litellm.proxy.control_plane.store.runtime import NOT_CONFIGURED, RuntimeConfig
 from litellm.types.proxy.control_plane.dataplanes import (
     DataplaneHealthResponse,
     DataplaneIdentityResponse,
@@ -33,9 +42,49 @@ router: Final = APIRouter(prefix="/dataplanes", tags=["dataplanes"])
 LIVENESS_PATH: Final = "/health/liveliness"
 
 
+@router.put("/{dataplane_id}", response_model=DataplaneResponse)
+async def put_dataplane(
+    dataplane_id: str,
+    spec: DataplaneSpec,
+    principal: Annotated[Principal, Security(audited_write, scopes=[Scope.DATAPLANES_WRITE.value])],
+    runtime: Annotated[RuntimeConfig, Depends(get_runtime_config)],
+) -> DataplaneResponse:
+    codec: Final = runtime.state.codec
+    if codec is None:
+        raise ControlPlaneException(service_unavailable(NOT_CONFIGURED))
+    change: Final = Change(
+        op="upsert", kind="dataplane", name=dataplane_id, entity=codec.encode(spec), actor=principal.subject
+    )
+    result: Final = await runtime.write(change, principal)
+    if isinstance(result, ErrorBody):
+        raise ControlPlaneException(result)
+    dataplane: Final = result.snapshot.registry.get(dataplane_id)
+    if dataplane is None:
+        raise ControlPlaneException(service_unavailable("Runtime dataplane is unavailable."))
+    return _to_response(dataplane)
+
+
+@router.delete("/{dataplane_id}", status_code=204)
+async def delete_dataplane(
+    dataplane_id: str,
+    principal: Annotated[Principal, Security(audited_write, scopes=[Scope.DATAPLANES_WRITE.value])],
+    runtime: Annotated[RuntimeConfig, Depends(get_runtime_config)],
+) -> Response:
+    result: Final = await runtime.write(
+        Change(op="delete", kind="dataplane", name=dataplane_id, actor=principal.subject), principal
+    )
+    if isinstance(result, ErrorBody):
+        raise ControlPlaneException(result)
+    return Response(status_code=204)
+
+
 def _to_response(dataplane: Dataplane) -> DataplaneResponse:
     return DataplaneResponse(
-        id=dataplane.id, name=dataplane.name, url=dataplane.url, credentials=dataplane.credential_kinds
+        id=dataplane.id,
+        name=dataplane.name,
+        url=dataplane.url,
+        credentials=dataplane.credential_kinds,
+        source=dataplane.source,
     )
 
 

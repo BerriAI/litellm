@@ -29,6 +29,8 @@ from litellm.proxy.control_plane.dataplanes.router import router as dataplanes_r
 from litellm.proxy.control_plane.fleet.router import router as fleet_router
 from litellm.proxy.control_plane.health.router import router as health_router
 from litellm.proxy.control_plane.proxy.router import router as proxy_router
+from litellm.proxy.control_plane.roles.router import router as roles_router
+from litellm.proxy.control_plane.store.dependencies import get_runtime_config
 from litellm.proxy.control_plane.usage.router import router as usage_router
 from litellm.proxy.middleware.request_size_limit_middleware import RequestSizeLimitMiddleware
 
@@ -89,15 +91,19 @@ class _Lifespan:
         return self
 
     async def __aenter__(self) -> None:
+        await self.container.runtime_config.start()
         self.container.audit_log.pipeline.start()
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
         try:
-            await self.container.audit_log.pipeline.close()
+            await self.container.runtime_config.close()
         finally:
-            self.container.telemetry.shutdown()
+            try:
+                await self.container.audit_log.pipeline.close()
+            finally:
+                self.container.telemetry.shutdown()
 
 
 def create_app(container: Container, license_check: License) -> FastAPI:
@@ -121,6 +127,7 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     app.dependency_overrides[get_dataplane_client] = lambda: container.dataplane_client
     app.dependency_overrides[get_fanout] = lambda: container.fanout
     app.dependency_overrides[get_audit_log] = lambda: container.audit_log
+    app.dependency_overrides[get_runtime_config] = lambda: container.runtime_config
     install_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router, prefix=container.settings.api_prefix)
@@ -129,4 +136,5 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     app.include_router(fleet_router, prefix=container.settings.api_prefix)
     app.include_router(proxy_router, prefix=container.settings.api_prefix)
     app.include_router(audit_router, prefix=container.settings.api_prefix)
+    app.include_router(roles_router, prefix=container.settings.api_prefix)
     return app

@@ -7,7 +7,16 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
@@ -161,7 +170,9 @@ _YAML_DOCUMENT: Final = TypeAdapter(dict[str, object])
 
 
 class ControlPlaneSettings(BaseSettings):
-    model_config = SettingsConfigDict(frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore", hide_input_in_errors=True
+    )
 
     master_key: SecretStr = Field(validation_alias="LITELLM_MASTER_KEY")
     ui_username: str | None = Field(default=None, max_length=USERNAME_MAX_LENGTH, validation_alias="UI_USERNAME")
@@ -171,6 +182,13 @@ class ControlPlaneSettings(BaseSettings):
     session_audience: str = "litellm-control-plane-api"
     roles: Mapping[str, RoleSpec] = Field(default_factory=dict)
     include_default_roles: bool = True
+    database_url: SecretStr | None = None
+    redis_url: SecretStr | None = None
+    config_stream: str = Field(default="litellm:control_plane:config", min_length=1)
+    config_stream_maxlen: int = Field(default=10_000, ge=1)
+    salt_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("CONTROL_PLANE_SALT_KEY", "LITELLM_SALT_KEY")
+    )
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
@@ -218,6 +236,14 @@ class ControlPlaneSettings(BaseSettings):
     audit_sentinel_authority_host: str = "https://login.microsoftonline.com"
     audit_sentinel_token_scope: str | None = None
     audit_sentinel_timeout_seconds: float = 30.0
+
+    @model_validator(mode="after")
+    def _runtime_store_settings(self) -> "ControlPlaneSettings":
+        if (self.database_url is None) != (self.redis_url is None):
+            raise ValueError("Set both CONTROL_PLANE_DATABASE_URL and CONTROL_PLANE_REDIS_URL, or neither.")
+        if self.database_url is not None and (self.salt_key is None or not self.salt_key.get_secret_value().strip()):
+            raise ValueError("Runtime config writes require CONTROL_PLANE_SALT_KEY or LITELLM_SALT_KEY.")
+        return self
 
     @field_validator("audit_s3_bucket")
     @classmethod
