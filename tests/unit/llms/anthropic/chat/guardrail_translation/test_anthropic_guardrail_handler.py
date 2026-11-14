@@ -2077,6 +2077,62 @@ class TestAnthropicMessagesHandlerToolInjection:
 
         assert [t.get("name") for t in result["tools"]] == ["injected_tool"]
 
+    @staticmethod
+    def _deferred_tool() -> dict[str, Any]:
+        return {
+            "name": "get_weather",
+            "description": "Get the weather at a specific location",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "defer_loading": True,
+            "strict": True,
+            "cache_control": {"type": "ephemeral"},
+            "input_examples": [{"city": "Paris"}],
+            "allowed_callers": ["code_execution_20250825"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_anthropic_only_tool_fields_survive_a_passthrough_guardrail(self):
+        """#49253: the OpenAI round trip dropped defer_loading, strict, input_examples
+        and allowed_callers, which broke tool search behind a default-on guardrail."""
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                self._deferred_tool(),
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="passthru")
+        )
+
+        assert data["tools"][0] == {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
+        assert {k: v for k, v in data["tools"][1].items() if k != "type"} == self._deferred_tool()
+
+    @pytest.mark.asyncio
+    async def test_guardrail_edits_to_a_tool_win_over_the_original_fields(self):
+        class DescriptionRewritingGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                inputs["tools"] = [
+                    {**tool, "function": {**tool["function"], "description": "[redacted]"}}
+                    for tool in inputs.get("tools") or []
+                ]
+                return inputs
+
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [self._deferred_tool()],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=DescriptionRewritingGuardrail(guardrail_name="rewrite")
+        )
+
+        assert data["tools"][0]["description"] == "[redacted]"
+        assert data["tools"][0]["defer_loading"] is True
+
 
 if __name__ == "__main__":
     # Run the tests
