@@ -5,7 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -363,12 +363,12 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
     )
 
 
-def _is_json_value(value: object) -> bool:
-    try:
-        _COUNT_OPTION.validate_python(value)
-    except ValidationError:
-        return False
-    return True
+def _json_options(options: Mapping[str, object]) -> Iterator[tuple[str, JsonValue]]:
+    for name, value in options.items():
+        try:
+            yield name, _COUNT_OPTION.validate_python(value)
+        except ValidationError:
+            continue
 
 
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
@@ -382,7 +382,7 @@ def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_para
             if isinstance(path, str)
         ),
     )
-    return _COUNT_REQUEST.validate_python({name: value for name, value in kept.items() if _is_json_value(value)})
+    return dict(_json_options(kept))
 
 
 def messages_count_options(
