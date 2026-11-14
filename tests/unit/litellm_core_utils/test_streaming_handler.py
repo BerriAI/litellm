@@ -20,6 +20,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice, ChoiceDelta
 from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
@@ -48,6 +49,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     ChoiceLogprobs,
+    Choices,
     CompletionTokensDetailsWrapper,
     Delta,
     ModelResponse,
@@ -10066,3 +10068,82 @@ async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passe
         (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
     ] == [("get_weather", '{"city": "Paris"}')]
     assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []
+
+
+def _n2_chat_chunk(
+    index: int, content: str | None, finish_reason: Literal["stop", "length"] | None = None
+) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id="chatcmpl-n2",
+        created=1,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[ChunkChoice(index=index, delta=ChoiceDelta(content=content), finish_reason=finish_reason)],
+    )
+
+
+_N2_CHAT_STREAMS: Final = (
+    pytest.param(
+        (
+            _n2_chat_chunk(0, "a"),
+            _n2_chat_chunk(1, "b"),
+            _n2_chat_chunk(1, "c"),
+            _n2_chat_chunk(1, None, "length"),
+            _n2_chat_chunk(0, "d"),
+            _n2_chat_chunk(0, None, "stop"),
+        ),
+        id="choice-1-finishes-first",
+    ),
+    pytest.param(
+        (
+            _n2_chat_chunk(0, "a"),
+            _n2_chat_chunk(1, "b"),
+            _n2_chat_chunk(0, "d"),
+            _n2_chat_chunk(0, None, "stop"),
+            _n2_chat_chunk(1, "c"),
+            _n2_chat_chunk(1, None, "length"),
+        ),
+        id="choice-0-finishes-first",
+    ),
+    pytest.param(
+        (
+            _n2_chat_chunk(0, "a"),
+            _n2_chat_chunk(1, "b"),
+            _n2_chat_chunk(1, "c", "length"),
+            _n2_chat_chunk(0, "d", "stop"),
+        ),
+        id="finish-on-content-chunks",
+    ),
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("upstream", _N2_CHAT_STREAMS)
+def test_openai_chat_stream_with_two_choices_finishes_each_choice_with_its_own_finish_reason(
+    logging_obj: Logging, custom_llm_provider: str, upstream: Sequence[ChatCompletionChunk]
+) -> None:
+    received: Final = list(
+        CustomStreamWrapper(
+            completion_stream=iter(upstream),
+            model="gpt-4o-mini",
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+    )
+    streamed_finishes: Final = sorted(
+        (choice.index, choice.finish_reason)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+        if choice.finish_reason is not None
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=received)
+
+    assert streamed_finishes == [(0, "stop"), (1, "length")]
+    assert isinstance(assembled, ModelResponse)
+    assert [
+        (choice.index, choice.finish_reason, choice.message.content)
+        for choice in assembled.choices
+        if isinstance(choice, Choices)
+    ] == [
+        (0, "stop", "ad"),
+        (1, "length", "bc"),
+    ]
