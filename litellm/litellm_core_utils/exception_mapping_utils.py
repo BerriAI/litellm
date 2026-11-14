@@ -321,6 +321,29 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
+def _permission_denied_error(
+    *,
+    model: str,
+    message: str,
+    custom_llm_provider: str,
+    exception_provider: str,
+    response: httpx.Response | None,
+    extra_information: str,
+) -> PermissionDeniedError:
+    """OpenAI-compatible 403 replies, matching openai.PermissionDeniedError (#49936)
+
+    The fallback response uses a neutral request so upstream credentials, query and body never leak into it
+    """
+    request: Final = httpx.Request("POST", "https://litellm.ai")
+    return PermissionDeniedError(
+        message=f"PermissionDeniedError: {exception_provider} - {message}",
+        llm_provider=custom_llm_provider,
+        model=model,
+        response=response if response is not None else httpx.Response(status_code=403, request=request),
+        litellm_debug_info=extra_information,
+    )
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -440,6 +463,15 @@ def _map_openai_exception(
                 litellm_debug_info=extra_information,
                 body=getattr(original_exception, "body", None),
             )
+        if invalid_request_status == 403:
+            raise _permission_denied_error(
+                model=model,
+                message=message,
+                custom_llm_provider=custom_llm_provider,
+                exception_provider=exception_provider,
+                response=response,
+                extra_information=extra_information,
+            )
         if invalid_request_status == 404:
             raise NotFoundError(
                 message=f"{exception_provider} - {message}",
@@ -516,6 +548,15 @@ def _map_openai_exception(
                 model=model,
                 response=response,
                 litellm_debug_info=extra_information,
+            )
+        elif original_exception.status_code == 403:
+            raise _permission_denied_error(
+                model=model,
+                message=message,
+                custom_llm_provider=custom_llm_provider,
+                exception_provider=exception_provider,
+                response=response,
+                extra_information=extra_information,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
@@ -1658,6 +1699,15 @@ def _map_huggingface_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
             )
+        elif original_exception.status_code == 403:
+            raise _permission_denied_error(
+                model=model,
+                message=original_exception.message,
+                custom_llm_provider="huggingface",
+                exception_provider="HuggingfaceException",
+                response=_without_credentials(getattr(original_exception, "response", None)),
+                extra_information=extra_information,
+            )
         elif original_exception.status_code == 400:
             raise BadRequestError(
                 message=f"HuggingfaceException - {original_exception.message}",
@@ -2209,6 +2259,15 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 response=response,
             )
+        elif original_exception.status_code == 403:
+            raise _permission_denied_error(
+                model=model,
+                message=message,
+                custom_llm_provider=custom_llm_provider,
+                exception_provider=exception_provider,
+                response=response,
+                extra_information=extra_information,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"AzureException NotFoundError - {message}",
@@ -2316,6 +2375,15 @@ def _map_openrouter_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+            )
+        elif original_exception.status_code == 403:
+            raise _permission_denied_error(
+                model=model,
+                message=error_str,
+                custom_llm_provider=custom_llm_provider,
+                exception_provider=exception_provider,
+                response=_without_credentials(getattr(original_exception, "response", None)),
+                extra_information=extra_information,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(

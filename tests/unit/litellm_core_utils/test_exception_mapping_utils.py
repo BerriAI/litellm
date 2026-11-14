@@ -1401,8 +1401,8 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
-@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
-def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+@pytest.mark.parametrize("status_code", [409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_403_and_404(
     provider: str, status_code: int
 ) -> None:
     message: Final = "Cannot cancel a batch that is already completed."
@@ -1504,7 +1504,7 @@ OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
     402: (litellm.PaymentRequiredError, 402),
-    403: (litellm.APIError, 403),
+    403: (litellm.PermissionDeniedError, 403),
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
     422: (litellm.BadRequestError, 422),
@@ -3469,3 +3469,87 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize("error_type", ["request_forbidden", "invalid_request_error"])
+def test_openai_403_maps_to_permission_denied(provider: str, error_type: str) -> None:
+    """Regression for #49936, a 403 must raise PermissionDeniedError like the openai SDK does"""
+    message: Final = "Country, region, or territory not supported"
+    error_message: Final = json.dumps(
+        {
+            "error": {
+                "message": message,
+                "type": error_type,
+                "param": None,
+                "code": "unsupported_country_region_territory",
+            }
+        }
+    )
+    original_exception: Final = OpenAIError(status_code=403, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="gpt-4o",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.PermissionDeniedError
+    assert isinstance(excinfo.value, openai.PermissionDeniedError)
+    assert excinfo.value.status_code == 403
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "huggingface"])
+def test_fallback_403_response_does_not_carry_the_upstream_request(provider: str) -> None:
+    """The stub response on a 403 must not reuse the upstream request and its credentials"""
+
+    class _Upstream403(Exception):
+        status_code = 403
+        message = "forbidden"
+        response = None
+        request = httpx.Request(
+            "POST",
+            "https://upstream.example/v1/chat?key=query-secret",
+            headers={"Authorization": "Bearer sk-upstream-secret"},
+            content=b'{"api_key": "body-secret"}',
+        )
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(model="some-model", original_exception=_Upstream403("forbidden"), custom_llm_provider=provider)
+
+    stub_request: Final = excinfo.value.response.request
+    assert str(stub_request.url) == "https://litellm.ai"
+    assert "authorization" not in stub_request.headers
+    assert b"body-secret" not in stub_request.content
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "huggingface"])
+def test_provider_403_response_does_not_carry_upstream_request_credentials(provider: str) -> None:
+    """A 403 whose response still holds the upstream request must not leak its credentials"""
+    sent_request: Final = httpx.Request(
+        "POST",
+        "https://upstream.example/v1/chat?key=query-secret",
+        headers={"Authorization": "Bearer sk-upstream-secret"},
+        content=b'{"api_key": "body-secret"}',
+    )
+    upstream: Final = httpx.Response(403, content=b'{"error":"forbidden"}', request=sent_request)
+
+    class _SDK403(Exception):
+        status_code = 403
+        message = "forbidden"
+        response = upstream
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(model="some-model", original_exception=_SDK403("forbidden"), custom_llm_provider=provider)
+
+    error_request: Final = excinfo.value.response.request
+    assert error_request.headers.get("authorization") is None
+    assert "query-secret" not in str(error_request.url)
+    assert b"body-secret" not in error_request.content
+    assert "sk-upstream-secret" not in str(excinfo.value)
+    assert "query-secret" not in str(excinfo.value)
+    assert "body-secret" not in str(excinfo.value)
+    assert "sk-upstream-secret" not in str(excinfo.value.response.request.headers)
+    assert "body-secret" not in excinfo.value.response.text
