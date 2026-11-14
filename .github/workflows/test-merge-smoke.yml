@@ -3,6 +3,8 @@ name: smoke
 on:
   pull_request:
     branches: [main, litellm_internal_staging, litellm_oss_staging, "litellm_**"]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +26,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the dashboard stage
-        run: docker build --target ui-builder -f Dockerfile .
+        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
 
   core-checks:
     name: py${{ matrix.python-version }}
@@ -52,8 +54,26 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Restore the Rust bridge
+        id: rust-bridge
+        uses: ./.github/actions/restore-rust-bridge
+
+      - name: Restore the Cargo build cache
+        if: steps.rust-bridge.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
+        env:
+          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION"
+            exit 0
+          fi
+          .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION" --no-install-project
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/litellm-*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Create the loopback-only network namespace
         run: |
@@ -87,6 +107,7 @@ jobs:
 
       - name: Upload smoke diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: merge-smoke-diagnostics-py${{ matrix.python-version }}
@@ -96,6 +117,10 @@ jobs:
       - name: Remove the network namespace
         if: always()
         run: sudo ip netns delete smoke
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
@@ -123,11 +148,33 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Restore the Rust bridge
+        id: rust-bridge
+        uses: ./.github/actions/restore-rust-bridge
+
+      - name: Restore the Cargo build cache
+        if: steps.rust-bridge.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install every extra and dependency group
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
+        env:
+          RUST_BRIDGE_RESTORED: ${{ steps.rust-bridge.outputs.cache-hit }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          if [ "$RUST_BRIDGE_RESTORED" != "true" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION"
+            exit 0
+          fi
+          .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION" --no-install-project --no-install-package litellm-proxy
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Import the SDK, the proxy server and the enterprise package
         run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   windows-sdk:
     name: windows-sdk
@@ -154,14 +201,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Set up the Rust bridge
-        uses: ./.github/actions/rust-bridge
-
       - name: Install dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   proxy-build-from-pip:
     name: proxy-build-from-pip
@@ -229,7 +277,7 @@ jobs:
             "prisma==0.11.0" \
             "openai==2.24.0"
           export PATH="/tmp/litellm-pip/bin:$PATH"
-          /tmp/litellm-pip/bin/prisma generate --schema=schema.prisma
+          /tmp/litellm-pip/bin/prisma generate --schema=litellm/schema.prisma
 
       - name: Start the fake OpenAI endpoint
         run: |
@@ -297,6 +345,10 @@ jobs:
       - name: Show the proxy logs
         if: always()
         run: cat /tmp/litellm-pip.log || true
+
+      - name: Keep only source-built wheels in the uv cache
+        if: always() && github.ref == 'refs/heads/main'
+        run: uv cache prune --ci
 
   smoke-passed:
     name: smoke passed

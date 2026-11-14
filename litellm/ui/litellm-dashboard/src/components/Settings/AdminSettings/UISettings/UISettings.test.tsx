@@ -1,0 +1,281 @@
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption } from "@/../tests/test-utils";
+import userEvent from "@testing-library/user-event";
+import UISettings from "./UISettings";
+import { toast } from "@/lib/toast";
+
+vi.mock("./BackgroundChatSettings", () => ({ default: () => null }));
+
+const mockUseAuthorized = vi.hoisted(() => vi.fn());
+const mockUseUISettings = vi.hoisted(() => vi.fn());
+const mockUseUpdateUISettings = vi.hoisted(() => vi.fn());
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  __esModule: true,
+  default: mockUseAuthorized,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: mockUseUISettings,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings", () => ({
+  useUpdateUISettings: mockUseUpdateUISettings,
+}));
+
+const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => ({
+  data: {
+    field_schema: {
+      description: "UI settings description",
+      properties: {
+        disable_model_add_for_internal_users: {
+          description: "Disable model add for internal users",
+        },
+        disable_team_admin_delete_team_user: {
+          description: "Disable team admin delete team user",
+        },
+        require_auth_for_public_ai_hub: {
+          description: "Require authentication for public AI Hub",
+        },
+      },
+    },
+    values: {
+      disable_model_add_for_internal_users: false,
+      disable_team_admin_delete_team_user: false,
+      require_auth_for_public_ai_hub: false,
+    },
+  },
+  isLoading: false,
+  isError: false,
+  error: null,
+  ...overrides,
+});
+
+describe("UISettings", () => {
+  it.each([
+    ["No access", "none"],
+    ["Own and team usage", "own_and_team_usage"],
+  ])("saves internal Aria access %s", async (label, value) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse());
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const select = screen.getByRole("combobox", { name: "Aria access for internal users" });
+    expect(select).toHaveTextContent("Own usage only");
+    await chooseSelectOption(userEvent.setup(), select, label);
+    expect(mutate).toHaveBeenCalledWith({ aria_internal_user_access: value }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned internal Aria access read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          values: { aria_internal_user_access: "none" },
+          source: { aria_internal_user_access: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toHaveTextContent("No access");
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseUISettings.mockReturnValue(buildSettingsResponse());
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+  });
+
+  it("saves the selected deployment default through existing UI settings", async () => {
+    const mutate = vi.fn();
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Last 7 days");
+    await chooseSelectOption(
+      userEvent.setup(),
+      screen.getByRole("combobox", { name: "Default Usage time range" }),
+      "Month to date",
+    );
+    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "month_to_date" }, expect.any(Object));
+  });
+
+  it("shows configuration-owned defaults without offering an ineffective override", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          values: { usage_default_time_range: "year_to_date" },
+          source: { usage_default_time_range: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Year to date");
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toBeDisabled();
+    expect(screen.getByText("Managed by the deployment configuration.")).toBeInTheDocument();
+  });
+
+  it("should render", () => {
+    render(<UISettings />);
+
+    expect(screen.getByText("UI Settings")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
+  });
+
+  it.each([false, true])("saves the deployment Aria visibility toggle from %s", (disabled) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse({ data: { values: { disable_aria: disabled } } }));
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const toggle = screen.getByRole("switch", { name: "Hide Aria Agent for everyone" });
+    if (disabled) expect(toggle).toBeChecked();
+    else expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(mutate).toHaveBeenCalledWith({ disable_aria: !disabled }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned Aria visibility read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({ data: { values: { disable_aria: true }, source: { disable_aria: "config" } } }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Hide Aria Agent for everyone" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText("Managed by the deployment configuration.")).toBeInTheDocument();
+  });
+
+  it("should toggle setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Disable model add for internal users" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { disable_model_add_for_internal_users: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("should toggle disable team admin delete team user setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Disable team admin delete team user" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { disable_team_admin_delete_team_user: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("disconnects Moyai by patching moyai_url to null", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, moyai_url: "https://moyai.example.com" },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    expect(screen.getByText("Connected to https://moyai.example.com")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { moyai_url: null },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
+  it("shows a link to the Moyai page when not connected", () => {
+    render(<UISettings />);
+
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect from the Moyai page" })).toHaveAttribute("href", "/ui/moyai");
+  });
+
+  it("should toggle require auth for public AI Hub setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Require authentication for public AI Hub" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { require_auth_for_public_ai_hub: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+});
