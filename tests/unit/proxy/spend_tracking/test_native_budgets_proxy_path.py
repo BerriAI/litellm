@@ -746,6 +746,7 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
 ROUTED_MODELS: Final = (
     ("gpt-realtime", "openai/gpt-realtime"),
     ("gpt-image-1", "openai/gpt-image-1"),
+    ("llama-rank", "together_ai/Salesforce/Llama-Rank-V1"),
     ("gpt-4o-mini-tts", "openai/gpt-4o-mini-tts"),
 )
 
@@ -768,6 +769,7 @@ FAMILIES: Final[Mapping[str, Family]] = {
     "speech": Family(
         "/v1/audio/speech", {"model": "gpt-4o-mini-tts", "input": "hello", "voice": "alloy"}, call_type="aspeech"
     ),
+    "rerank": Family("/v1/rerank", {"model": "llama-rank", "query": "q", "documents": ["a", "b"]}, call_type="arerank"),
 }
 
 
