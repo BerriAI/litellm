@@ -174,17 +174,22 @@ def proxy_sub_call_metadata(
 class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
     litellm_trusted_callback_vars: ReadOnly[Mapping[str, object]]
     proxy_server_request: ReadOnly[Mapping[str, Mapping[str, str]]]
+    litellm_session_id: ReadOnly[str]
+    litellm_trace_id: ReadOnly[str]
 
 
 def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
-    """The parent request's callback params and proxy-stamped callback vars, so a sub-call logs under the same
-    message-logging and callback-disable settings as the request it serves. Of the parent's ``proxy_server_request``
-    only the ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads
-    per-request routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its
-    configured model, and redaction headers already ride in ``proxy_sub_call_metadata``."""
+    """The parent request's callback params, proxy-stamped callback vars, and session and trace ids, so a sub-call
+    logs in the same session and under the same message-logging and callback-disable settings as the request it
+    serves. The session goes as the top-level ``litellm_session_id`` only, never as metadata ``session_id``, which
+    deployment affinity reads. Of the parent's ``proxy_server_request`` only the ``x-litellm-disable-callbacks``
+    header is carried, since dispatch reads it there: the router reads per-request routing inputs from the rest, such
+    as the Claude Code session that would pull a sub-call off its configured model, and redaction headers already ride
+    in ``proxy_sub_call_metadata``."""
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
+    session: Final = _parent_session(parent_kwargs)
     parent_params: Final[ProxySubCallLoggingKwargs] = (
-        {**parent_logging.standard_callback_dynamic_params} if parent_logging is not None else {}
+        {**parent_logging.standard_callback_dynamic_params, **session} if parent_logging is not None else session
     )
     disable_header: Final = _disable_callbacks_header(parent_kwargs)
     dynamic_params: Final[ProxySubCallLoggingKwargs] = (
@@ -207,6 +212,15 @@ def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
     logged_trace_id: Final = parent_logging.litellm_trace_id if parent_logging is not None else None
     return logged_trace_id if isinstance(logged_trace_id, str) and logged_trace_id else None
+
+
+def _parent_session(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
+    session_id: Final = parent_kwargs.get("litellm_session_id")
+    trace_id: Final = proxy_sub_call_trace_id(parent_kwargs)
+    session: Final[ProxySubCallLoggingKwargs] = (
+        {"litellm_session_id": session_id} if isinstance(session_id, str) and session_id else {}
+    )
+    return session if trace_id is None else {**session, "litellm_trace_id": trace_id}
 
 
 def _disable_callbacks_header(parent_kwargs: Mapping[str, object]) -> str | None:

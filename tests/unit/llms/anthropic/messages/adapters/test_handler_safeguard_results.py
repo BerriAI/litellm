@@ -402,11 +402,13 @@ async def test_a_subagent_turns_classifier_call_stays_on_the_classifier_model_wh
         num_retries=0,
     )
     session_headers: Final = {"x-claude-code-session-id": "session-1234"}
+    proxy_session_ids: Final = {"litellm_session_id": "session-1234", "litellm_trace_id": "session-1234"}
     await router.acompletion(
         model="smart-router",
         messages=list(MESSAGES),
         metadata={"user_api_key_hash": "key-hash-a"},
         proxy_server_request={"headers": session_headers},
+        **proxy_session_ids,
     )
     subagent_headers: Final = {**session_headers, "x-claude-code-agent-id": "agent-1234"}
     with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
@@ -420,6 +422,7 @@ async def test_a_subagent_turns_classifier_call_stays_on_the_classifier_model_wh
                 },
                 "litellm_router": router,
                 "proxy_server_request": {"headers": subagent_headers},
+                **proxy_session_ids,
             },
             MESSAGES,
         )
@@ -481,3 +484,75 @@ async def test_a_trace_id_sent_in_the_body_carries_the_classifier_and_summary_ca
         "call_main": {"type": "evaluated", "outcome": "not_flagged"}
     }
     assert "The user asked to install the deps." in json.dumps(backend.calls[0]["messages"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_ids, parent_session",
+    [
+        (
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            "claude-code-session",
+        ),
+        ({"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
+        ({}, "trace-the-parent-minted"),
+    ],
+    ids=["claude-code-session-header", "session-and-trace-sent-apart", "no-session-sent"],
+)
+async def test_the_classifier_and_summary_calls_log_in_the_parent_requests_session(
+    monkeypatch: pytest.MonkeyPatch, parent_ids: dict[str, str], parent_session: str
+) -> None:
+    await _drain_logging_worker()
+    logs: Final = _ClassifierLogs()
+    monkeypatch.setattr(litellm, "callbacks", [logs])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logs])
+    router: Final = Router(
+        model_list=[
+            _mock_deployment("classifier", '{"verdicts": {"call_main": {"flagged": false}}}'),
+            _mock_deployment("summarizer", "<summary>The user asked to install the deps.</summary>"),
+        ],
+        num_retries=0,
+    )
+    parent_logging: Final = Logging(
+        model="fireworks_ai/kimi",
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="parent-call",
+        function_id="parent",
+        litellm_trace_id=parent_ids.get("litellm_trace_id", "trace-the-parent-minted"),
+    )
+    backend: Final = _Backend(stream=False)
+    router_deployment_call: Final = litellm.acompletion
+
+    async def agent_model_or_router_deployment(**kwargs: object) -> object:
+        if kwargs.get("model") == "fireworks_ai/kimi":
+            return await backend(**kwargs)
+        return await router_deployment_call(**kwargs)
+
+    settings: Final = {"safeguards_classifier_model": "classifier", "context_management_summary_model": "summarizer"}
+    with (
+        patch("litellm.acompletion", new=agent_model_or_router_deployment),
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch("litellm.token_counter", return_value=200_000),
+    ):
+        await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=256,
+            messages=list(MESSAGES),
+            model="fireworks_ai/kimi",
+            tools=[dict(BASH_TOOL)],
+            stream=False,
+            litellm_router=router,
+            litellm_metadata=dict(LITELLM_METADATA),
+            litellm_logging_obj=parent_logging,
+            safeguards=SAFEGUARDS,
+            context_management={"edits": [{"type": "compact_20260112"}]},
+            **parent_ids,
+        )
+        await _drain_logging_worker()
+
+    assert {row["model_group"]: row["trace_id"] for row in logs.logged} == {
+        "classifier": parent_session,
+        "summarizer": parent_session,
+    }
