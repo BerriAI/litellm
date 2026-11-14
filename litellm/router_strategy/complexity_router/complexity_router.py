@@ -2448,7 +2448,12 @@ class ComplexityRouter(CustomLogger):
                 ),
                 system_prompt=None,
                 model=config.model,
-                instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+                instructions=config.instructions
+                or (
+                    f"{DEFAULT_JEV_INSTRUCTIONS} {_CLASSIFICATION_WITH_CONVERSATION}"
+                    if self.config.classifier_context_window_size > 0
+                    else DEFAULT_JEV_INSTRUCTIONS
+                ),
                 criteria=criteria,
             )
 
