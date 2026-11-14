@@ -355,7 +355,9 @@ def _rig_config(sink_url: str, root: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["guardrails"] = [
-        _guardrail("straiker-v3", V3_KEY, sink_url, "pre_call", True, agent_ref=AUDIT_AGENT),
+        _guardrail(
+            "straiker-v3", V3_KEY, sink_url, "pre_call", True, agent_ref=AUDIT_AGENT, on_flagged_action="passthrough"
+        ),
         _guardrail("straiker-v3-post", V3_KEY, sink_url, "post_call", False, agent_ref=POST_AGENT),
         _guardrail("straiker-v3-log", V3_KEY, sink_url, "logging_only", False, agent_ref=LOG_AGENT),
         _guardrail("straiker-v3-open", V3_KEY, sink_url, "pre_call", False, fail_on_error=False, agent_ref=OPEN_AGENT),
@@ -476,6 +478,12 @@ def _chat_reply(response: httpx.Response) -> tuple[int, str | None, str | None]:
     return response.status_code, choice["finish_reason"], choice["message"]["content"]
 
 
+def _blocked_error(response: httpx.Response) -> tuple[int, str | None]:
+    if response.status_code == 200:
+        return response.status_code, None
+    return response.status_code, object_value(response.json()["error"]).get("message")
+
+
 def _v3_request_calls(rig: Rig, marker: str, agent: str | None = AUDIT_AGENT) -> tuple[Seen, ...]:
     return tuple(
         s
@@ -563,6 +571,26 @@ def test_v3_block_verdict_on_an_answer_through_apply_guardrail_is_a_400(rig: Rig
     )
     assert response.status_code == 400, response.text
     assert response.json()["error"]["message"] == BLOCK_MESSAGE, response.text
+
+
+# H2d: without on_flagged_action a prompt block stays an HTTP 400 on every route, as on other guardrails
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
+def test_v3_block_verdict_without_on_flagged_action_is_a_400(rig: Rig, path: str) -> None:
+    marker: Final = rig.marker()
+    text: Final = f"{STRAY_V3_BLOCK_MARK} {marker}"
+    bodies: Final[dict[str, dict[str, object]]] = {
+        "/v1/chat/completions": {"model": rig.chat_model, "messages": _messages(text)},
+        "/v1/messages": {"model": rig.anthropic_model, "max_tokens": 16, "messages": _messages(text)},
+        "/v1/responses": {"model": rig.chat_model, "input": text},
+    }
+    response: Final = rig.proxy.client.post(
+        path,
+        json={**bodies[path], "guardrails": ["straiker-v3-stray-version"]},
+        headers={"Authorization": f"Bearer {rig.proxy.key}", "anthropic-version": "2023-06-01"},
+    )
+    assert _blocked_error(response) == (400, BLOCK_MESSAGE), response.text
+    assert len(_v3_request_calls(rig, marker, agent=None)) == 1, rig.sink_calls(marker)
+    assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
 
 # H3: a resend of a blocked conversation is blocked by the process that saw the block, without a second detect call
@@ -796,7 +824,7 @@ def test_v1_key_keeps_webhook_envelope_and_format_header(rig: Rig) -> None:
 def test_v1_block_verdict_still_blocks(rig: Rig) -> None:
     marker: Final = rig.marker()
     response: Final = _chat(rig, f"{V1_BLOCK_MARK} {marker}", guardrails=["straiker-v1"])
-    assert _chat_reply(response) == BLOCKED_REPLY, response.text
+    assert _blocked_error(response) == (400, BLOCK_MESSAGE), response.text
     assert len(_v1_calls(rig, marker, V1_KEY)) == 1, rig.sink_calls(marker)
     assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
@@ -821,7 +849,7 @@ def test_saved_api_version_v1_with_v3_key_routes_to_v3_not_the_v1_webhook(rig: R
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-as-v1"])
-    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
+    assert _blocked_error(blocked) == (400, BLOCK_MESSAGE), blocked.text
     assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1, rig.sink_calls(blocked_marker)
     assert _v1_calls(rig, blocked_marker, V3_KEY) == ()
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
@@ -836,7 +864,7 @@ def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-stray-version"])
-    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
+    assert _blocked_error(blocked) == (400, BLOCK_MESSAGE), blocked.text
     assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
@@ -850,7 +878,7 @@ def test_empty_api_version_with_v1_key_still_enforces_on_v1(rig: Rig) -> None:
 
     blocked_marker: Final = rig.marker()
     blocked: Final = _chat(rig, f"{V1_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v1-empty-version"])
-    assert _chat_reply(blocked) == BLOCKED_REPLY, blocked.text
+    assert _blocked_error(blocked) == (400, BLOCK_MESSAGE), blocked.text
     assert len(_v1_calls(rig, blocked_marker, V1_KEY)) == 1
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 

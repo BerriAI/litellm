@@ -40,6 +40,7 @@ from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     STRAIKER_WEBHOOK_SCHEMA_VERSION,
     StraikerGuardrailConfigModel,
+    StraikerOnFlaggedAction,
     StraikerStreamMode,
     StraikerWebhookApplication,
     StraikerWebhookContent,
@@ -1026,6 +1027,7 @@ class StraikerGuardrail(CustomGuardrail):
         fail_on_error: bool = True,
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
         stream_mode: StraikerStreamMode = "buffered",
+        on_flagged_action: StraikerOnFlaggedAction = "block",
         custom_headers: dict[str, str] | None = None,
         metadata: dict[str, str] | None = None,
         verbose: bool = False,
@@ -1038,6 +1040,8 @@ class StraikerGuardrail(CustomGuardrail):
             raise ValueError(f"unreachable_fallback must be 'fail_open' or 'fail_closed'; got {unreachable_fallback!r}")
         if stream_mode not in ("buffered", "streaming"):
             raise ValueError(f"stream_mode must be 'buffered' or 'streaming'; got {stream_mode!r}")
+        if on_flagged_action not in ("block", "passthrough"):
+            raise ValueError(f"on_flagged_action must be 'block' or 'passthrough'; got {on_flagged_action!r}")
         if api_version not in (None, "v1", "v3"):
             raise ValueError(f"api_version must be 'v1' or 'v3'; got {api_version!r}")
         # The v1 webhook rejects an sk_agt_ key, so an sk_agt_ key always means v3. Guardrails
@@ -1083,6 +1087,7 @@ class StraikerGuardrail(CustomGuardrail):
         self.stream_mode: StraikerStreamMode = stream_mode
         self.streaming_end_of_stream_only = True
         self.streaming_buffer_until_moderated = stream_mode == "buffered"
+        self.on_flagged_action: StraikerOnFlaggedAction = on_flagged_action
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -1388,12 +1393,16 @@ class StraikerGuardrail(CustomGuardrail):
         blocked_content: bool = False,
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> NoReturn:
-        # A verdict on the prompt is answered as a reply, the way an answer-side block already
-        # is. GuardrailRaisedException reaches the client as HTTP 400, which some clients
-        # report as a malformed request without the reason. A backend failure stays an error,
-        # so a consumer can still tell an outage from a verdict, and so does a verdict on a
-        # route that has no reply to give.
-        replies: Final = blocked_content and _resolve_call_surface(logging_obj, request_data) in _REPLY_CALL_SURFACES
+        # With on_flagged_action 'passthrough', a verdict on the prompt is answered as a reply,
+        # the way an answer-side block already is. With 'block' (the default) it is
+        # GuardrailRaisedException, an HTTP 400, as on every other guardrail by default. A
+        # backend failure stays an error in both modes, so a consumer can still tell an outage
+        # from a verdict, and so does a verdict on a route that has no reply to give.
+        replies: Final = (
+            self.on_flagged_action == "passthrough"
+            and blocked_content
+            and _resolve_call_surface(logging_obj, request_data) in _REPLY_CALL_SURFACES
+        )
         if input_type == "request" and not replies:
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter, field_validator
@@ -6,7 +7,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.proxy.guardrails.guardrail_hooks.straiker import StraikerStreamMode
+from litellm.types.proxy.guardrails.guardrail_hooks.straiker import StraikerOnFlaggedAction, StraikerStreamMode
 
 from .straiker import StraikerGuardrail
 
@@ -34,6 +35,10 @@ class _V3Routing(LiteLLMBaseModel):
 
 
 _STREAM_MODE: Final[TypeAdapter[StraikerStreamMode]] = TypeAdapter(StraikerStreamMode)
+_CONFIG_ENTRIES: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+# LitellmParams carries another guardrail's `on_flagged_action` default, 'monitor', and a guardrail
+# saved through the API is stored with it, so that value means "not set" here, not a typo.
+_UNSET_ON_FLAGGED_ACTIONS: Final = ("monitor",)
 
 _OPTIONAL_INIT_FIELDS: Final = (
     "timeout",
@@ -58,6 +63,30 @@ def _get_config_value(litellm_params: "LitellmParams", optional_params: object, 
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)
+
+
+def _explicit_value(params: object, attribute_name: str) -> object:
+    """The value the operator set for `attribute_name`, or None when it is only a model default."""
+    if isinstance(params, dict):
+        return _CONFIG_ENTRIES.validate_python(params).get(attribute_name)
+    fields_set: Final = getattr(params, "model_fields_set", None)
+    if fields_set is None or attribute_name not in fields_set:
+        return None
+    return getattr(params, attribute_name, None)
+
+
+def _on_flagged_action(litellm_params: "LitellmParams", optional_params: object) -> StraikerOnFlaggedAction:
+    """'passthrough' only when the operator asked for it; anything else keeps the HTTP 400 block."""
+    nested: Final = _explicit_value(optional_params, "on_flagged_action")
+    value: Final = nested if nested is not None else _explicit_value(litellm_params, "on_flagged_action")
+    if value == "passthrough":
+        return "passthrough"
+    if value is not None and value != "block" and value not in _UNSET_ON_FLAGGED_ACTIONS:
+        verbose_proxy_logger.warning(
+            "Straiker guardrail: ignoring on_flagged_action %r, expected 'block' or 'passthrough'; blocking with HTTP 400",
+            value,
+        )
+    return "block"
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
@@ -95,6 +124,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         stream_mode=_STREAM_MODE.validate_python(
             _get_config_value(litellm_params, optional_params, "stream_mode") or "buffered"
         ),
+        on_flagged_action=_on_flagged_action(litellm_params, optional_params),
         **kwargs,
     )
 

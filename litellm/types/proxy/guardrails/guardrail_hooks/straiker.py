@@ -12,6 +12,7 @@ StraikerWebhookEventType = Literal["pre_call", "post_call"]
 StraikerWebhookStreamPhase = Literal["none", "assembled"]
 StraikerWebhookAction = Literal["NONE", "BLOCKED", "GUARDRAIL_INTERVENED"]
 StraikerStreamMode: TypeAlias = Literal["buffered", "streaming"]
+StraikerOnFlaggedAction: TypeAlias = Literal["block", "passthrough"]
 
 STRAIKER_WEBHOOK_SCHEMA_VERSION: Final = "1"
 
@@ -152,6 +153,16 @@ class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
             "the assembled response at the end, holding back only the stream's final frames: a "
             "block then ends the stream with the block message, but the text before it has "
             "already been delivered."
+        ),
+    )
+    on_flagged_action: StraikerOnFlaggedAction | None = Field(
+        default="block",
+        description=(
+            "How a blocked prompt reaches the client. 'block' (default) answers HTTP 400 with the "
+            "block message. 'passthrough' answers HTTP 200 with the block message as the assistant "
+            "reply and finish_reason content_filter, on chat completions, text completions, "
+            "/v1/messages and /v1/responses; other routes keep the HTTP 400. A blocked response is "
+            "replaced by the block message in either mode."
         ),
     )
     api_version: Literal["v1", "v3"] | None = Field(
