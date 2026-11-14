@@ -662,6 +662,13 @@ _REASONING_ITEM: Final = {
     "summary": [{"type": "summary_text", "text": "France's capital is Paris."}],
 }
 _ANSWER_ITEM: Final = {"role": "assistant", "content": "Paris."}
+_THINK_CHUNK_TURN: Final = {
+    "role": "assistant",
+    "content": [
+        {"type": "thinking", "thinking": [{"type": "text", "text": "France's capital is Paris."}]},
+        {"type": "text", "text": "Paris."},
+    ],
+}
 
 
 @pytest.mark.parametrize(
@@ -680,8 +687,24 @@ _ANSWER_ITEM: Final = {"role": "assistant", "content": "Paris."}
         ("magistral-medium-latest", {**_REASONED_TURN, "content": None}, []),
         ("magistral-medium-latest", {"role": "assistant", "content": ""}, []),
         ("mistral-no-reasoning-test-model", _REASONED_TURN, [_ANSWER_ITEM]),
+        ("magistral-medium-latest", _THINK_CHUNK_TURN, [_REASONING_ITEM, _ANSWER_ITEM]),
+        (
+            "magistral-medium-latest",
+            {**_THINK_CHUNK_TURN, "reasoning_content": "A reasoning text chat skips beside a thinking chunk."},
+            [_REASONING_ITEM, _ANSWER_ITEM],
+        ),
+        ("mistral-no-reasoning-test-model", _THINK_CHUNK_TURN, [_ANSWER_ITEM]),
     ],
-    ids=["reasoning_content", "thinking_blocks", "no_turn_output", "empty_text", "model_without_reasoning"],
+    ids=[
+        "reasoning_content",
+        "thinking_blocks",
+        "no_turn_output",
+        "empty_text",
+        "model_without_reasoning",
+        "thinking_chunk",
+        "thinking_chunk_beside_reasoning_content",
+        "thinking_chunk_model_without_reasoning",
+    ],
 )
 @pytest.mark.asyncio
 async def test_count_tokens_counts_reasoning_only_where_mistral_chat_replays_it(

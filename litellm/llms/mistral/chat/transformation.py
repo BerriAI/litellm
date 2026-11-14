@@ -563,6 +563,14 @@ class MistralConfig(OpenAIGPTConfig):
                 return None
 
     @staticmethod
+    def think_chunk_texts(part: object) -> tuple[str, ...] | None:
+        match part:
+            case {"type": "thinking", "thinking": object() as items} if _is_json_array(items):
+                return tuple(text for text in map(MistralConfig._text_item_text, items) if text is not None)
+            case _:
+                return None
+
+    @staticmethod
     def _sendable_think_chunk(
         chunk: object, items: Sequence[object], may_stay_open: bool
     ) -> MistralThinkingBlock | None:
@@ -640,19 +648,21 @@ class MistralConfig(OpenAIGPTConfig):
             case _:
                 return False
 
-    def sent_turns(self, messages: Sequence[Mapping[str, object]], model: str) -> tuple[bool, ...]:
-        keeps_reasoning: Final = self.accepts_reasoning(model)
+    def replayed_turns(self, messages: Sequence[Mapping[str, object]], model: str) -> tuple[AllMessageValues, ...]:
         chat_messages: Final = cast(  # cast-ok: a count holds the chat turns as plain mappings
             list[AllMessageValues], [dict(message) for message in messages]
         )
-        replayed_messages: Final = MistralConfig._replayed_messages(chat_messages, keeps_reasoning)
+        return MistralConfig._replayed_messages(chat_messages, self.accepts_reasoning(model))
+
+    def sent_turns(self, messages: Sequence[Mapping[str, object]], model: str) -> tuple[bool, ...]:
+        replayed_messages: Final = self.replayed_turns(messages, model)
         if MistralConfig._sends_content_as_is(replayed_messages):
             return tuple(True for _ in replayed_messages)
         return MistralConfig._sent_flags(
             tuple(
                 map(
                     MistralConfig._handle_tool_call_message,
-                    MistralConfig._flattened_messages(replayed_messages, keeps_reasoning),
+                    MistralConfig._flattened_messages(replayed_messages, self.accepts_reasoning(model)),
                 )
             )
         )

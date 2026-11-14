@@ -147,15 +147,26 @@ def _user_parts_in_order(content: object) -> tuple[object, ...]:
     return tuple(chain.from_iterable(_run_parts(is_file_id, run) for is_file_id, run in runs))
 
 
-def _replayed_reasoning_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
-    if not keeps_reasoning or message.get("role") != "assistant":
+def _is_think_chunk(part: object) -> bool:
+    return MistralConfig.think_chunk_texts(part) is not None
+
+
+def _reasoning_item(texts: tuple[str, ...]) -> Mapping[str, object]:
+    return {"type": "reasoning", "summary": [{"type": "summary_text", "text": text} for text in texts]}
+
+
+def _replayed_reasoning_items(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if message.get("role") != "assistant":
         return ()
-    if not message.get("content") and not message.get("tool_calls"):
-        return ()
-    reasoning_text: Final = MistralConfig.replayed_reasoning_text(message)
-    if reasoning_text is None:
-        return ()
-    return ({"type": "reasoning", "summary": [{"type": "summary_text", "text": reasoning_text}]},)
+    chunk_texts: Final = map(MistralConfig.think_chunk_texts, parts_of(message.get("content")))
+    return tuple(_reasoning_item(texts) for texts in chunk_texts if texts)
+
+
+def _without_think_chunks(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = parts_of(message.get("content"))
+    if message.get("role") != "assistant" or not any(map(_is_think_chunk, parts)):
+        return message
+    return {**message, "content": [part for part in parts if not _is_think_chunk(part)] or None}
 
 
 def _input_content_parts(content: object) -> tuple[object, ...]:
@@ -226,17 +237,17 @@ def _with_chat_text_joins(message: Mapping[str, object]) -> Mapping[str, object]
             return {**message, "content": list(blocks)}
 
 
-def _chat_message_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
+def _chat_message_items(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     if _is_system_turn(message):
         return ({"role": "system", "content": _system_text(message.get("content"))},)
-    joined_message: Final = _with_chat_text_joins(message)
+    joined_message: Final = _with_chat_text_joins(_without_think_chunks(message))
     items, _ = OpenAICountTokensConfig.messages_to_responses_input((joined_message,))
     sent_items: Final = (
         tuple({**item, "content": _user_parts_in_order(joined_message.get("content"))} for item in items)
         if _sends_file_ids(message)
         else tuple(items)
     )
-    return (*_replayed_reasoning_items(message, keeps_reasoning), *sent_items)
+    return (*_replayed_reasoning_items(message), *sent_items)
 
 
 def _counted_tool_choice(tool_choice: object) -> JsonValue:
@@ -299,12 +310,12 @@ class MistralTokenCounter(BaseTokenCounter):
                     output_format=output_format,
                 )
             case "openai":
-                keeps_reasoning: Final = _MISTRAL_CHAT_CONFIG.accepts_reasoning(model_to_use)
+                replayed_turns: Final = _MISTRAL_CHAT_CONFIG.replayed_turns(messages, model_to_use)
                 sent_turns: Final = _MISTRAL_CHAT_CONFIG.sent_turns(messages, model_to_use)
                 input_items: Final = tuple(
                     chain.from_iterable(
-                        _chat_message_items(message, keeps_reasoning)
-                        for message, is_sent in zip(messages, sent_turns, strict=True)
+                        _chat_message_items(message)
+                        for message, is_sent in zip(replayed_turns, sent_turns, strict=True)
                         if is_sent
                     )
                 )
