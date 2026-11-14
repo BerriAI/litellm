@@ -244,5 +244,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
             results=rerank_results,
-            meta=rerank_meta,
+            meta=TypeAdapter(RerankResponseMeta).validate_python(response["meta"])
+            if "meta" in response and response["meta"] is not None
+            else rerank_meta,
         )

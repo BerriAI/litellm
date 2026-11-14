@@ -21,7 +21,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import CLAUDE_CODE_CLIENT, CLAUDE_CODE_PICKER_PATTERN, GATEWAY_CLIENT_HEADER
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -160,8 +160,8 @@ class ClaudeCodeRoutingNames:
 
 @dataclass(frozen=True, slots=True)
 class CallerAliases:
-    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it, and `router`,
-    its key's or team's `router_settings.model_group_alias`.
+    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it, `router`,
+    its key's or team's `router_settings.model_group_alias`, and `team_id`, the key's team.
     `rewrite` are the maps `/chat/completions` rewrites its model through after auth's `router`
     rewrite, in the order it applies them: the team's, the key's in `add_litellm_data_to_request`,
     then the global `model_alias_map` and the key's again in `common_processing_pre_call_logic`,
@@ -170,6 +170,7 @@ class CallerAliases:
     team: object
     key: object
     router: object = None
+    team_id: str | None = None
 
     @property
     def own(self) -> tuple[object, ...]:
@@ -214,12 +215,12 @@ def caller_alias_maps(
     """Team aliases count only when listing the team the key authenticated as."""
     if listed_team_id is not None and listed_team_id != key_team_id:
         return CallerAliases(None, key_aliases, router_aliases)
-    return CallerAliases(team_aliases, key_aliases, router_aliases)
+    return CallerAliases(team_aliases, key_aliases, router_aliases, key_team_id)
 
 
 def alias_map(aliases: object) -> Mapping[str, str]:
     try:
-        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases)
     except ValidationError:
         return _NO_ALIASES
     return MappingProxyType(
@@ -287,6 +288,15 @@ def _dispatch(model_id: str, layers: Sequence[_AliasLayer]) -> tuple[str, bool]:
     return reduce(_through_layer, layers, (model_id, False))
 
 
+def dispatched_model(model_id: str, aliases: CallerAliases) -> str:
+    target, _ = _dispatch(model_id, _alias_layers(aliases))
+    return target
+
+
+def requestable_alias_names(aliases: CallerAliases) -> frozenset[str]:
+    return frozenset(chain.from_iterable(layer.aliases for layer in _alias_layers(aliases)))
+
+
 def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
     if name in lookup_by_response:
         return lookup_by_response[name]
@@ -340,6 +350,18 @@ def alias_listing_entries(
         and (lookup_id := _added_lookup_id(alias, layers, lookup_by_response, lookup_ids)) is not None
     )
     return (*retargeted, *added)
+
+
+def unlisted_alias_targets(entries: Sequence[tuple[str, str]], aliases: CallerAliases) -> tuple[str, ...]:
+    layers: Final = _alias_layers(aliases)
+    listed: Final = frozenset(chain.from_iterable(entries))
+    return tuple(
+        dict.fromkeys(
+            target
+            for target, checks_target in (_dispatch(response_id, layers) for response_id, _ in entries)
+            if not checks_target and target not in listed
+        )
+    )
 
 
 def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
@@ -438,7 +460,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def _response_to_lookup_map(
         model_names: Sequence[str],
-        internal_to_public: dict[str, str],
+        internal_to_public: Mapping[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
         `model_names`, preserving first-occurrence order. First-wins keeps list
@@ -473,6 +495,12 @@ class TeamModelNameTranslator:
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
+
+    @staticmethod
+    def public_name_entries(
+        model_names: Sequence[str], internal_to_public: Mapping[str, str]
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
 
     @staticmethod
     def translate_listing(

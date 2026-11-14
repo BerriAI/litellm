@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
 
+import httpx
 import openai
 from pydantic import JsonValue
 from typing_extensions import assert_never
@@ -21,7 +22,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import count_vie
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
@@ -61,6 +62,7 @@ def _workload_identity_config(
 class _CountCredential:
     api_base: str | None
     credential: str | OpenAIWorkloadIdentityConfig
+    timeout: float | httpx.Timeout | None
     organization: str | None
 
 
@@ -87,6 +89,7 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
     return _CountCredential(
         api_base=credentials.api_base,
         credential=credential,
+        timeout=deployment_timeout(litellm_params),
         organization=organization if isinstance(organization, str) else None,
     )
 
@@ -182,6 +185,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
@@ -251,6 +255,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=text,
+                timeout=resolved.timeout,
                 organization=resolved.organization,
             ),
             model_to_use,
@@ -272,7 +277,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         return await self._counted(
             resolved,
             lambda api_key, api_base: openai_count_tokens_handler.post_count_request(
-                body, api_key, api_base, organization=resolved.organization
+                body, api_key, api_base, resolved.timeout, organization=resolved.organization
             ),
             model_to_use,
             request_model,
@@ -281,7 +286,7 @@ class OpenAITokenCounter(BaseTokenCounter):
     @staticmethod
     async def _counted(
         resolved: _CountCredential,
-        send: Callable[[str, str | None], Awaitable[Mapping[str, object]]],
+        send: Callable[[str, str | None], Awaitable[object]],
         model_to_use: str,
         request_model: str,
     ) -> TokenCountResponse | None:

@@ -2,10 +2,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal, TypeAlias
 
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.responses.main import hosted_web_tool_call, web_search_call_tool_id
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -152,6 +154,36 @@ class ToolReference(TypedDict, total=False):
 
     type: Required[Literal["tool_reference"]]
     tool_name: Required[str]
+
+
+class AnthropicToolReferenceBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_reference"] = "tool_reference"
+    tool_name: str
+
+
+class AnthropicToolSearchResultContent(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    tool_references: tuple[AnthropicToolReferenceBlock, ...] = ()
+
+
+class AnthropicToolSearchToolResultBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_search_tool_result"] = "tool_search_tool_result"
+    tool_use_id: str
+    content: AnthropicToolSearchResultContent
+
+    @property
+    def found_tools(self) -> bool:
+        return self.content.type == ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(reference.tool_name for reference in self.content.tool_references)
 
 
 class DirectToolCaller(TypedDict, total=False):
@@ -416,6 +448,14 @@ class AnthropicCompaction(TypedDict, total=False):
     instructions: ReadOnly[str]
 
 
+class AnthropicMessageThread(TypedDict, total=False):
+    """``thread`` body field of the message-threads beta: ``{"type": "create"}`` opens a server-side
+    thread, ``{"type": "continue", "previous_message_id": "msg_..."}`` appends only the new messages to it."""
+
+    type: Required[ReadOnly[Literal["create", "continue"]]]
+    previous_message_id: ReadOnly[str]
+
+
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
@@ -440,6 +480,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     reasoning_effort: str | None
     safeguards: ReadOnly[list[dict[str, object]] | None]
     service_tier: ReadOnly[str | None]
+    thread: ReadOnly[AnthropicMessageThread | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -660,6 +701,7 @@ class MessageChunk(TypedDict, total=False):
     stop_sequence: str | None
     usage: UsageDelta
     safeguard_results: ReadOnly[Sequence[SafeguardResult]]
+    input_transformations: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class MessageStartBlock(TypedDict):
@@ -713,6 +755,14 @@ class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):
     data: str
 
 
+class AnthropicResponseContentBlockCompaction(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["compaction"]
+    content: str | None = None
+    signature: str | None = None
+
+
 class AnthropicResponseContentBlockServerToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -743,7 +793,9 @@ class AnthropicOutputTokensDetails(LiteLLMBaseModel):
     thinking_tokens: int | None = None
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
+AnthropicFinishReason = Literal[
+    "end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "pause_turn", "compaction"
+]
 
 
 class AnthropicResponse(LiteLLMBaseModel):
@@ -761,6 +813,7 @@ class AnthropicResponse(LiteLLMBaseModel):
         | AnthropicResponseContentBlockToolUse
         | AnthropicResponseContentBlockThinking
         | AnthropicResponseContentBlockRedactedThinking
+        | AnthropicResponseContentBlockCompaction
         | AnthropicResponseContentBlockServerToolUse
         | AnthropicResponseContentBlockWebSearchToolResult
     ]
@@ -808,6 +861,9 @@ class AnthropicThinkingParam(TypedDict, total=False):
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]
 
 
+LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("anthropic", "azure_ai", "vertex_ai"))
+
+
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_SEARCH = "web_search"
     BASH = "bash"
@@ -828,12 +884,15 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     COMPACT_2026_01_12 = "compact-2026-01-12"
     COMPACT_2026_09_04 = "compact-2026-09-04"
+    INLINE_TOOLS_2026_09_15 = "inline-tools-2026-09-15"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
+    MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
+    MESSAGE_THREADS_2026_08_12 = "message-threads-2026-08-12"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
@@ -844,6 +903,16 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
 )
 ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
 ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE: Final = "tool_search_tool_search_result"
+
+
+def claude_hosted_web_tool_call(search: ResponseFunctionWebSearch) -> tuple[str, str, str] | None:
+    tool_id: Final = web_search_call_tool_id(search.id)
+    if tool_id is None or not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
+    hosted_call: Final = hosted_web_tool_call(search.action)
+    return None if hosted_call is None else (tool_id, *hosted_call)
+
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
@@ -851,6 +920,9 @@ ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER: Final = "mid-conversation-output-config-2026-07-01"
 
 ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER: Final = "thinking-display-updates-2026-08-18"
+
+MESSAGE_THREAD_NOT_FOUND_ERROR_CODE: Final = "thread_not_found"
+MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE: Final = "thread_unsupported_request"
 ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER: Final = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: Final = "mid-conversation-tool-changes-2026-07-01"
 

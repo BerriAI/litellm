@@ -34,7 +34,7 @@ from typing import List, Tuple
 import pytest
 
 from claude_code.cli_driver import _FIXED_CLI_USER_ID, _seed_cli_identity, _stable_cli_state, run_claude
-from claude_code.rate_limiter import RateLimiter
+from cli_harness.rate_limiter import RateLimiter
 
 pytestmark = pytest.mark.cli_determinism
 
