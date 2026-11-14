@@ -108,6 +108,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
+    override_headers,
 )
 from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
@@ -6014,13 +6015,13 @@ def completion(
             model=model,
         )
 
-        if provider_specific_header is not None:
-            headers.update(
-                ProviderSpecificHeaderUtils.get_provider_specific_headers(
-                    provider_specific_header=provider_specific_header,
-                    custom_llm_provider=custom_llm_provider,
-                )
-            )
+        headers = override_headers(  # rebind-ok: headers is this function's legacy mutable request headers
+            headers,
+            ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                provider_specific_header=provider_specific_header,
+                custom_llm_provider=custom_llm_provider,
+            ),
+        )
 
         if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
             model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior

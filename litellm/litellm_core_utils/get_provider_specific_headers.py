@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -8,6 +8,15 @@ from litellm.types.utils import ProviderSpecificHeader
 _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]] = TypeAdapter(
     ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
 )
+
+_HeaderValue: Final = TypeVar("_HeaderValue")
+
+
+def override_headers(
+    headers: Mapping[str, _HeaderValue], overrides: Mapping[str, _HeaderValue]
+) -> dict[str, _HeaderValue]:  # mutable-ok: legacy callers pass the merged headers on as a dict
+    overridden: Final = frozenset(name.lower() for name in overrides)
+    return {**{name: value for name, value in headers.items() if name.lower() not in overridden}, **overrides}
 
 
 class ProviderSpecificHeaderUtils:

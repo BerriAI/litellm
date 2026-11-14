@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
 )
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, override_headers
 from litellm.llms.base_llm.responses.transformation import (
     ANY_REASONING_FIELD_VALUES,
     REASONING_SUMMARY_VALUES,
@@ -285,7 +285,7 @@ class ResponsesAPIRequestUtils:
         )
         if extra_headers is None and not scoped_headers:
             return None
-        return {**(extra_headers or {}), **scoped_headers}
+        return override_headers(extra_headers or {}, scoped_headers)
 
     @staticmethod
     def _check_valid_arg(

@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_path_params,
     resolve_inference_model,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_METADATA_KEY
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -1922,7 +1923,19 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+_ADMIN_ONLY_METADATA_KEYS: Final = (
+    *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
+    TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
+    ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+)
+_ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: "It lets the holder read and write those buckets with the proxy's AWS credentials.",
+        ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: (
+            "It picks the Anthropic user profile a safety action applies to, so the holder cannot change it."
+        ),
+    }
+)
 
 
 def enforce_batch_limits_are_admin_only(
@@ -1936,7 +1949,8 @@ def enforce_batch_limits_are_admin_only(
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
     own quota, and the S3 bucket list grants access to buckets with the proxy's
-    own credentials. A project only enforces ``model_batch_enqueued_token_limit``,
+    own credentials, and the Anthropic user profile id picks which end user an
+    Anthropic safety action applies to. A project only enforces ``model_batch_enqueued_token_limit``,
     so that is the one key gated there. Gated on the resulting value rather than
     on presence, so a form resending the stored value stays a no-op.
     """
@@ -1955,10 +1969,8 @@ def enforce_batch_limits_are_admin_only(
     )
     if changed is None:
         return
-    reason: Final = (
-        "It lets the holder read and write those buckets with the proxy's AWS credentials."
-        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
-        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    reason: Final = _ADMIN_ONLY_METADATA_REASONS.get(
+        changed, "It limits what the holder can do with batches, so the holder cannot raise it."
     )
     raise HTTPException(
         status_code=403,

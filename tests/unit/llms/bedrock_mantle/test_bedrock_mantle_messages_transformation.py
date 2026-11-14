@@ -338,8 +338,12 @@ class TestWireRequest:
     @respx.mock
     @pytest.mark.parametrize(
         "extra_headers,expected_fields",
-        [({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}), ({}, {})],
-        ids=["sdk-header-in-any-case", "no-profile"],
+        [
+            ({"Anthropic-User-Profile-Id": "uprof_sdk"}, {"user_profile_id": "uprof_sdk"}),
+            ({"Anthropic-User-Profile-Id": ""}, {}),
+            ({}, {}),
+        ],
+        ids=["sdk-header-in-any-case", "empty-sdk-header", "no-profile"],
     )
     async def test_an_sdk_user_profile_header_becomes_the_mantle_body_field(
         self, extra_headers: dict[str, str], expected_fields: dict[str, str]

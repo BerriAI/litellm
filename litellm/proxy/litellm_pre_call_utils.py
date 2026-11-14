@@ -409,7 +409,11 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
-from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS, ANTHROPIC_USER_PROFILE_ID_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_HEADERS,
+    ANTHROPIC_USER_PROFILE_ID_HEADER,
+    ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+)
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -608,7 +612,6 @@ UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
 )
 _CLIENT_MOCK_CONTROL_FIELDS: Final = frozenset({"mock_response", "mock_tool_calls"})
 _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY: Final = "allow_client_mock_response"
-_ANTHROPIC_USER_PROFILE_ID_METADATA_KEY: Final = "anthropic_user_profile_id"
 _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_message_redaction_opt_out"
 
 # Per-request pricing parameters mutate cost-tracking output and (via
@@ -851,7 +854,7 @@ def _key_or_team_metadata_flag_is_true(
 
 
 def _anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str]) -> str | None:
-    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, _ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
     return next(
         (value for value in admin_mapped if isinstance(value, str) and value),
         headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
