@@ -2062,6 +2062,21 @@ def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
 
 
+@pytest.mark.parametrize("commentary", ["Checking the weather.", "", None, 42, ["not text"]])
+def test_token_counter_counts_replayed_commentary(commentary: object) -> None:
+    replayed: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": "Paris", "provider_specific_fields": {"commentary": commentary}},
+    ]
+    as_text: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "content": "Paris",
+            "reasoning_content": commentary if isinstance(commentary, str) else None,
+        },
+    ]
+    assert token_counter_new(model="gpt-5.6", messages=replayed) == token_counter_new(model="gpt-5.6", messages=as_text)
+
+
 class _BosEncoder:
     def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
         return [[0] * (len(text.split()) + 1) for text in texts]

@@ -30,11 +30,27 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
-from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAudioObject,
+    ChatCompletionFileObject,
+    ChatCompletionImageObject,
+)
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
+
+
+@pytest.mark.parametrize("commentary", ["Checking the weather.", "", None, 42, ["not text"]])
+def test_get_str_from_messages_includes_replayed_commentary(commentary: object) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": "Paris", "provider_specific_fields": {"commentary": commentary}},
+        {"role": "user", "content": "Tomorrow?"},
+    ]
+    assert (
+        get_str_from_messages(messages) == "Paris" + (commentary if isinstance(commentary, str) else "") + "Tomorrow?"
+    )
 
 
 def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():

@@ -7,6 +7,7 @@ import queue
 import unittest
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -6928,7 +6929,8 @@ def test_convert_response_output_folds_commentary_and_final_answer_into_one_choi
     assert len(choices) == 1
     assert choices[0].index == 0
     assert choices[0].finish_reason == "stop"
-    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.provider_specific_fields == {"commentary": "Let me answer that."}
     assert choices[0].message.tool_calls is None
 
 
@@ -7058,3 +7060,87 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _commentary_message_events(index: int, item: ResponseOutputMessage) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "response.output_item.added", "output_index": index, "item": item.model_dump()},
+        {"type": "response.output_text.delta", "output_index": index, "delta": item.content[0].text},
+        {"type": "response.output_item.done", "output_index": index, "item": item.model_dump()},
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("answer", [None, "", '{"city":"Paris"}'])
+def test_commentary_phase_preserves_json_and_separates_notes(stream: bool, answer: str | None) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.history import replay_items
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    notes: Final = ("Let me check.", "Looking up the weather now.")
+    items: Final = tuple(
+        _final_answer_message(f"msg_{index}", text).model_copy(update={"phase": "commentary"})
+        for index, text in enumerate(notes)
+    ) + ((_final_answer_message("answer", answer),) if answer is not None else ())
+    expected_content: Final = answer or "\n\n".join(notes)
+    expected_commentary: Final = "\n\n".join(notes) if answer else None
+    if stream:
+        iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+            streaming_response=iter(()), sync_stream=True, replays_openai_history=True
+        )
+        events: Final = tuple(
+            chain.from_iterable(_commentary_message_events(index, item) for index, item in enumerate(items))
+        ) + ({"type": "response.completed", "response": {"output": [item.model_dump() for item in items]}},)
+        chunks: Final = [iterator.chunk_parser(event) for event in events]
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content
+        assembled: Final = litellm.stream_chunk_builder(chunks)
+        assert assembled is not None
+        message: Final = assembled.choices[0].message
+    else:
+        choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+            items, replay_openai_history=True, completed=True
+        )
+        message: Final = choices[0].message
+    assert message.content == expected_content
+    assert (message.provider_specific_fields or {}).get("commentary") == expected_commentary
+    replayed: Final = replay_items(message, replay_tool_search=True)
+    assert replayed is not None
+    assert replayed.items == tuple(
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": item.content[0].text}],
+            "phase": item.phase,
+        }
+        for item in items
+    )
+
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("has_answer", [False, True])
+def test_commentary_annotations_follow_only_kept_content(raw: bool, has_answer: bool) -> None:
+    annotation: Final = {
+        "type": "url_citation", "start_index": 0, "end_index": 4, "url": "https://example.com", "title": "Note"
+    }
+    first: Final = _final_answer_message("note_1", "Note one.").model_copy(update={"phase": "commentary"})
+    second: Final = ResponseOutputMessage.model_validate({
+        **first.model_dump(), "id": "note_2",
+        "content": [{"type": "output_text", "text": "Note two.", "annotations": [annotation]}],
+    })
+    answer: Final = ResponseOutputMessage.model_validate({
+        **_final_answer_message("answer", "Done").model_dump(),
+        "content": [{"type": "output_text", "text": "Done", "annotations": [annotation]}],
+    })
+    items: Final = ((answer,) if has_answer else ()) + (first, second)
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    choices: Final = handler._convert_response_output_to_choices(
+        tuple(item.model_dump() for item in items) if raw else items,
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+    offset: Final = 0 if has_answer else len("Note one.\n\n")
+    assert choices[0].message.content == ("Done" if has_answer else "Note one.\n\nNote two.")
+    assert choices[0].message.annotations == [{**annotation, "start_index": offset, "end_index": offset + 4}]
+    assert choices[0].message.provider_specific_fields == (
+        {"commentary": "Note one.\n\nNote two."} if has_answer else None
+    )
