@@ -520,11 +520,8 @@ def _redacted_responses_api_response(
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """
-    Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
-
-    The success path redacts through ``perform_redaction`` before a callback ever sees the
-    payload, but the failure path does not, so a callback that batches both has to redact
-    the ones it is handed.
+    Return a copy of a ``StandardLoggingPayload`` with its messages, response and guardrail
+    prompt text redacted.
     """
     return _redact_standard_logging_object(payload)
 

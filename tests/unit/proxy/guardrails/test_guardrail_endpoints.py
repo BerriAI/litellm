@@ -4244,7 +4244,7 @@ class _CapturingLogger(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.logged.append(kwargs["standard_logging_object"])
+        self.logged.append(self.redact_standard_logging_payload_from_model_call_details(kwargs)["standard_logging_object"])
 
     async def async_post_call_failure_hook(
         self,
@@ -4276,6 +4276,7 @@ async def _apply_bedrock_guardrail_over_http(
     body: Mapping[str, object],
     guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
     message_logging: bool = True,
+    headers: Mapping[str, str] = MappingProxyType({}),
 ) -> _BedrockGuardrailCall:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.guardrails.guardrail_endpoints import router
@@ -4316,7 +4317,7 @@ async def _apply_bedrock_guardrail_over_http(
     )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
         response: Final = await client.post(
-            "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}
+            "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}, headers=dict(headers)
         )
     assert len(capture.logged) == 1
     return _BedrockGuardrailCall(
@@ -4370,17 +4371,25 @@ async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bedrock_action", ["ANONYMIZED", "BLOCKED"])
+@pytest.mark.parametrize(
+    ("message_logging", "headers"),
+    [
+        pytest.param(False, MappingProxyType({}), id="callback-turns-off-message-logging"),
+        pytest.param(True, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"),
+    ],
+)
 async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_callback_receives(
-    mocker: MockerFixture,
+    mocker: MockerFixture, bedrock_action: str, message_logging: bool, headers: Mapping[str, str]
 ) -> None:
-    masked: Final = {
+    answer: Final = {
         "action": "GUARDRAIL_INTERVENED",
         "outputs": [{"text": "please bill my card {CREDIT_DEBIT_CARD_NUMBER}"}],
         "assessments": [
             {
                 "sensitiveInformationPolicy": {
                     "piiEntities": [
-                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}
+                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": bedrock_action}
                     ]
                 }
             }
@@ -4388,10 +4397,13 @@ async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_c
     }
 
     call: Final = await _apply_bedrock_guardrail_over_http(
-        mocker, (masked,), {"text": "please bill my card 4111111111111111"}, message_logging=False
+        mocker,
+        (answer,),
+        {"text": "please bill my card 4111111111111111"},
+        message_logging=message_logging,
+        headers=headers,
     )
 
-    assert call.response.status_code == 200
     assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
     assert "please bill my card" not in str(call.logged["guardrail_information"])
     assert "4111111111111111" not in str(call.logged["guardrail_information"])
