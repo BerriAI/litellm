@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { uiHref } from "@/utils/uiHref";
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import {
   act,
   fireEvent,
@@ -66,6 +67,9 @@ const requestedUrls = () => fetchMock.mock.calls.map(([input]) => requestUrl(inp
 
 function serve(input: Parameters<typeof fetch>[0]): Response {
   const url = requestUrl(input);
+  if (url.pathname.endsWith("/daily/activity/aggregated"))
+    return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
+  if (url.pathname.endsWith("/daily/activity")) return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
   if (url.pathname === "/models")
     return json({ data: [{ id: "configured-model", object: "model", created: 0, owned_by: "openai" }] });
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
@@ -113,6 +117,107 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it.each(["teams", "members"] as const)(
+    "should show usage-style budgets, spend share, tokens and actions for customer %s",
+    async (kind) => {
+      const id = kind === "teams" ? "team-a" : "member-a";
+      const label = kind === "teams" ? "Product" : "Member One";
+      const collection = kind === "teams" ? "customer_teams" : "customer_members";
+      const budgetUsage = [
+        { source: "scalar", budget_duration: "1mo", max_budget: 10, spend: 3, reset_at: null },
+        { source: "window", budget_duration: "12mo", max_budget: 100, spend: 7, reset_at: null },
+      ];
+      fetchMock.mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (url.pathname === `/management/v1/${collection}`) {
+          return json({
+            data: [{ ...(kind === "teams" ? product : member), budget_usage: budgetUsage }],
+            meta: { total_count: 1, page: 1, page_size: 20, total_pages: 1 },
+          });
+        }
+        if (url.pathname.endsWith("/daily/activity/aggregated"))
+          return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 12 } });
+        if (!url.pathname.endsWith("/daily/activity")) return serve(input);
+        const spend = url.pathname.includes("customer_organizations") ? 12 : 3;
+        const metrics = {
+          spend,
+          total_tokens: 250,
+          prompt_tokens: 250,
+          completion_tokens: 0,
+          api_requests: 1,
+          successful_requests: 1,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        };
+        return json({
+          results: [
+            {
+              date: url.searchParams.get("start_date"),
+              metrics,
+              breakdown: {
+                models: {},
+                model_groups: {},
+                providers: {},
+                mcp_servers: {},
+                api_keys: {},
+                entities: { [id]: { metrics, metadata: {}, api_key_breakdown: {} } },
+              },
+            },
+          ],
+          metadata: {
+            ...EMPTY_DAILY_ACTIVITY_METADATA,
+            total_spend: spend,
+            total_tokens: 250,
+            total_api_requests: 1,
+          },
+        });
+      });
+      renderWithProviders(<CustomerHierarchyManager />, { searchParams: `?org=org-1&tab=${kind}` });
+      const table = await screen.findByRole("table", {
+        name: kind === "teams" ? "Customer teams" : "Customer members",
+      });
+      const progress = await within(table).findByRole("progressbar", { name: "Spend this month / monthly limit" });
+      expect(progress).toHaveAttribute("aria-valuenow", "30");
+      expect(within(table).getByText("$3.00 / $10.00")).toBeInTheDocument();
+      expect(within(table).getByText("$7.00 remains")).toBeInTheDocument();
+      expect(within(table).getByText("$7.00 / $100.00")).toBeInTheDocument();
+      expect(within(table).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
+        "aria-valuenow",
+        "25",
+      );
+      expect(within(table).getByRole("cell", { name: "250" })).toBeInTheDocument();
+      expect(within(table).getByText("Within budget")).toBeInTheDocument();
+      expect(within(table).getByRole("button", { name: `Edit ${label}` })).toBeEnabled();
+      expect(within(table).getByRole("link", { name: "View usage" })).toHaveAttribute(
+        "href",
+        `${uiHref("customers/usage")}?org=org-1&${kind === "teams" ? "team" : "member"}=${id}`,
+      );
+      const activity = requestedUrls().filter((url) => url.pathname.endsWith("/daily/activity"));
+      expect(activity).toHaveLength(2);
+      expect(
+        activity
+          .filter((url) => url.pathname.includes(collection))
+          .every((url) => url.searchParams.get(kind === "teams" ? "customer_team_ids" : "customer_member_ids") === id),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["/daily/activity", "/daily/activity/aggregated"])(
+    "should keep row actions without showing zero usage when %s fails",
+    async (route) => {
+      fetchMock.mockImplementation(async (input) =>
+        requestUrl(input).pathname.endsWith(route) ? json({ detail: "Usage unavailable" }, 503) : serve(input),
+      );
+      renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });
+      const table = await screen.findByRole("table", { name: "Customer teams" });
+      expect(await screen.findByRole("alert")).toHaveTextContent("Usage unavailable");
+      expect(within(table).getByRole("status")).toHaveTextContent("Unavailable");
+      expect(within(table).queryByRole("meter")).not.toBeInTheDocument();
+      expect(within(table).getByRole("button", { name: "Edit Product" })).toBeEnabled();
+    },
+  );
+
   it("should preserve a draft on refresh and conflict, then reload and save the current configuration", async () => {
     const user = userEvent.setup();
     const standard = {

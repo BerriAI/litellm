@@ -148,11 +148,12 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
 };
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
   const url = requestUrl(input);
-  if (url.pathname.endsWith("/daily/activity")) {
-    const resource = url.pathname.split("/").at(-3);
+  const aggregated = url.pathname.endsWith("/daily/activity/aggregated");
+  if (url.pathname.endsWith("/daily/activity") || aggregated) {
+    const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
     const dimension = activityDimension(resource);
     const filter = filterFor(resource);
-    const ids = url.searchParams.get(filter)?.split(",") ?? [];
+    const ids = aggregated ? [url.searchParams.get("customer_org_id")] : url.searchParams.get(filter)?.split(",") ?? [];
     const selected = records
       .filter((record) => ids.includes(record[dimension]))
       .filter(
@@ -173,7 +174,13 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
         },
       };
     });
-    return json({ results, metadata: EMPTY_DAILY_ACTIVITY_METADATA });
+    return json({
+      results,
+      metadata: {
+        ...EMPTY_DAILY_ACTIVITY_METADATA,
+        total_spend: selected.reduce((total, record) => total + record.metrics.spend, 0),
+      },
+    });
   }
   if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
   if (url.pathname === "/management/v1/customer_teams") return json(list(teams));

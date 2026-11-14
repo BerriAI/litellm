@@ -4,7 +4,6 @@ import { useState } from "react";
 import { ChevronRight, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
-import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,7 +13,8 @@ import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHi
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import type { CustomerUsageEntity } from "./customerUsageApi";
+import { customerUsageEntity, type CustomerUsageEntity } from "./customerUsageApi";
+import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
@@ -123,8 +123,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
     return list.data.map((team) => ({
       id: team.customer_team_id,
       label: team.alias || team.customer_team_id,
-      spend: team.spend,
-      budget: team.budget?.max_budget,
+      entity: customerUsageEntity(team.customer_team_id, team),
       open: () => hierarchy.openTeam(team.customer_team_id),
       edit: () => hierarchy.openTeam(team.customer_team_id, true),
       parentTeamId: null,
@@ -135,8 +134,7 @@ function hierarchyRows({ hierarchy, selected, scope }: ScopeProps) {
     return list.data.map((member) => ({
       id: member.customer_member_id,
       label: member.alias || member.customer_member_id,
-      spend: member.spend,
-      budget: member.effective_budget.max_budget,
+      entity: customerUsageEntity(member.customer_member_id, member),
       open: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
       edit: () => hierarchy.openMember(member.customer_member_id, member.parent_team_ids[0] ?? ""),
       parentTeamId: member.parent_team_ids[0] ?? "",
@@ -180,7 +178,7 @@ function HierarchyCreateAction({ hierarchy, selected, scope }: ScopeProps) {
 function HierarchyChildTable(props: ScopeProps) {
   const { t } = useTranslation();
   const { hierarchy } = props;
-  const { children, childTab, page } = hierarchy;
+  const { children, childUsage, childTab, page } = hierarchy;
   const showTeam = childTab === "members" && props.selected.team === null;
   const hint = showTeam ? "customerPortal.hierarchy.organizationMembersHint" : CHILD_HINTS[childTab];
   const childLabel = childTab === "teams" ? t("customerPortal.hierarchy.teams") : t("customerPortal.hierarchy.members");
@@ -204,6 +202,8 @@ function HierarchyChildTable(props: ScopeProps) {
     );
   const rows = hierarchyRows(props);
   const pages = Math.max(1, children.data.meta.total_pages);
+  const monthly = new Map(childUsage.data?.monthly.map((row) => [row.id, row]));
+  const yearly = new Map(childUsage.data?.yearly.map((row) => [row.id, row.spend]));
   return (
     <>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -213,13 +213,16 @@ function HierarchyChildTable(props: ScopeProps) {
         </div>
         <HierarchyCreateAction hierarchy={hierarchy} selected={props.selected} scope={props.scope} />
       </div>
+      {childUsage.isError && (
+        <ErrorState message={extractProxyErrorMessage(childUsage.error)} onRetry={() => void childUsage.refetch()} />
+      )}
+      <p className="mb-4 text-xs text-muted-foreground">{t("customerPortal.analytics.memberSpendHint")}</p>
       <Table aria-label={childLabel}>
         <TableHeader>
           <TableRow>
             <TableHead className="pl-0">{t("customerPortal.hierarchy.name")}</TableHead>
             {showTeam && <TableHead>{t("customerPortal.hierarchy.team")}</TableHead>}
-            <TableHead className="text-right">{t("customerPortal.hierarchy.spend")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.hierarchy.budget")}</TableHead>
+            <CustomerSpendHeaders />
             <TableHead className="pr-0">
               <span className="sr-only">{t("customerPortal.hierarchy.settings")}</span>
             </TableHead>
@@ -229,10 +232,7 @@ function HierarchyChildTable(props: ScopeProps) {
           {rows.map((row) => (
             <TableRow key={row.id}>
               <TableCell className="py-4 pl-0">
-                <button type="button" onClick={row.open} className="block text-left font-medium hover:text-primary">
-                  {row.label}
-                </button>
-                <span className="mt-1 block font-mono text-[11px] text-muted-foreground">{row.id}</span>
+                <CustomerSpendIdentity entity={row.entity} onClick={row.open} />
               </TableCell>
               {showTeam && (
                 <TableCell>
@@ -245,10 +245,19 @@ function HierarchyChildTable(props: ScopeProps) {
                   </button>
                 </TableCell>
               )}
-              <TableCell className="text-right tabular-nums">{formatUsd(row.spend)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {row.budget == null ? t("customerPortal.hierarchy.noBudget") : formatUsd(row.budget)}
-              </TableCell>
+              {childUsage.data ? (
+                <CustomerSpendCells
+                  entity={row.entity}
+                  monthlySpend={monthly.get(row.id)?.spend ?? 0}
+                  yearlySpend={yearly.get(row.id) ?? 0}
+                  tokens={monthly.get(row.id)?.tokens ?? 0}
+                  organizationSpend={childUsage.data.organizationSpend}
+                />
+              ) : (
+                <TableCell colSpan={5} className="text-center text-xs text-muted-foreground" role="status">
+                  {t(childUsage.isError ? "customerPortal.analytics.unknownSpend" : "customerPortal.hierarchy.loading")}
+                </TableCell>
+              )}
               <TableCell className="pr-0 text-right">
                 <div className="flex justify-end gap-2">
                   <a
@@ -273,7 +282,7 @@ function HierarchyChildTable(props: ScopeProps) {
           ))}
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={showTeam ? 5 : 4} className="py-12 text-center text-sm text-muted-foreground">
+              <TableCell colSpan={showTeam ? 8 : 7} className="py-12 text-center text-sm text-muted-foreground">
                 {t(
                   childTab === "teams"
                     ? "customerPortal.hierarchy.emptyTeams"
