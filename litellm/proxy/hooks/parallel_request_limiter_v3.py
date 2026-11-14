@@ -4994,6 +4994,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         open_reservation: Final = stash if stash is not None and not stash.reservation_released else None
         reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
+        call_type: Final[object] = kwargs.get("call_type")
+        settled_tokens: Final = (
+            reserved_tokens
+            if total_tokens == 0 and rate_limit_type != "output" and call_type in EMBEDDING_API_CALL_TYPES
+            else total_tokens
+        )
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         served_model: Final = self._rate_limited_model(model_group)
@@ -5060,18 +5066,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if fell_back
             else ()
         )
-        if reserved_tokens > 0 and total_tokens < reserved_tokens:
+        if reserved_tokens > 0 and settled_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
                 reserved_tokens,
-                total_tokens,
-                reserved_tokens - total_tokens,
+                settled_tokens,
+                reserved_tokens - settled_tokens,
             )
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
                 targets=charged_targets,
                 reserved_scopes=reserved_scopes,
-                actual_tokens=total_tokens,
+                actual_tokens=settled_tokens,
                 reserved_tokens=reserved_tokens,
             )
         )
@@ -5083,7 +5089,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
-        call_type: Final[object] = kwargs.get("call_type")
         ptu_skips_socket_usage: Final = call_type == CallTypes.aresponses_websocket.value
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
