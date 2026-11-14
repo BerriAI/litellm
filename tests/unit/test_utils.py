@@ -504,6 +504,37 @@ def test_supports_continuation_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model).get("supports_continuation") is continuation
 
 
+def test_get_model_info_reports_the_shared_context_window_next_to_the_split_limits(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "gemini/shared-window-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "max_input_tokens": 900,
+            "max_output_tokens": 300,
+            "max_context_tokens": 1000,
+        },
+    )
+    info: Final = litellm.get_model_info(model)
+    assert (info["max_input_tokens"], info["max_output_tokens"], info.get("max_context_tokens")) == (900, 300, 1000)
+
+
+def test_get_model_info_leaves_the_shared_context_window_unset_when_the_cost_map_omits_it(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "gemini/split-window-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "gemini", "mode": "chat", "max_input_tokens": 900, "max_output_tokens": 300},
+    )
+    assert litellm.get_model_info(model).get("max_context_tokens") is None
+
+
 def test_supports_continuation_is_unset_when_the_cost_map_omits_it(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1127,6 +1158,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "litellm_provider": {"type": "string"},
             "max_input_tokens": {"type": "number"},
             "max_output_tokens": {"type": "number"},
+            "max_context_tokens": {"type": "number"},
             "max_tokens": {"type": "number"},
             "metadata": {"type": "object"},
             "provider_specific_entry": {"type": "object"},

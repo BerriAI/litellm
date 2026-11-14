@@ -326,6 +326,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_tokens: Required[int | None]
     max_input_tokens: Required[int | None]
     max_output_tokens: Required[int | None]
+    max_context_tokens: ReadOnly[int | None]
     input_cost_per_token: Required[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
@@ -4353,7 +4354,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"max_input_tokens", "max_output_tokens", "max_tokens"}
+    {"max_input_tokens", "max_output_tokens", "max_context_tokens", "max_tokens"}
 )
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(

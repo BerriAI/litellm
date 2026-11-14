@@ -364,6 +364,23 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
 
 
+@pytest.mark.parametrize("deployment_window", [None, 500000])
+def test_model_info_reports_the_shared_context_window_and_a_deployment_override(
+    monkeypatch, local_model_cost_map, deployment_window
+):
+    catalog_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
+    configured: Final = {} if deployment_window is None else {"max_context_tokens": deployment_window}
+    reported: Final = _enriched_model_info(
+        monkeypatch, {"model": "gemini/gemini-4-argon"}, {"id": "argon-deployment", **configured}
+    )
+    expected_window: Final = catalog_row["max_context_tokens"] if deployment_window is None else deployment_window
+    assert (reported["max_context_tokens"], reported["max_input_tokens"], reported["max_output_tokens"]) == (
+        expected_window,
+        catalog_row["max_input_tokens"],
+        catalog_row["max_output_tokens"],
+    )
+
+
 def _enriched_model_info(monkeypatch, litellm_params: dict, model_info: dict) -> dict:
     monkeypatch.setattr(proxy_server, "llm_router", None)
     enriched: Final = proxy_server._get_proxy_model_info(

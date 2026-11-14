@@ -7372,6 +7372,7 @@ def get_model_info_helper(
                 max_tokens=_model_info.get("max_output_tokens") or _model_info.get("max_input_tokens"),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
+                max_context_tokens=_model_info.get("max_context_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
@@ -7768,6 +7769,7 @@ def get_model_info(
             max_tokens: Required[Optional[int]]
             max_input_tokens: Required[Optional[int]]
             max_output_tokens: Required[Optional[int]]
+            max_context_tokens: Optional[int]
             input_cost_per_token: Required[float]
             input_cost_per_character: Optional[float]  # only for vertex ai models
             input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
