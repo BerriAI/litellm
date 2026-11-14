@@ -55,13 +55,29 @@ def _still_matches(current: object, default: object) -> bool:
         return False
 
 
+def _restored_entries(current: dict[object, object], default: dict[object, object]) -> dict[object, object]:
+    return {
+        key: current[key]
+        if key in current and type(current[key]) is type(value) and current[key] == value
+        else _restored_value(value)
+        for key, value in default.items()
+    }
+
+
+def _restored_from(current: object, default: object) -> object:
+    if type(current) is dict and type(default) is dict:
+        return _restored_entries(current, default)
+    return _restored_value(default)
+
+
 def restore_mutable_state(module: ModuleType, snapshot: Mapping[str, object]) -> None:
     live: Final = vars(module)
     for attr, default in snapshot.items():
-        if _still_matches(live.get(attr, _ABSENT), default):
+        current = live.get(attr, _ABSENT)
+        if _still_matches(current, default):
             continue
         try:
-            setattr(module, attr, _restored_value(default))
+            setattr(module, attr, _restored_from(current, default))
         except Exception as exc:
             warnings.warn(f"conftest: could not restore {module.__name__}.{attr}: {exc}", stacklevel=2)
 
