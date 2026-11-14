@@ -15,7 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import anthropic_beta_headers_manager
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
@@ -943,6 +943,56 @@ def test_vertex_schema_rejects_oneof_nested_past_the_max_depth():
 
     with pytest.raises(ValueError, match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded"):
         build_vertex_schema({"type": "object", "properties": {"f": deepest}})
+
+
+def _nested_object(levels: int, branches: list[JsonValue]) -> dict[str, JsonValue]:
+    return functools.reduce(
+        lambda child, _: {"type": "object", "properties": {"x": child}, **({"oneOf": branches} if branches else {})},
+        range(levels),
+        {"type": "string"},
+    )
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda nested: nested,
+        lambda nested: {"type": "array", "items": nested},
+        lambda nested: {"anyOf": [nested, {"type": "string"}]},
+    ],
+    ids=["properties", "items", "anyof-branch"],
+)
+def test_vertex_schema_drops_nested_oneof_whose_branches_repeat_their_parents_past_the_node_budget(
+    wrap: Callable[[JsonValue], JsonValue],
+):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"f": wrap(_nested_object(12, [{}, {}]))}})
+
+    assert schema == build_vertex_schema({"type": "object", "properties": {"f": wrap(_nested_object(12, []))}})
+
+
+def _bulk_object() -> dict[str, JsonValue]:
+    return {
+        "type": "object",
+        "properties": {f"p{index}": {"type": "string"} for index in range(MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES)},
+    }
+
+
+@pytest.mark.parametrize(
+    "bulk",
+    [
+        _bulk_object(),
+        {"type": "array", "items": _bulk_object()},
+        {"anyOf": [_bulk_object(), {"type": "string"}]},
+        {"oneOf": [_bulk_object(), {"type": "string"}]},
+    ],
+    ids=["properties", "items", "anyof-branch", "oneof-branch"],
+)
+def test_vertex_schema_budget_counts_only_the_nodes_oneof_adds(bulk: JsonValue):
+    union: Final[JsonValue] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"bulk": bulk, "f": union}})
+
+    assert schema["properties"]["f"] == {"anyOf": [{"type": "string"}, {"type": "integer"}]}
 
 
 def test_vertex_ai_complex_response_schema():

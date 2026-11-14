@@ -1,11 +1,11 @@
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
-from itertools import accumulate, chain, repeat, takewhile
+from itertools import accumulate, chain, islice, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
@@ -15,7 +15,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -860,6 +860,39 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+def _with_oneof_as_anyof_within_budget(schema: Mapping[str, JsonValue]) -> Mapping[str, object]:
+    node_limit: Final = _schema_node_count(schema) + MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES
+    if next(islice(_oneof_expansion(schema), node_limit, None), None) is None:
+        return _with_oneof_as_anyof(schema)
+    verbose_logger.warning(
+        "Dropping the oneOf unions of this schema for Vertex AI and Gemini, since turning them into anyOf "
+        "would add more than %s nodes, as every oneOf branch repeats the properties of its parent",
+        MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES,
+    )
+    return schema
+
+
+def _schema_node_count(schema: Mapping[str, JsonValue], depth: int = 0) -> int:
+    children: Final = _child_schemas(schema) if depth <= DEFAULT_MAX_RECURSE_DEPTH else ()
+    return 1 + sum(_schema_node_count(child, depth + 1) for child in children)
+
+
+def _oneof_expansion(schema: Mapping[str, JsonValue], depth: int = 0) -> Iterator[Mapping[str, JsonValue]]:
+    node: Final = _oneof_node_as_anyof(schema)
+    children: Final = _child_schemas(node) if depth <= DEFAULT_MAX_RECURSE_DEPTH else ()
+    return chain((node,), chain.from_iterable(_oneof_expansion(child, depth + 1) for child in children))
+
+
+def _child_schemas(schema: Mapping[str, JsonValue]) -> Iterator[Mapping[str, JsonValue]]:
+    candidates: Final = (
+        *_object_keyword(schema, "properties").values(),
+        schema.get("items"),
+        *_list_keyword(schema, "anyOf"),
+        *_list_keyword(schema, "oneOf"),
+    )
+    return (child for child in candidates if isinstance(child, dict))
+
+
 def _with_oneof_as_anyof(schema: Mapping[str, JsonValue], depth: int = 0) -> Mapping[str, object]:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
@@ -949,7 +982,7 @@ def build_vertex_schema(
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
-    schema: Final = dict(_with_oneof_as_anyof(parameters))
+    schema: Final = dict(_with_oneof_as_anyof_within_budget(parameters))
 
     _convert_schema_types(schema)
 
