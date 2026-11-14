@@ -649,6 +649,11 @@ class RequestRateLimiterStash:
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
     native_capacity_state: "NativeModelCapacityState | None" = None
 
+    def native_capacity(self, create: Callable[[], "NativeModelCapacityState"]) -> "NativeModelCapacityState":
+        if self.native_capacity_state is None:
+            self.native_capacity_state = create()
+        return self.native_capacity_state
+
     def clear_reserved_tokens(self) -> None:
         self.reserved_tokens = 0
         self.ptu_reserved_tokens = 0
