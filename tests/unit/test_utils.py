@@ -5102,6 +5102,57 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
     assert success_kwargs["stream"] is True
 
 
+class _SyncSuccessKwargsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: tuple[dict[str, object], ...] = ()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_kwargs = (*self.success_kwargs, kwargs)
+
+
+def test_wrapper_sync_logs_a_replayed_fake_stream_as_a_stream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _SyncSuccessKwargsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.executor", executor)
+        replayed: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            fake_stream=True,
+        )
+        assert isinstance(replayed, CustomStreamWrapper)
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in replayed if chunk.choices) == "ok"
+
+    assert len(capture.success_kwargs) == 1
+    standard_logging_object: Final = capture.success_kwargs[0]["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["stream"] is True
+    assert capture.success_kwargs[0]["stream"] is True
+
+
 class _RewritingSuccessDeploymentHook(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

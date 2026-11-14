@@ -170,6 +170,7 @@ class TestGetLitellmParamsKwargsExtraction:
         ({"fake_stream": True}, ControlOptions(fake_stream=True)),
         ({"fake_stream": "true", "stream_chunk_size": 64}, ControlOptions(stream_chunk_size=64, fake_stream=True)),
         ({"fake_stream": False}, ControlOptions(fake_stream=False)),
+        ({"fake_stream": "false"}, ControlOptions(fake_stream=False)),
     ],
 )
 def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, object], expected: ControlOptions) -> None:
@@ -206,9 +207,10 @@ def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(r
     )
 
 
-def test_control_options_reject_a_fake_stream_that_is_not_a_boolean() -> None:
-    assert parse_control_options({"fake_stream": "maybe"}) == InvalidControlOption(
-        param="fake_stream", message="Invalid fake_stream='maybe': expected true or false"
+@pytest.mark.parametrize("raw", ["maybe", "yes", "1", "True", 1, 0, 1.0])
+def test_control_options_reject_a_fake_stream_that_is_not_true_or_false(raw: object) -> None:
+    assert parse_control_options({"fake_stream": raw}) == InvalidControlOption(
+        param="fake_stream", message=f"Invalid fake_stream={raw!r}: expected true or false"
     )
 
 

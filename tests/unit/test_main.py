@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kw
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
@@ -5410,6 +5411,87 @@ def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_reque
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "stream_chunk_size" not in sent, sent
     assert sent["model"] == "gpt-4.1-mini"
+
+
+_ROUTES_WITHOUT_A_NATIVE_FAKE_STREAM: Final = pytest.mark.parametrize(
+    ("model", "url", "answer"),
+    [
+        (
+            "openai/gpt-5.6",
+            "https://api.openai.com/v1/chat/completions",
+            {
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+        (
+            "anthropic/claude-sonnet-5-5",
+            "https://api.anthropic.com/v1/messages",
+            {
+                "id": "msg_replayed",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+    ],
+    ids=["openai_sdk", "anthropic"],
+)
+
+
+async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelResponseStream]:
+    if asynchronous:
+        streamed: Final = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            stream_options={"include_usage": True},
+            fake_stream=True,
+        )
+        assert isinstance(streamed, CustomStreamWrapper), streamed
+        return [chunk async for chunk in streamed]
+    replayed: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-key",
+        stream=True,
+        stream_options={"include_usage": True},
+        fake_stream=True,
+    )
+    assert isinstance(replayed, CustomStreamWrapper), replayed
+    return list(replayed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@_ROUTES_WITHOUT_A_NATIVE_FAKE_STREAM
+async def test_a_caller_fake_stream_sends_one_plain_request_and_replays_the_answer_as_a_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    chunks: Final = await _fake_streamed_chunks(model, asynchronous)
+
+    assert route.call_count == 1
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("stream") is not True and "stream_options" not in sent and "fake_stream" not in sent, sent
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "ok"
+    assert chunks[-1].usage is not None and chunks[-1].usage.total_tokens == 2, chunks[-1]
 
 
 @pytest.mark.asyncio
