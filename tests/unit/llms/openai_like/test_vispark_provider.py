@@ -281,6 +281,25 @@ def test_vispark_rejects_a_file_part_sent_by_file_id_without_drop_params():
     assert route.call_count == 0
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("file_part", [{"type": "file"}, {"type": "file", "file": None}], ids=["missing", "null"])
+def test_vispark_answers_400_for_a_file_part_without_its_file(file_part: dict[str, object], drop_params: bool):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field") as error:
+            litellm.completion(
+                model="vispark/vision-medium",
+                messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize this file"}, file_part]}],
+                drop_params=drop_params,
+                api_key="vispark-test-key",
+            )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_vispark_drops_a_file_part_sent_by_file_id_with_drop_params(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
