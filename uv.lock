@@ -5588,7 +5588,7 @@ source = { editable = "litellm/enterprise" }
 
 [[package]]
 name = "litellm-proxy"
-version = "1.109.0"
+version = "1.111.0"
 source = { editable = "litellm/packaging/litellm-proxy" }
 
 [[package]]
