@@ -79,10 +79,10 @@ def _insert_delivery(connection: psycopg.Connection[tuple[object, ...]], request
     )
 
 
-def test_delivery_migrations_store_application_ids_without_database_uuid_generation() -> None:
+def test_delivery_table_stores_application_ids_without_database_uuid_generation() -> None:
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        _apply(connection, _OLD_LEDGER)
         _apply(connection, _SPEND_LOG_DELIVERY)
-        _apply(connection, _DROP_DELIVERY_ID_DEFAULT)
 
         _insert_delivery(connection, "request")
         with pytest.raises(psycopg.errors.NotNullViolation):
@@ -96,6 +96,7 @@ def test_delivery_migrations_store_application_ids_without_database_uuid_generat
 
 def test_drop_default_keeps_deliveries_written_under_the_database_generated_id() -> None:
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        _apply(connection, _OLD_LEDGER)
         _apply(connection, _SPEND_LOG_DELIVERY)
         connection.execute(
             'ALTER TABLE "LiteLLM_SpendLogDelivery" ALTER COLUMN "delivery_id" SET DEFAULT gen_random_uuid()::text'
