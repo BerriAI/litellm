@@ -11689,3 +11689,159 @@ def test_get_supported_params_reports_sampling_params_only_when_the_request_keep
 
     assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
     assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
+
+
+_ORDER_TOOL_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {"order_id": {"type": "string", "pattern": "^ORD-[0-9]{6}$"}},
+    "required": ["order_id"],
+    "additionalProperties": False,
+}
+
+
+class _SentAnthropicTools(BaseModel):
+    tools: tuple[dict[str, object], ...]
+
+
+def _order_tool(*, function_strict: bool | None = None, tool_strict: bool | None = None) -> dict[str, object]:
+    function: Final[dict[str, object]] = {
+        "name": "lookup_order",
+        "description": "Look up an order by id.",
+        "parameters": _ORDER_TOOL_PARAMETERS,
+    }
+    if function_strict is not None:
+        function["strict"] = function_strict
+    tool: Final[dict[str, object]] = {"type": "function", "function": function}
+    if tool_strict is not None:
+        tool["strict"] = tool_strict
+    return tool
+
+
+async def _sent_anthropic_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, tool: dict[str, object]
+) -> dict[str, object]:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_strict_tool",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "model": model,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+    await litellm.acompletion(
+        api_key="mock_api_key",
+        model=f"anthropic/{model}",
+        messages=[{"role": "user", "content": "Check order ORD-123456"}],
+        tools=[tool],
+    )
+    (sent_tool,) = _SentAnthropicTools.model_validate_json(route.calls.last.request.content).tools
+    return sent_tool
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [_order_tool(function_strict=True), _order_tool(tool_strict=True)],
+    ids=["function_strict", "tool_level_strict"],
+)
+async def test_strict_tool_reaches_the_anthropic_request_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool: dict[str, object]
+) -> None:
+    """Regression for #51230: `strict: true` on an OpenAI-format tool was dropped before reaching Anthropic."""
+    sent_tool: Final = await _sent_anthropic_tool(respx_mock, monkeypatch, "claude-sonnet-4-5", tool)
+    assert sent_tool["strict"] is True
+    assert sent_tool["input_schema"] == _ORDER_TOOL_PARAMETERS
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [_order_tool(), _order_tool(function_strict=False)],
+    ids=["no_strict", "strict_false"],
+)
+async def test_non_strict_tool_sends_no_strict_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool: dict[str, object]
+) -> None:
+    sent_tool: Final = await _sent_anthropic_tool(respx_mock, monkeypatch, "claude-sonnet-4-5", tool)
+    assert "strict" not in sent_tool
+
+
+async def test_strict_tool_on_model_without_strict_support_is_dropped_with_warning(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent_tool: Final = await _sent_anthropic_tool(
+            respx_mock, monkeypatch, "claude-3-haiku-20240307", _order_tool(function_strict=True)
+        )
+    assert "strict" not in sent_tool
+    assert any("dropped `strict` from tool lookup_order" in record.getMessage() for record in caplog.records)
+
+
+async def test_strict_tool_schema_is_normalized_for_anthropic_strict_mode(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strict mode needs `additionalProperties: false` on every object, inlined `$defs` and no unsupported keywords."""
+    tool: Final[dict[str, object]] = {
+        "type": "function",
+        "function": {
+            "name": "create_order",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"item": {"$ref": "#/$defs/Item"}},
+                "required": ["item"],
+                "additionalProperties": False,
+                "$defs": {
+                    "Item": {
+                        "type": "object",
+                        "properties": {"quantity": {"type": "integer", "minimum": 1}},
+                        "required": ["quantity"],
+                    }
+                },
+            },
+        },
+    }
+    sent_tool: Final = await _sent_anthropic_tool(respx_mock, monkeypatch, "claude-sonnet-4-5", tool)
+    assert sent_tool["strict"] is True
+    assert sent_tool["input_schema"] == {
+        "type": "object",
+        "properties": {
+            "item": {
+                "type": "object",
+                "properties": {"quantity": {"type": "integer", "description": "Note: minimum value: 1."}},
+                "required": ["quantity"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["item"],
+        "additionalProperties": False,
+    }
+
+
+async def test_strict_tool_schema_anthropic_cannot_enforce_is_sent_without_strict(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    lookaround_parameters: Final = {
+        "type": "object",
+        "properties": {"code": {"type": "string", "pattern": "^(?!TEST)[A-Z]{4}$"}},
+        "required": ["code"],
+        "additionalProperties": False,
+    }
+    tool: Final[dict[str, object]] = {
+        "type": "function",
+        "function": {"name": "check_code", "strict": True, "parameters": lookaround_parameters},
+    }
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent_tool: Final = await _sent_anthropic_tool(respx_mock, monkeypatch, "claude-sonnet-4-5", tool)
+    assert "strict" not in sent_tool
+    assert sent_tool["input_schema"] == lookaround_parameters
+    assert any(
+        "dropped `strict` from tool check_code because Anthropic cannot enforce" in record.getMessage()
+        for record in caplog.records
+    )

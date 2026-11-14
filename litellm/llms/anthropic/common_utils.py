@@ -622,6 +622,28 @@ def eager_input_streaming_flag(tool: object) -> bool | None:
     return parsed.function.eager_input_streaming if parsed.function is not None else None
 
 
+class _StrictToolFunction(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    strict: StrictBool | None = None
+
+
+class _StrictTool(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    strict: StrictBool | None = None
+    function: _StrictToolFunction | None = None
+
+
+def tool_requests_strict(tool: object) -> bool:
+    """Whether an OpenAI-format tool sets ``strict: true``, on the tool itself or on its ``function``."""
+    try:
+        parsed: Final = _StrictTool.model_validate(tool)
+    except ValidationError:
+        return False
+    return parsed.strict is True or (parsed.function is not None and parsed.function.strict is True)
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
