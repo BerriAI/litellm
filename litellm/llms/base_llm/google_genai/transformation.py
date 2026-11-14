@@ -22,6 +22,14 @@ else:
 
 from litellm.types.router import GenericLiteLLMParams
 
+GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS: Final = (
+    "safetySettings",
+    "toolConfig",
+    "cachedContent",
+    "labels",
+    "continuationToken",
+)
+
 
 class BaseGoogleGenAIGenerateContentConfig(ABC):
     """Base configuration class for Google GenAI generate_content functionality"""
@@ -73,7 +81,17 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         ``systemInstruction`` (dedicated extraction) and ``generationConfig`` (mapped
         to ``config``).
         """
-        return ("safetySettings", "toolConfig", "cachedContent", "labels", "continuationToken")
+        return GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS
+
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return request_fields
+
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return headers
 
     @abstractmethod
     def map_generate_content_optional_params(
@@ -164,7 +182,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
         system_instruction: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request parameters for the generate content API.
 
