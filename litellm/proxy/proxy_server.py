@@ -57,6 +57,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from urllib.parse import urlparse
 
 import anyio
 import anyio.lowlevel
@@ -108,12 +109,17 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
-from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_choice_tokens,
+    chat_template_tool_section,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -373,6 +379,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
+    XAI_API_BASE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
@@ -925,6 +932,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
@@ -3776,7 +3784,7 @@ def _cached_budget_limits(cached: object) -> object:
 
 
 def _has_budget_windows(budget_limits: object) -> bool:
-    return isinstance(budget_limits, list) and budget_limits != []
+    return isinstance(budget_limits, (list, tuple)) and budget_limits not in ([], ())
 
 
 def _budget_windows_absent_marker(absent_key: str) -> object:
@@ -3829,12 +3837,14 @@ async def accounting_window_keys(
     token: str | None,
     team_id: str | None,
     customer_counters: Sequence[BudgetCounter] = (),
+    user_id: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
             (Litellm_EntityType.KEY, token, token),
             (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+            (Litellm_EntityType.USER, user_id, user_id),
         )
         if entity_id is not None and cache_key is not None
     )
@@ -3867,7 +3877,7 @@ async def _accounting_scope_windows(
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
-    if not isinstance(limits, list):
+    if not isinstance(limits, (list, tuple)):
         return ()
     windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
     return tuple(
@@ -3895,6 +3905,8 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
         row: Final[SupportsModelDump | None] = (
             await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": entity_id})
             if entity_type == Litellm_EntityType.KEY
+            else await UserRepository(prisma_client).table.find_unique(where={"user_id": entity_id})
+            if entity_type == Litellm_EntityType.USER
             else await TeamRepository(prisma_client).table.find_unique(where={"team_id": entity_id})
         )
     except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
@@ -3963,7 +3975,7 @@ async def _increment_spend_counters_batched(
                 counter_key=window_counter,
                 entity_type=(
                     entity_type.value.capitalize()
-                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM)
+                    if entity_type in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM, Litellm_EntityType.USER)
                     else entity_type.value
                 ),
                 entity_id=entity_id,
@@ -3992,13 +4004,16 @@ async def _increment_spend_counters_batched(
         duration: Final = (
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
+        duration_text: Final = TypeAdapter(str).validate_python(duration)
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
         window_counter: Final = (
-            key_window_counter(entity_id, str(duration))
+            key_window_counter(entity_id, duration_text)
             if entity_type is Litellm_EntityType.KEY
-            else team_window_counter(entity_id, str(duration))
+            else user_window_counter(entity_id, duration_text)
+            if entity_type is Litellm_EntityType.USER
+            else team_window_counter(entity_id, duration_text)
         )
         return await _resolved_window_increment(
             entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
@@ -4025,7 +4040,7 @@ async def _increment_spend_counters_batched(
     async def _window_increments(
         entity_type: Litellm_EntityType, entity_id: str, budget_limits: object
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        if not isinstance(budget_limits, list):
+        if not isinstance(budget_limits, (list, tuple)):
             return ()
         window_pending: Final = await asyncio.gather(
             *(_window_increment(entity_type, entity_id, window) for window in budget_limits), return_exceptions=True
@@ -4106,17 +4121,20 @@ async def _increment_spend_counters_batched(
             ),
         )
 
-    async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
+    async def _user_scope(scope_user_id: str) -> tuple[_SpendScopeItem, ...]:
         user_counter_key: Final = user_counter(scope_user_id)
-        if user_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=user_counter_key,
-                source_cache_key=scope_user_id,
-                increment=cost,
-            ),
+        pending: Final = (
+            ()
+            if user_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=user_counter_key,
+                    source_cache_key=scope_user_id,
+                    increment=cost,
+                ),
+            )
         )
+        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
 
     scope_coros: Final = tuple(
         coro
@@ -15884,6 +15902,7 @@ async def _local_token_estimate(
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
 ) -> _LocalTokenEstimate:
@@ -15897,6 +15916,7 @@ async def _local_token_estimate(
         text=prompt,
         messages=messages,
         tools=tools,
+        tool_choice=tool_choice,
         custom_tokenizer=tokenizer,
     )
     total_tokens: Final = await (
@@ -15916,17 +15936,19 @@ async def _kimi_k3_count(
     model: str,
     messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
 ) -> int | None:
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
     if encoding is None:
         return None
     match messages_format:
         case "anthropic":
+            fields: Final = request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
             return await offload_token_count(kimi_k3_anthropic_tokens)(
-                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+                encoding, model, fields if tool_choice is None else {**fields, "tool_choice": tool_choice}
             )
         case "openai":
-            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools, tool_choice)
 
 
 class _TokenCountDeployment(TypedDict, total=False):
@@ -16169,15 +16191,59 @@ def _deployment_api_base(
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
-    params: Final = deployment.get("litellm_params", {})
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    return None if resolved is None else resolved[1]
+
+
+def _deployment_served_model(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    if resolved is None:
+        return None
+    model, provider = resolved
+    served_by: Final = "xai" if _is_xai_api_base(_deployment_api_base(deployment, responses_request)) else provider
+    return f"{served_by}/{model}"
+
+
+def _is_xai_api_base(api_base: str | None) -> bool:
+    if api_base is None:
+        return False
     try:
-        return litellm.get_llm_provider(
-            model=_non_empty_str(params.get("model")) or request_model,
-            custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
+        return urlparse(api_base).hostname == urlparse(XAI_API_BASE).hostname
+    except ValueError:
+        return False
+
+
+def _deployment_llm_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> tuple[str, str] | None:
+    params: Final = deployment.get("litellm_params", {})
+    model: Final = _non_empty_str(params.get("model")) or request_model
+    custom_llm_provider: Final = _non_empty_str(params.get("custom_llm_provider"))
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
             api_base=_deployment_api_base(deployment, responses_request),
-        )[1]
+        )
     except litellm.BadRequestError:
         return None
+    return resolved_model, provider
+
+
+def _xai_tool_choice_off_xai(
+    template_model: str, tool_section: ChatTemplateToolSection | None, served_model: str | None
+) -> bool:
+    return (
+        tool_section is not None
+        and served_model is not None
+        and chat_template_tool_choice_tokens(template_model, tool_section) is not None
+        and chat_template_tool_choice_tokens(served_model, tool_section) is None
+    )
 
 
 def _serves_native_responses(
@@ -16242,7 +16308,16 @@ async def token_counter(
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     return await answered_with_litellm_call_id(
-        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        count_request_tokens(
+            request=request,
+            call_endpoint=call_endpoint,
+            request_litellm_params=MappingProxyType(
+                {}
+                if request.additional_drop_params is None
+                else {"additional_drop_params": request.additional_drop_params}
+            ),
+            litellm_call_id=call_id,
+        ),
         call_id,
         http_request,
         fastapi_response,
@@ -16567,6 +16642,17 @@ async def _count_request_tokens(
     openai_model: Final = deployment_openai_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
+    count_policy: Final = _count_drop_policy(deployment_view, {**request_litellm_params, **(responses_request or {})})
+    counted_tool_choice: Final = (
+        request.tool_choice
+        if counted_messages is not None
+        and isinstance(request.tool_choice, (str, Mapping))
+        and "tool_choice" not in count_policy.additional_drop_params
+        and not _xai_tool_choice_off_xai(
+            template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
+        )
+        else None
+    )
     counted_tools: Final = (
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None
@@ -16593,6 +16679,7 @@ async def _count_request_tokens(
             model_to_use,
             kimi_k3_messages,
             counted_tools,
+            counted_tool_choice,
         )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
@@ -16611,6 +16698,7 @@ async def _count_request_tokens(
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
+        tool_choice=counted_tool_choice,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
     )
@@ -16643,8 +16731,6 @@ async def supported_openai_params(model: str):
         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-
     global llm_router
     try:
         resolved_models: Final = (

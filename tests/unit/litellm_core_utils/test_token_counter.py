@@ -705,26 +705,87 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
 
 
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
-# these tool_choice values on 2026-10-17, the same as without one
+# these tool_choice values on 2026-10-17, the same as without one. On 2026-10-29 aiand's
+# deepseek-v4.1-flash billed 296 for each, and Fireworks' deepseek-v4p1-flash and OpenRouter's
+# deepseek-v3.2 billed the same for "required" and the named tool as without one
+@pytest.mark.parametrize(
+    "model",
+    [
+        "DeepSeek-V4-Flash-0731",
+        "aiand/deepseek-ai/deepseek-v4.1-flash",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "openrouter/deepseek/deepseek-v3.2",
+    ],
+)
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
-def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
 
     assert token_counter_new(
-        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
-    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
-# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
-# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
-@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
-def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+# Gemini API gemini-3.8-flash, gemini-3.1-pro-preview and gemini-3.5-flash-lite each billed 51 prompt tokens for the
+# weather tool with no toolConfig, NONE, ANY and ANY limited to the tool on 2026-11-11
+@pytest.mark.parametrize("model", ["gemini/gemini-3.8-flash", "gemini/gemini-3.1-pro-preview", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_gemini(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
-    named: Final = {"type": "function", "function": {"name": "get_weather"}}
 
     assert token_counter_new(
-        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
-    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
+# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and OpenRouter, which served
+# x-ai/grok-4.3 from xAI, billed the same on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning", "openrouter/x-ai/grok-4.3"])
+@pytest.mark.parametrize(
+    ("tool_choice", "billed_over_unset"),
+    [
+        pytest.param("none", 21, id="none"),
+        pytest.param({"type": "none"}, 21, id="anthropic-none"),
+        pytest.param("required", 11, id="required"),
+        pytest.param({"type": "any"}, 11, id="anthropic-any"),
+        pytest.param({"type": "function", "function": {"name": "get_weather"}}, 14, id="named"),
+        pytest.param({"type": "tool", "name": "get_weather"}, 14, id="anthropic-tool"),
+        pytest.param({"type": "function", "name": "get_weather"}, 14, id="responses-function"),
+        pytest.param("auto", 0, id="auto"),
+    ],
+)
+def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
+    model: str, tool_choice: str | Mapping[str, object], billed_over_unset: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert (
+        token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice)
+        - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        == billed_over_unset
+    )
+
+
+# Azure AI Foundry grok-4-1 billed 351 prompt tokens for the weather tool with no tool_choice, 163 with "none" and
+# 352 with "required" or the named tool on 2026-11-10, so xAI's costs would count it 10 to 21 over
+@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3", "vertex_ai/xai/grok-4.3"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_grok_served_off_xai(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI and OpenAI both answered 400 to a tool_choice sent without tools on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "gpt-4.1"])
+@pytest.mark.parametrize("tool_choice", ["none", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_without_tools_adds_nothing(model: str, tool_choice: object):
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tool_choice=tool_choice) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
+    )
 
 
 def _counted_with_strict(model: str, **strict: bool) -> int:
@@ -761,7 +822,7 @@ def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_tem
     ("tool_choice", "expected_tool_choice"),
     [
         pytest.param({"type": "auto"}, None, id="anthropic-auto"),
-        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "any"}, "required", id="anthropic-any"),
         pytest.param({"type": "none"}, "none", id="anthropic-none"),
         pytest.param(
             {"type": "tool", "name": "get_weather"},
