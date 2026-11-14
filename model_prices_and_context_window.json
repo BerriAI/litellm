@@ -42336,6 +42336,76 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "linkrra/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.1e-07,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "linkrra/gpt-oss-20b": {
+        "input_cost_per_token": 1.7e-08,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 8.5e-08,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "linkrra/meta/muse-glimmer-30b": {
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-06,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "linkrra/qwen/qwen3-30b-a3b-instruct-2507": {
+        "input_cost_per_token": 8.1267e-08,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 98304,
+        "max_output_tokens": 98304,
+        "mode": "chat",
+        "output_cost_per_token": 2.438e-07,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "linkrra/qwen/qwen3-vl-30b-a3b-instruct": {
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-07,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "linkrra/qwen3-coder-30b": {
+        "input_cost_per_token": 6.75e-08,
+        "litellm_provider": "linkrra",
+        "max_input_tokens": 98304,
+        "max_output_tokens": 98304,
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-07,
+        "source": "https://synap402.com/v1/models?format=openrouter",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "low/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",

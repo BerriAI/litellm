@@ -4841,6 +4841,7 @@ class LlmProviders(str, Enum):
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    LINKRRA = "linkrra"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
     LITELLM_AGENT = "litellm_agent"
