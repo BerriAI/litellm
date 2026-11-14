@@ -3477,18 +3477,28 @@ dependencies = [
 name = "litellm-auth-azure"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "azure_core",
  "azure_identity",
+ "futures-util",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-http",
  "litellm-secret-value",
  "litellm-secrets",
  "moka",
+ "rcgen",
+ "reqwest",
  "rstest",
+ "rustls 0.23.42",
  "serde_json",
  "sha2 0.10.9",
  "strum",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tokio-rustls 0.26.4",
  "url",
 ]
 
@@ -3864,6 +3874,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -3885,6 +3896,7 @@ dependencies = [
  "tracing",
  "uuid",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
@@ -4343,6 +4355,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4380,6 +4393,7 @@ name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "fancy-regex 0.19.2",
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
@@ -4426,6 +4440,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-sdk-secretsmanager",
+ "azure_core",
  "bytes",
  "criterion",
  "fancy-regex 0.19.2",
@@ -4433,6 +4448,7 @@ dependencies = [
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-azure",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
@@ -4624,8 +4640,11 @@ dependencies = [
  "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-llms",
+ "litellm-model-catalog",
  "litellm-router-types",
  "rstest",
+ "serde_json",
 ]
 
 [[package]]

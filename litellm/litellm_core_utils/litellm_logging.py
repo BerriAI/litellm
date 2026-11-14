@@ -75,6 +75,7 @@ from litellm.cost_calculator import (
 )
 from litellm.exceptions import (
     BudgetExceededError,
+    logged_class_name,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -873,6 +874,7 @@ class _SyncSuccessRun:
     start_time: datetime.datetime
     end_time: datetime.datetime
     complete_streaming_response: object
+    logs_mid_stream_chunk: bool
     is_sync_request: bool
     for_async_request: bool
     call_details_view: Mapping[str, object]
@@ -2449,7 +2451,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return self._a2a_agent_response_cost(self.a2a_agent_cost_per_query)
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
-        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent, litellm.CustomStreamWrapper)) and hasattr(
             priced_result, "_hidden_params"
         ):
             hidden_params: Final = result_hidden_params
@@ -3051,6 +3053,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
 
+    def record_every_round_breakdown(self, cost_breakdown: CostBreakdown | None) -> None:
+        self.cost_breakdown = cost_breakdown
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -3130,11 +3135,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
         parked: Final = self.deferred_success_result
-        if parked is None or self.enqueue_deferred_logging is None:
+        if parked is None or not self.unpark_success_log():
             return False
-        self.deferred_success_result = None
-        self.enqueue_deferred_logging = None
-        self._async_success_scheduled = False
         served: Final = self.served_round(parked[0])
         if served is None:
             return True
@@ -3143,6 +3145,14 @@ class Logging(LiteLLMLoggingBaseClass):
             served,
         )
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
+
+    def unpark_success_log(self) -> bool:
+        if self.deferred_success_result is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
         return True
 
     def mark_stash_billed_by_continuation(self) -> None:
@@ -3369,6 +3379,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if call_type == CallTypes.anthropic_messages.value:
             return self._anthropic_messages_logged_response(result=result)
         if call_type in (CallTypes.generate_content.value, CallTypes.agenerate_content.value):
+            if isinstance(result, ModelResponse):
+                return result
             return self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
         if call_type in (CallTypes.asend_message.value, CallTypes.send_message.value):
             return self._handle_a2a_response_logging(result=result)
@@ -4080,8 +4092,18 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     cache_hit=cache_hit,
                     for_async_request=for_async_request,
+                    ends_stream=False,
                     **kwargs,
                 )
+        finally:
+            self._restore_correlation_context()
+
+    def stream_end_success_handler(self, result: object, cache_hit: bool | None) -> None:
+        """The stream wrapper's one end-of-stream log, which still reaches callbacks that skip chunk logs
+        when the response builder failed and the result is a chunk carrying best-effort usage."""
+        try:
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
+                self._success_handler_body(result=result, cache_hit=cache_hit, ends_stream=True)
         finally:
             self._restore_correlation_context()
 
@@ -4096,6 +4118,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
         for_async_request: bool = False,
+        ends_stream: bool = False,
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
@@ -4196,6 +4219,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 else callbacks
             )
 
+            logs_mid_stream_chunk: Final = isinstance(result, ModelResponseStream) and not ends_stream
             ## REDACT MESSAGES ##
             result = _REDACTED_RESULT.validate_python(
                 redact_message_input_output_from_logging(
@@ -4230,6 +4254,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
                 complete_streaming_response=complete_streaming_response,
+                logs_mid_stream_chunk=logs_mid_stream_chunk,
                 is_sync_request=is_sync_request,
                 for_async_request=for_async_request,
                 call_details_view=MappingProxyType(prepared.details),
@@ -4296,6 +4321,8 @@ class Logging(LiteLLMLoggingBaseClass):
         is_sync_request: Final = run.is_sync_request
         for_async_request: Final = run.for_async_request
         call_details_view: Final = run.call_details_view
+        delivers_final_stream_log: Final = complete_streaming_response is not None or self._is_pass_through_call()
+        sends_success_log: Final = delivers_final_stream_log or not run.logs_mid_stream_chunk
         result = run.result  # rebind-ok: integrations swap in the assembled stream for later callbacks
         kwargs: Mapping[str, object] = run.kwargs  # rebind-ok: integrations leave their kwargs to later callbacks
         litellm_params = run.litellm_params  # rebind-ok: supabase leaves its params to later callbacks
@@ -4307,7 +4334,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             if not should_run:
                 return
-            if callback == "promptlayer" and promptLayerLogger is not None:
+            if callback == "promptlayer" and promptLayerLogger is not None and sends_success_log:
                 print_verbose("reaches promptlayer for logging!")
                 promptLayerLogger.log_event(
                     kwargs=call_details,
@@ -4322,7 +4349,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches supabase for streaming logging!")
@@ -4353,7 +4380,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     print_verbose=print_verbose,
                 )
-            if callback == "wandb" and weightsBiasesLogger is not None:
+            if callback == "wandb" and weightsBiasesLogger is not None and sends_success_log:
                 print_verbose("reaches wandb for logging!")
                 weightsBiasesLogger.log_event(
                     kwargs=call_details,
@@ -4371,7 +4398,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches logfire for streaming logging!")
@@ -4397,7 +4424,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         result = call_details_view["complete_streaming_response"]  # rebind-ok: seen by later callbacks
@@ -4425,7 +4452,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                 if self.stream:
-                    if "complete_streaming_response" not in kwargs:
+                    if not delivers_final_stream_log or "complete_streaming_response" not in kwargs:
                         return
                     else:
                         print_verbose("reaches helicone for streaming logging!")
@@ -4504,7 +4531,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     print_verbose=print_verbose,
                 )
-            if callback == "athina" and athinaLogger is not None:
+            if callback == "athina" and athinaLogger is not None and sends_success_log:
                 deep_copy = {}  # rebind-ok: each integration branch binds its own
                 for k, v in call_details_view.items():
                     deep_copy[k] = v
@@ -4515,7 +4542,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     print_verbose=print_verbose,
                 )
-            if callback == "traceloop":
+            if callback == "traceloop" and sends_success_log:
                 deep_copy = {}  # rebind-ok: each integration branch binds its own
                 for k, v in call_details_view.items():
                     if k != "original_response":
@@ -4533,7 +4560,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if s3Logger is None:
                     s3Logger = S3Logger()  # rebind-ok: lazily built module logger
                 if self.stream:
-                    if "complete_streaming_response" in call_details:
+                    if delivers_final_stream_log and "complete_streaming_response" in call_details:
                         print_verbose("S3Logger Logger: Got Stream Event - Completed Stream Response")
                         s3Logger.log_event(
                             kwargs=call_details,
@@ -4607,7 +4634,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         start_time=start_time,
                         end_time=end_time,
                     )
-            if callable(callback) is True and is_sync_request:  # custom logger functions
+            if callable(callback) is True and is_sync_request and sends_success_log:  # custom logger functions
                 function_logger: Final = customLogger if customLogger is not None else CustomLogger()
                 print_verbose(f"success callbacks: Running Custom Callback Function - {callback}")
 
@@ -4763,6 +4790,7 @@ class Logging(LiteLLMLoggingBaseClass):
             is_async=True,
             streaming_chunks=self.streaming_chunks,
         )
+        is_pass_through_call: Final = self._is_pass_through_call()
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -4819,7 +4847,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             # print standard logging payload
             self._emit_stored_standard_logging_payload()
-        elif self.call_type == "pass_through_endpoint":
+        elif is_pass_through_call:
             print_verbose("Async success callbacks: Got a pass-through endpoint response")
 
             self.model_call_details["async_complete_streaming_response"] = result
@@ -4841,6 +4869,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # print standard logging payload
                 self._emit_stored_standard_logging_payload()
+        delivers_final_stream_log: Final[bool] = complete_streaming_response is not None or is_pass_through_call
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -4859,7 +4888,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ## LOGGING HOOK ##
 
         hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
-        include_v2: Final = self.stream is not True or "async_complete_streaming_response" in self.model_call_details
+        include_v2: Final = self.stream is not True or delivers_final_stream_log
         prepared: Final = _LogHookRun(details=self.model_call_details, result=result)
         await _run_callbacks(
             Hook.log_prepare,
@@ -4884,7 +4913,7 @@ class Logging(LiteLLMLoggingBaseClass):
             Hook.attempt_ended,
             delivery_callbacks,
             self.model_call_details,
-            functools.partial(self._deliver_async_success, result, start_time, end_time),
+            functools.partial(self._deliver_async_success, result, start_time, end_time, delivers_final_stream_log),
             include_v2=include_v2,
             owner=self,
             args=HookArgs(
@@ -4954,6 +4983,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        delivers_final_stream_log: bool,
         callback: object,
         _kwargs: object,
     ) -> Awaitable[None] | None:
@@ -4963,7 +4993,11 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params=litellm_params,
             event_hook="async_success_handler",
         )
-        return self._deliver_async_success_to(callback, result, start_time, end_time) if should_run else None
+        return (
+            self._deliver_async_success_to(callback, result, start_time, end_time, delivers_final_stream_log)
+            if should_run
+            else None
+        )
 
     async def _deliver_async_success_to(
         self,
@@ -4971,11 +5005,12 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        delivers_final_stream_log: bool,
     ) -> None:
         try:
             if callback == "openmeter" and openMeterLogger is not None:
                 if self.stream is True:
-                    if "async_complete_streaming_response" in self.model_call_details:
+                    if delivers_final_stream_log:
                         await openMeterLogger.async_log_success_event(
                             kwargs=self.model_call_details,
                             response_obj=self.model_call_details["async_complete_streaming_response"],
@@ -5010,9 +5045,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     custom_logger=callback,
                 )
-                if isinstance(callback, ShadowEvalLogger) and (
-                    not self.stream or "async_complete_streaming_response" in model_call_details
-                ):
+                if isinstance(callback, ShadowEvalLogger) and (not self.stream or delivers_final_stream_log):
                     await callback.async_log_success_event(
                         kwargs=model_call_details,
                         response_obj=model_call_details["async_complete_streaming_response"]
@@ -5023,7 +5056,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         guardrail_snapshot=self.shadow_eval_request_snapshot,
                     )
                 elif self.stream is True:
-                    if "async_complete_streaming_response" in model_call_details:
+                    if delivers_final_stream_log:
                         await callback.async_log_success_event(
                             kwargs=model_call_details,
                             response_obj=model_call_details["async_complete_streaming_response"],
@@ -5049,7 +5082,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if customLogger is None:
                     customLogger = CustomLogger()  # rebind-ok: lazily built module logger
                 if self.stream:
-                    if "async_complete_streaming_response" in self.model_call_details:
+                    if delivers_final_stream_log:
                         await customLogger.async_log_event(
                             kwargs=self.model_call_details,
                             response_obj=self.model_call_details["async_complete_streaming_response"],
@@ -5072,7 +5105,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if dynamoLogger is None:
                     dynamoLogger = DyanmoDBLogger()  # rebind-ok: lazily built module logger
                 if self.stream:
-                    if "async_complete_streaming_response" in self.model_call_details:
+                    if delivers_final_stream_log:
                         print_verbose("DynamoDB Logger: Got Stream Event - Completed Stream Response")
                         await dynamoLogger.async_log_event(
                             kwargs=self.model_call_details,
@@ -5257,6 +5290,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     original_model_group=model_group,
                     kwargs=self.model_call_details,
                 )
+
+    def _is_pass_through_call(self) -> bool:
+        return self.call_type in (CallTypes.pass_through.value,)
 
     def claim_v2_failure(self, eligible: bool) -> bool:
         if not eligible or self.v2_failure_delivered:
@@ -8097,7 +8133,7 @@ class StandardLoggingPayloadSetup:
                 response_attr: Final[object] = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
-        error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
+        error_class: Final[str] = logged_class_name(original_exception) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
         traceback_info = traceback_str or ""

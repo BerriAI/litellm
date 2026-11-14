@@ -24,7 +24,7 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::{MessagesShapeOptions, MessagesTransformContext},
+            context::{MessagesShapeOptions, MessagesTransformContext, UnparsedMessages},
             transformation::BaseMessagesConfig,
         },
     },
@@ -196,7 +196,12 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             Some(workspace) => with_header(headers, WORKSPACE_HEADER, workspace.into()),
             None => headers,
         };
-        update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
+        update_headers_with_safeguards_beta(
+            headers,
+            request,
+            BetaProvider::Anthropic,
+            UnparsedMessages::Skipped,
+        )
     }
 
     fn wire_body(&self, body: Value) -> Value {

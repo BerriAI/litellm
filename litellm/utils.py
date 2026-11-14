@@ -80,6 +80,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    TOGETHER_AI_API_KEY_ENV_VARS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -91,6 +92,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     bind_budget_reservation_to_callbacks,
     has_attributes,
@@ -103,6 +105,12 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
+)
+from litellm.litellm_core_utils.fallback_utils import (
+    checked_fallback_attempt,
+    report_failed_sync_fallback_attempt,
+    uses_fallbacks,
+    without_global_fallbacks,
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
@@ -240,7 +248,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
     ChatCompletionAssistantToolCall,
-    ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     OpenAITextCompletionUserMessage,
@@ -830,7 +837,7 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         {
             key: copy.deepcopy(value)
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs
+            if key not in kwargs and key != "github_copilot_app_private_key"
         }
     )
 
@@ -1493,7 +1500,7 @@ def function_setup(
             if isinstance(messages, list) and len(messages) > 0:
                 try:
                     from litellm.litellm_core_utils.get_llm_provider_logic import (
-                        get_llm_provider,
+                        resolve_model_and_provider_for_metadata,
                     )
                     from litellm.litellm_core_utils.prompt_templates.factory import (
                         THOUGHT_SIGNATURE_SEPARATOR,
@@ -1503,10 +1510,11 @@ def function_setup(
                     custom_llm_provider = kwargs.get("custom_llm_provider")
 
                     # If custom_llm_provider not in kwargs, try to determine it from the model
-                    if not custom_llm_provider and model:
+                    metadata_model: Final = _OPAQUE_VALUE.validate_python(model)
+                    if not custom_llm_provider and isinstance(metadata_model, str) and metadata_model:
                         try:
-                            _, custom_llm_provider, _, _ = get_llm_provider(
-                                model=model,
+                            _, custom_llm_provider = resolve_model_and_provider_for_metadata(
+                                model=metadata_model,
                                 custom_llm_provider=custom_llm_provider,
                             )
                         except Exception:
@@ -1870,9 +1878,10 @@ async def async_pre_call_deployment_hook(
     route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
     resolved: Final = resolve_deployment_tool_fields(kwargs, route)
     if isinstance(resolved, MalformedField):
+        model: Final = kwargs.get("model")
         raise MalformedRequestFieldError(
             message=resolved.message,
-            model=kwargs.get("model"),
+            model=model if isinstance(model, str) else None,
             llm_provider=_deployment_provider(kwargs),
             body={"type": "invalid_request_error", "param": resolved.field},
         )
@@ -2357,7 +2366,11 @@ def client(original_function):
 
             clamp_max_tokens(model, args, kwargs, call_type)
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            try:
+                result = original_function(*args, **kwargs)
+            except Exception as deployment_error:
+                report_failed_sync_fallback_attempt(kwargs, call_type, deployment_error)
+                raise
             end_time = datetime.datetime.now()
             if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
@@ -2411,17 +2424,18 @@ def client(original_function):
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
+            checked_result: Final = checked_fallback_attempt(kwargs, call_type, result)
 
             # [OPTIONAL] ADD TO CACHE
             _llm_caching_handler.sync_set_cache(
-                result=result,
+                result=checked_result,
                 args=args,
                 kwargs=kwargs,
             )
 
             _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
             _update_response_metadata(
-                result=result,
+                result=checked_result,
                 logging_obj=logging_obj,
                 model=model,
                 kwargs=kwargs,
@@ -2431,7 +2445,8 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            if not is_internal_call.get():
+            logged_by_fallback_attempt: Final = call_type == CallTypes.completion.value and uses_fallbacks(kwargs)
+            if not is_internal_call.get() and not logged_by_fallback_attempt:
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
@@ -2439,12 +2454,12 @@ def client(original_function):
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
-                    result,
+                    checked_result,
                     start_time,
                     end_time,
                 )
             # RETURN RESULT
-            return result
+            return checked_result
         except Exception as e:
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
@@ -2543,7 +2558,7 @@ def client(original_function):
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
-        is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
+        is_completion_with_fallbacks: Final = bool(kwargs.get("fallbacks"))
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
@@ -3285,7 +3300,7 @@ def token_counter(
     messages: Sequence | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
+    tool_choice: str | Mapping[str, object] | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
 ) -> int:
@@ -4854,7 +4869,6 @@ def get_optional_params_embeddings(
     drop_params = normalize_drop_params(drop_params)
     passed_params.pop("additional_drop_params", None)
     passed_params.pop("allowed_openai_params", None)
-    allowed_openai_params = allowed_openai_params or []
     # Remove function objects from passed_params to avoid JSON serialization errors
     passed_params.pop("get_supported_openai_params", None)
 
@@ -4918,7 +4932,7 @@ def get_optional_params_embeddings(
             model is not None
             and "text-embedding-3" not in model
             and "dimensions" in non_default_params
-            and "dimensions" not in (allowed_openai_params or [])
+            and "dimensions" not in allowed_openai_param_names(allowed_openai_params)
         ):
             # Honor drop_params (per-call) and litellm.drop_params (global) the same
             # way `_check_valid_arg` does above. The raised error message itself
@@ -5772,8 +5786,7 @@ def get_optional_params(
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
 
     supported_params = supported_params or []
-    allowed_openai_params = allowed_openai_params or []
-    supported_params.extend(allowed_openai_params)
+    supported_params.extend(allowed_openai_param_names(allowed_openai_params))
 
     _check_valid_arg(
         supported_params=supported_params or [],
@@ -6370,7 +6383,7 @@ def add_provider_specific_params_to_optional_params(
 def apply_openai_param_overrides(
     optional_params: dict[str, object],
     non_default_params: dict[str, object],
-    allowed_openai_params: list[str],
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:
     """
     If user passes in allowed_openai_params, apply them to optional_params
@@ -6384,13 +6397,12 @@ def apply_openai_param_overrides(
     `AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'`).
     See https://github.com/BerriAI/litellm/issues/25697
     """
-    if allowed_openai_params:
-        for param in allowed_openai_params:
-            if param in optional_params:
-                continue
-            if param not in non_default_params:
-                continue
-            optional_params[param] = non_default_params.pop(param)
+    for param in allowed_openai_param_names(allowed_openai_params):
+        if param in optional_params:
+            continue
+        if param not in non_default_params:
+            continue
+        optional_params[param] = non_default_params.pop(param)
     return optional_params
 
 
@@ -8141,7 +8153,7 @@ def validate_environment(
             else:
                 missing_keys.append("AI21_API_KEY")
         elif custom_llm_provider == "together_ai":
-            if "TOGETHERAI_API_KEY" in os.environ:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
@@ -8413,12 +8425,6 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("AI21_API_KEY")
-        ## together_ai
-        elif model in litellm.together_ai_models:
-            if "TOGETHERAI_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("TOGETHERAI_API_KEY")
         ## aleph_alpha
         elif model in litellm.aleph_alpha_models:
             if "ALEPH_ALPHA_API_KEY" in os.environ:
@@ -8452,6 +8458,12 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
+        ## together_ai
+        elif f"together_ai/{model}" in litellm.together_ai_models:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
+                keys_in_environment = True
+            else:
+                missing_keys.append("TOGETHERAI_API_KEY")
 
     def filter_missing_keys(keys: list[str], exclude_pattern: str) -> list[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
@@ -8501,7 +8513,8 @@ def check_valid_key(model: str, api_key: str):
     """
     messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
-        litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
+        with without_global_fallbacks():
+            litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
         return True
     except AuthenticationError:
         return False
@@ -9092,28 +9105,22 @@ _model_cache: Final = AvailableModelsCache()
 _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
+def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    if provider == LlmProviders.TOGETHER_AI:
+        return TOGETHER_AI_API_KEY_ENV_VARS
+    return (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+
+
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: str | None = None,
 ) -> list[str]:
-    valid_providers: Final[list[str]] = []
     environ_keys: Final = os.environ.keys()
-    for provider in litellm.provider_list:
-        if custom_llm_provider and provider != custom_llm_provider:
-            continue
-
-        # edge case litellm has together_ai as a provider, it should be togetherai
-        env_provider_1 = provider.replace("_", "")
-        env_provider_2 = provider
-
-        # litellm standardizes expected provider keys to
-        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-        if expected_provider_key_1 in environ_keys or expected_provider_key_2 in environ_keys:
-            # key is set
-            valid_providers.append(provider)
-
-    return valid_providers
+    return [
+        provider
+        for provider in litellm.provider_list
+        if (not custom_llm_provider or provider == custom_llm_provider)
+        and any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+    ]
 
 
 def _provider_listing_params(
@@ -10397,6 +10404,7 @@ class ProviderConfigManager:
             LlmProviders.AZURE_AI,
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
+            LlmProviders.VERCEL_AI_GATEWAY,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10405,6 +10413,7 @@ class ProviderConfigManager:
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
+                LlmProviders.VERCEL_AI_GATEWAY: litellm.VercelAIGatewayDecisionsConfig,
             }
             return configs[provider]()
         return None
@@ -10856,6 +10865,10 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.chat.transformation import MistralConfig
+
+            return MistralConfig()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
@@ -11031,10 +11044,10 @@ class ProviderConfigManager:
     def _get_vertex_ai_vector_stores_config(api_type: str | None) -> BaseVectorStoreConfig | None:
         if api_type == "rag_api" or api_type is None:
             from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
-                VertexVectorStoreConfig,
+                vertex_rag_api_vector_store_config,
             )
 
-            return VertexVectorStoreConfig()
+            return vertex_rag_api_vector_store_config
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
                 vertex_search_api_vector_store_config,

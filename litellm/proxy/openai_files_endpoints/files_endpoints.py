@@ -1364,6 +1364,7 @@ async def get_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:
@@ -1577,6 +1578,7 @@ async def delete_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:

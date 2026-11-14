@@ -70,7 +70,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return anthropic_handler_error_json_response(exc, request)
 
 
-_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "tool_choice", "system")
 
 
 def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
