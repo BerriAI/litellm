@@ -3852,6 +3852,7 @@ async def _settle_tpm_for_call(
     data: dict[str, object],
     usage: Usage,
     rate_limit_type: str = "total",
+    failed_attempts: int = 0,
 ) -> tuple[int, int]:
     from litellm.proxy import proxy_server
 
@@ -3876,12 +3877,17 @@ async def _settle_tpm_for_call(
         if call_type == "aembedding"
         else ModelResponse(usage=usage)
     )
+    callback_kwargs: Final = {
+        "litellm_call_id": "settle-call",
+        "call_type": call_type,
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    for _ in range(failed_attempts):
+        await handler.async_log_failure_event(
+            kwargs=dict(callback_kwargs), response_obj=None, start_time=datetime.now(), end_time=datetime.now()
+        )
     await handler.async_log_success_event(
-        kwargs={
-            "litellm_call_id": "settle-call",
-            "call_type": call_type,
-            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
-        },
+        kwargs=dict(callback_kwargs),
         response_obj=response,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -3901,6 +3907,19 @@ async def test_embedding_the_provider_reports_as_zero_tokens_keeps_its_tpm_reser
         data={"model": "titan-embed-image", "input": embedding_input},
         usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
         rate_limit_type=rate_limit_type,
+    )
+
+    assert counted == reserved
+
+
+@pytest.mark.asyncio
+async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_estimate_v3(monkeypatch):
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_JPEG_DATA_URI]},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        failed_attempts=1,
     )
 
     assert counted == reserved

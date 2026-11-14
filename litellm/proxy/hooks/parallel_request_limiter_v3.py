@@ -4996,8 +4996,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         call_type: Final[object] = kwargs.get("call_type")
         settled_tokens: Final = (
-            reserved_tokens
-            if total_tokens == 0 and rate_limit_type != "output" and call_type in EMBEDDING_API_CALL_TYPES
+            stash.reserved_tokens
+            if stash is not None
+            and total_tokens == 0
+            and rate_limit_type != "output"
+            and call_type in EMBEDDING_API_CALL_TYPES
             else total_tokens
         )
         reserved_model: Final = stash.reserved_model if stash is not None else None
