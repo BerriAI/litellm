@@ -21,7 +21,6 @@ import time
 from typing import Final, NoReturn
 from unittest.mock import MagicMock
 
-import _hashlib
 import pytest
 import respx
 from cryptography.fernet import Fernet
@@ -347,9 +346,6 @@ def test_plugin_session_claim_opens_under_the_documented_hmac_plugin_key(monkeyp
     assert (claim["plugin"], claim["user_id"], claim["user_role"]) == ("chat-ui", "user-1", "proxy_admin")
 
 
-@pytest.mark.skipif(
-    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
-)
 @pytest.mark.usefixtures("fips_mode")
 def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_urandom_or_hmac_new(
     monkeypatch: pytest.MonkeyPatch,
