@@ -19,6 +19,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     routed_model_info,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     content_parts,
     convert_content_list_to_str,
@@ -30,7 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
@@ -46,7 +47,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, PromptCacheBreakpoint
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
-from litellm.utils import add_path_to_api_base, get_model_cost_key, supports_tool_choice
+from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -179,14 +180,19 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 _REASONING_EFFORT: Final = "reasoning_effort"
 
 
-def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
-    return declared_reasoning_efforts_for_model(get_model_cost_key(f"azure_ai/{model}") or model, "azure_ai")
+def _catalog_levels(model: str) -> tuple[str, ...] | None:
+    row: Final = GetModelCostMap.loaded_model_cost_map_entry(f"azure_ai/{model.removeprefix('azure_ai/')}")
+    return declared_reasoning_efforts(row) if row is not None else None
+
+
+def _catalog_reasoning_efforts(model: str, base_model: str | None) -> tuple[str, ...] | None:
+    return next(filter(None, (_catalog_levels(name) for name in (base_model, model) if name)), None)
 
 
 def _with_reasoning_effort(
     supported_params: Sequence[str], model: str
 ) -> list[str]:  # mutable-ok: get_supported_openai_params returns a list its callers extend
-    if _REASONING_EFFORT in supported_params or not _catalog_reasoning_efforts(model):
+    if _REASONING_EFFORT in supported_params or not _catalog_levels(model):
         return list(supported_params)
     return [*supported_params, _REASONING_EFFORT]
 
@@ -202,15 +208,14 @@ class _UnsendableReasoningEffort:
 
 
 def _foundry_reasoning_effort(
-    requested: object, model: str, deployment_levels: Collection[str]
+    requested: object, catalog_levels: tuple[str, ...] | None
 ) -> _SendReasoningEffort | _UnsendableReasoningEffort:
     fields: Final = as_str_mapping(requested)
     level: Final = fields.get("effort") if fields is not None else requested
-    declared: Final = None if deployment_levels else _catalog_reasoning_efforts(model)
-    if isinstance(level, str) and (declared is None or level in declared):
+    if isinstance(level, str) and (catalog_levels is None or level in catalog_levels):
         return _SendReasoningEffort(level)
     return _UnsendableReasoningEffort(
-        f"azure_ai/{model} lists only {list(declared or ())} in reasoning_effort_levels."
+        f"the model catalog lists only {list(catalog_levels or ())} in its reasoning_effort_levels."
         if isinstance(level, str)
         else "it names no level such as 'high'."
     )
@@ -220,13 +225,15 @@ def _reasoning_effort_params(
     non_default_params: dict[str, object],  # mutable-ok: a drop removes the effort from the caller's params
     model: str,
     *,
-    deployment_levels: Collection[str],
+    base_model: str | None,
+    level_check_waived: bool,
     drop_params: bool,
 ) -> Mapping[str, str]:
     if _REASONING_EFFORT not in non_default_params:
         return {}
     requested: Final = non_default_params[_REASONING_EFFORT]
-    outcome: Final = _foundry_reasoning_effort(requested, model, deployment_levels)
+    catalog_levels: Final = None if level_check_waived else _catalog_reasoning_efforts(model, base_model)
+    outcome: Final = _foundry_reasoning_effort(requested, catalog_levels)
     match outcome:
         case _SendReasoningEffort(level=level):
             return {_REASONING_EFFORT: level}
@@ -279,12 +286,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        base_model: str | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             foundry_effort: Final = _reasoning_effort_params(
                 non_default_params,
                 model,
-                deployment_levels=declared_reasoning_efforts or (),
+                base_model=base_model,
+                level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
                 drop_params=drop_params or litellm.drop_params is True,
             )
             return {
