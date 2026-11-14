@@ -307,8 +307,13 @@ def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     rebuilt logging object has no request headers to derive them from.
     """
     litellm_params: Final = _OBJECT_DICT.validate_python(logging_obj.model_call_details.get("litellm_params") or {})
+    metadata: Final = _OBJECT_MAPPING.validate_python(
+        get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    )
+    if metadata.get("tags") and not isinstance(metadata.get("tags"), list):
+        return metadata
     return {
-        **_OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)),
+        **metadata,
         **_request_tags(litellm_params),
     }
 
