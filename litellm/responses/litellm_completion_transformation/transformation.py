@@ -52,7 +52,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import chat_member_name, qualified_member_name
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -887,8 +887,8 @@ class LiteLLMCompletionResponsesConfig:
                 else bridged_messages
             ),
             "model": model,
-            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+            "tool_choice": LiteLLMCompletionResponsesConfig._chat_tool_choice(
+                responses_api_request.get("tool_choice"), request_tools
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
@@ -2612,8 +2612,8 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
-    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
-        namespace_entries: Final = tuple(
+    def _namespace_entries(tools: ResponseTools) -> tuple[tuple[str, str], ...]:
+        return tuple(
             (str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
             for tool in tools or ()
             if tool.get("type") == "namespace"
@@ -2622,6 +2622,25 @@ class LiteLLMCompletionResponsesConfig:
             for namespace_tool in namespace_tools
             if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
         )
+
+    @staticmethod
+    def _chat_tool_choice(tool_choice: object, tools: ResponseTools) -> object:
+        chat_tool_choice: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        match chat_tool_choice:
+            case {"type": "function", "function": {"name": str(forced_name)}}:
+                chat_names: Final = MappingProxyType(
+                    {
+                        qualified_member_name(namespace, member): chat_member_name(namespace, member)
+                        for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
+                    }
+                )
+                return {"type": "function", "function": {"name": chat_names.get(forced_name, forced_name)}}
+            case _:
+                return chat_tool_choice
+
+    @staticmethod
+    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
+        namespace_entries: Final = LiteLLMCompletionResponsesConfig._namespace_entries(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
