@@ -128,6 +128,7 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "litellm_credential_name": NotSecret("name of a credentials table entry, not a credential"),
         "default_api_key_tpm_limit": NotSecret("rate limit number"),
         "default_api_key_rpm_limit": NotSecret("rate limit number"),
+        "max_output_tokens_cap": NotSecret("max completion-token budget, not a credential"),
         "valkey_password": Unplanted(),
         "anthropic_identity_token": Unplanted(),
         "anthropic_identity_token_file": Unplanted(),
@@ -156,6 +157,7 @@ REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = Mapping
         "litellm_credential_name": NotSecret("name of a credentials table entry, not a credential"),
         "default_api_key_tpm_limit": NotSecret("rate limit number"),
         "default_api_key_rpm_limit": NotSecret("rate limit number"),
+        "max_output_tokens_cap": NotSecret("max completion-token budget, not a credential"),
     }
 )
 

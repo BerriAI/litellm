@@ -395,6 +395,34 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def apply_max_output_tokens_cap_to_request(
+    deployment: Mapping[str, object],
+    kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
+) -> None:
+    """
+    Lower caller-requested completion token budgets to the deployment's
+    max_output_tokens_cap, when set (see litellm_params.max_output_tokens_cap).
+
+    Only lowers what the request already carries: a smaller caller budget is
+    respected, and requests without an output budget are untouched (a default
+    belongs in the router's default_litellm_params). Applies to the OpenAI token
+    budget fields so provider translation can normalize it afterwards.
+    """
+    dep_params_raw: Final[object] = deployment.get("litellm_params", {}) or {}
+    deployment_params: Final = (
+        dep_params_raw if isinstance(dep_params_raw, Mapping) else dep_params_raw.model_dump(exclude_none=True)
+    )
+    cap: Final[object] = deployment_params.get("max_output_tokens_cap")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+        return
+    for name in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+        requested = kwargs.get(name)
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            continue
+        if requested > cap:
+            kwargs[name] = cap  # rebind-ok: the clamped budget rides the request kwargs to the provider call
+
+
 def update_kwargs_with_deployment(
     shaping: Shaping,
     deployment: Mapping[str, object],
@@ -528,6 +556,7 @@ def update_kwargs_with_deployment(
             STREAM_USAGE_INJECTED_FIELD
         ] = True
     update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name)
+    apply_max_output_tokens_cap_to_request(deployment=deployment, kwargs=kwargs)
     pinned_model_id: Final = deployment_model_id_pin(deployment_params)
     if pinned_model_id is not None:
         kwargs["model_id"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
