@@ -1,17 +1,24 @@
 import asyncio
+import ipaddress
 import json
-from collections.abc import Callable, Mapping
+import ssl
+import threading
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Final
 
 import httpx
 import jwt
 import pytest
 import respx
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 import litellm
 from litellm.exceptions import AuthenticationError, BadRequestError, RateLimitError, ServiceUnavailableError
@@ -603,6 +610,59 @@ def test_network_failure_does_not_expose_jwt(private_key: str) -> None:
         auth.resolve(_CONFIG)
     assert "Bearer" not in str(error.value)
     assert error.value.__context__ is None
+
+
+class _CreatedHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.send_response(201)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def private_ca_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now: Final = datetime.now(timezone.utc)
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    ca_file: Final = tmp_path / "ca.pem"
+    ca_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file: Final = tmp_path / "key.pem"
+    key_file.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(ca_file, key_file)
+    server: Final = HTTPServer(("127.0.0.1", 0), _CreatedHandler)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"https://127.0.0.1:{server.server_port}/app/installations/123/access_tokens", ca_file
+    server.shutdown()
+    server.server_close()
+
+
+def test_installation_token_requests_trust_the_configured_ca_bundle(
+    private_ca_server: tuple[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, ca_file = private_ca_server
+    monkeypatch.setenv("SSL_VERIFY", str(ca_file))
+    with app_auth._new_client() as client:
+        assert client.post(url).status_code == 201
 
 
 @pytest.mark.parametrize("is_app", [False, True])

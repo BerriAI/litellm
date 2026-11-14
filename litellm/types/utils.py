@@ -4591,7 +4591,9 @@ server_owned_wif_litellm_params: Final = (
     + github_copilot_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
-secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+secret_bearing_wif_litellm_params: Final = tuple(
+    sorted(WIF_SECRET_BEARING_KEYS | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key"})
+)
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,

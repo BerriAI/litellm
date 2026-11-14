@@ -14,6 +14,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr, Validation
 
 from litellm.exceptions import AuthenticationError, BadRequestError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.secret_managers.main import get_secret_str
 
 from .github_host import github_host_endpoints, normalized_github_host
@@ -170,7 +171,7 @@ def _raise_failure(failure: _Failure, now: float) -> NoReturn:
 
 
 def _new_client() -> httpx.Client:
-    return httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False)
+    return httpx.Client(timeout=httpx.Timeout(15, connect=5), follow_redirects=False, verify=get_ssl_configuration())
 
 
 class AppTokenManager:
