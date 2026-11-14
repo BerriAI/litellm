@@ -164,6 +164,7 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -903,7 +904,7 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
     http_method: Final = request.method if hasattr(request, "method") else None
     is_post_method: Final = http_method and http_method.upper() == "POST"
-    is_openai_route: Final = RouteChecks.is_llm_api_route(route=route)
+    is_openai_route: Final = RouteChecks.runs_inference_checks(route=route)
     is_mcp_route: Final = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
         route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
     )
@@ -930,7 +931,7 @@ def _reject_clientside_metadata_tags_check(
             and "tags" in request_body["metadata"]
         )
     )
-    if RouteChecks.is_llm_api_route(route=route) and has_client_tags:
+    if RouteChecks.runs_inference_checks(route=route) and has_client_tags:
         raise ProxyException(
             message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via key or team metadata, or by configured request_tag_mappings.",
             type=ProxyErrorTypes.bad_request_error,
@@ -944,7 +945,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         litellm.max_budget > 0
         and not skip_budget_checks
         and global_proxy_spend is not None
-        and RouteChecks.is_llm_api_route(route=route)
+        and RouteChecks.runs_inference_checks(route=route)
         and route not in MODEL_LIST_ROUTES
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
@@ -1128,7 +1129,7 @@ def route_skips_budget_checks(route: str) -> bool:
         return False
     if route in MODEL_DISCOVERY_ROUTES:
         return True
-    if RouteChecks.is_llm_api_route(route=route):
+    if RouteChecks.runs_inference_checks(route=route):
         return False
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import the auth stack
         InitPassThroughEndpointHelpers,
@@ -1229,7 +1230,7 @@ async def common_checks(
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
-        if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
+        if litellm.block_requests_for_models_without_pricing and RouteChecks.runs_inference_checks(route=route)
         else ()
     )
     if unpriced_models:
@@ -1321,7 +1322,7 @@ async def common_checks(
         team_object is not None
         and _team_metadata_requires_trace_id(team_object)
         and request.method not in ("GET", "HEAD", "OPTIONS")
-        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
+        and (RouteChecks.runs_inference_checks(route) or pass_through_route)
         and not RouteChecks.check_route_access(
             route=route,
             allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,
@@ -1456,10 +1457,14 @@ async def common_checks(
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
-            if user_object is None or user_object.max_budget is None:
+            if user_object is None:
                 return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
             if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+                return
+
+            await _user_multi_budget_check(user_object)
+            if user_object.max_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
@@ -3115,8 +3120,9 @@ async def get_user_object(
                     add_new_user_to_default_team,
                     check_if_default_team_set,
                 )
+                from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
-                default_params: Final = litellm.default_internal_user_params or {}
+                default_params: Final[Mapping[str, object]] = litellm.default_internal_user_params or {}
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
@@ -3124,6 +3130,11 @@ async def get_user_object(
                     "user_id": user_id,
                     **({"user_email": user_email} if user_email is not None else {}),
                     **scalar_default_params,
+                    **(
+                        {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
+                        if "budget_limits" in scalar_default_params
+                        else {}
+                    ),
                 }
                 if (
                     new_user_params.get("budget_duration") is not None
@@ -7552,6 +7563,37 @@ async def team_max_budget_check(
 
 
 _team_max_budget_check: Final = team_max_budget_check
+
+
+async def _user_multi_budget_check(user_object: LiteLLM_UserTable | None) -> None:
+    if user_object is None or not user_object.budget_limits:
+        return
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in user_object.budget_limits:
+        if (
+            spend := await get_current_spend(
+                counter_key=user_window_counter(user_object.user_id, window.budget_duration),
+                fallback_spend=0.0,
+                max_budget=window.max_budget,
+                window_entity_type="User",
+                window_entity_id=user_object.user_id,
+                window_duration=window.budget_duration,
+                window_start=get_budget_window_start(window),
+            )
+        ) < window.max_budget:
+            continue
+        if math.isfinite(window.max_budget) and spend >= window.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=spend,
+                max_budget=window.max_budget,
+                message=(
+                    f"ExceededBudget: User={user_object.user_id} over {window.budget_duration} budget. "
+                    f"Spend=${spend:.4f}, Limit=${window.max_budget:.2f}"
+                ),
+                entity_type=Litellm_EntityType.USER.value,
+                entity_id=user_object.user_id,
+            )
 
 
 async def _team_multi_budget_check(

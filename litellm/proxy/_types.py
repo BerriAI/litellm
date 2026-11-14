@@ -15,9 +15,14 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     NonNegativeInt,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
     field_validator,
     model_validator,
 )
@@ -25,6 +30,7 @@ from typing_extensions import (
     NotRequired,
     ReadOnly,
     Required,
+    Self,
     TypedDict,
 )
 
@@ -3357,6 +3363,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     metadata: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -3514,6 +3521,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+    _sent_metadata: bool = PrivateAttr(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -3528,6 +3536,18 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_whether_metadata_was_sent(cls, values: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        sent_metadata: Final = not isinstance(values, Mapping) or "metadata" in values
+        request: Final = handler(values)
+        request._sent_metadata = sent_metadata
+        return request
+
+    @property
+    def sent_metadata(self) -> bool:
+        return self._sent_metadata
 
 
 class DeleteProjectRequest(LiteLLMPydanticObjectBase):
@@ -3616,6 +3636,13 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
     response: list[LiteLLM_SpendLogs | Any] | None = None
 
 
+def _none_when_invalid(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
@@ -3630,10 +3657,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
 
     tools: list[dict] | None = None
+    tool_choice: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
+    additional_drop_params: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     system: Any | None = None
     thinking: JsonValue = None
     reasoning_effort: JsonValue = None
-    tool_choice: JsonValue = None
     parallel_tool_calls: JsonValue = None
     response_format: JsonValue = None
     web_search_options: JsonValue = None

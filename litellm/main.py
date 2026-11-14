@@ -237,6 +237,7 @@ from litellm.utils import (
 from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
@@ -2841,11 +2842,6 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
-    outbound_headers: Final = (
-        headers
-        if provider_config is None
-        else with_attribution_headers(provider_config.get_attribution_headers(), headers)
-    )
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -2862,13 +2858,27 @@ def _complete_custom_openai(
         copilot_headers: Final = get_copilot_default_headers(
             user_session.token if user_session is not None else Authenticator().get_api_key()
         )
+        is_app_session: Final = user_session is not None and user_session.is_app
+        if headers and is_app_session:
+            copilot_headers.update(
+                cast("dict[str, str]", headers)  # cast-ok: HTTP request headers have string names and values
+            )
         if extra_headers:
             copilot_headers.update(
                 cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
             )
         if user_session is not None:
-            pin_session_authorization(copilot_headers, user_session.token)
+            pin_session_authorization(copilot_headers, user_session.token, user_session.integration_id)
         extra_headers = copilot_headers
+        if is_app_session:
+            headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
+
+    request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    outbound_headers: Final = (
+        request_headers
+        if provider_config is None
+        else with_attribution_headers(provider_config.get_attribution_headers(), request_headers)
+    )
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 
@@ -6097,7 +6107,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
@@ -6318,6 +6328,9 @@ def completion(
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
+                    "github_copilot_app_id",
+                    "github_copilot_app_installation_id",
+                    "github_copilot_app_private_key_ref",
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
@@ -6915,6 +6928,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base", None),
+            litellm_params=GenericLiteLLMParams(**kwargs),  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the existing untyped SDK boundary
         )
 
         # Await normally
@@ -8449,7 +8463,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 

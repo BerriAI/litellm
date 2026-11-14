@@ -14,7 +14,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError, openai_organization_header
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
@@ -78,7 +78,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
-            headers: Final = self.get_required_headers(api_key, organization)
+            headers: Final = {**self.get_required_headers(api_key), **openai_organization_header({}, organization)}
 
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
 
