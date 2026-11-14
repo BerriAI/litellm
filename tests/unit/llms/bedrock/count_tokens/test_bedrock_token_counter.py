@@ -386,6 +386,35 @@ async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_para
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_to_use", "runtime", "posted_hosts"),
+    (
+        ("bedrock_mantle/anthropic.claude-opus-5-5", (200, {"inputTokens": 1}), (MANTLE_HOST,)),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST)),
+    ),
+)
+async def test_messages_count_options_reach_the_mantle_count(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]], posted_hosts: tuple[str, ...]
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 433}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 433)
+    assert bedrock.posted_hosts() == posted_hosts
+    assert _JSON_BODY.validate_json(bedrock.requests[-1].content)["tool_choice"] == {"type": "any"}
+
+
+@pytest.mark.asyncio
 async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sends() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
     schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}

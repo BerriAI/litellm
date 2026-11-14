@@ -11,6 +11,7 @@ from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Final,
     Protocol,
     TypeAlias,
@@ -20,14 +21,16 @@ from typing import (
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_values
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_blocks,
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
     carries_signed_compaction_block,
     context_management_betas,
     context_management_with_edits,
@@ -38,9 +41,16 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
+_DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
@@ -391,6 +401,75 @@ def anthropic_fields_for_chat_tool_use(
     )
 
 
+def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
+    from litellm.utils import get_model_info
+
+    try:
+        max_output_tokens: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+            "max_output_tokens"
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises a plain Exception for a model the cost map lacks
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    return (
+        max_output_tokens
+        if isinstance(max_output_tokens, int) and max_output_tokens > 0
+        else DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    )
+
+
+def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
+    return _COUNT_REQUEST.validate_python(
+        delete_nested_values(
+            options,
+            (
+                path
+                for path in _DROPPED_PATHS.validate_python(
+                    additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
+                )
+                if isinstance(path, str)
+            ),
+        )
+    )
+
+
+def messages_count_options(
+    translator: "AnthropicMessagesConfig",
+    model: str,
+    messages: Sequence[Mapping[str, JsonValue]],
+    options: Mapping[str, JsonValue],
+    litellm_params: Mapping[str, object],
+) -> Mapping[str, JsonValue] | ChatCountTranslationError:
+    """The thinking, tool_choice, and output_config the deployment's /v1/messages transform sends upstream
+    for these Anthropic Messages body options. The transform needs max_tokens, which a count request lacks,
+    so it gets the model's max output tokens: a thinking budget's size never changes a count, only whether
+    thinking stays on."""
+    if not options:
+        return MappingProxyType({})
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    kept_options: Final = without_dropped_paths(options, litellm_params.get("additional_drop_params"))
+    thinking_betas: Final = AnthropicModelInfo().thinking_betas(kept_options.get("thinking"))
+    try:
+        request: Final = _TRANSFORMED_REQUEST.validate_python(
+            translator.transform_anthropic_messages_request(
+                model=model,
+                messages=_COUNTED_MESSAGES.validate_python(messages),
+                anthropic_messages_optional_request_params={
+                    **kept_options,
+                    "max_tokens": _max_output_tokens(model, translator.custom_llm_provider),
+                },
+                litellm_params=GenericLiteLLMParams.model_validate({"drop_params": litellm_params.get("drop_params")}),
+                headers={"anthropic-beta": ",".join(thinking_betas)} if thinking_betas else {},
+            )
+        )
+    except (AnthropicError, BadRequestError) as e:
+        return ChatCountTranslationError(message=str(e.message))
+    return _COUNT_REQUEST.validate_python(
+        {name: request[name] for name in COUNT_TOKEN_OPTION_NAMES if request.get(name) is not None}
+    )
+
+
 async def anthropic_count_fields(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -492,6 +571,7 @@ class AnthropicCountTokensConfig:
         auth_header: Mapping[str, str],
         messages: Sequence[Mapping[str, JsonValue]],
         context_management: JsonValue = None,
+        thinking: JsonValue = None,
     ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
@@ -508,6 +588,7 @@ class AnthropicCountTokensConfig:
             ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
             *compaction_betas,
             *context_management_betas(context_management),
+            *AnthropicModelInfo().thinking_betas(thinking),
         )
         return {
             "Content-Type": "application/json",
