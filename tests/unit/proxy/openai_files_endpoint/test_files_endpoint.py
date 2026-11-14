@@ -5016,7 +5016,7 @@ class _ManagedFileTableOverRows:
     async def find_first(self, where):
         return next(iter(self._owned_rows(where)), None)
 
-    async def delete(self, where):
+    async def delete(self, where: dict[str, str]) -> object:
         deleted_row: Final = await self.find_first(where)
         self.rows = [row for row in self.rows if row is not deleted_row]
         return deleted_row
