@@ -572,7 +572,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(

@@ -6,12 +6,10 @@ import json
 import logging
 import os
 import re
-import socket
-import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -19,9 +17,6 @@ from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-
-import click
 import fastapi.routing
 import httpx
 import pytest
@@ -34,12 +29,16 @@ from starlette.datastructures import URL
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
-from litellm._internal_context import current_service_target
 from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    ModelCostMapReloadResult,
+    install_model_cost_map,
+)
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -51,16 +50,17 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendUpdateQueue
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
-from litellm.utils import _invalidate_model_cost_lowercase_map
-from litellm.proxy.common_utils.banner import LITELLM_BANNER
-from tests._master_key import MASTER_KEY
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
+from tests._master_key import MASTER_KEY
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -919,6 +919,51 @@ async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_depl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("proxy_batch_write_at", [10, 60])
+async def test_committed_spend_twins_outlive_the_slowest_spend_write_to_the_db(
+    monkeypatch: pytest.MonkeyPatch, proxy_batch_write_at: int
+) -> None:
+    """A twin that expires before its charges reach the DB seeds again from a total still missing them."""
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.constants import SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS
+    from litellm.proxy.proxy_server import _BATCH_WRITE_JITTER_MAX_SECONDS, ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters()
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    scheduler: Final = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+            patch("litellm.proxy.proxy_server.spend_counter_store", spend.store()),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=MagicMock(),
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=proxy_batch_write_at,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+    finally:
+        scheduler.shutdown(wait=False)
+
+    slowest_db_write: Final = (
+        SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS + proxy_batch_write_at + _BATCH_WRITE_JITTER_MAX_SECONDS
+    )
+    assert spend.committed_ttl is not None
+    assert spend.committed_ttl >= slowest_db_write
+
+
+@pytest.mark.asyncio
 async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
     """
     Regression (LIT-4882): reload schedules configured from the Admin UI live in the DB and
@@ -1003,43 +1048,6 @@ async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_
                 proxy_logging_obj=mock_proxy_logging,
             )
             assert scheduler.get_job("spend_log_cleanup_job") is not None, "DB-only retention was not scheduled at boot"
-    finally:
-        scheduler.shutdown(wait=False)
-
-
-@pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_does_not_fall_back_to_the_interval_for_a_non_string_cron(monkeypatch):
-    """A truthy non-string cron is invalid, so startup must log it and register no cleanup job
-    rather than silently pruning on the default interval the admin never configured."""
-    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
-    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    from litellm.proxy.proxy_server import ProxyStartupEvent
-    from litellm.proxy.utils import ProxyLogging
-
-    mock_prisma_client = MagicMock()
-    mock_proxy_logging = MagicMock(spec=ProxyLogging)
-    mock_proxy_logging.slack_alerting_instance = MagicMock()
-    mock_proxy_logging.db_spend_update_writer = MagicMock()
-    settings = {"maximum_daily_tag_spend_retention_period": "30d", "maximum_spend_logs_cleanup_cron": 5}
-    scheduler = AsyncIOScheduler()
-    try:
-        with (
-            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
-            patch("litellm.proxy.proxy_server.store_model_in_db", False),
-            patch("litellm.proxy.proxy_server.general_settings", settings),
-            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
-        ):
-            await ProxyStartupEvent.initialize_scheduled_background_jobs(
-                general_settings=settings,
-                prisma_client=mock_prisma_client,
-                proxy_budget_rescheduler_min_time=1,
-                proxy_budget_rescheduler_max_time=2,
-                proxy_batch_write_at=5,
-                proxy_logging_obj=mock_proxy_logging,
-            )
-            assert scheduler.get_job("spend_log_cleanup_job") is None, "invalid cron fell back to the interval"
     finally:
         scheduler.shutdown(wait=False)
 
@@ -1656,6 +1664,7 @@ class MockPrisma:
         self.database_url = database_url
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
+        self.writer_db = MagicMock()
 
     async def connect(self):
         pass
@@ -1706,7 +1715,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(test_config, f)
 
-    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
+    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {config_path!s}")
     # Second setting of CONFIG_FILE_PATH to a different value
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     print(f"config_path: {config_path}")
@@ -1725,7 +1734,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         yaml.dump(empty_config, f)
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
-    print("test_env_master_key: {}".format(test_env_master_key))
+    print(f"test_env_master_key: {test_env_master_key}")
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
@@ -1955,10 +1964,10 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
+
 @pytest.mark.asyncio
 async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
     from fastapi import FastAPI
-
 
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
@@ -2048,7 +2057,7 @@ def test_team_info_masking():
             all_teams_config=[team1_info],
         )
 
-    print("Got exception: {}".format(exc_info.value))
+    print(f"Got exception: {exc_info.value}")
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
 
@@ -2060,7 +2069,6 @@ async def test_get_all_team_models():
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import get_all_team_models
 
     # Mock team data
@@ -4042,7 +4050,7 @@ async def test_load_config_warns_per_worker_login_counters_without_general_setti
     Redis must hear that its counters are per worker even when the config has no general_settings."""
     import logging
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4202,7 +4210,6 @@ async def test_load_environment_variables_blocks_dangerous_keys():
     Test that _load_environment_variables rejects dangerous env var keys
     like PATH, LD_PRELOAD, PYTHONPATH, etc.
     """
-    import logging
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4284,7 +4291,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4332,7 +4339,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4429,7 +4436,7 @@ async def test_async_data_generator_midstream_error():
         try:
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
-        except Exception as e:
+        except Exception:
             # If there's an exception, that's also part of what we want to test
             pass
 
@@ -4656,7 +4663,9 @@ class TestPriceDataReloadAPI:
             with patch(
                 "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
                 new=AsyncMock(
-                    return_value=ModelCostMapReloaded(model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}})
+                    return_value=ModelCostMapReloaded(
+                        model_count=1
+                    )
                 ),
             ):
                 # Mock the database connection
@@ -4678,8 +4687,7 @@ class TestPriceDataReloadAPI:
                     assert data["models_count"] == 1
         finally:
             # Restore the full model cost map so subsequent tests are not affected
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_reload_model_cost_map_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot access the reload endpoint"""
@@ -4912,22 +4920,13 @@ class TestPriceDataReloadIntegration:
 
     def test_complete_reload_flow(self, client_with_auth):
         """Test the complete reload flow from API to model cost update"""
-        # Mock the model cost map
-        mock_cost_map = {
-            "gpt-3.5-turbo": {
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-            },
-            "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
-        }
-
         from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
                 "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=mock_cost_map)),
+                new=AsyncMock(return_value=ModelCostMapReloaded(model_count=2)),
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -4943,8 +4942,7 @@ class TestPriceDataReloadIntegration:
                     response = client_with_auth.get("/public/litellm_model_cost_map")
                     assert response.status_code == 200
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_pod_data_clock_seeded_from_actual_cost_map_load(self):
         """Regression: seeding from ProxyConfig construction time instead of the real
@@ -5001,12 +4999,11 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+                    model_count=1
                 )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
-                assert litellm.model_cost["gpt-3.5-turbo"] == {"input_cost_per_token": 0.001}
                 assert proxy_config.model_cost_map_loaded_at == frozen_now
                 assert mock_prisma.db.litellm_config.update_many.call_args[1] == {
                     "data": {"last_run_at": frozen_now},
@@ -5015,8 +5012,7 @@ class TestPriceDataReloadIntegration:
                 mock_prisma.db.litellm_config.upsert.assert_not_called()
                 assert proxy_config.model_cost_map_applied_revision == 4
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_distributed_reload_ignores_already_applied_request(self):
         """
@@ -5054,8 +5050,7 @@ class TestPriceDataReloadIntegration:
                 mock_prisma.db.litellm_config.update_many.assert_not_called()
                 assert proxy_config.model_cost_map_loaded_at == pod_data_loaded_at
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_periodic_reload_uses_pod_local_data_age(self):
         """
@@ -5086,12 +5081,11 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4-test": {"input_cost_per_token": 0.5}}
+                    model_count=1
                 )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
-                assert litellm.model_cost["gpt-4-test"] == {"input_cost_per_token": 0.5}
                 assert proxy_config.model_cost_map_loaded_at == frozen_now
                 assert mock_prisma.db.litellm_config.update_many.call_args[1]["data"] == {"last_run_at": frozen_now}
 
@@ -5105,8 +5099,7 @@ class TestPriceDataReloadIntegration:
                 mock_prisma.db.litellm_config.update_many.assert_not_called()
                 assert proxy_config.model_cost_map_loaded_at == frozen_now - timedelta(hours=1)
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_every_pod_applies_a_manual_revision_exactly_once(self):
         """The fleet property: no pod clears the revision, so each one reloads on the tick
@@ -5131,7 +5124,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    model_count=1
                 )
 
                 for _ in range(3):
@@ -5141,8 +5134,7 @@ class TestPriceDataReloadIntegration:
                 assert mock_get_map.call_count == len(pods)
                 assert all(p.model_cost_map_applied_revision == 1 for p in pods)
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     @pytest.mark.parametrize(
         "published_revision, expect_reload",
@@ -5175,7 +5167,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    model_count=1
                 )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -5184,8 +5176,7 @@ class TestPriceDataReloadIntegration:
                 assert mock_get_map.call_count == (1 if expect_reload else 0)
                 assert proxy_config.model_cost_map_applied_revision == published_revision
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_distributed_reload_stamps_last_run_without_creating_row(self):
         """
@@ -5211,7 +5202,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    model_count=1
                 )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -5223,8 +5214,7 @@ class TestPriceDataReloadIntegration:
                 mock_prisma.db.litellm_config.upsert.assert_not_called()
                 mock_prisma.db.litellm_config.create.assert_not_called()
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_distributed_reload_leaves_request_unserved_when_status_write_fails(self):
         """
@@ -5253,15 +5243,14 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.1}}
+                    model_count=1
                 )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
                 assert proxy_config.model_cost_map_applied_revision == 0
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_distributed_reload_keeps_current_map_when_fetch_fails(self):
         """Fetch failure during a periodic reload must not downgrade the pod or count the
@@ -5317,8 +5306,6 @@ class TestPriceDataReloadIntegration:
         The swap happens early in the handler, so a failure in the bookkeeping
         after it is swallowed by the surrounding except and would otherwise
         leave the metadata correct while the path is quietly broken"""
-        from litellm import utils as litellm_utils
-        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
@@ -5331,20 +5318,18 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
             )
 
+            async def reload_the_bundled_document(url: str) -> ModelCostMapReloadResult:
+                return install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes())
+
             with (
                 patch(
                     "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                    new=AsyncMock(
-                        return_value=ModelCostMapReloaded(
-                            model_cost_map={"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
-                        )
-                    ),
+                    new=reload_the_bundled_document,
                 ),
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
                 patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
@@ -5352,39 +5337,29 @@ class TestPriceDataReloadIntegration:
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
             mock_logger.exception.assert_not_called()
+            assert litellm.model_cost is not original_model_cost
             assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
             assert "gpt-4o" in litellm.model_cost
             assert proxy_config.model_cost_map_applied_revision == 7
         finally:
-            litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
-    def test_swap_in_model_cost_map_counts_the_fetched_catalog_only(self):
-        """The count the reload endpoints report describes the price data, so it
-        is taken before the runtime registrations are written back into the same
-        dict. Counting after would inflate it by however many deployments and
-        overrides this pod happens to be carrying"""
-        from litellm import utils as litellm_utils
-        from litellm.proxy.proxy_server import _swap_in_model_cost_map
-
+    def test_install_counts_the_fetched_catalog_only(self):
+        """The count the reload endpoints report describes the price data, so the
+        runtime registrations written back into the same dict are not counted.
+        Counting them would inflate it by however many deployments and overrides
+        this pod happens to be carrying"""
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
             )
+            reloaded = install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes())
 
-            models_count = _swap_in_model_cost_map({"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
-
-            assert models_count == 1
+            assert reloaded == ModelCostMapReloaded(model_count=len(litellm.model_cost) - 1)
             assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
         finally:
-            litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_manual_reload_preserves_interval_hours(self, monkeypatch):
         """
@@ -5417,7 +5392,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
                 mock_get_map.return_value = ModelCostMapReloaded(
-                    model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    model_count=1
                 )
                 mock_prisma.db.litellm_config.upsert = AsyncMock(
                     return_value=_reload_schedule_row({}, reload_revision=9)
@@ -5442,8 +5417,7 @@ class TestPriceDataReloadIntegration:
                     "the serving pod must adopt the revision it published, not reload again"
                 )
         finally:
-            litellm.model_cost = original_model_cost
-            _invalidate_model_cost_lowercase_map()
+            publish(original_model_cost)
 
     def test_anthropic_beta_headers_reload_preserves_interval_hours(self):
         """Test that _check_and_reload_anthropic_beta_headers preserves interval_hours after reload.
@@ -5564,7 +5538,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     This tests how router settings from config file and database are combined,
     including scenarios where nested dictionaries should be properly merged.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -5696,15 +5670,27 @@ def _content_policy_router(**router_kwargs: object) -> litellm.Router:
         model_list=[
             {
                 "model_name": "primary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "primary answered",
+                },
             },
             {
                 "model_name": "secondary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "secondary answered",
+                },
             },
             {
                 "model_name": "backup",
-                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake",
+                    "mock_response": "backup answered",
+                },
             },
         ],
         num_retries=0,
@@ -5784,7 +5770,9 @@ async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules
     "invalid_rule",
     [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
 )
-async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(
+    monkeypatch: pytest.MonkeyPatch, invalid_rule: object
+):
     monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
     router: Final = _content_policy_router()
 
@@ -6722,7 +6710,7 @@ async def test_init_sso_settings_in_db_error_handling():
     """
     Test that _init_sso_settings_in_db handles database errors gracefully.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6852,7 +6840,6 @@ async def test_init_hashicorp_vault_config_override_retries_on_transport_error()
         invocations.append(None)
         if len(invocations) == 1:
             raise prisma.errors.ClientNotConnectedError()
-        return None  # No config in DB → function returns early after retry.
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(side_effect=_flaky_find_unique)
@@ -7000,9 +6987,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     routes_to_remove = []
     for route in app.routes:
         if hasattr(route, "path") and route.path == "/":
-            if hasattr(route, "methods") and "GET" in route.methods:
-                routes_to_remove.append(route)
-            elif not hasattr(route, "methods"):  # Catch-all routes
+            if hasattr(route, "methods") and "GET" in route.methods or not hasattr(route, "methods"):
                 routes_to_remove.append(route)
 
     for route in routes_to_remove:
@@ -7538,6 +7523,89 @@ async def test_async_data_generator_cleanup_on_early_exit():
 
     # Verify aclose was called on the response to release the HTTP connection
     mock_response.aclose.assert_awaited_once()
+
+
+class _FakeClock:
+    """Hand-advanced stand-in for time.perf_counter, so the hook's cost is exact and no real time passes."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimeWithFakeClock:
+    """The module's `time` with perf_counter swapped for the fake clock, everything else untouched."""
+
+    def __init__(self, clock: _FakeClock) -> None:
+        self.perf_counter = clock
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_records_first_chunk_work_on_the_logging_object(monkeypatch: pytest.MonkeyPatch):
+    """The overhead header is stamped before any chunk is read, so the time the proxy spends in the
+    hook on the first chunk of a chat stream is recorded on the logging object for the success callback.
+    Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
+    import litellm.proxy.common_request_processing as common_request_processing_module
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    clock: Final = _FakeClock()
+    monkeypatch.setattr(proxy_server_module, "time", _TimeWithFakeClock(clock))
+    monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
+
+    class _SlowStreamingCb(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: object) -> object:
+            clock.advance(0.02)
+            return response
+
+    monkeypatch.setattr(litellm, "callbacks", [_SlowStreamingCb()])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    logging_obj = Logging(
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="call-stream",
+        function_id="fn",
+    )
+    request_data = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "test"}],
+        "litellm_logging_obj": logging_obj,
+    }
+    chunks = [
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(content=word))])
+        for word in ("Hello", " world", " more")
+    ]
+
+    async def provider_stream() -> AsyncIterator[object]:
+        for chunk in chunks:
+            yield chunk
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock())):
+        yielded = [
+            data async for data in async_data_generator(provider_stream(), MagicMock(spec=UserAPIKeyAuth), request_data)
+        ]
+
+    ProxyLogging._callback_capabilities_cache.clear()
+    assert len(yielded) == len(chunks) + 1
+    assert yielded[-1] == "data: [DONE]\n\n"
+    assert logging_obj.first_chunk_overhead_ms == pytest.approx(20.0)
 
 
 def _guarded_chain_logging(chain):
@@ -9755,7 +9823,7 @@ async def test_reseed_locks_dict_is_bounded():
     long-lived deployments with high counter-key churn. Inserting more
     than the cap evicts the oldest entries.
     """
-    import litellm.constants as constants
+    from litellm import constants
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     orig_locks = SpendCounterReseed._locks.copy()
@@ -13865,12 +13933,13 @@ async def _drain(queue):
 
 
 @pytest.mark.asyncio
-async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+@pytest.mark.parametrize("duration", ("30d", "12mo"))
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: str):
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    reset_at: Final = datetime(2029, 1, 1, tzinfo=timezone.utc)
     key_obj = MagicMock()
-    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    key_obj.budget_limits = [{"budget_duration": duration, "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
 
     with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
@@ -13879,9 +13948,10 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
     assert len(enqueued) == 1
     assert enqueued[0]["entity_type"] == "key"
     assert enqueued[0]["entity_id"] == "hashed-token"
-    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
+    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
         tzinfo=None
     ).isoformat(timespec="microseconds")
 
@@ -15664,7 +15734,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     warm_tokenizer("claude-fable-5")
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+        lambda: proxy_server_module.count_request_tokens(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
     )
 
     assert response.total_tokens > 0
@@ -15705,7 +15775,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
-        response: Final = await proxy_server_module.token_counter(
+        response: Final = await proxy_server_module.count_request_tokens(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
         assert loader_threads.get_nowait() is not loop_thread
@@ -15746,7 +15816,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
         responses: Final = [
-            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted", prompt="count me once"))
             for _ in range(3)
         ]
         assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
@@ -15754,8 +15824,8 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
-        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
         assert from_pretrained.call_args_list == [
             mock.call("my-org/tokenizer", revision="main", token=None),
             mock.call("my-org/tokenizer", revision="v2", token=None),
