@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from functools import cache
 from typing import TYPE_CHECKING, ClassVar, Final
 
@@ -19,7 +19,15 @@ from litellm.constants import (
 from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.call import CallContext
+from litellm.integrations.custom_logger_v2.derivations import (
+    cold_storage_object_key,
+    log_id,
+    logged_key_identity,
+    mapping,
+    payload_copy,
+)
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
 from litellm.integrations.s3_v2 import S3Logger
@@ -142,6 +150,50 @@ async def _periodic_flush(sink: "NativeS3Log", interval: float) -> None:
             verbose_logger.exception("CustomLogger: periodic flush failed: %s", e)
 
 
+def _excluding_fields(kwargs: object) -> Mapping[str, object] | None:
+    excluded: Final[object] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
+    details: Final = mapping(kwargs)
+    logged: Final = None if details is None else mapping(details.get("standard_logging_object"))
+    if details is None or logged is None or not isinstance(excluded, Collection) or not excluded:
+        return None
+    if logged.get("status") == "failure":
+        return None
+    return {**details, "standard_logging_object": {key: value for key, value in logged.items() if key not in excluded}}
+
+
+def _logged_payload(kwargs: object, details: Mapping[str, object] | None) -> object:
+    source: Final = mapping(kwargs) if details is None else details
+    return None if source is None else source.get("standard_logging_object")
+
+
+def _legacy_kwargs(view: object) -> object:
+    return getattr(view, Field.deprecated_kwargs.value, None)
+
+
+_read_attribute: Final[Callable[[object, str], object]] = getattr
+
+
+class _ExcludedView:
+    def __init__(self, view: object, details: Mapping[str, object]) -> None:
+        args: Final = HookArgs(request=details)
+        self.view: Final = view
+        self.fields: Final[Mapping[str, object]] = {
+            Field.deprecated_kwargs.value: details,
+            Field.standard_logging_payload_ref.value: payload_copy(args),
+            Field.log_id.value: log_id(args),
+            Field.cold_storage_object_key.value: cold_storage_object_key(args),
+            Field.logged_key_identity.value: logged_key_identity(args),
+        }
+
+    def __getattr__(self, name: str) -> object:
+        if name not in self.fields:
+            return _read_attribute(self.view, name)
+        value: Final = self.fields[name]
+        if value is None:
+            raise AttributeError(name)
+        return value
+
+
 class S3LoggerV3(RustLogger):
     sink: ClassVar["NativeS3Log"]
     s3_host: ClassVar[_Host]
@@ -159,9 +211,12 @@ class S3LoggerV3(RustLogger):
         if payload is not None and not isinstance(payload, Mapping):
             return self._failed(AttributeError(f"'{type(payload).__name__}' object has no attribute 'get'"))  # pyright: ignore[reportUnknownArgumentType]  # any non-mapping payload
         try:
-            if self.sink.strip_base64_files and isinstance(payload, Mapping):
-                _STRIPPER.strip(payload)  # pyright: ignore[reportArgumentType]  # the shared StandardLoggingPayload, stripped in place as S3Logger does
-            return await super().run_rust(hook, reads, view, ctx)
+            raw: Final = _legacy_kwargs(view)
+            details: Final = _excluding_fields(raw)
+            logged: Final = _logged_payload(raw, details)
+            if self.sink.strip_base64_files and isinstance(logged, Mapping):
+                _STRIPPER.strip(logged)  # pyright: ignore[reportArgumentType]  # the shared StandardLoggingPayload, stripped in place as S3Logger does
+            return await super().run_rust(hook, reads, view if details is None else _ExcludedView(view, details), ctx)
         except Exception as e:  # noqa: BLE001  # S3Logger counts a failure to build the element and moves on
             return self._failed(e)
 

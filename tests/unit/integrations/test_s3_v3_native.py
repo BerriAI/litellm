@@ -77,8 +77,9 @@ def _golden_values() -> Iterator[Mapping[str, object]]:
     values: Final = {} if RECORDING else json.loads(GOLDEN_FILE.read_text(encoding="utf-8"))
     yield values
     if RECORDING:
+        kept: Final = json.loads(GOLDEN_FILE.read_text(encoding="utf-8")) if GOLDEN_FILE.exists() else {}
         GOLDEN_FILE.write_text(
-            json.dumps(_RECORDED, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps({**kept, **_RECORDED}, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
         )
 
 
@@ -1613,3 +1614,22 @@ async def test_a_falsy_alias_of_any_type_adds_no_prefix_like_python(
     await _flush(python_logger, rust_logger)
     _assert_same_puts(golden, buckets, 1)
     assert _put_paths(buckets[1]) == ["/logs/2026-11-13/time-09-05-07-000042_chatcmpl-1.json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_excluded_payload_fields_are_left_out_like_python(
+    golden: Golden, buckets: tuple[FakeBucket, FakeBucket], monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["response", "metadata", "messages"])
+    python_logger, rust_logger = await _loggers(monkeypatch, buckets, {"s3_use_team_prefix": True})
+    monkeypatch.setattr(litellm, "callbacks", [python_logger, rust_logger])
+    with pytest.raises(litellm.RateLimitError) if failed else nullcontext():
+        await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="litellm.RateLimitError" if failed else "hi there",
+            metadata={"user_api_key_team_alias": "team-a"},
+        )
+    await _settled(buckets, python_logger, rust_logger)
+    _assert_same_live_puts(golden, buckets, 1)
