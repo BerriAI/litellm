@@ -5953,27 +5953,70 @@ def test_delete_managed_file_ignores_a_model_routing_hint(
     assert stored_managed_file_table.rows == []
 
 
-@pytest.mark.parametrize(
-    ("method", "provider_body"),
-    [
-        (
-            "GET",
-            {
-                "id": _unified_managed_file_id(),
-                "object": "file",
-                "bytes": 27,
-                "created_at": 1234567890,
-                "filename": "hello.txt",
-                "purpose": "user_data",
-                "status": "processed",
-                "expires_at": None,
-                "status_details": None,
-            },
+def _retrieve_and_delete_provider_bodies(file_id: str) -> pytest.MarkDecorator:
+    return pytest.mark.parametrize(
+        ("method", "provider_body"),
+        [
+            (
+                "GET",
+                {
+                    "id": file_id,
+                    "object": "file",
+                    "bytes": 27,
+                    "created_at": 1234567890,
+                    "filename": "hello.txt",
+                    "purpose": "user_data",
+                    "status": "processed",
+                    "expires_at": None,
+                    "status_details": None,
+                },
+            ),
+            ("DELETE", {"id": file_id, "object": "file", "deleted": True}),
+        ],
+        ids=["retrieve", "delete"],
+    )
+
+
+@_retrieve_and_delete_provider_bodies("file-raw-xyz789")
+@_ROUTING_HINTS
+def test_raw_provider_file_id_still_goes_to_the_hinted_model_when_managed_files_are_on(
+    stored_managed_file_table: _ManagedFileTableOverRows,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    provider_body: dict[str, object],
+    routing_headers: dict[str, str],
+    routing_query: str,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "litellm_proxy/gpt-3.5-turbo",
+                        "api_key": "upstream-proxy-key",
+                        "api_base": "https://upstream-proxy.test",
+                    },
+                    "model_info": {"id": "upstream-gpt-3.5-turbo-id"},
+                }
+            ]
         ),
-        ("DELETE", {"id": _unified_managed_file_id(), "object": "file", "deleted": True}),
-    ],
-    ids=["retrieve", "delete"],
-)
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        provider_file: Final = upstream.route(
+            method=method, url__startswith="https://upstream-proxy.test/files/file-raw-xyz789"
+        ).mock(return_value=httpx.Response(status_code=200, json=provider_body))
+        response: Final = _call_managed_file_route(method, f"/v1/files/file-raw-xyz789{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == provider_body
+    assert provider_file.call_count == 1
+    assert provider_file.calls.last.request.headers["authorization"] == "Bearer upstream-proxy-key"
+
+
+@_retrieve_and_delete_provider_bodies(_unified_managed_file_id())
 @_ROUTING_HINTS
 def test_proxy_without_managed_files_forwards_a_managed_id_to_the_hinted_model(
     monkeypatch: pytest.MonkeyPatch,
