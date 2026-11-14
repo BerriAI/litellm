@@ -641,8 +641,6 @@ AZURE_STREAM_CUT_ERROR: Final = "Response payload is not completed"
 
 @pytest.fixture
 def azure_stream_cut(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
-    """Route gpt-5.4-mini (Azure chat) and gpt-3.5-turbo-instruct (Azure text) to an Azure endpoint
-    whose stream sends one chunk and then drops the connection."""
     import httpx
 
     import litellm
