@@ -9609,6 +9609,8 @@ class Router:
 
     @staticmethod
     def _cost_map_backend_model(deployment: Deployment) -> str:
+        from litellm.cost_calculator import cost_map_key_prices_anything
+
         model_info_base_model: Final = deployment.model_info.base_model
         if isinstance(model_info_base_model, str) and model_info_base_model:
             return model_info_base_model
@@ -9627,7 +9629,7 @@ class Router:
         ):
             profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
             profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-            if not isinstance(profile_info, ModelInfoLookupMiss):
+            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_prices_anything(profile_info["key"]):
                 return profile_model
         return deployment.litellm_params.model
 
