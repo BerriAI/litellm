@@ -139,7 +139,8 @@ def test_minimax_image_edit_sends_form_output_compression_as_a_number():
     assert sent["output_compression"] == 80
 
 
-def test_minimax_image_edit_refuses_stream_before_calling_minimax():
+@pytest.mark.parametrize("stream", [True, "true"])
+def test_minimax_image_edit_refuses_stream_before_calling_minimax(stream: bool | str):
     with respx.mock(assert_all_called=False) as router:
         route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
         with pytest.raises(UnsupportedParamsError) as error:
@@ -148,11 +149,27 @@ def test_minimax_image_edit_refuses_stream_before_calling_minimax():
                 image=PNG_BYTES,
                 prompt="make it night",
                 api_key="sk-fake",
-                stream=True,
+                stream=stream,
             )
 
     assert error.value.status_code == 400
     assert route.call_count == 0
+
+
+@pytest.mark.parametrize("stream", [False, "false"])
+def test_minimax_image_edit_accepts_stream_off(stream: bool | str):
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
+        litellm.image_edit(
+            model="minimax/MiniMax-H3-Image",
+            image=PNG_BYTES,
+            prompt="make it night",
+            api_key="sk-fake",
+            stream=stream,
+        )
+
+    assert route.call_count == 1
+    assert "stream" not in json.loads(route.calls.last.request.content)
 
 
 def test_minimax_image_edit_drops_stream_under_drop_params():

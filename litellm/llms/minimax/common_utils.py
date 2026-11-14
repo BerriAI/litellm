@@ -1,11 +1,25 @@
 from collections.abc import Mapping
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 
+_STREAM_FLAG: Final = TypeAdapter(bool)
+
+
+def _asks_to_stream(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        return _STREAM_FLAG.validate_python(value)
+    except ValidationError:
+        return True
+
 
 def image_params_without_stream(params: Mapping[str, object], drop_params: object) -> Mapping[str, object]:
-    if params.get("stream") and litellm.drop_params is not True and drop_params is not True:
+    if _asks_to_stream(params.get("stream")) and litellm.drop_params is not True and drop_params is not True:
         raise UnsupportedParamsError(
             status_code=400,
             message=(
