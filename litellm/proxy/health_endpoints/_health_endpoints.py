@@ -81,8 +81,14 @@ from litellm.proxy.db.health_check_latest import (
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
+    BILLED_MEDIA_NOT_CHECKED_WARNING,
+    DEPLOYMENTS_ADAPTER,
+    MODEL_IDS_ADAPTER,
     _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    all_bill_media_on_probe,
+    billed_media_model_ids,
+    bills_media_on_probe,
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -1428,6 +1434,24 @@ def _caller_may_probe_deployment(
     return reachable.include(deployment, team_id)
 
 
+async def _deployments_caller_may_see(
+    deployments: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> tuple[Mapping[str, object], ...]:
+    is_admin: Final = _is_proxy_admin(user_api_key_dict)
+    if is_admin and _key_models_unrestricted(user_api_key_dict):
+        return tuple(deployments)
+    reachable: Final = await _deployments_key_may_reach(
+        _OBJECTS.validate_python(deployments),
+        await _caller_aliases(user_api_key_dict),
+        user_api_key_dict,
+        await _key_owner(user_api_key_dict),
+        llm_router,
+    )
+    return tuple(
+        d for d in deployments if _caller_may_probe_deployment(d, reachable, user_api_key_dict.team_id, is_admin)
+    )
+
+
 def _resolve_targeted_model_ids(
     model_list: list, model: str | None, model_id: str | None, team_id: str | None
 ) -> set | None:
@@ -1454,7 +1478,10 @@ def _resolve_targeted_model_ids(
     }
 
 
-def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
+_ENDPOINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _filter_health_check_results_by_model_ids(results: Mapping[str, object], allowed_model_ids: set) -> dict:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
@@ -1467,11 +1494,49 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
     downstream transform (e.g. _strip_admin_only_fields_from_health_result)
     cannot accidentally mutate the shared ``health_check_results`` cache.
     """
-    healthy = [dict(ep) for ep in (results.get("healthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids]
+    healthy: Final = [
+        dict(ep)
+        for ep in _ENDPOINTS.validate_python(results.get("healthy_endpoints") or ())
+        if ep.get("model_id") in allowed_model_ids
+    ]
     unhealthy: Final = [
-        dict(ep) for ep in (results.get("unhealthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids
+        dict(ep)
+        for ep in _ENDPOINTS.validate_python(results.get("unhealthy_endpoints") or ())
+        if ep.get("model_id") in allowed_model_ids
     ]
     return {
+        "healthy_endpoints": healthy,
+        "unhealthy_endpoints": unhealthy,
+        "healthy_count": len(healthy),
+        "unhealthy_count": len(unhealthy),
+    }
+
+
+def _billed_media_skipped_result() -> Mapping[str, object]:
+    return {
+        "healthy_endpoints": [],
+        "unhealthy_endpoints": [],
+        "healthy_count": 0,
+        "unhealthy_count": 0,
+        "warnings": [BILLED_MEDIA_NOT_CHECKED_WARNING],
+    }
+
+
+def _without_model_ids(results: Mapping[str, object], model_ids: frozenset[str]) -> Mapping[str, object]:
+    if not model_ids:
+        return results
+    healthy: Final = [
+        ep
+        for ep in _ENDPOINTS.validate_python(results.get("healthy_endpoints") or ())
+        if ep.get("model_id") not in model_ids
+    ]
+    unhealthy: Final = [
+        ep
+        for ep in _ENDPOINTS.validate_python(results.get("unhealthy_endpoints") or ())
+        if ep.get("model_id") not in model_ids
+    ]
+    return {
+        **results,
         "healthy_endpoints": healthy,
         "unhealthy_endpoints": unhealthy,
         "healthy_count": len(healthy),
@@ -1583,8 +1648,11 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
 
-    To skip deployments that set ``model_info.disable_background_health_check: true``
-    on ``GET /health`` as well as in the background loop, set
+    Deployments whose check would generate billed media (image_generation, image_edit, video_generation,
+    and models priced per generated clip) are not checked here or by the background loop unless they set
+    ``model_info.disable_background_health_check: false``. A ``model`` or ``model_id`` that targets only
+    such deployments answers 200 with zero counts and a ``warnings`` entry. To also skip deployments that
+    set ``disable_background_health_check: true`` on ``GET /health``, set
     ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
@@ -1609,29 +1677,36 @@ async def health_endpoint(
     is_admin: Final = _is_proxy_admin(user_api_key_dict)
     model_specific_request: Final = bool(model or model_id)
 
-    def _post_process(result: dict) -> dict:
+    def _for_caller(result: Mapping[str, object]) -> Mapping[str, object]:
         # api_base / api_version reveal which provider/region/internal host the
         # deployment talks to; only proxy admins receive them. Non-admin keys
         # still see model/model_id and the healthy/unhealthy status. We also
         # set a header so non-admin clients that previously parsed those
         # fields can detect the change programmatically.
+        if is_admin:
+            return result
+        response.headers["Litellm-Health-Field-Notice"] = (
+            f"{', '.join(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)} are admin-only on this endpoint"
+        )
+        return _strip_admin_only_fields_from_health_result(dict(result))
+
+    def _post_process(result: dict) -> Mapping[str, object]:
         # When a caller asked about a specific model/model_id and zero
         # endpoints came back healthy, surface that as a 503 so monitoring
         # systems can rely on the HTTP status instead of having to parse the
         # body. The body shape is unchanged.
         if model_specific_request and result.get("healthy_count", 0) == 0:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        if is_admin:
-            return result
-        response.headers["Litellm-Health-Field-Notice"] = (
-            f"{', '.join(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)} are admin-only on this endpoint"
-        )
-        return _strip_admin_only_fields_from_health_result(result)
+        return _for_caller(result)
 
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
+                if await asyncio.to_thread(
+                    bills_media_on_probe, {"model_name": user_model, "litellm_params": {"model": user_model}}
+                ):
+                    return _for_caller(_billed_media_skipped_result())
                 cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
@@ -1692,7 +1767,20 @@ async def health_endpoint(
                     else f"key not allowed to health-check model {model}"
                 },
             )
+        deployments: Final = DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list)
+        probe_ids: Final = None if targeted_ids is None else MODEL_IDS_ADAPTER.validate_python(targeted_ids)
+        if probe_ids is not None and await asyncio.to_thread(
+            all_bill_media_on_probe, deployments, probe_ids, **_hc_filter
+        ):
+            return _for_caller(_billed_media_skipped_result())
+        not_checked_ids: Final = await asyncio.to_thread(billed_media_model_ids, deployments, probe_ids, **_hc_filter)
+        media_warning: Final = (
+            {"warnings": [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: {', '.join(not_checked_ids)}"]}
+            if not_checked_ids
+            else {}
+        )
         if use_background_health_checks:
+            cached_results: Final = _without_model_ids(health_check_results, frozenset(not_checked_ids))
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
             # cache to that deployment before _post_process evaluates
@@ -1709,7 +1797,7 @@ async def health_endpoint(
                 # model_names above, so targeted_ids is implicitly the
                 # intersection of "targeted" and "allowed."
                 filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
-                filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
+                filtered: Final = _filter_health_check_results_by_model_ids(cached_results, filter_ids)
                 if targeted_ids is None and _llm_model_list and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
@@ -1730,13 +1818,18 @@ async def health_endpoint(
                         "and were excluded from this response. Ask a proxy admin "
                         "to populate model_info.id for these models."
                     ]
-                return _post_process(filtered)
+                return _post_process({**filtered, **media_warning})
             if targeted_ids is not None:
                 # Admin caller targeting a specific model: filter the cache
                 # so the response (and the targeted-503 check) reflects only
                 # that deployment, not the global aggregate.
-                return _post_process(_filter_health_check_results_by_model_ids(health_check_results, targeted_ids))
-            return _post_process(health_check_results)
+                return _post_process(
+                    {
+                        **_filter_health_check_results_by_model_ids(cached_results, targeted_ids),
+                        **media_warning,
+                    }
+                )
+            return _post_process({**cached_results, **media_warning})
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
@@ -1753,7 +1846,7 @@ async def health_endpoint(
                 team_id=user_api_key_dict.team_id,
                 **_hc_filter,
             )
-            return _post_process(router_result)
+            return _post_process({**router_result, **media_warning})
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
@@ -1800,6 +1893,30 @@ async def health_check_history_endpoint(
         )
 
 
+def _latest_check_row(check: LatestHealthCheckRow, skipped_ids: frozenset[str]) -> Mapping[str, object]:
+    row: Final = convert_health_check_to_dict(check)
+    if check.model_id not in skipped_ids:
+        return row
+    return {**row, "status": "skipped", "error_message": BILLED_MEDIA_NOT_CHECKED_WARNING}
+
+
+def _never_checked_media_row(model_name: object, model_id: str) -> Mapping[str, object]:
+    return {
+        "health_check_id": None,
+        "model_name": model_name,
+        "model_id": model_id,
+        "status": "skipped",
+        "healthy_count": 0,
+        "unhealthy_count": 0,
+        "error_message": BILLED_MEDIA_NOT_CHECKED_WARNING,
+        "response_time_ms": None,
+        "details": None,
+        "checked_by": None,
+        "checked_at": None,
+        "created_at": None,
+    }
+
+
 @router.get("/health/latest", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def latest_health_checks_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1809,15 +1926,31 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
+    from litellm.proxy.proxy_server import llm_model_list, llm_router
+
     prisma_client: Final = _check_prisma_client()
 
     try:
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        deployments: Final = DEPLOYMENTS_ADAPTER.validate_python(llm_model_list or ())
+        skipped_ids: Final = frozenset(await asyncio.to_thread(billed_media_model_ids, deployments))
+        visible_names_by_id: Final = {
+            str(info["id"]): d.get("model_name")
+            for d in await _deployments_caller_may_see(deployments, user_api_key_dict, llm_router)
+            if isinstance(info := d.get("model_info"), Mapping) and info.get("id")
+        }
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
-            for check in latest_checks
+            **{
+                model_id: _never_checked_media_row(visible_names_by_id[model_id], model_id)
+                for model_id in skipped_ids
+                if model_id in visible_names_by_id
+            },
+            **{
+                (check.model_id if check.model_id else check.model_name): _latest_check_row(check, skipped_ids)
+                for check in latest_checks
+            },
         }
 
         return {

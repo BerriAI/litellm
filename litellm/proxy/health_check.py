@@ -6,7 +6,7 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
@@ -27,7 +27,11 @@ from litellm.constants import (
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
-from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.litellm_core_utils.health_check_helpers import (
+    cost_map_entry,
+    default_health_check_mode,
+    native_health_check_mode,
+)
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
@@ -35,6 +39,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     strategy_router_dependencies,
 )
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
+from litellm.utils import get_model_info_helper
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
 # admins so they can see which region/version a deployment is checking and which identity it uses;
@@ -91,7 +96,19 @@ def _native_health_check_mode(model: str, provider_param: object) -> str | None:
     return native_health_check_mode(model=resolved_model, custom_llm_provider=custom_llm_provider)
 
 
-def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
+def _model_info_mode(model: str) -> str | None:
+    return litellm.get_model_info(model=model).get("mode")
+
+
+def _catalog_mode(model: str) -> str | None:
+    return get_model_info_helper(model=model, catalog_only=True).get("mode")
+
+
+def resolve_health_check_mode(
+    model_info: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    lookup_mode: Callable[[str], str | None] = _model_info_mode,
+) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
@@ -112,7 +129,7 @@ def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: 
     if native_mode is not None:
         return native_mode
     try:
-        return litellm.get_model_info(model=model).get("mode")
+        return lookup_mode(model)
     except Exception:
         return None
 
@@ -194,7 +211,7 @@ def _get_process_rss_mb() -> float | None:
         if sys.platform == "darwin":
             return float(ru_maxrss) / (1024 * 1024)
         return float(ru_maxrss) / 1024
-    except Exception:
+    except (ImportError, OSError):
         return None
 
 
@@ -231,9 +248,9 @@ def health_check_filter_kwargs_from_general_settings(
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
 
-    When ``health_check_skip_disabled_background_models`` is true, deployments with
-    ``model_info.disable_background_health_check`` are omitted from health runs
-    (including on-demand ``GET /health``), matching the background loop behavior.
+    When ``health_check_skip_disabled_background_models`` is true, deployments the
+    background loop skips are omitted from health runs (including on-demand
+    ``GET /health``).
     """
     g: Final = general_settings or {}
     return {
@@ -308,9 +325,131 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _skips_health_checks(deployment: Mapping[str, object]) -> bool:
-    info: Final = deployment.get("model_info")
-    return bool(info.get("disable_background_health_check", False)) if isinstance(info, Mapping) else False
+_BILLED_MEDIA_GENERATION_MODES: Final = frozenset({"image_generation", "image_edit", "video_generation"})
+BILLED_MEDIA_NOT_CHECKED_WARNING: Final = (
+    "Not checked, because this health check would generate media the provider may bill. "
+    "Set model_info.disable_background_health_check: false to check this model on every interval, "
+    "or use Test Connection for one check."
+)
+_DEPLOYMENT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+DEPLOYMENTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+MODEL_IDS_ADAPTER: Final = TypeAdapter(frozenset[object])
+_STR: Final = TypeAdapter(str)
+
+
+def _str_key_mapping(value: object) -> Mapping[str, object]:
+    return _DEPLOYMENT_ADAPTER.validate_python(value) if isinstance(value, Mapping) else MappingProxyType({})
+
+
+def _fallback_probe_mode(probe_params: Mapping[str, object]) -> str | None:
+    """The mode `litellm.ahealth_check` picks for these probe params when the caller passes none."""
+    provider: Final = probe_params.get("custom_llm_provider")
+    api_base: Final = probe_params.get("api_base")
+    api_key: Final = probe_params.get("api_key")
+    try:
+        model: Final = _STR.validate_python(probe_params.get("model"))
+        resolved_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=provider if isinstance(provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+            api_key=api_key if isinstance(api_key, str) else None,
+        )
+    except (ValidationError, litellm.BadRequestError):
+        return None
+    return default_health_check_mode(
+        requested_model=model, model=resolved_model, custom_llm_provider=custom_llm_provider
+    )
+
+
+def _bills_per_generated_clip(entry: Mapping[str, object]) -> bool:
+    return bool(entry.get("output_cost_per_image")) and not entry.get("output_cost_per_token")
+
+
+def _priced_per_generated_clip(probe_params: Mapping[str, object]) -> bool:
+    model: Final = _STR.validate_python(probe_params.get("model"))
+    provider: Final = probe_params.get("custom_llm_provider")
+    names: Final = (model, f"{provider}/{model}") if isinstance(provider, str) else (model,)
+    return any(_bills_per_generated_clip(cost_map_entry(name)) for name in names)
+
+
+def _offline_probe_params(
+    model_info: Mapping[str, object], litellm_params: Mapping[str, object], mode: str | None
+) -> Mapping[str, object]:
+    """The probe's target params, with the mode and max_tokens set so that no provider lookup runs."""
+    return _PROBE_PARAMS_ADAPTER.validate_python(
+        update_litellm_params_for_health_check(
+            {**model_info, "mode": mode or "chat", "health_check_supports_max_tokens": False}, dict(litellm_params)
+        )
+    )
+
+
+def _probe_generates_billed_media(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
+    mode: Final = resolve_health_check_mode(model_info, litellm_params, _catalog_mode)
+    if mode in _BILLED_MEDIA_GENERATION_MODES:
+        return True
+    if not isinstance(litellm_params.get("model"), str):
+        return False
+    probe_params: Final = _offline_probe_params(model_info, litellm_params, mode)
+    return (mode is None and _fallback_probe_mode(probe_params) in _BILLED_MEDIA_GENERATION_MODES) or (
+        _priced_per_generated_clip(probe_params)
+    )
+
+
+def _disable_background_flag(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("disable_background_health_check") if isinstance(model_info, Mapping) else None
+
+
+def bills_media_on_probe(deployment: Mapping[str, object]) -> bool:
+    explicit: Final = _disable_background_flag(deployment)
+    if explicit is not None and not explicit:
+        return False
+    try:
+        return _probe_generates_billed_media(
+            _str_key_mapping(deployment.get("model_info")), _str_key_mapping(deployment.get("litellm_params"))
+        )
+    except Exception:
+        logger.debug("Could not work out the health check for %s", _deployment_id(deployment))
+        return False
+
+
+def skips_background_health_check(deployment: Mapping[str, object]) -> bool:
+    return bool(_disable_background_flag(deployment)) or bills_media_on_probe(deployment)
+
+
+def background_check_deployments(model_list: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(deployment for deployment in model_list if not skips_background_health_check(deployment))
+
+
+def _probe_targets(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object] | None,
+    health_check_skip_disabled_background_models: bool,
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        d
+        for d in deployments
+        if (ids is None or _deployment_id(d) in ids)
+        and not (health_check_skip_disabled_background_models and _disable_background_flag(d))
+    )
+
+
+def all_bill_media_on_probe(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object],
+    health_check_skip_disabled_background_models: bool,
+) -> bool:
+    targets: Final = _probe_targets(deployments, ids, health_check_skip_disabled_background_models)
+    return bool(targets) and all(bills_media_on_probe(d) for d in targets)
+
+
+def billed_media_model_ids(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object] | None = None,
+    health_check_skip_disabled_background_models: bool = False,
+) -> tuple[str, ...]:
+    targets: Final = _probe_targets(deployments, ids, health_check_skip_disabled_background_models)
+    return tuple(sorted(filter(None, (_deployment_id(d) for d in targets if bills_media_on_probe(d)))))
 
 
 def _health_check_eligible(
@@ -318,11 +457,12 @@ def _health_check_eligible(
 ) -> tuple[Mapping[str, object], ...]:
     """Deployments this run is allowed to contact.
 
-    The one eligibility gate, applied to the requested set and to the pool a router's
-    dependencies are drawn from alike, so an opted-out deployment cannot re-enter through a
-    router that depends on it.
+    The one eligibility gate, applied to the requested set and to each round of a router's
+    dependencies alike, so an opted-out deployment cannot re-enter through a router that
+    depends on it.
     """
-    return tuple(x for x in model_list if not (skip_disabled and _skips_health_checks(x)))
+    skipped: Final = skips_background_health_check if skip_disabled else bills_media_on_probe
+    return tuple(x for x in model_list if not skipped(x))
 
 
 def _deployment_model(deployment: Mapping[str, object]) -> str | None:
@@ -472,6 +612,7 @@ def _dependency_deployments_to_probe(
     checked: Sequence[Mapping[str, object]],
     universe: Sequence[Mapping[str, object]],
     router: "Router",
+    skip_disabled: bool = False,
 ) -> tuple[Mapping[str, object], ...]:
     """Deployments backing the checked routers' dependencies that are not already checked.
 
@@ -479,7 +620,7 @@ def _dependency_deployments_to_probe(
     `/health?model_id=<router>` call the dashboard makes per deployment that needs them,
     since a router's verdict is a statement about models the request never named. Drawn from
     `universe`, the caller's access-filtered list, so no deployment is probed that the caller
-    was not already granted. Expansion follows routers through routers, one hop per round,
+    was not already granted, and only those `_health_check_eligible` passes. Expansion follows routers through routers, one hop per round,
     because a child router's own models must be probed for the parent to fail; stopping when
     a round adds nothing is what makes a router cycle terminate.
     """
@@ -499,9 +640,9 @@ def _dependency_deployments_to_probe(
         )
         if not fresh_ids:
             break
-        frontier = _deployments_by_id(universe, fresh_ids)
+        frontier = _health_check_eligible(_deployments_by_id(universe, fresh_ids), skip_disabled)
         reached = reached | fresh_ids
-    return _deployments_by_id(universe, reached - checked_ids)
+    return _health_check_eligible(_deployments_by_id(universe, reached - checked_ids), skip_disabled)
 
 
 def _strategy_router_verdicts(
@@ -1005,11 +1146,13 @@ async def perform_health_check(
     another team's deployment carries, else the deployments whose ``litellm_params.model``
     is that string.
 
+    Deployments whose check would generate billed media are omitted unless they set
+    ``model_info.disable_background_health_check: false``.
+
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
-    with ``model_info.disable_background_health_check: true`` are omitted from
-    this run (including targeted ``/health`` queries), consistent with the
-    background health loop.
+    the background health loop skips are omitted from this run (including targeted
+    ``/health`` queries).
 
     Returns:
         (bool): True if the health check passes, False otherwise.
@@ -1034,7 +1177,9 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id, team_id), skip_disabled)
+    narrowed: Final = await asyncio.to_thread(
+        _health_check_eligible, _narrow_to_target(model_list, model, model_id, team_id), skip_disabled
+    )
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(
@@ -1049,9 +1194,7 @@ async def perform_health_check(
     deduped_model_count: Final = len(requested)
 
     dependency_probes: Final = (
-        _dependency_deployments_to_probe(requested, _health_check_eligible(model_list, skip_disabled), router)
-        if router is not None
-        else ()
+        _dependency_deployments_to_probe(requested, model_list, router, skip_disabled) if router is not None else ()
     )
     checked: Final = requested + list(dependency_probes)
 
