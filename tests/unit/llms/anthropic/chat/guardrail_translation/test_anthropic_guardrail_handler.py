@@ -3660,6 +3660,46 @@ class TestOutputToolCallRewrites:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_rewritten_call_drops_its_safeguard_verdict_and_every_explanation(self) -> None:
+        response: Final = _dict_tool_use_response()
+        content: Final = cast(list[object], response["content"])
+        content.append({"type": "tool_use", "id": "toolu_2", "name": "lookup", "input": {"query": "weather"}})
+        response["safeguard_results"] = [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "explanation": "runs echo SECRET-123",
+                    "tool_uses": {
+                        "toolu_1": {"type": "evaluated", "outcome": "flagged", "explanation": "echoes SECRET-123"},
+                        "toolu_2": {"type": "evaluated", "outcome": "not_flagged", "explanation": "looks up weather"},
+                    },
+                },
+            }
+        ]
+
+        def redact_first_only(tool_calls: Sequence[object]) -> list[object]:
+            return [*_redacting(tool_calls[:1]), tool_calls[1]]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(redact_first_only),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] == {"cmd": "echo [REDACTED]"}
+        assert response["safeguard_results"] == (
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"toolu_2": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            },
+        )
+        assert "SECRET-123" not in json.dumps(response)
+
+    @pytest.mark.asyncio
     async def test_rewritten_arguments_that_are_not_a_json_object_fail_the_response(self) -> None:
         response: Final = _dict_tool_use_response()
 

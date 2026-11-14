@@ -468,6 +468,18 @@ def _write_back_tool_use_block(block: object, shape: _ToolCallShape, rewritten_i
         block.name = shape.name  # rebind-ok: same in-place rewrite as the input above
 
 
+def _redact_output_safeguard_results(response: object, unchanged_tool_use_ids: frozenset[str]) -> None:
+    """The response's safeguard verdicts judged the tool inputs as the model wrote them, so only those
+    for unchanged ``tool_use`` blocks survive, and no explanation can quote an input the guardrail rewrote."""
+    fields: Final = as_str_mapping(response)
+    raw: Final = fields.get("safeguard_results") if fields is not None else None
+    if raw is None or not isinstance(response, dict):
+        return
+    response["safeguard_results"] = filtered_safeguard_results(  # rebind-ok: client-visible response rewrite
+        raw, unchanged_tool_use_ids, keep_explanations=False
+    )
+
+
 def _streamed_query_strings(
     tool_call_blocks: Sequence[tuple[int, Mapping[str, object]]], tool_calls: Sequence[_ToolCallShape]
 ) -> tuple[_WebSearchString, ...]:
@@ -1558,13 +1570,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             self._write_back_web_search_strings(
                 response_content, _web_search_rewrites_by_block(web_search_strings, web_search_rewrites)
             )
-            self._write_back_output_tool_calls(
+            unchanged_tool_use_ids: Final = self._write_back_output_tool_calls(
                 response_content,
                 scanned_tool_calls=tool_calls_to_check,
                 pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                 returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                 guardrail_name=guardrail_to_apply.guardrail_name,
             )
+            if unchanged_tool_use_ids is not None:
+                _redact_output_safeguard_results(response, unchanged_tool_use_ids)
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
 
@@ -1750,33 +1764,42 @@ class AnthropicMessagesHandler(BaseTranslation):
         pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
         returned_tool_calls: Sequence[object] | None,
         guardrail_name: str | None,
-    ) -> None:
+    ) -> frozenset[str] | None:
         """The nth returned call belongs to the nth ``tool_use`` block, the order the calls were scanned
         in. A returned list of another length cannot be placed, so the scanned calls stand, as on the
         request side. Rewritten arguments that are not a JSON object cannot become a ``tool_use`` input,
-        so the response fails instead of carrying the arguments the guardrail meant to replace."""
+        so the response fails instead of carrying the arguments the guardrail meant to replace. Returns the
+        ids of the ``tool_use`` blocks left unchanged when any block was rewritten, else None."""
         post_guardrail_tool_calls: Final = _tool_call_shapes(
             returned_tool_calls
             if returned_tool_calls is not None and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
             else scanned_tool_calls
         )
         tool_use_blocks: Final = tuple(
-            block
+            (block, fields[1].get("id"))
             for block in response_content
             if (fields := cls._output_block_fields(block)) is not None and fields[0] == "tool_use"
         )
         if len(tool_use_blocks) != len(pre_guardrail_tool_calls):
-            return
+            return None
         rewrites: Final = tuple(
-            (block, after, _rewritten_tool_use_input(after.arguments))
-            for block, before, after in zip(tool_use_blocks, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+            (position, after, _rewritten_tool_use_input(after.arguments))
+            for position, (before, after) in enumerate(zip(pre_guardrail_tool_calls, post_guardrail_tool_calls))
             if before != after
         )
+        if not rewrites:
+            return None
         if any(rewritten_input is None for _, _, rewritten_input in rewrites):
             raise unappliable_request_rewrite(guardrail_name)
-        for block, after, rewritten_input in rewrites:
+        for position, after, rewritten_input in rewrites:
             if rewritten_input is not None:
-                _write_back_tool_use_block(block, after, rewritten_input)
+                _write_back_tool_use_block(tool_use_blocks[position][0], after, rewritten_input)
+        rewritten_positions: Final = frozenset(position for position, _, _ in rewrites)
+        return frozenset(
+            tool_use_id
+            for position, (_, tool_use_id) in enumerate(tool_use_blocks)
+            if position not in rewritten_positions and isinstance(tool_use_id, str)
+        )
 
     @staticmethod
     def _get_response_content(response: object) -> Sequence[object]:
