@@ -333,3 +333,108 @@ def test_muse_accepts_nested_workload_identity_credentials(
     )
     assert route.calls.last.request.headers["authorization"] == "Bearer unit-token"
     assert response.output_text == "Hello"
+
+
+@pytest.mark.parametrize(("field", "value"), [("background", True), ("previous_response_id", "resp_unit")])
+def test_muse_drop_params_omits_server_side_state_fields(
+    field: str, value: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
+        input="Say hello",
+        vertex_project="unit-project",
+        drop_params=True,
+        num_retries=0,
+        **{field: value},
+    )
+    assert field not in FIELDS.validate_json(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize("location", ["us-central1", "europe-west4"])
+def test_muse_rejects_a_regional_location_before_contacting_vertex(
+    location: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    with pytest.raises(litellm.UnsupportedParamsError, match="global location"):
+        litellm.responses(
+            model="vertex_ai/meta/muse-wonder-1.0",
+            input="Say hello",
+            vertex_project="unit-project",
+            vertex_location=location,
+            num_retries=0,
+        )
+    assert not route.called
+
+
+@pytest.mark.parametrize("location", [None, "global"])
+def test_muse_accepts_the_global_location(location: str | None, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
+        input="Say hello",
+        vertex_project="unit-project",
+        vertex_location=location,
+        num_retries=0,
+    )
+    assert route.called
+
+
+def test_muse_drop_params_sends_a_regional_location_to_the_global_endpoint(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
+        input="Say hello",
+        vertex_project="unit-project",
+        vertex_location="us-central1",
+        drop_params=True,
+        num_retries=0,
+    )
+    assert route.called
+
+
+@pytest.mark.parametrize("prefix", ["vertex", "vertex_ai"])
+def test_muse_chat_completions_bridge_authenticates_with_the_deployment_credentials(
+    prefix: str, respx_mock: respx.MockRouter, mocker: MockerFixture
+) -> None:
+    deployment_credentials: Final = mocker.Mock(
+        spec=Credentials, token=f"{prefix}-token", expired=False, quota_project_id=None, requires_scopes=False
+    )
+    credential_type: Final = mocker.patch("google.auth.identity_pool.Credentials")
+    credential_type.from_info.return_value = deployment_credentials
+    route: Final = respx_mock.post(ENDPOINT.replace("unit-project", f"{prefix}-project")).mock(
+        return_value=httpx.Response(200, json=_response("muse-ember-1.0"))
+    )
+    response: Final = litellm.completion(
+        model="vertex_ai/meta/muse-ember-1.0",
+        messages=[{"role": "user", "content": "Say hello"}],
+        num_retries=0,
+        **{
+            f"{prefix}_project": f"{prefix}-project",
+            f"{prefix}_credentials": {
+                "type": "external_account",
+                "audience": f"{prefix}-audience",
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_url": "https://sts.googleapis.com/v1/token",
+                "credential_source": {"file": "/unit/subject.token"},
+            },
+        },
+    )
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == f"Bearer {prefix}-token"
+    assert credential_type.from_info.call_args.args[0]["audience"] == f"{prefix}-audience"
+    assert not {"vertex_project", "vertex_credentials", "vertex_location"} & FIELDS.validate_json(request.content).keys()
+    assert response.choices[0].message.content == "Hello"
+
+
+def test_muse_chat_completions_bridge_rejects_a_regional_deployment_location(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    with pytest.raises(litellm.UnsupportedParamsError, match="global location"):
+        litellm.completion(
+            model="vertex_ai/meta/muse-ember-1.0",
+            messages=[{"role": "user", "content": "Say hello"}],
+            vertex_project="unit-project",
+            vertex_location="us-central1",
+            num_retries=0,
+        )
+    assert not route.called

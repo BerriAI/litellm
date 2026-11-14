@@ -88,21 +88,30 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
     ) -> dict[str, object]:  # mutable-ok: Responses handler mutates the returned request
-        if response_api_optional_request_params.get("store") is True and not drops_params(litellm_params):
+        drops_unsupported: Final = drops_params(litellm_params)
+        if response_api_optional_request_params.get("store") is True and not drops_unsupported:
             raise UnsupportedParamsError(
                 status_code=400,
                 message="Vertex Muse supports stateless Responses requests only. Set store=False or drop_params=True.",
             )
+        location: Final = VertexBase.explicit_vertex_ai_location(_FIELDS.validate_python(litellm_params.model_dump()))
+        if location not in (None, "global") and not drops_unsupported:
+            raise UnsupportedParamsError(
+                status_code=400,
+                message="Vertex Muse is served from the global location only. Set vertex_location to global "
+                "or drop_params=True.",
+            )
         tool_choice: Final = response_api_optional_request_params.get("tool_choice")
-        if tool_choice is not None and tool_choice != "auto" and not drops_params(litellm_params):
+        if tool_choice is not None and tool_choice != "auto" and not drops_unsupported:
             raise UnsupportedParamsError(
                 status_code=400,
                 message="Vertex Muse supports only tool_choice='auto'. Set drop_params=True to normalize unsupported choices.",
             )
+        dropped_params: Final = (_STORED_RESPONSE_PARAMS if drops_unsupported else frozenset[str]()) | (
+            {"tools"} if tool_choice == "none" else frozenset[str]()
+        )
         tool_params: Final = {
-            key: value
-            for key, value in response_api_optional_request_params.items()
-            if not (tool_choice == "none" and key == "tools")
+            key: value for key, value in response_api_optional_request_params.items() if key not in dropped_params
         }
         normalized_params: Final = {**tool_params, **({"tool_choice": "auto"} if tool_choice is not None else {})}
         request: Final = _FIELDS.validate_python(
