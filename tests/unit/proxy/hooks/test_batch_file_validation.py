@@ -7,6 +7,8 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2101,7 +2103,10 @@ def test_estimate_entry_output_tokens_multiplies_candidate_count(body_extra, exp
 # ---------------------------------------------------------------------------
 
 
-def _enqueued_rate_limiter():
+def _enqueued_rate_limiter(
+    model_group_resolver: Callable[[str], str | None] = lambda _model: None,
+    deployment_model_name: Callable[[str], str | None] = lambda _model: None,
+):
     from litellm import DualCache
     from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -2111,10 +2116,13 @@ def _enqueued_rate_limiter():
 
     local_cache = DualCache(default_in_memory_ttl=60)
     internal_usage_cache = InternalUsageCache(local_cache)
-    parallel_request_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
+    parallel_request_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache, model_group_resolver=model_group_resolver
+    )
     rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=internal_usage_cache,
         parallel_request_limiter=parallel_request_limiter,
+        deployment_model_name=deployment_model_name,
     )
     return rate_limiter, local_cache
 
@@ -2126,9 +2134,9 @@ _ENQUEUED_BATCH_FILE_CONTENT = (
 )
 
 
-def _enqueued_batch_patches():
+def _enqueued_batch_patches(file_content: bytes = _ENQUEUED_BATCH_FILE_CONTENT):
     mock_content = MagicMock()
-    mock_content.content = _ENQUEUED_BATCH_FILE_CONTENT
+    mock_content.content = file_content
     afile_content_mock = AsyncMock(return_value=mock_content)
     return afile_content_mock, (
         patch("litellm.proxy.proxy_server.general_settings", {}),
@@ -2259,6 +2267,307 @@ async def test_enqueued_team_limit_applies_to_batch_submission():
 
     assert exc.value.status_code == 429
     assert "Batch enqueued token limit exceeded for team: team-enqueued-batch" in str(exc.value.detail)
+
+
+_MODEL_LESS_BATCH_FILE_CONTENT = (
+    b'{"body": {"max_tokens": 40, "messages": [{"role": "user", "content": "hi"}]}}\n'
+    b'{"body": {"max_tokens": 40, "messages": [{"role": "user", "content": "hi"}]}}\n'
+)
+_ALIASED_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"mini-alias")
+_UNLISTED_MODEL_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"unlisted-model")
+_MIXED_MODEL_BATCH_FILE_CONTENT = (
+    _ENQUEUED_BATCH_FILE_CONTENT
+    + b'{"body": {"model": "gpt-5.5", "max_tokens": 40, "messages": [{"role": "user", "content": "hello there"}]}}\n'
+)
+
+
+def _project_model_limited_user(model_limits: Mapping[str, int]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-jwt-project-caller",
+        models=["*"],
+        team_id="shared-team",
+        project_id="project-enqueued-batch",
+        project_metadata={"model_batch_enqueued_token_limit": model_limits},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "file_content",
+    [
+        _ENQUEUED_BATCH_FILE_CONTENT,
+        _MODEL_LESS_BATCH_FILE_CONTENT,
+        _ALIASED_BATCH_FILE_CONTENT,
+        _UNLISTED_MODEL_BATCH_FILE_CONTENT,
+    ],
+    ids=[
+        "rows name the model",
+        "rows name no model",
+        "rows name an alias of the model",
+        "rows name an unlisted model",
+    ],
+)
+async def test_project_model_enqueued_limit_rejects_a_batch_over_that_models_limit(file_content):
+    rate_limiter, local_cache = _enqueued_rate_limiter({"mini-alias": "gpt-4o-mini"}.get)
+    afile_content_mock, patches = _enqueued_batch_patches(file_content)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini" in str(
+        exc.value.detail
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_reserves_only_the_limited_models_rows():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_project_model_limited_user({"gpt-5.5": 100000}),
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    (scope,) = stash.batch_enqueued_reservation.scopes
+    assert scope.value == "project-enqueued-batch:gpt-5.5"
+    assert scope.tokens is not None
+    assert 0 < scope.tokens < data["_batch_token_count"]
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_for_another_model_leaves_the_batch_on_per_minute_limits():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_project_model_limited_user({"gpt-5.5": 10}),
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    assert data["_batch_token_count"] > 10
+    stash: Final = get_request_stash()
+    assert stash is None or stash.batch_enqueued_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_per_minute_limits_still_apply_when_only_a_rows_model_has_a_project_allowance():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped: Final = _project_model_limited_user({"gpt-5.5": allowance}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=per_minute_capped,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit" not in str(exc.value.detail)
+    whole_allowance: Final = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-5.5", limit=allowance, tokens=allowance
+    )
+    refilled: Final = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
+async def test_a_project_allowance_for_the_routing_model_replaces_per_minute_limits():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped: Final = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=per_minute_capped,
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    assert stash.batch_enqueued_reservation.tokens == data["_batch_token_count"] > 10
+
+
+@pytest.mark.asyncio
+async def test_a_routing_model_allowance_keeps_project_input_limits_on_the_other_row_models():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+    user: Final = _project_model_limited_user({"gpt-4o-mini": allowance}).model_copy(
+        update={
+            "project_metadata": {
+                "model_batch_enqueued_token_limit": {"gpt-4o-mini": allowance},
+                "model_itpm_limit": {"gpt-5.5": 1},
+            }
+        }
+    )
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_itpm" in str(exc.value.detail)
+    whole_allowance: Final = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-4o-mini", limit=allowance, tokens=allowance
+    )
+    refilled: Final = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
+async def test_daily_token_limit_still_applies_alongside_a_project_model_reservation():
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        daily_capped: Final = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(update={"tpd_limit": 10})
+        rejected_data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=daily_capped,
+                cache=local_cache,
+                data=rejected_data,
+                call_type="acreate_batch",
+            )
+        assert exc.value.status_code == 429
+        assert "Batch enqueued token limit" not in str(exc.value.detail)
+
+        exact_fit: Final = _project_model_limited_user({"gpt-4o-mini": rejected_data["_batch_token_count"]})
+        accepted_data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=exact_fit,
+            cache=local_cache,
+            data=accepted_data,
+            call_type="acreate_batch",
+        )
+
+    assert result is accepted_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "opted_in_user",
+    [
+        UserAPIKeyAuth(
+            api_key="sk-enqueued-daily", models=["*"], tpd_limit=10, metadata={"batch_enqueued_token_limit": 1000000}
+        ),
+        UserAPIKeyAuth(
+            api_key="sk-team-enqueued-daily",
+            models=["*"],
+            team_id="team-enqueued-daily",
+            team_tpd_limit=10,
+            team_metadata={"batch_enqueued_token_limit": 1000000},
+        ),
+    ],
+    ids=["key", "team"],
+)
+async def test_key_or_team_enqueued_limit_alone_governs_a_batch_over_its_daily_cap(opted_in_user):
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=opted_in_user,
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    assert data["_batch_token_count"] > 10
+
+
+@pytest.mark.asyncio
+async def test_a_model_bound_upload_still_charges_the_model_its_rows_name():
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini-priority": 1000000, "gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": encode_file_id_with_model("file-abc123", "gpt-4o-mini-priority")},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini." in str(
+        exc.value.detail
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_applies_to_a_batch_that_names_a_deployment_id():
+    rate_limiter, local_cache = _enqueued_rate_limiter(deployment_model_name={"deployment-1": "gpt-4o-mini"}.get)
+    afile_content_mock, patches = _enqueued_batch_patches(_MODEL_LESS_BATCH_FILE_CONTENT)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "deployment-1"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini" in str(
+        exc.value.detail
+    )
 
 
 @pytest.mark.asyncio

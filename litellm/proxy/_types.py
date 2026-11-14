@@ -15,8 +15,10 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     NonNegativeInt,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     ValidatorFunctionWrapHandler,
@@ -28,6 +30,7 @@ from typing_extensions import (
     NotRequired,
     ReadOnly,
     Required,
+    Self,
     TypedDict,
 )
 
@@ -3518,6 +3521,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+    _sent_metadata: bool = PrivateAttr(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -3532,6 +3536,18 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_whether_metadata_was_sent(cls, values: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        sent_metadata: Final = not isinstance(values, Mapping) or "metadata" in values
+        request: Final = handler(values)
+        request._sent_metadata = sent_metadata
+        return request
+
+    @property
+    def sent_metadata(self) -> bool:
+        return self._sent_metadata
 
 
 class DeleteProjectRequest(LiteLLMPydanticObjectBase):

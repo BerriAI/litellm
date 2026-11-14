@@ -23,10 +23,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
+from litellm.proxy.auth.auth_utils import BatchLimitRequest, enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
+from litellm.proxy.hooks.batch_enqueued_tokens import model_batch_enqueued_token_limits_are_valid
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
@@ -116,6 +119,32 @@ def _user_table(prisma_client: PrismaClient) -> TableActions["prisma_models.Lite
 def _jsonified(prisma_client: PrismaClient, payload: dict[str, object]) -> dict[str, object]:
     jsonified: dict[str, object] = prisma_client.jsonify_object(payload)
     return jsonified
+
+
+def _check_project_batch_limits(
+    data: BatchLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    enforce_batch_limits_are_admin_only(
+        data=data,
+        existing_metadata=existing_metadata,
+        user_api_key_dict=user_api_key_dict,
+        entity="project",
+    )
+    if not model_batch_enqueued_token_limits_are_valid(data.metadata):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"{MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} must map each model name to a positive integer"
+            },
+        )
+
+
+def _stored_metadata_with(
+    request: BatchLimitRequest, stored_metadata: Mapping[str, object]
+) -> dict[str, object] | None:
+    return None if request.metadata is None else {**stored_metadata, **request.metadata}
 
 
 async def _check_user_permission_for_project(
@@ -606,6 +635,11 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
+        _check_project_batch_limits(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+        )
         await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
@@ -845,6 +879,18 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
+        stored_metadata: Final[dict[str, object]] = (
+            existing_project.metadata if isinstance(existing_project.metadata, dict) else {}
+        )
+        merged_metadata: Final = None if data.sent_metadata else _stored_metadata_with(data, stored_metadata)
+        merged_request: Final = (
+            data if merged_metadata is None else data.model_copy(update={"metadata": merged_metadata})
+        )
+        _check_project_batch_limits(
+            data=merged_request,
+            existing_metadata=stored_metadata,
+            user_api_key_dict=user_api_key_dict,
+        )
         await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
@@ -863,7 +909,7 @@ async def update_project(
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             _raise_on_missing_project_model_quota_on_update(
-                data,
+                merged_request,
                 existing_project,
                 _router_access_group_names(llm_router),
                 quota_policy,
@@ -872,7 +918,7 @@ async def update_project(
 
         # Prepare update data
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
-        update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
+        update_data = _jsonified(prisma_client, merged_request.model_dump(exclude_none=True, exclude={"project_id"}))
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
         # Handle budget updates

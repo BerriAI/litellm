@@ -10,9 +10,11 @@ import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { projectFormSchema, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
-import { buildProjectUpdateParams } from "./projectFormUtils";
+import { buildProjectUpdateParams, withStoredBatchEnqueuedTokenLimit } from "./projectFormUtils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface EditProjectModalProps {
@@ -27,6 +29,7 @@ const INTERNAL_METADATA_KEYS = new Set([
   "model_tpm_limit",
   "model_itpm_limit",
   "model_otpm_limit",
+  "model_batch_enqueued_token_limit",
   "guardrails",
 ]);
 
@@ -36,6 +39,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
   const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
   const itpmLimits = (metadataObj.model_itpm_limit ?? {}) as Record<string, number>;
   const otpmLimits = (metadataObj.model_otpm_limit ?? {}) as Record<string, number>;
+  const batchEnqueuedTokenLimits = (metadataObj.model_batch_enqueued_token_limit ?? {}) as Record<string, number>;
   const guardrails = (Array.isArray(metadataObj.guardrails) ? metadataObj.guardrails : []) as string[];
 
   const modelLimits = Array.from(
@@ -44,6 +48,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
       ...Object.keys(tpmLimits),
       ...Object.keys(itpmLimits),
       ...Object.keys(otpmLimits),
+      ...Object.keys(batchEnqueuedTokenLimits),
     ]),
   ).map((model) => ({
     model,
@@ -51,6 +56,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
     tpm: tpmLimits[model],
     itpm: itpmLimits[model],
     otpm: otpmLimits[model],
+    batchEnqueuedTokens: batchEnqueuedTokenLimits[model],
   }));
 
   const metadata = Object.entries(metadataObj)
@@ -74,6 +80,7 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
   const { t } = useTranslation();
   const form = useZodForm(projectFormSchema, { defaultValues: toFormValues(project) });
   const updateMutation = useUpdateProject();
+  const { userRole } = useAuthorized();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedEverOpened, setAdvancedEverOpened] = useState(false);
 
@@ -87,8 +94,11 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       ? values
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
+    const built = buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget);
+    const keepsStoredBatchLimit = built.metadata !== undefined && !isProxyAdminRole(userRole ?? "");
     const params: ProjectUpdateParams = {
-      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
+      ...built,
+      ...(keepsStoredBatchLimit && { metadata: withStoredBatchEnqueuedTokenLimit(built.metadata, project.metadata) }),
       team_id: submitted.team_id,
     };
 
