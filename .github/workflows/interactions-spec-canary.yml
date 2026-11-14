@@ -18,7 +18,7 @@ jobs:
   interactions-spec-canary:
     name: interactions-spec-canary
     if: github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: read
@@ -57,7 +57,7 @@ jobs:
     name: tracking-issue
     needs: interactions-spec-canary
     if: always() && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       issues: write

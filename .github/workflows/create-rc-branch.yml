@@ -12,7 +12,7 @@ jobs:
   create-rc-branch:
     name: Create RC Branch
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     outputs:

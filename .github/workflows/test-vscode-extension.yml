@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   vscode-extension:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     defaults:
       run:

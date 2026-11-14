@@ -33,7 +33,7 @@ concurrency:
 jobs:
   classify-issue-tests:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -60,7 +60,7 @@ jobs:
         github.event.action != 'edited'
         || !contains(join(github.event.issue.labels.*.name, ','), 'domain:')
       )
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
@@ -132,7 +132,7 @@ jobs:
   label-issue:
     needs: classify-issue
     if: needs.classify-issue.outputs.verdict != ''
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read

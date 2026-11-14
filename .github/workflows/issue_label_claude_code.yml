@@ -9,7 +9,7 @@ permissions: {}
 jobs:
   label-claude-code:
     if: github.repository == 'BerriAI/litellm' && contains(github.event.issue.body, 'claude code')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 2
     permissions:
       issues: write

@@ -24,7 +24,7 @@ jobs:
       (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
       (github.event.schedule == '0 8 * * 6' ||
        (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'record'))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     services:
       postgres:
@@ -118,7 +118,7 @@ jobs:
       (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
       (github.event.schedule == '0 8 * * 1-5' ||
        (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'replay'))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     permissions:
       contents: read
