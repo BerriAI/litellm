@@ -338,7 +338,12 @@ async def test_a_tier_param_no_deployment_supports_is_dropped(make_core: MakeCor
 
 
 @pytest.mark.asyncio
-async def test_a_tier_param_the_request_allowlists_is_kept(make_core: MakeCore) -> None:
+@pytest.mark.parametrize(
+    "allowlist",
+    [["logit_bias"], "logit_bias", "seed, logit_bias", {"logit_bias": True}],
+    ids=["list", "bare-string", "comma-separated", "dict"],
+)
+async def test_a_tier_param_the_request_allowlists_is_kept(make_core: MakeCore, allowlist: object) -> None:
     core: Final = make_core(
         model_list=[
             deployment("small", "s", model="anthropic/claude-3-5-sonnet-20240620"),
@@ -346,7 +351,24 @@ async def test_a_tier_param_the_request_allowlists_is_kept(make_core: MakeCore) 
             _complexity_router(tiers=_pinned(logit_bias={"1": 2})),
         ]
     )
-    request: Final[dict[str, object]] = {"allowed_openai_params": ["logit_bias"]}
+    request: Final[dict[str, object]] = {"allowed_openai_params": allowlist}
+    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    assert request["logit_bias"] == {"1": 2}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowlist", [["logit_bias"], "logit_bias"], ids=["list", "bare-string"])
+async def test_a_tier_param_the_deployment_allowlists_is_kept(make_core: MakeCore, allowlist: object) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "small", "s", model="anthropic/claude-3-5-sonnet-20240620", allowed_openai_params=allowlist
+            ),
+            deployment("big", "b"),
+            _complexity_router(tiers=_pinned(logit_bias={"1": 2})),
+        ]
+    )
+    request: Final[dict[str, object]] = {}
     await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
     assert request["logit_bias"] == {"1": 2}
 

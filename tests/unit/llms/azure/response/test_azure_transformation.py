@@ -167,6 +167,108 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
     assert result == f"https://gateway.example.com/foundry/openai/openai/v1/responses?api-version={expected_version}"
 
 
+_FOUNDRY_PROJECT: Final = "https://x.services.ai.azure.com/api/projects/proj"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "litellm_params", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT}/openai/v1", {}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1/", {"api_version": ""}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1", {"api_version": "v1"}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+            {"api_version": "2025-04-01-preview"},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1",
+            {"api_version": "2024-10-21", "responses_api_version": "preview"},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1?tenant=example&api-version=preview",
+            {},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses?tenant=example",
+        ),
+        (_FOUNDRY_PROJECT, {}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (
+            "https://gw.example.com/foundry/api/projects/proj/openai/v1",
+            {"api_version": "preview"},
+            "https://gw.example.com/foundry/api/projects/proj/openai/v1/responses",
+        ),
+        (
+            _FOUNDRY_PROJECT,
+            {"api_version": "2025-11-15-preview"},
+            f"{_FOUNDRY_PROJECT}/openai/responses?api-version=2025-11-15-preview",
+        ),
+        (
+            "https://x.services.ai.azure.com/openai/v1",
+            {},
+            f"https://x.services.ai.azure.com/openai/v1/responses?api-version={AZURE_DEFAULT_RESPONSES_API_VERSION}",
+        ),
+    ],
+)
+def test_foundry_project_v1_responses_url_never_carries_an_api_version(
+    api_base: str, litellm_params: dict[str, str], expected_url: str
+) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    responses_url: Final = config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+    get_url, _ = config.transform_get_response_api_request(
+        response_id="resp_1", api_base=responses_url, litellm_params=GenericLiteLLMParams(), headers={}
+    )
+
+    assert responses_url == expected_url
+    assert httpx.URL(get_url).params == httpx.URL(expected_url).params
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        ("https://apim.example.com/my-foundry/openai/v1", "none", "https://apim.example.com/my-foundry/openai/v1/responses"),
+        ("https://apim.example.com/my-foundry", "None", "https://apim.example.com/my-foundry/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai/responses", "none", "https://x.openai.azure.com/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai", "none", "https://x.openai.azure.com/openai/v1/responses"),
+        (
+            "https://apim.example.com/my-foundry/openai/v1?tenant=example&api-version=preview",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/responses?tenant=example",
+        ),
+    ],
+)
+def test_api_version_none_sends_responses_and_lifecycle_calls_with_no_api_version(
+    api_base: str, api_version: str, expected_url: str
+) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    responses_url: Final = config.get_complete_url(api_base=api_base, litellm_params={"api_version": api_version})
+    get_url, _ = config.transform_get_response_api_request(
+        response_id="resp_1", api_base=responses_url, litellm_params=GenericLiteLLMParams(), headers={}
+    )
+
+    assert responses_url == expected_url
+    assert "api-version" not in httpx.URL(get_url).params
+
+
+def test_gateway_v1_base_without_the_opt_out_keeps_its_api_version() -> None:
+    responses_url: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base="https://apim.example.com/my-foundry/openai/v1", litellm_params={"api_version": "preview"}
+    )
+
+    assert httpx.URL(responses_url).params.get("api-version") == "preview"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT}/openai/v1", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1/", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        ("https://x.services.ai.azure.com/openai/v1", "wss://x.services.ai.azure.com/openai/v1/responses"),
+    ],
+)
+def test_websocket_url_on_an_openai_v1_base_dials_v1_responses_once(api_base: str, expected_url: str) -> None:
+    assert AzureOpenAIResponsesAPIConfig().get_websocket_url(api_base=api_base, litellm_params={}) == expected_url
+
+
 @pytest.mark.serial
 @pytest.mark.parametrize(
     ("api_base", "api_version", "expected_url"),
@@ -185,6 +287,11 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
             "https://gw.example.com/foundry/openai/openai/v1?tenant=example",
             "v1",
             "https://gw.example.com/foundry/openai/openai/v1/responses/compact?tenant=example&api-version=v1",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1",
+            "preview",
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses/compact",
         ),
     ],
 )

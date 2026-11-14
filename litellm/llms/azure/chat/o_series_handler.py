@@ -49,7 +49,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
             litellm_params=litellm_params,
             api_key=api_key,
             api_base=api_base,
-            api_version=api_version,
+            api_version=self.chat_client_api_version(api_base, api_version),
             client=client,
             _is_async=acompletion,
         )
