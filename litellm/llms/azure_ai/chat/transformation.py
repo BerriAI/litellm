@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -29,8 +29,8 @@ from litellm.llms.openai.common_utils import drop_params_from_unprocessable_enti
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.router_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
     declared_reasoning_efforts,
-    nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -54,26 +54,20 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 )
 
 
-def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
-    row: Final = GetModelCostMap.loaded_model_cost_map().get(f"azure_ai/{model}")
-    return declared_reasoning_efforts(row) if row is not None else None
+_DEFAULT_REASONING_EFFORT: Final = "default"
+_FOUNDRY_REASONING_EFFORTS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 
 
 def _declares_reasoning_effort(model: str) -> bool:
-    return bool(_catalog_reasoning_efforts(model))
+    row: Final = GetModelCostMap.loaded_model_cost_map_entry(f"azure_ai/{model}")
+    return row is not None and bool(declared_reasoning_efforts(row))
 
 
-def _reasoning_effort_level(
-    requested: object, model: str, declared: Sequence[str], drop_params: bool
-) -> Mapping[str, str]:
-    fields: Final = as_str_mapping(requested)
-    level: Final = fields.get("effort") if fields is not None else requested
-    if isinstance(level, str):
-        return {"reasoning_effort": nearest_declared_reasoning_effort(level, declared)}
+def _unsupported_reasoning_effort(requested: object, model: str, drop_params: bool) -> Mapping[str, str]:
     if not drop_params and litellm.drop_params is not True:
         raise UnsupportedParamsError(
-            message=f"azure_ai takes reasoning_effort only as a level such as 'high', got {requested!r}. To drop "
-            "unsupported openai params from the call, set `litellm.drop_params = True`",
+            message=f"azure_ai takes reasoning_effort as one of {', '.join(REASONING_EFFORT_ADVERTISEMENT_ORDER)}, "
+            f"got {requested!r}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
             llm_provider="azure_ai",
             model=model,
             status_code=400,
@@ -86,13 +80,30 @@ def _reasoning_effort_level(
     return {}
 
 
+def _reasoning_effort_level(requested: object, model: str, drop_params: bool) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(requested)
+    level: Final = fields.get("effort") if fields is not None else requested
+    if level == _DEFAULT_REASONING_EFFORT:
+        return {}
+    if not isinstance(level, str) or level not in _FOUNDRY_REASONING_EFFORTS:
+        return _unsupported_reasoning_effort(requested, model, drop_params)
+    if fields is not None and any(key != "effort" for key in fields):
+        verbose_logger.warning(
+            "Dropping reasoning_effort=%r for model=%r because Azure AI Foundry takes only a level name, so %r is "
+            "sent without the other fields.",
+            requested,
+            model,
+            level,
+        )
+    return {"reasoning_effort": level}
+
+
 def _declared_reasoning_effort_param(
     non_default_params: Mapping[str, object], model: str, drop_params: bool
 ) -> Mapping[str, str]:
-    declared: Final = _catalog_reasoning_efforts(model)
-    if "reasoning_effort" not in non_default_params or not declared:
+    if "reasoning_effort" not in non_default_params or not _declares_reasoning_effort(model):
         return {}
-    return _reasoning_effort_level(non_default_params["reasoning_effort"], model, declared, drop_params)
+    return _reasoning_effort_level(non_default_params["reasoning_effort"], model, drop_params)
 
 
 def _message_fields_to_strip(model: str) -> tuple[str, ...]:
