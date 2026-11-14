@@ -1952,7 +1952,7 @@ class _SavedRouterSettings:
         return {"fallbacks": [{"busy": ["spare"]}], "fallback_on_saturation": True}
 
 
-async def test_the_logger_registry_and_the_borrowing_check_find_the_native_in_the_pythons_place(
+async def test_the_logger_registry_and_the_borrowing_check_find_the_native(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -1964,23 +1964,18 @@ async def test_the_logger_registry_and_the_borrowing_check_find_the_native_in_th
 
     router: Final = _router(("held", 1000, None))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    found: Final[list[tuple[bool, bool, bool]]] = []  # mutable-ok: one row per flag value
-    for flag in ("false", "true"):
-        monkeypatch.setenv("LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3", flag)
-        monkeypatch.setattr(model_capacity_native, "_REGISTERED", type(model_capacity_native._REGISTERED)())  # pyright: ignore[reportPrivateUsage]  # a fresh registration per flag value
-        monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging._in_memory_loggers", [])
-        built = _init_custom_logger_compatible_class(
-            "dynamic_rate_limiter_v3", internal_usage_cache=DualCache(), llm_router=router
-        )
-        monkeypatch.setattr(litellm, "callbacks", [built])
-        found.append(
-            (
-                get_custom_logger_compatible_class("dynamic_rate_limiter_v3") is built,
-                dynamic_rate_limiter_covers("held"),
-                isinstance(built, NativeDynamicRateLimiter),
-            )
-        )
-    assert found == [(True, True, False), (True, True, True)], found
+    monkeypatch.setattr(model_capacity_native, "_REGISTERED", type(model_capacity_native._REGISTERED)())  # pyright: ignore[reportPrivateUsage]  # a fresh registration for this test
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging._in_memory_loggers", [])
+    built: Final = _init_custom_logger_compatible_class(
+        "dynamic_rate_limiter_v3", internal_usage_cache=DualCache(), llm_router=router
+    )
+    monkeypatch.setattr(litellm, "callbacks", [built])
+    found: Final = (
+        get_custom_logger_compatible_class("dynamic_rate_limiter_v3") is built,
+        dynamic_rate_limiter_covers("held"),
+        isinstance(built, NativeDynamicRateLimiter),
+    )
+    assert found == (True, True, True), found
 
 
 async def test_the_router_fallback_check_holds_a_fallback_through_the_native_like_python(

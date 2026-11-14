@@ -75,7 +75,6 @@ from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcom
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeModelCapacity, NativeModelCapacityState
 
-NATIVE_FLAG: Final = "LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3"
 UNLICENSED_PRIORITY_MESSAGE: Final = (
     "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your "
     ".env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
@@ -87,10 +86,6 @@ RERAISE_KIND: Final = "model_capacity_reraise"
 _TOKENS: Final = count(1)
 _LOG_LEVELS: Final = MappingProxyType({"error": logging.ERROR, "warning": logging.WARNING, "info": logging.INFO})
 _TARGETED_HOOKS: Final = frozenset({Hook.pre_call, Hook.post_call_success, Hook.post_call_failure})
-
-
-def native_enabled() -> bool:
-    return os.getenv(NATIVE_FLAG, "").strip().lower() == "true"
 
 
 @dataclass(slots=True)
@@ -825,7 +820,6 @@ def build_native_dynamic_rate_limiter(
 @dataclass(slots=True)
 class _Registered:
     logger: NativeDynamicRateLimiter | None = None
-    enabled: bool | None = None
 
 
 _REGISTERED: Final = _Registered()
@@ -835,11 +829,7 @@ def registered_native_dynamic_rate_limiter() -> NativeDynamicRateLimiter | None:
     return _REGISTERED.logger
 
 
-def native_dynamic_rate_limiter(internal_usage_cache: DualCache, llm_router: object) -> NativeDynamicRateLimiter | None:
-    if _REGISTERED.enabled is None:
-        _REGISTERED.enabled = native_enabled()
-    if not _REGISTERED.enabled:
-        return None
+def native_dynamic_rate_limiter(internal_usage_cache: DualCache, llm_router: object) -> NativeDynamicRateLimiter:
     if _REGISTERED.logger is None:
         _REGISTERED.logger = build_native_dynamic_rate_limiter(internal_usage_cache)
     if isinstance(llm_router, Router):
@@ -855,12 +845,10 @@ def is_dynamic_rate_limiter(callback: object) -> TypeIs[DynamicRateLimiter]:  # 
 
 
 __all__ = [
-    "NATIVE_FLAG",
     "CapacityDelegate",
     "NativeDynamicRateLimiter",
     "build_native_dynamic_rate_limiter",
     "is_dynamic_rate_limiter",
     "native_dynamic_rate_limiter",
-    "native_enabled",
     "registered_native_dynamic_rate_limiter",
 ]

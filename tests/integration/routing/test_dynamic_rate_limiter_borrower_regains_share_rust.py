@@ -59,7 +59,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
     with (
         gateway_from_environment() as rig,
         wire_server(_respond) as wire,
-        owned_proxy(rig, directory, {"LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3": "true"}, config=path) as owned,
+        owned_proxy(rig, directory, {}, config=path) as owned,
     ):
         yield owned, wire.url
 

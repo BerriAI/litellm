@@ -11,11 +11,6 @@ from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimi
 from tests.unit.proxy.hooks.native_capacity_handler import pre_call_at_saturation
 
 
-@pytest.fixture(autouse=True)
-def native_dynamic_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3", "true")
-
-
 def _make_phase1_barrier(num_concurrent: int, timeout: float = 0.1):
     """
     Sync primitive that, pre-fix, forces all N concurrent coroutines to finish

@@ -13,11 +13,6 @@ from tests.unit.proxy.hooks.native_capacity_handler import (
 from tests.unit.proxy.hooks.native_capacity_handler import pre_call_at_saturation
 
 
-@pytest.fixture(autouse=True)
-def native_dynamic_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3", "true")
-
-
 def _gpt_4o_mini(rpm: int) -> Router:
     return Router(
         model_list=[

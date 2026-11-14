@@ -53,11 +53,6 @@ class TimeController:
         self._current += timedelta(seconds=seconds)
 
 
-@pytest.fixture(autouse=True)
-def native_dynamic_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_NATIVE_DYNAMIC_RATE_LIMITER_V3", "true")
-
-
 @pytest.fixture
 def time_controller(monkeypatch):
     controller = TimeController()
