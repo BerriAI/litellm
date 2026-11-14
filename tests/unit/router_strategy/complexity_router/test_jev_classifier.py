@@ -1138,7 +1138,7 @@ async def test_jev_bounds_complete_input_without_changing_forwarded_messages(
     [
         ("false", None, None, None, "truncated"),
         ("true", None, None, None, "within_budget"),
-        ("true", "false", None, None, "truncated"),
+        ("true", "false", None, None, "within_budget"),
         ("true", None, 8192, None, "truncated"),
         ("true", None, 8192, "default", "truncated"),
         ("true", None, None, "default", "truncated"),
@@ -1199,7 +1199,7 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
     assert telemetry["classifier_input_tokens"] <= telemetry["classifier_input_budget_tokens"]
     sent: Final = JevSystemOneRequest.model_validate_json(route.calls[0].request.content)
     if other_member is None:
-        assert route.calls[0].request.headers[header] == (default_header or mode)
+        assert route.calls[0].request.headers[header] == mode
     if explicit_cap is not None:
         assert telemetry["classifier_input_budget_tokens"] < explicit_cap
     assert (ask in sent.state) is (expected_status == "within_budget")

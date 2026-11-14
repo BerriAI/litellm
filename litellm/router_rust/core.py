@@ -242,6 +242,7 @@ from litellm.router_strategy.least_busy import (
     picks_reserve,
     release_started_attempt,
 )
+from litellm.router_utils import default_litellm_params as default_params
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
@@ -3203,13 +3204,11 @@ class RustCore(
         )
 
     def params_sent_to_deployment(self, request: Mapping[str, object], deployment_id: object) -> Mapping[str, object]:
-        """The request as a deployment received it: its params, the router defaults, its tool choice, then
+        """The request as a deployment received it: its params, the router defaults it leaves unset, then
         the request (``_params_sent_to_deployment``)."""
         record: Final = self._handle.deployment(deployment_id) if isinstance(deployment_id, str) else None
         params: Final = as_str_mapping((as_str_mapping(record) or {}).get("litellm_params")) or {}
-        defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
-        tool_choice: Final = {"tool_choice": params["tool_choice"]} if params.get("tool_choice") is not None else {}
-        return MappingProxyType({**params, **defaults, **tool_choice, **request})
+        return default_params.params_sent_to_deployment(params, self._resolved.default_litellm_params, request)
 
     def _drive_sync_steps(self, call: "RouterCall[_FailureReportSteps | _SuccessReportSteps]") -> Mapping[str, object]:
         """Drive a call whose only steps are cache ops (``report_failure``) to its end."""
@@ -3434,15 +3433,17 @@ class RustCore(
     ) -> list[str]:  # mutable-ok: the step's answer
         """The candidates that refuse the audio or videos a Decisions call carries."""
         group: Final = str(step.get("model_group"))
-        defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
-        sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))
             if refuses_decisions_media(
-                as_str_mapping(self._handle.deployment(str(id))) or {}, group, sent, audio=audio, videos=videos
+                as_str_mapping(self._handle.deployment(str(id))) or {},
+                group,
+                self.params_sent_to_deployment(request, str(id)),
+                audio=audio,
+                videos=videos,
             )
         ]
 

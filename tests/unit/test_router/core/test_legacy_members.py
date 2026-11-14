@@ -640,7 +640,7 @@ def test_deployment_params_merge_in_the_order_the_deployment_receives_them(make_
     params: Final = RoutingContext(core).deployment_params({"top_p": 0.7}, target)  # pyright: ignore[reportArgumentType]  # the core a context wraps
 
     assert params["model"] == "openai/a"
-    assert params["temperature"] == 0.9
+    assert params["temperature"] == 0.1
     assert params["tool_choice"] == "auto"
     assert params["top_p"] == 0.7
     assert RoutingContext(core).deployment_params({}, None).get("temperature") == 0.9  # pyright: ignore[reportArgumentType]  # see above

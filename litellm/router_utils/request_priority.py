@@ -6,6 +6,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +92,8 @@ def request_drops_params(
     request_flag: Final = _explicit_drop_params(kwargs)
     if request_flag is not None:
         return request_flag
-    router_flag: Final = _explicit_drop_params(router_defaults)
-    if router_flag is not None:
-        return router_flag
-    return any(_explicit_drop_params(params) is True for params in deployments)
+    if not deployments:
+        return _explicit_drop_params(router_defaults) is True
+    return any(
+        _explicit_drop_params(params_sent_to_deployment(params, router_defaults, {})) is True for params in deployments
+    )

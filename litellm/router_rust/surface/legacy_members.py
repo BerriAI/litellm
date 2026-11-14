@@ -18,7 +18,6 @@ import traceback
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from functools import partial
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -46,6 +45,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -538,9 +538,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         """``_params_sent_to_deployment`` of a ``Deployment``, which ``RoutingContext.deployment_params`` hands in."""
         params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
         configured: Final = as_str_mapping(RoutingContext(self).settings().default_litellm_params)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # the core's RoutingContext
-        defaults: Final = {k: v for k, v in (configured or {}).items() if v is not None}
-        tool_choice: Final = {"tool_choice": params["tool_choice"]} if params.get("tool_choice") is not None else {}
-        return MappingProxyType({**params, **defaults, **tool_choice, **request_kwargs})
+        return params_sent_to_deployment(params, configured or {}, request_kwargs)
 
 
 __all__ = ["RustLegacyMembers"]

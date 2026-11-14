@@ -15107,7 +15107,21 @@ async def test_router_caller_entra_field_that_changes_nothing_still_cools_down_a
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-async def test_router_caller_repeating_the_secret_an_empty_router_default_selects_still_cools_down(monkeypatch):
+@pytest.mark.parametrize(
+    ("deployment_secret", "router_default_secret", "caller_secret"),
+    [
+        pytest.param({}, "", "environment-secret", id="empty-router-default-selects-the-environment"),
+        pytest.param(
+            {"client_secret": "configured-secret"},
+            "router-default-secret",
+            "configured-secret",
+            id="deployment-secret-beats-the-router-default",
+        ),
+    ],
+)
+async def test_router_caller_repeating_the_configured_secret_still_cools_down(
+    monkeypatch, deployment_secret, router_default_secret, caller_secret
+):
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
     router = Router(
         model_list=[
@@ -15119,12 +15133,12 @@ async def test_router_caller_repeating_the_secret_an_empty_router_default_select
                     "api_version": "2025-04-01-preview",
                     "tenant_id": "configured-tenant",
                     "client_id": "configured-client",
-                    "client_secret": "configured-secret",
+                    **deployment_secret,
                 },
                 "model_info": {"id": "configured-deployment"},
             }
         ],
-        default_litellm_params={"client_secret": ""},
+        default_litellm_params={"client_secret": router_default_secret},
     )
 
     with pytest.raises(litellm.AuthenticationError):
@@ -15138,7 +15152,7 @@ async def test_router_caller_repeating_the_secret_an_empty_router_default_select
                     model="gpt-4.1",
                 )
             ),
-            client_secret="environment-secret",
+            client_secret=caller_secret,
         )
 
     with pytest.raises(litellm.RouterRateLimitError) as excinfo:
@@ -20514,3 +20528,161 @@ def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_te
     assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
     assert list(registry.deployments("public-chat", team_id="team-b")) == []
     assert list(registry.deployments("public-chat")) == []
+
+
+_ROUTER_DEFAULT_REGION: Final = "us-east-1"
+_BEDROCK_URL: Final = r"https://bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/model/.+"
+_BEDROCK_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+_REGION_PRECEDENCE: Final = pytest.mark.parametrize(
+    ("deployment_region", "request_region", "called_region"),
+    [
+        ("eu-west-1", None, "eu-west-1"),
+        (None, None, _ROUTER_DEFAULT_REGION),
+        ("eu-west-1", "ap-northeast-1", "ap-northeast-1"),
+    ],
+    ids=["deployment-over-router-default", "router-default-fills-unset", "request-over-both"],
+)
+
+
+def _bedrock_router_with_a_default_region(model: str, deployment_region: str | None) -> Router:
+    region: Final = {} if deployment_region is None else {"aws_region_name": deployment_region}
+    return Router(
+        model_list=[
+            {
+                "model_name": "regional",
+                "litellm_params": {
+                    "model": model,
+                    "aws_access_key_id": "unit-access-key",
+                    "aws_secret_access_key": "unit-secret-key",
+                    **region,
+                },
+            }
+        ],
+        default_litellm_params={"aws_region_name": _ROUTER_DEFAULT_REGION},
+        num_retries=0,
+    )
+
+
+def _request_region(request_region: str | None) -> Mapping[str, str]:
+    return {} if request_region is None else {"aws_region_name": request_region}
+
+
+def _called_regions(route: respx.Route) -> list[str]:
+    return [call.request.url.host.split(".")[1] for call in route.calls]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_router_httpx_transport")
+@_REGION_PRECEDENCE
+async def test_acompletion_calls_the_deployment_region_over_a_conflicting_router_default(
+    deployment_region: str | None, request_region: str | None, called_region: str
+) -> None:
+    router: Final = _bedrock_router_with_a_default_region(
+        "bedrock/converse/anthropic.claude-haiku-5-5", deployment_region
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=_BEDROCK_URL).respond(json=_BEDROCK_CONVERSE_REPLY)
+        await router.acompletion(
+            model="regional", messages=[{"role": "user", "content": "Say hi"}], **_request_region(request_region)
+        )
+
+    assert _called_regions(route) == [called_region]
+
+
+@_REGION_PRECEDENCE
+def test_text_completion_calls_the_deployment_region_over_a_conflicting_router_default(
+    deployment_region: str | None, request_region: str | None, called_region: str
+) -> None:
+    router: Final = _bedrock_router_with_a_default_region(
+        "bedrock/converse/anthropic.claude-haiku-5-5", deployment_region
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=_BEDROCK_URL).respond(json=_BEDROCK_CONVERSE_REPLY)
+        router.text_completion(model="regional", prompt="Say hi", **_request_region(request_region))
+
+    assert _called_regions(route) == [called_region]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_router_httpx_transport")
+@_REGION_PRECEDENCE
+async def test_aembedding_calls_the_deployment_region_over_a_conflicting_router_default(
+    deployment_region: str | None, request_region: str | None, called_region: str
+) -> None:
+    router: Final = _bedrock_router_with_a_default_region("bedrock/amazon.titan-embed-text-v2:0", deployment_region)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=_BEDROCK_URL).respond(
+            json={"embedding": [0.1, 0.2], "inputTextTokenCount": 2}
+        )
+        await router.aembedding(model="regional", input=["Say hi"], **_request_region(request_region))
+
+    assert _called_regions(route) == [called_region]
+
+
+def test_text_completion_calls_the_provider_with_the_deployment_model_not_the_group_name() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "text-group",
+                "litellm_params": {
+                    "model": "text-completion-openai/unit-text-model",
+                    "api_base": "https://sync-text-group.invalid/v1",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        provider: Final = upstream.post("https://sync-text-group.invalid/v1/completions").respond(
+            200,
+            json={
+                "id": "cmpl-unit",
+                "object": "text_completion",
+                "created": 1,
+                "model": "unit-text-model",
+                "choices": [{"text": "provider called", "index": 0, "finish_reason": "stop", "logprobs": None}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        response: Final = router.text_completion(model="text-group", prompt="Say hi")
+
+    assert response.choices[0].text == "provider called"
+    assert json.loads(provider.calls.last.request.content)["model"] == "unit-text-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_router_httpx_transport")
+@pytest.mark.parametrize(
+    ("deployment_params", "provider_hits"),
+    [({"max_retries": 1}, 2), ({"max_retries": 3}, 4)],
+    ids=["deployment-max-retries-1", "deployment-max-retries-3"],
+)
+async def test_aembedding_retries_at_the_provider_as_often_as_the_deployment_sets(
+    deployment_params: Mapping[str, int], provider_hits: int
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-large", "api_key": "sk-test", **deployment_params},
+            }
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://api.openai.com/v1/embeddings").respond(
+            500, headers={"retry-after-ms": "1"}, json={"error": {"message": "overloaded", "type": "server_error"}}
+        )
+        with pytest.raises(litellm.InternalServerError):
+            await router.aembedding(model="embed", input=["Say hi"])
+
+    assert len(route.calls) == provider_hits

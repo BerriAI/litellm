@@ -207,6 +207,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -15969,7 +15970,8 @@ def _count_context_management(
         )
     )
     sent_params: Final = tuple(
-        {**params, **router_defaults, **request_litellm_params} for params in deployment_params or ({},)
+        params_sent_to_deployment(params, router_defaults, request_litellm_params)
+        for params in deployment_params or ({},)
     )
     if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
         return None
@@ -16072,7 +16074,7 @@ def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) ->
 def _inference_params(
     litellm_params: Mapping[str, object], responses_request: Mapping[str, object]
 ) -> Mapping[str, object]:
-    return {**litellm_params, **_router_default_litellm_params(llm_router), **responses_request}
+    return params_sent_to_deployment(litellm_params, _router_default_litellm_params(llm_router), responses_request)
 
 
 def _count_drop_policy(deployment: Mapping[str, object] | None, responses_request: Mapping[str, object]) -> DropPolicy:
@@ -16314,12 +16316,17 @@ async def _count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
-    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    router_defaults: Final = _router_default_litellm_params(llm_router)
+    sent_params: Final = params_sent_to_deployment(
+        _DEPLOYMENT_LITELLM_PARAMS.validate_python((deployment or {}).get("litellm_params") or {}),
+        router_defaults,
+        request_litellm_params,
+    )
     count_deployment: Final = _deployment_with_request_drop_settings(deployment, sent_params)
     count_litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(
         (count_deployment or {}).get("litellm_params") or {}
     )
-    deployment_defaults: Final = {**count_litellm_params, **_router_default_litellm_params(llm_router)}
+    deployment_defaults: Final = params_sent_to_deployment(count_litellm_params, router_defaults, {})
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(

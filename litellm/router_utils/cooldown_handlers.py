@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.default_litellm_params import params_sent_to_deployment
 from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
@@ -888,8 +889,9 @@ def is_caller_entra_credential_failure(
 
     credential_name: Final = deployment.litellm_params.litellm_credential_name
     configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
-        router_defaults,
-        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            params_sent_to_deployment(deployment.litellm_params.model_dump(exclude_none=True), router_defaults, {})
+        ),
         _CREDENTIAL_VALUES_ADAPTER.validate_python(
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         ),

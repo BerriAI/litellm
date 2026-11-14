@@ -41,6 +41,11 @@ from litellm.router_strategy.tag_based_routing import (
     get_tags_from_request_kwargs,
     tags_with_serving_deployment_tags,
 )
+from litellm.router_utils.default_litellm_params import (
+    deployment_sets_litellm_param,
+    params_sent_to_deployment,
+    router_defaults_for_deployment,
+)
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     deployment_has_io_token_limits,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     refund_stale_reservation_before_retry,
@@ -119,8 +124,7 @@ def _drops_malformed_request_tools(
 ) -> bool:
     if isinstance(request.get("tools") or [], (list, tuple)) or not deployment_params.get("tools"):
         return False
-    set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
-    return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+    return drop_policy(params_sent_to_deployment(deployment_params, defaults, request)).drops("tools")
 
 
 def _malformed_request_params_the_deployment_sets(
@@ -136,8 +140,7 @@ def _malformed_request_params_the_deployment_sets(
     try:
         validate_litellm_params_strictly(GenericLiteLLMParams, overrides)
     except ValidationError as error:
-        set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
-        policy: Final = drop_policy({**deployment_params, **set_defaults, **request})
+        policy: Final = drop_policy(params_sent_to_deployment(deployment_params, defaults, request))
         malformed: Final = (str(detail["loc"][0]) for detail in error.errors() if detail["loc"])
         return frozenset(key for key in malformed if policy.drops(key))
     return frozenset()
@@ -175,21 +178,13 @@ def merge_tools_from_deployment(
         )
 
 
-def _deployment_sets_litellm_param(deployment_params: Mapping[str, object], key: str) -> bool:
-    value: Final = deployment_params.get(key)
-    if value is None:
-        return False
-    field: Final = LiteLLM_Params.model_fields.get(key)
-    return field is None or value != field.default  # pyright: ignore[reportAny]  # litellm's untyped helpers and request values
-
-
 def _forwarded_alias_marker_keys_the_deployment_sets(
     deployment_params: Mapping[str, object], forwarded_keys: object
 ) -> tuple[str, ...]:
     if not isinstance(forwarded_keys, tuple):
         return ()
     keys: Final[tuple[object, ...]] = forwarded_keys  # pyright: ignore[reportUnknownVariableType]  # the router's own marker
-    return tuple(key for key in keys if isinstance(key, str) and _deployment_sets_litellm_param(deployment_params, key))
+    return tuple(key for key in keys if isinstance(key, str) and deployment_sets_litellm_param(deployment_params, key))
 
 
 # --- reasoning effort -------------------------------------------------------------------------
@@ -355,19 +350,18 @@ def call_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[s
 
 def update_kwargs_with_default_litellm_params(
     shaping: Shaping,
+    deployment_params: Mapping[str, object],
     kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     metadata_variable_name: str,
 ) -> None:
-    """``_update_kwargs_with_default_litellm_params``: unset non-None defaults fill the request;
-    the default metadata fills the keys the request leaves unset, the router's caching groups excepted."""
-    defaults: Final = dict(without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs))
-    metadata_defaults: Final = defaults.pop("metadata", {}) or {}  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
-    for key, value in defaults.items():
-        if value is None:
-            continue
+    """``_update_kwargs_with_default_litellm_params``: the non-None defaults the request leaves unset and
+    the deployment does not set itself fill the request; the default metadata fills the keys the request
+    leaves unset, the router's caching groups excepted."""
+    defaults: Final = without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs)
+    for key, value in router_defaults_for_deployment(without(defaults, "metadata"), deployment_params).items():
         kwargs.setdefault(key, value)
     bucket: Final = metadata_bucket(kwargs, metadata_variable_name)
-    bucket.update(metadata_defaults_under_request(defaults=as_dict(metadata_defaults), request_metadata=bucket))  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
+    bucket.update(metadata_defaults_under_request(defaults=as_dict(defaults.get("metadata")), request_metadata=bucket))
 
 
 # --- clientside credentials -------------------------------------------------------------------
@@ -515,11 +509,11 @@ def update_kwargs_with_deployment(
     )
     _set_timeouts(shaping, deployment_params, kwargs, function_name, splits_stream_timeout)
 
-    if router_config_requests_stream_usage(kwargs, (deployment_params, defaults)):
+    if router_config_requests_stream_usage(kwargs, (params_sent_to_deployment(deployment_params, defaults, {}),)):
         kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
             STREAM_USAGE_INJECTED_FIELD
         ] = True
-    update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name)
+    update_kwargs_with_default_litellm_params(shaping, deployment_params, kwargs, metadata_variable_name)
     pinned_model_id: Final = deployment_model_id_pin(deployment_params)
     if pinned_model_id is not None:
         kwargs["model_id"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them

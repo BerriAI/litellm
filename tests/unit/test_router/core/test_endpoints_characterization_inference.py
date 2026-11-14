@@ -216,18 +216,17 @@ async def test_sync_text_completion_keeps_the_request_metadata_over_the_default_
     assert _bucket(_sent(host))["requester_metadata"] == {"env": "dev", "region": "us", "team": "t1"}
 
 
-async def test_sync_text_completion_sends_the_model_group_name_not_the_deployment_model(
+async def test_sync_text_completion_sends_the_deployment_model_not_the_model_group_name(
     make_core: MakeCore, host: EndpointHost
 ):
-    """The request's model="g" is spread after the deployment params, so it replaces "openai/d1"."""
     core: Final = make_core(model_list=[deployment("g", "d1", api_base="https://d1.example")])
     core.text_completion(model="g", prompt="p")
     call: Final = host.calls[0]
-    assert (call.model, call.kwargs["api_base"]) == ("g", "https://d1.example")
+    assert (call.model, call.kwargs["api_base"]) == ("openai/d1", "https://d1.example")
 
 
 async def test_sync_text_completion_is_not_retried(make_core: MakeCore, host: EndpointHost):
-    host.answer("g", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
+    host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=3)
     with pytest.raises(litellm.InternalServerError):
         core.text_completion(model="g", prompt="p")

@@ -52,6 +52,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     initialize_compaction_state,
     surface_for_call,
 )
+from litellm.router_utils.default_litellm_params import router_defaults_for_deployment
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
 from litellm.vector_stores.search_query import store_search_params
 
@@ -2176,7 +2177,7 @@ class RustEndpoints:
         return await self._direct("amoderation", prepared)
 
     def text_completion(self, request: Mapping[str, object]) -> object:
-        """The sync `text_completion`: one pick, no retries, the group name as the model."""
+        """The sync `text_completion`: one pick, no retries."""
         from litellm.litellm_core_utils.routing_common_utils import (
             deployment_model_id_pin,
             metadata_defaults_under_request,
@@ -2197,17 +2198,21 @@ class RustEndpoints:
                 request_kwargs=kwargs,
             )
         data: Final = as_dict(deployment.get("litellm_params"))
-        for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
-            elif key == "metadata":
-                metadata_bucket(kwargs, key).update(
-                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+        defaults: Final = self._core.resolved.default_litellm_params
+        for key, value in router_defaults_for_deployment(without(defaults, "metadata"), data).items():
+            kwargs.setdefault(key, value)
+        if "metadata" in defaults:
+            metadata_bucket(kwargs, "metadata").update(
+                metadata_defaults_under_request(
+                    defaults=as_dict(defaults["metadata"]), request_metadata=as_dict(kwargs["metadata"])
                 )
+            )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+        return self._invoke("text_completion")(
+            **{**data, "prompt": prompt, "caching": self._cache_responses, **without(kwargs, "model")}
+        )
 
     async def aadapter_completion(
         self,

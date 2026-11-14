@@ -4174,7 +4174,7 @@ async def test_clips_to_a_group_whose_only_taker_is_cooling_down_are_refused_rat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", tuple(_MEDIA_SURFACES))
-async def test_a_router_default_drop_params_overrides_a_deployment_when_choosing_who_takes_clips(
+async def test_a_deployment_drop_params_beats_a_router_default_when_choosing_who_takes_clips(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, surface: str
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -4194,12 +4194,12 @@ async def test_a_router_default_drop_params_overrides_a_deployment_when_choosing
         return await response if asyncio.iscoroutine(response) else response
 
     await send()
-    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
-    assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
-
-    await send(drop_params=True)
     assert respx_mock.calls.last.request.headers["authorization"] == "Bearer drops"
     assert "audio" not in json.loads(respx_mock.calls.last.request.content)
+
+    await send(drop_params=False)
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
+    assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
 
 
 @pytest.mark.asyncio

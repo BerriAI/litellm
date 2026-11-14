@@ -1582,7 +1582,10 @@ def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
 
 
 async def _count_on_a_model_without_a_count_api(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], router_defaults: dict[str, JsonValue] | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, object],
+    router_defaults: dict[str, JsonValue] | None = None,
+    deployment_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> JSONResponse | dict[str, JsonValue]:
     import litellm.proxy.proxy_server as proxy_server
 
@@ -1590,7 +1593,7 @@ async def _count_on_a_model_without_a_count_api(
         model_list=[
             {
                 "model_name": "mistral-tool-result",
-                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test", **deployment_params},
             }
         ],
         default_litellm_params=router_defaults,
@@ -1633,14 +1636,22 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("body_drop_params", "expected_status"), (({}, None), ({"drop_params": False}, 400)))
-async def test_count_tokens_honors_router_default_drop_params_unless_the_body_overrides_it(
-    monkeypatch: pytest.MonkeyPatch, body_drop_params: dict[str, JsonValue], expected_status: int | None
+@pytest.mark.parametrize(
+    ("deployment_params", "body_drop_params", "expected_status"),
+    (({}, {}, None), ({}, {"drop_params": False}, 400), ({"drop_params": False}, {}, 400)),
+    ids=("router-default", "body-over-router-default", "deployment-over-router-default"),
+)
+async def test_count_tokens_honors_router_default_drop_params_unless_the_body_or_deployment_overrides_it(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: dict[str, JsonValue],
+    body_drop_params: dict[str, JsonValue],
+    expected_status: int | None,
 ) -> None:
     response: Final = await _count_on_a_model_without_a_count_api(
         monkeypatch,
         {"model": "mistral-tool-result", "messages": _build_log_messages(None), **body_drop_params},
         router_defaults={"drop_params": True},
+        deployment_params=deployment_params,
     )
 
     match response:
@@ -2992,6 +3003,7 @@ _NATIVE_RESPONSES_BASE: Final = {
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
 }
+_BRIDGED_RESPONSES_BASE: Final = "https://unused.cognitiveservices.azure.com/models"
 
 
 def _responses_function(tool: Mapping[str, object], **strict: bool | None) -> dict[str, object]:
@@ -3300,26 +3312,34 @@ async def test_a_responses_count_that_asks_for_the_chat_completions_bridge_frame
 
 
 @pytest.mark.asyncio
-async def test_a_responses_count_frames_for_the_api_base_router_defaults_send_inference_to(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("deployment_params", "inference_api_base"),
+    [
+        pytest.param({}, _BRIDGED_RESPONSES_BASE, id="router-default-fills-an-unset-api-base"),
+        pytest.param(
+            {"api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]},
+            _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1],
+            id="deployment-api-base-beats-the-router-default",
+        ),
+    ],
+)
+async def test_a_responses_count_frames_for_the_api_base_inference_is_sent_to(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: dict[str, object], inference_api_base: str
 ):
     router: Final = Router(
         model_list=[
             {
                 "model_name": "counted",
-                "litellm_params": {
-                    "api_key": "unused",
-                    "model": _AZURE_GROK_4_1,
-                    "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1],
-                },
+                "litellm_params": {"api_key": "unused", "model": _AZURE_GROK_4_1, **deployment_params},
                 "model_info": {},
             }
         ],
-        default_litellm_params={"api_base": "https://unused.cognitiveservices.azure.com/models"},
+        default_litellm_params={"api_base": _BRIDGED_RESPONSES_BASE},
     )
-    chat_count: Final = await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=False)
+    sent_alone: Final = _single_deployment_router({"model": _AZURE_GROK_4_1, "api_base": inference_api_base}, {})
+    expected: Final = await _count_with_router(monkeypatch, sent_alone, (_GET_WEATHER,), responses=True)
 
-    assert await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=True) == chat_count
+    assert await _count_with_router(monkeypatch, router, (_GET_WEATHER,), responses=True) == expected
 
 
 @pytest.mark.asyncio
@@ -4157,10 +4177,20 @@ async def test_messages_count_tokens_for_a_model_with_no_deployment_drops_an_inv
 
 
 @pytest.mark.asyncio
-async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params() -> None:
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults"),
+    (({}, {}), ({"drop_params": False}, {"drop_params": True})),
+    ids=("no-drop-params", "deployment-over-router-default"),
+)
+async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params(
+    deployment_params: dict[str, JsonValue], router_defaults: dict[str, JsonValue]
+) -> None:
     with patch.object(litellm, "drop_params", False):
         response, sent_bodies = await _count_through_the_messages_endpoint(
-            Router(model_list=[_gemini_deployment("gemini-agent", {})]),
+            Router(
+                model_list=[_gemini_deployment("gemini-agent", deployment_params)],
+                default_litellm_params=router_defaults,
+            ),
             {"model": "gemini-agent", "context_management": _INVALID_COMPACT_EDIT},
         )
 
@@ -5480,6 +5510,7 @@ async def _claude_count(
     monkeypatch: pytest.MonkeyPatch,
     deployment_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object],
+    router_defaults: dict[str, JsonValue] | None = None,
 ) -> tuple[TokenCountResponse, list[dict[str, JsonValue]]]:
     router: Final = Router(
         model_list=[
@@ -5492,7 +5523,8 @@ async def _claude_count(
                     **deployment_params,
                 },
             }
-        ]
+        ],
+        default_litellm_params=router_defaults,
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
     bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
@@ -5516,14 +5548,15 @@ async def _claude_count(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deployment_params", "request_params"),
-    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
-    ids=["deployment", "request"],
+    ("deployment_params", "request_params", "router_defaults"),
+    [({"drop_params": True}, {}, None), ({}, {"drop_params": True}, None), ({}, {}, {"drop_params": True})],
+    ids=["deployment", "request", "router-default"],
 )
 async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_drop_params(
     monkeypatch: pytest.MonkeyPatch,
     deployment_params: Mapping[str, JsonValue],
     request_params: Mapping[str, JsonValue],
+    router_defaults: dict[str, JsonValue] | None,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
@@ -5531,6 +5564,7 @@ async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_dro
         monkeypatch,
         deployment_params,
         {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required", **request_params},
+        router_defaults,
     )
 
     assert (result.error, result.total_tokens) == (False, 77)
@@ -5539,13 +5573,25 @@ async def test_responses_count_on_claude_downgrades_forced_tool_choice_under_dro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults"),
+    [({}, None), ({"drop_params": False}, {"drop_params": True})],
+    ids=["no-drop-params", "deployment-over-router-default"],
+)
 async def test_responses_count_on_claude_rejects_forced_tool_choice_without_drop_params(
     monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: dict[str, JsonValue] | None,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
 
     with pytest.raises(ProxyException) as rejected:
-        await _claude_count(monkeypatch, {}, {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"})
+        await _claude_count(
+            monkeypatch,
+            deployment_params,
+            {"input": "Weather?", "tools": [_WEATHER_TOOL], "tool_choice": "required"},
+            router_defaults,
+        )
 
     assert (rejected.value.code, "forced tool use" in rejected.value.message) == ("400", True)
 
