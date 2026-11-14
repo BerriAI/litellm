@@ -5626,12 +5626,13 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         for index in range(3):
             marker: Final = start + timedelta(seconds=index)
             kwargs["current_attempt_api_call_start_time"] = marker
-            kwargs["standard_logging_object"]["api_base"] = f"https://region-{index}.example/v1"
+            kwargs["standard_logging_object"]["api_base"] = f"https://region-{index}.example:{8443 + index}/v1"
             otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
             otel._handle_failure(kwargs, None, marker, marker + timedelta(milliseconds=500))
         spans: Final = tuple(s for s in exporter.get_finished_spans() if s.name == LITELLM_REQUEST_SPAN_NAME)
         assert len(spans) == 3
         assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+        assert [s.attributes["server.port"] for s in spans] == [8443, 8444, 8445]
         assert all(s.status.status_code is StatusCode.ERROR for s in spans)
 
     def test_create_guardrail_span_dedupes_across_lifecycle_entrypoints(self):
