@@ -86,9 +86,13 @@ class KeyExpiryAlertManager:
         self.clock = clock
 
     async def process_alerts(self) -> None:
-        from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
-            get_email_settings,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
-        )
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
+                get_email_settings,  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
+            )
+        except ImportError:
+            logger.debug("Enterprise package not installed, skipping key expiry alerts")
+            return
 
         if not (await get_email_settings(self.prisma_client)).get("Virtual Key Expiring", True):  # pyright: ignore[reportUnknownMemberType]  # litellm_enterprise is absent from the type-check venv
             return
