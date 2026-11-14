@@ -25,13 +25,12 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     keep_non_string_tool_result_texts,

@@ -1008,6 +1008,78 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
 
+    def test_namespace_member_past_64_characters_round_trips_through_a_chat_name_within_64(self):
+        namespace = "mcp__codex_apps__codex_document_control"
+        member = "_get_document_tool_schemas"
+        sibling = "_get_document_tool_schemas_v2"
+        request_tools = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Document control",
+                "tools": [
+                    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                    for name in (member, sibling)
+                ],
+            }
+        ]
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=request_tools
+        )
+        chat_names = [tool["function"]["name"] for tool in chat_tools]
+        assert len(f"{namespace}__{member}") > 64
+        assert all(len(name) <= 64 for name in chat_names)
+        assert len(set(chat_names)) == 2
+
+        echoed = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": member,
+                "namespace": namespace,
+                "call_id": "call_echo",
+                "arguments": "{}",
+            }
+        )
+        assert echoed[0]["tool_calls"][0]["function"]["name"] == chat_names[0]
+
+        tool_call_id = "call_long_namespace_member"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="muse-ember-1.0",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name=chat_names[0], arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="List the document tools",
+                    responses_api_request={"tools": request_tools},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(call.namespace, call.name) for call in tool_calls] == [(namespace, member)]
+
     def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
         """A deferred top-level function (defer_loading=True) comes back with namespace == name,
         the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises
