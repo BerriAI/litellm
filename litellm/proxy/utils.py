@@ -4977,6 +4977,10 @@ class ProxyLogging:
         if result is not None:
             merged_headers.update(result)
 
+    @staticmethod
+    def filters_listed_models() -> bool:
+        return bool(hook_subscribers(Hook.list_models, ProxyLogging.callback_capabilities().hook_callbacks).entries)
+
     async def hidden_by_listing_callbacks(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
     ) -> frozenset[str]:

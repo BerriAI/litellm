@@ -24,12 +24,20 @@ from litellm.llms.gemini.common_utils import (
     GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
     map_openai_size_to_gemini_image_config,
 )
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_REQUEST_LABELS_MAX,
+    resolve_vertex_request_labels,
+    string_labels,
+    vertex_metadata_sources,
+    vertex_request_label_fields,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     PartType,
     Schema,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
@@ -200,8 +208,12 @@ def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> N
             hidden_params.pop(field, None)
 
 
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_CALLER_LABELS: Final = TypeAdapter(object)
+
+
 def vertex_request_labels_from_litellm_params(
-    litellm_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
@@ -209,23 +221,23 @@ def vertex_request_labels_from_litellm_params(
     using ``requester_metadata`` string key-value pairs (same convention as Gemini).
     ``metadata`` is tried first when both are present.
     """
-    if not litellm_params:
-        return None
-    for key in ("metadata", "litellm_metadata"):
-        if key not in litellm_params:
-            continue
-        metadata = litellm_params[key]
-        if metadata is None or not isinstance(metadata, dict):
-            continue
-        if "requester_metadata" not in metadata:
-            continue
-        rm = metadata["requester_metadata"]
-        if not isinstance(rm, dict):
-            continue
-        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
-        if labels:
-            return labels
-    return None
+    sources: Final = vertex_metadata_sources(litellm_params or {})
+    candidates: Final = (dict(string_labels(source.get("requester_metadata"))) for source in sources)
+    return next((labels for labels in candidates if labels), None)
+
+
+def pop_vertex_caller_labels(
+    optional_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, str] | None:
+    """
+    Pop the caller's optional ``labels`` (Gemini-style), falling back to ``requester_metadata``
+    on ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``.
+    """
+    raw: Final = (
+        _CALLER_LABELS.validate_python(optional_params.pop("labels", None)) if optional_params is not None else None
+    )
+    return dict(string_labels(raw)) or vertex_request_labels_from_litellm_params(litellm_params)
 
 
 def pop_vertex_request_labels(
@@ -233,18 +245,29 @@ def pop_vertex_request_labels(
     litellm_params: dict | None,
 ) -> dict[str, str] | None:
     """
-    Resolve labels from optional ``labels`` (Gemini-style) and/or
-    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
-    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
+    ``litellm.vertex_request_label_fields`` allows.
     """
-    labels: dict[str, str] | None = None
-    if optional_params is not None and "labels" in optional_params:
-        raw: Final = optional_params.pop("labels")
-        if isinstance(raw, dict):
-            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
-    if not labels:
-        labels = vertex_request_labels_from_litellm_params(litellm_params)
-    return labels if labels else None
+    request_params: Final = _LITELLM_PARAMS.validate_python(litellm_params or {})
+    labels: Final = pop_vertex_caller_labels(optional_params, request_params)
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return labels
+    resolved: Final = resolve_vertex_request_labels(allowed_fields, labels, request_params, VERTEX_REQUEST_LABELS_MAX)
+    return dict(resolved) if resolved else None
+
+
+def vertex_top_level_request_fields(
+    request_fields: Mapping[str, object] | None,
+    litellm_params: GenericLiteLLMParams,
+) -> Mapping[str, object] | None:
+    """The caller's top-level body fields with ``labels`` replaced by ``pop_vertex_request_labels`` while the setting is on."""
+    if not vertex_request_label_fields():
+        return request_fields
+    fields: Final = request_fields or {}
+    unlabelled: Final = {name: value for name, value in fields.items() if name != "labels"}
+    labels: Final = pop_vertex_request_labels({"labels": fields.get("labels")}, dict(litellm_params))
+    return {**unlabelled, "labels": labels} if labels else unlabelled
 
 
 class VertexAIModelRoute(str, Enum):

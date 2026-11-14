@@ -1,7 +1,18 @@
+import json
+from collections.abc import Mapping
+from datetime import datetime
+from types import MappingProxyType
+from typing import Final
+
+import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.interactions.http_handler import InteractionsHTTPHandler
 from litellm.interactions.utils import get_provider_interactions_api_config
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
 )
@@ -229,3 +240,104 @@ class TestInteractionByIdRequests:
 
         assert url == f"{GLOBAL_BASE}/abc123/cancel"
         assert request_body == {}
+
+
+
+LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+PROXY_METADATA: Final = MappingProxyType({**IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+async def _created_interaction_body(
+    config: VertexAIInteractionsConfig, extra_body: Mapping[str, object], *, is_async: bool
+) -> Mapping[str, object]:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"id": "interaction-1", "status": "completed", "outputs": []})
+
+    transport: Final = httpx.MockTransport(reply)
+    litellm_params: Final = GenericLiteLLMParams(vertex_project="test-proj", metadata=dict(PROXY_METADATA))
+    logging_obj: Final = Logging(
+        model="gemini-omni-flash-preview",
+        messages=[],
+        stream=False,
+        call_type="acreate_interaction" if is_async else "create_interaction",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="labels-test",
+        function_id="labels-test",
+    )
+    handler: Final = InteractionsHTTPHandler()
+    if is_async:
+        await handler.async_create_interaction(
+            interactions_api_config=config,
+            optional_params={},
+            custom_llm_provider="vertex_ai",
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            model="gemini-omni-flash-preview",
+            input="hi",
+            extra_body=extra_body,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    else:
+        handler.create_interaction(
+            interactions_api_config=config,
+            optional_params={},
+            custom_llm_provider="vertex_ai",
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            model="gemini-omni-flash-preview",
+            input="hi",
+            extra_body=extra_body,
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+    return SENT_BODY.validate_python(json.loads(sent[0].content))
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_create_replaces_forged_extra_body_labels_with_identity_while_the_setting_is_on(
+    config: VertexAIInteractionsConfig, monkeypatch: pytest.MonkeyPatch, is_async: bool
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
+
+    body: Final = await _created_interaction_body(config, {"labels": dict(FORGED)}, is_async=is_async)
+
+    assert list(SENT_LABELS.validate_python(body["labels"]).items()) == [
+        *IDENTITY.items(),
+        ("app", "bot"),
+        ("cost-center", "cc-1"),
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_create_sends_caller_labels_as_is_while_the_setting_is_off(
+    config: VertexAIInteractionsConfig, monkeypatch: pytest.MonkeyPatch, is_async: bool
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    with_labels: Final = await _created_interaction_body(config, {"labels": dict(FORGED)}, is_async=is_async)
+    without_labels: Final = await _created_interaction_body(config, {}, is_async=is_async)
+
+    assert with_labels["labels"] == dict(FORGED)
+    assert "labels" not in without_labels
+
+
+def test_create_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    config: VertexAIInteractionsConfig, litellm_params: GenericLiteLLMParams, monkeypatch: pytest.MonkeyPatch
+):
+    caller_headers: Final = {"x-vertex-ai-labels": "eyJ1c2VyX2FwaV9rZXlfdGVhbV9hbGlhcyI6ICJmb3JnZWQifQ==", "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = config.validate_environment(caller_headers, "gemini-omni-flash-preview", litellm_params)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
+    setting_on: Final = config.validate_environment(caller_headers, "gemini-omni-flash-preview", litellm_params)
+
+    assert setting_off["x-vertex-ai-labels"] == caller_headers["x-vertex-ai-labels"]
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

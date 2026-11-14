@@ -4,7 +4,7 @@ import re
 import sys
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache, lru_cache
+from functools import cache, lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -743,6 +743,12 @@ class _ClientSideStorageAllowlist(BaseModel):
                 return value in (self.allowed_client_side_s3_buckets or ())
             case "allowed_client_side_s3_endpoint_urls":
                 return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return partial(
+        _ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
+    )
 
 
 def _banned_param_error(param: str) -> ValueError:
