@@ -33,6 +33,7 @@ from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.router import Router
 from litellm.types.agents import AgentResponse
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.spend_tracking.native_budgets_replica import admit_native_plan, install_native_owner
 
 CLASSIFIER: Final = "classifier"
 CLASSIFIER_BUDGET: Final = {CLASSIFIER: {"max_budget": 0.1, "budget_duration": "1d"}}
@@ -393,12 +394,13 @@ async def test_a_spent_budget_leaves_a_free_classifier_allowed(proxy_auth_state:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sub_call, reserved", [(False, True), (True, False)], ids=["parent-request", "sub-call"])
 async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
-    proxy_auth_state: ProxyAuthState, sub_call: bool, reserved: bool
+    proxy_auth_state: ProxyAuthState, native_budgets_on: None, sub_call: bool, reserved: bool
 ) -> None:
     proxy_auth_state.serve(_classifier_router(cost_per_token=0.001))
     caller: Final = UserAPIKeyAuth(api_key="sk-live", spend=0.0, max_budget=10.0)
     counter_key: Final = f"spend:key:{caller.token}"
     proxy_server.spend_counter_store.set_local(counter_key, 0.0)
+    _ = install_native_owner(proxy_server.spend_counter_store)
     request: Final = Request(
         scope={"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""}
     )
@@ -409,6 +411,7 @@ async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
     }
 
     await run_centralized_common_checks(caller, request, priced_body, "/v1/messages", sub_call=sub_call)
+    await admit_native_plan(caller, priced_body)
 
     counter: Final = proxy_server.spend_counter_store.get_local(counter_key)
     assert (counter > 0, caller.budget_reservation is not None) == (reserved, reserved)
