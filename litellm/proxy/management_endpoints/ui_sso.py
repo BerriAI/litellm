@@ -2003,6 +2003,23 @@ def sso_lookup_user_ids(alternate_user_id: str | None, provider_id: str | None) 
     )
 
 
+def _would_new_sso_user_have_admin_ui_access(
+    user_defined_values: SSOUserDefinedValues | None,
+) -> bool:
+    if user_defined_values is None:
+        return False
+    proxy_admin_id: Final = os.getenv("PROXY_ADMIN_ID")
+    if proxy_admin_id is not None and proxy_admin_id == user_defined_values.get("user_id"):
+        return True
+    sso_role: Final = user_defined_values.get("user_role")
+    if _should_use_role_from_sso_response(sso_role) and sso_role is not None:
+        return has_admin_ui_access(sso_role)
+    default_role: Final = (litellm.default_internal_user_params or {}).get("user_role")
+    if isinstance(default_role, str):
+        return has_admin_ui_access(default_role)
+    return False
+
+
 async def get_user_info_from_db(
     result: CustomOpenID | OpenID | dict,
     prisma_client: PrismaClient,
@@ -2011,6 +2028,7 @@ async def get_user_info_from_db(
     user_email: str | None,
     user_defined_values: SSOUserDefinedValues | None,
     alternate_user_id: str | None = None,
+    ui_access_mode: dict | str | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
     mapped_user_id: Final = None if user_defined_values is None else user_defined_values.get("user_id")
     resolved_by_database_only: Final = user_defined_values is not None and (
@@ -2043,6 +2061,16 @@ async def get_user_info_from_db(
         verbose_proxy_logger.debug(
             "user_info: %s; litellm.default_internal_user_params: %s", user_info, litellm.default_internal_user_params
         )
+
+        if (
+            user_info is None
+            and check_is_admin_only_access(ui_access_mode or {})
+            and not _would_new_sso_user_have_admin_ui_access(user_defined_values)
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping SSO user creation in DB because ui_access_mode is admin_only and user has no admin role"
+            )
+            return None
 
         # Upsert SSO User to LiteLLM DB
         user_info = await SSOAuthenticationHandler.upsert_sso_user(
@@ -4007,6 +4035,7 @@ class SSOAuthenticationHandler:
             user_email=user_email,
             user_defined_values=user_defined_values,
             alternate_user_id=user_id,
+            ui_access_mode=ui_access_mode,
         )
 
         # Sync user role from JWT claims via jwt_litellm_role_map (if configured).
@@ -4032,6 +4061,23 @@ class SSOAuthenticationHandler:
                 "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
             )
 
+        target_user_id: Final = _require_sso_user_id(user_defined_values["user_id"])
+        user_role = user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        is_admin_only_access: Final = check_is_admin_only_access(ui_access_mode or {})
+        if is_admin_only_access:
+            user_role = await check_and_update_if_proxy_admin_id(
+                user_role=user_role, user_id=target_user_id, prisma_client=prisma_client
+            )
+            verbose_proxy_logger.debug("user_role: %s; ui_access_mode: %s", user_role, ui_access_mode)
+            has_access: Final = has_admin_ui_access(user_role or "")
+            if not has_access:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
+                    },
+                )
+
         verbose_proxy_logger.info("user_defined_values for creating ui key: %s", user_defined_values)
 
         response: Final = await generate_key_helper_fn(
@@ -4044,7 +4090,7 @@ class SSOAuthenticationHandler:
             spend=0,
             team_id="litellm-dashboard",
             models=user_defined_values["models"],
-            user_id=_require_sso_user_id(user_defined_values["user_id"]),
+            user_id=target_user_id,
             user_email=user_defined_values["user_email"],
             user_role=user_defined_values["user_role"],
             max_budget=user_defined_values["max_budget"],
@@ -4055,24 +4101,10 @@ class SSOAuthenticationHandler:
         key = response["token"]
         user_id = response["user_id"]
 
-        user_role = user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-        if user_id and isinstance(user_id, str):
+        if not is_admin_only_access and user_id and isinstance(user_id, str):
             user_role = await check_and_update_if_proxy_admin_id(
                 user_role=user_role, user_id=user_id, prisma_client=prisma_client
             )
-
-        verbose_proxy_logger.debug("user_role: %s; ui_access_mode: %s", user_role, ui_access_mode)
-        ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-        is_admin_only_access: Final = check_is_admin_only_access(ui_access_mode or {})
-        if is_admin_only_access:
-            has_access: Final = has_admin_ui_access(user_role or "")
-            if not has_access:
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
-                    },
-                )
 
         from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
 
