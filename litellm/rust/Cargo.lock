@@ -3800,6 +3800,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "litellm-circuit-breaker",
+ "litellm-error",
  "litellm-secret-value",
  "macro_rules_attribute",
  "rstest",

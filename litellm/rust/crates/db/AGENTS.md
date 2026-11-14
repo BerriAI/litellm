@@ -54,7 +54,21 @@ Python and SQLx run side by side until every repository operation is native, so 
 | Startup connection budget | `postgres_connection_budget_message` | Counts the Rust writer and reader pools' shares |
 | Read replica routing | `routing_prisma_wrapper.py`, `DATABASE_URL_READ_REPLICA` | `Pools`: callers pick `writer()`, `read()` or `read_after_write()`. `read()` prefers the reader and `read_after_write()` the writer (`WriterPinnedClient`); either falls back to the other side when its pool cannot connect and skips that side for 30s, so reads keep working on the reader while the writer is down. Writes have no fallback |
 | Error classification, `lock_timeout` on rollups | `exception_handler.py`, `rollup_lock_timeout.py` | Planned |
-| `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py` | Planned |
+| `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py`, `prometheus_services.py`, `otel/model/spans.py` | Python host only. Wrap each native operation in `observe` with the call type and table its Prisma version uses, and the bridge forwards events to `ServiceLoggingEvents`. Nesting under an outer Python `db_span` is not detected. A Rust host has no sink yet and must emit the names below |
 | Auth lookup gate, fail open on DB outage, reader choice per query | `db_lookup_gate.py`, `allow_requests_on_db_unavailable` | With each ported auth read |
+| Connect at boot, so a database that cannot be reached is reported before traffic | `PrismaClient.connect` | The pool stays lazy and never fails boot. `Database.open` pings it once in the background and logs a warning when it cannot connect, so a mistranslated endpoint is not first found by a ported query |
 | Health watchdog, engine reaper, drain tracker, engine recreation | `utils.py`, `query_engine_reaper.py`, `prisma_client.py` | Not needed: SQLx pools reconnect per connection and `close` waits for checked-out connections |
 | Migrations, `check_migration`, views | `prisma_client.py`, `create_views.py` | Prisma keeps them until the SQLx cutover |
+
+## DB event names a Rust host sink must match
+
+Prometheus and OTel dashboards aggregate across the Python proxy and any Rust server, so a Rust sink emits the same names and labels Python does, pinned by inline cases on both sides
+
+- Prometheus
+  - `litellm_postgres_latency`, a histogram with label `postgres="postgres"`
+  - `litellm_postgres_total_requests`
+  - `litellm_postgres_failed_requests`, adding `error_class` (`NativeDatabaseError` for native failures) and `function_name` (the call type)
+- OTel span name, from `service_span_name`
+  - `postgres.{verb} {table}` when the call type maps to a known Prisma helper and its table resolves
+  - `postgres.{verb}` for targetless verbs, for example `postgres.ping` for `health_check`
+  - `postgres {call_type}` otherwise

@@ -21,14 +21,16 @@ import struct
 import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 
 from litellm._logging import verbose_proxy_logger
+from litellm._service_logger import ServiceTypes
+from litellm.proxy.db.db_span import db_event_metadata
 from litellm.proxy.db.db_url_settings import NATIVE_APPLICATION_NAME, PRISMA_APPLICATION_NAME
 from litellm.proxy.db.pgbouncer import database_url_is_pooled, fold_libpq_option_tokens, libpq_option_setting
 from litellm.proxy.db.token_auth import (
@@ -287,3 +289,81 @@ async def keep_token_fresh(
     while True:
         await sleep(delay)
         delay = await _refresh(install, rotation, now)
+
+
+class DatabaseServiceHooks(Protocol):
+    async def async_service_success_hook(
+        self,
+        service: ServiceTypes,
+        call_type: str,
+        duration: float,
+        parent_otel_span: None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
+    ) -> None: ...
+
+    async def async_service_failure_hook(
+        self,
+        service: ServiceTypes,
+        duration: float,
+        error: Exception,
+        call_type: str,
+        parent_otel_span: None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
+    ) -> None: ...
+
+
+class NativeDatabaseError(Exception):
+    """A native (SQLx) query failure, reported to service logging like a Prisma one."""
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceLoggingEvents:
+    """Turns native round trips into the ``ServiceTypes.DB`` events ``db_span`` emits.
+
+    Rust calls ``record`` from its own threads once per round trip, so the hook is
+    handed to the proxy's event loop rather than awaited here.
+    """
+
+    loop: asyncio.AbstractEventLoop
+    service_logging: Callable[[], DatabaseServiceHooks | None]
+
+    def record(
+        self,
+        call_type: str,
+        table: str | None,
+        operation: str | None,
+        started_at: float,
+        duration_seconds: float,
+        failure: str | None,
+    ) -> None:
+        service_logging: Final = self.service_logging()
+        if service_logging is None:
+            return
+        start_time: Final = datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone().replace(tzinfo=None)
+        hook: Final = (
+            service_logging.async_service_success_hook(
+                service=ServiceTypes.DB,
+                call_type=call_type,
+                parent_otel_span=None,
+                duration=duration_seconds,
+                start_time=start_time,
+                end_time=start_time + timedelta(seconds=duration_seconds),
+                event_metadata=db_event_metadata(table, operation),
+            )
+            if failure is None
+            else service_logging.async_service_failure_hook(
+                error=NativeDatabaseError(failure),
+                service=ServiceTypes.DB,
+                call_type=call_type,
+                parent_otel_span=None,
+                duration=duration_seconds,
+                start_time=start_time,
+                end_time=start_time + timedelta(seconds=duration_seconds),
+                event_metadata=db_event_metadata(table, operation),
+            )
+        )
+        _ = self.loop.call_soon_threadsafe(self.loop.create_task, hook)
