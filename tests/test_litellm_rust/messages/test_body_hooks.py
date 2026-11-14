@@ -1,16 +1,22 @@
+import asyncio
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import (
+    _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # the first call's entry must land before the second reads it
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native import interceptors
 from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
-from tests.test_litellm_rust.messages.data import BODY_HOOKS, MESSAGES_RESPONSE, REQUEST, call
+from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE, REQUEST, call
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.body_hooks import LegacyAgenticLoop, PlannedAgenticLoop, agentic_hooks
 from tests.test_litellm_rust.support.isolation import rebound
@@ -20,6 +26,8 @@ from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_nativ
 
 pytestmark = pytest.mark.requires_rust_extension
 
+_SENT: Final = TypeAdapter(dict[str, object])
+
 
 @pytest.fixture
 def server(server: RecordingServer) -> Iterator[RecordingServer]:
@@ -27,7 +35,6 @@ def server(server: RecordingServer) -> Iterator[RecordingServer]:
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_pre_request_hook_rewrites_the_provider_request(server: RecordingServer) -> None:
     class Rewrite(CustomLogger):
         async def async_pre_request_hook(
@@ -44,7 +51,27 @@ async def test_body_pre_request_hook_rewrites_the_provider_request(server: Recor
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
+async def test_body_pre_request_hook_runs_only_after_a_response_cache_miss(server: RecordingServer) -> None:
+    seen: Final[list[object]] = []
+
+    class Rewrite(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            seen.append(kwargs.get("stop_sequences"))
+            return {**kwargs, "stop_sequences": ["HOOKED"]}
+
+    with rebound(litellm, "callbacks", [Rewrite()]), rebound(litellm, "cache", Cache()):
+        await call(server, stop_sequences=["CALLER"])
+        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+        await call(server, stop_sequences=["CALLER"])
+
+    assert seen == [None]
+    assert len(server.requests) == 1
+    assert _SENT.validate_python(server.requests[0].body).get("stop_sequences") == ["HOOKED"]
+
+
+@pytest.mark.asyncio
 async def test_body_websearch_short_circuit_answers_without_the_provider(server: RecordingServer) -> None:
     class ShortCircuit(WebSearchInterceptionLogger):
         async def try_short_circuit_search(
@@ -65,7 +92,6 @@ async def test_body_websearch_short_circuit_answers_without_the_provider(server:
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_interceptor_replaces_the_provider_call(server: RecordingServer) -> None:
     class Replace(MessagesInterceptor):
         def can_handle(self, tools: list[dict[str, object]] | None, custom_llm_provider: str | None) -> bool:
@@ -82,7 +108,6 @@ async def test_body_interceptor_replaces_the_provider_call(server: RecordingServ
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_response(server: RecordingServer) -> None:
     loop: Final = PlannedAgenticLoop()
     server.enqueue(ResponseSpec(body=MESSAGES_RESPONSE))
@@ -105,7 +130,6 @@ async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_res
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingServer) -> None:
     loop: Final = LegacyAgenticLoop()
 

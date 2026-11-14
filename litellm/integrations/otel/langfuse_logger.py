@@ -20,13 +20,26 @@ from litellm.integrations.otel.plumbing.context import request_root_span
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
     the root observation, and the proxy's root span is still recording when the LLM call starts."""
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        cache: "DualCache",
+        data: dict,
+        call_type: "CallTypesLiteral",
+    ) -> dict:
+        # Through v1.111.0 the proxy's leaf-only override check never ran OpenTelemetryV2's pre-call identity
+        # seeding for the Langfuse subclasses. The MRO-aware check that replaced it would, so this no-op keeps them
+        # as they were.
+        return data
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()

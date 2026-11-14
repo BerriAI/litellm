@@ -26,20 +26,20 @@ directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
-CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
+GitHub Actions integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
 the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
 `run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,
-and on a pull request when someone adds the `run-ci` label. Neither runs every pull request, so a new file here
+and on a pull request when someone adds the `run-ci` label. These jobs do not run every pull request, so a new file here
 first runs on main after its PR merges, or earlier if the PR gets `run-ci`. Wanting a file to run before merge
 is no reason to change CI, and a new
 dedicated workflow for it is the same mistake as a shared shard. Write the file, leave `GITHUB_FILES` and
 every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is only for a file that
-needs what CircleCI's groups cannot give it, like the images `image-scan.yml` builds or the plain pytest
-run CircleCI's `roi-database` job gives `test_roi_observed.py`. Add a file there only in that case,
+needs what GitHub Actions groups cannot give it, like the images `image-scan.yml` builds. `test_roi_observed.py` previously needed a dedicated plain pytest
+job and now has no CI owner. It is listed explicitly in the coverage allowlist. Add a file to `GITHUB_FILES` only when needed,
 together with its dedicated job, and list a new dedicated GitHub workflow with the directory it owns in
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
-fails a file here that a GitHub workflow runs unless it is in `GITHUB_FILES` and that workflow owns its
-directory (#46780)
+fails a file here that another workflow selects unless that workflow owns its path in
+`DEDICATED_INTEGRATION_WORKFLOWS` (#46780).
 
 ## Fixtures that boot a proxy
 
@@ -50,4 +50,4 @@ on one xdist worker, so the proxy they share boots there once and stops when tha
 file. A test that requests one more of those fixtures than its neighbors gets its own group and can boot
 the proxy again on another worker, so keep that set the same across the tests that share a proxy. An
 unpinned session fixture boots a copy on every worker that runs one of its tests and keeps them all until
-the node ends, and those copies ran CircleCI integration-extensions nodes out of memory
+the node ends, and those copies ran GitHub Actions integration-extensions nodes out of memory
