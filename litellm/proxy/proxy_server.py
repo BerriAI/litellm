@@ -583,6 +583,7 @@ from litellm.proxy.common_utils.model_listing_utils import (
     configured_display_names,
     dispatched_model,
     label_entries,
+    unlisted_alias_targets,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -12784,18 +12785,58 @@ def _with_router_aliases_to(hidden: frozenset[str]) -> frozenset[str]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ListingCallbackVerdict:
+    hid: frozenset[str]
+    hidden: frozenset[str]
+    kept_alias_targets: frozenset[str]
+
+
+async def _listing_callback_verdict(
+    user_api_key_dict: UserAPIKeyAuth,
+    listed_names: Sequence[str],
+    alias_targets: Sequence[str],
+    internal_to_public: Mapping[str, str],
+) -> _ListingCallbackVerdict:
+    router_aliases: Final = llm_router.registry().aliases() if llm_router is not None else {}
+    target_reads: Final = MappingProxyType(
+        {
+            target: frozenset(
+                internal_to_public.get(name, name)
+                for name in (target, resolve_model_group_alias(router_aliases, target))
+                if name is not None
+            )
+            for target in alias_targets
+        }
+    )
+    offered_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(dict.fromkeys((*listed_names, *chain.from_iterable(target_reads.values()))))
+    )
+    hid: Final = offered_hid.intersection(listed_names)
+    return _ListingCallbackVerdict(
+        hid,
+        _with_router_aliases_to(hid),
+        frozenset(target for target, names in target_reads.items() if offered_hid.isdisjoint(names)),
+    )
+
+
 def _describable_model_groups(
     listed_entries: Sequence[tuple[str, str]],
     hidden_names: frozenset[str] | set[str],
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
+    kept_alias_targets: frozenset[str],
 ) -> DeployedModelGroups:
     listing_team_id: Final = team_id or user_api_key_dict.team_id
     return DeployedModelGroups(
         llm_router,
         hidden_names | undiscoverable_model_groups(llm_router, user_api_key_dict, listing_team_id),
         listing_team_id,
-        (frozenset(lookup_id for _, lookup_id in listed_entries) if ProxyLogging.filters_listed_models() else None),
+        (
+            frozenset((*(lookup_id for _, lookup_id in listed_entries), *kept_alias_targets))
+            if ProxyLogging.filters_listed_models()
+            else None
+        ),
     )
 
 
@@ -12898,19 +12939,23 @@ async def _key_model_listing(
     translated_entries: Final = TeamModelNameTranslator.listing_entries(
         [name for name in names if name not in excluded], llm_router, general_settings_view()
     )
-    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
-        user_api_key_dict, tuple(response_id for response_id, _ in translated_entries)
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in translated_entries),
+        unlisted_alias_targets(translated_entries, caller_aliases),
+        TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings_view()),
     )
-    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
-    listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in callback_hidden_names)
+    listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in verdict.hidden)
     entries: Final = tuple(
         entry
         for entry in alias_listing_entries(
             listed_entries,
             caller_aliases,
-            _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
         )
-        if entry[0] not in names_callbacks_hid
+        if entry[0] not in verdict.hid
     )
     return _KeyModelListing(
         rows=tuple(
@@ -13253,19 +13298,18 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
-    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
-        user_api_key_dict,
-        tuple(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(
-                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
-            )
-        ),
+    offered_entries: Final = TeamModelNameTranslator.listing_entries(
+        tuple(m for m in all_models if m not in hidden_names), llm_router, settings
     )
-    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
-    if hidden_names or callback_hidden_names:
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in offered_entries),
+        unlisted_alias_targets(offered_entries, caller_aliases),
+        internal_to_public,
+    )
+    if hidden_names or verdict.hidden:
         all_models = [
-            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in verdict.hidden
         ]
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -13276,12 +13320,14 @@ async def model_info(
     )
     aliased_model_id: Final = (
         None
-        if model_id in names_callbacks_hid
+        if model_id in verdict.hid
         else alias_target(
             model_id,
             caller_aliases,
             listed_entries,
-            _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
         )
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
@@ -19302,7 +19348,7 @@ async def model_group_info(
     )
 
     agent_groups: Final = await append_agents_to_model_group(model_groups=[], user_api_key_dict=user_api_key_dict)
-    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+    verdict: Final = await _listing_callback_verdict(
         user_api_key_dict,
         tuple(
             dict.fromkeys(
@@ -19312,10 +19358,11 @@ async def model_group_info(
                 )
             )
         ),
+        unlisted_alias_targets(tuple((name, name) for name in listed_group_names), caller_aliases),
+        internal_to_public,
     )
-    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
     kept_entries: Final = tuple(
-        (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in callback_hidden_names
+        (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in verdict.hidden
     )
     blocked_names: Final = llm_router.health().fully_blocked_model_names()
     requested_entries: Final = tuple(
@@ -19324,9 +19371,9 @@ async def model_group_info(
             kept_entries,
             blocked_names,
             caller_aliases,
-            _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None),
+            _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None, verdict.kept_alias_targets),
         )
-        if (model_group is None or entry[0] == model_group) and entry[0] not in names_callbacks_hid
+        if (model_group is None or entry[0] == model_group) and entry[0] not in verdict.hid
     )
     lookup_ids: Final = tuple(dict.fromkeys(lookup_id for _, lookup_id in requested_entries))
     groups_by_lookup_id: Final = MappingProxyType(
@@ -19350,7 +19397,7 @@ async def model_group_info(
                 _model_group_row_listed_as(groups_by_lookup_id[lookup_id], listed_name, lookup_id)
                 for listed_name, lookup_id in requested_entries
             ),
-            *(group for group in agent_groups if group.model_group not in callback_hidden_names),
+            *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
 

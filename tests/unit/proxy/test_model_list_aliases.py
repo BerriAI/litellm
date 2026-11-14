@@ -517,6 +517,41 @@ async def test_a_name_a_listing_callback_hides_stays_hidden_when_it_is_also_an_a
 
 @pytest.mark.asyncio
 @_LISTING_GATES
+async def test_an_alias_to_an_unlisted_model_a_listing_callback_keeps_is_described_by_that_model(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
+) -> None:
+    caller: Final = _team_listing("fast", team_model_aliases={"fast": "gpt-4.1"})
+    target_holder: Final = _keyholder("gpt-4.1")
+    target_row: Final = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=target_holder, request=None))["data"]}
+    target_info: Final = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=target_holder)
+    target_group: Final = {**(await _model_group_rows(target_holder))["gpt-4.1"], "model_group": "fast"}
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"unrelated"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    rows: Final = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=caller, request=None))["data"]}
+    assert rows["fast"] == {**target_row["gpt-4.1"], "id": "fast"}
+    assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target_info, "id": "fast"}
+    assert (await _model_group_rows(caller))["fast"] == target_group
+    assert await _model_group_rows(caller, model_group="fast") == {"fast": target_group}
+
+
+@pytest.mark.asyncio
+@_LISTING_GATES
+async def test_an_alias_to_an_unlisted_model_a_listing_callback_hides_is_not_described_by_that_model(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
+) -> None:
+    caller: Final = _team_listing("fast", team_model_aliases={"fast": "gpt-4.1"})
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"gpt-4.1"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert (await _model_group_rows(caller))["fast"]["providers"] == []
+    with pytest.raises(HTTPException) as lookup:
+        await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
+    assert lookup.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@_LISTING_GATES
 async def test_an_alias_named_like_a_router_alias_to_a_hidden_model_is_listed_as_its_own_target(
     router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
 ) -> None:

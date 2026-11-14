@@ -352,6 +352,18 @@ def alias_listing_entries(
     return (*retargeted, *added)
 
 
+def unlisted_alias_targets(entries: Sequence[tuple[str, str]], aliases: CallerAliases) -> tuple[str, ...]:
+    layers: Final = _alias_layers(aliases)
+    listed: Final = frozenset(chain.from_iterable(entries))
+    return tuple(
+        dict.fromkeys(
+            target
+            for target, checks_target in (_dispatch(response_id, layers) for response_id, _ in entries)
+            if not checks_target and target not in listed
+        )
+    )
+
+
 def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """`entries` with every `listed` name read under its own lookup id again, so an alias
     `alias_listing_entries` describes by its target keeps its own display name, the way a

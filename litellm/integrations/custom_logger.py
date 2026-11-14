@@ -440,7 +440,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
         `/model_group/info`) with the public model names the route would otherwise return, so a
         lookup of one model may offer just that name: decide per name, never by position in the
-        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        sequence. The names also include each unlisted model that a listed key or team alias sends
+        requests to, and the model a `model_group_alias` of that name resolves to, and the alias row
+        carries that model's info only while the callback keeps all of them. Leaving one out hides
+        no listed name. Alias names a key or team maps without listing them are not offered. Return
+        the names to keep as a sequence of strings; a name left out disappears
         from every listing, any alias of it offered in the same call goes with it, and
         `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
         outside `model_names` are ignored, so a callback can only narrow the listing, never widen
