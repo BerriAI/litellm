@@ -933,9 +933,9 @@ _REGISTRATIONS: Final[Mapping[str, tuple[Registration, Literal["native", "fallba
     "configured_success_and_failure_events": (_configured_events, "native"),
     "string_in_success_and_failure_callback": (_string_in("success_callback", "failure_callback"), "native"),
     "dynamic_and_global": (_dynamic(True), "native"),
-    "instance_in_success_and_failure_callback": (_instance_in("success_callback", "failure_callback"), "fallback"),
-    "instance_in_async_lists": (_instance_in("_async_success_callback", "_async_failure_callback"), "fallback"),
-    "dynamic_only": (_dynamic(False), "fallback"),
+    "instance_in_success_and_failure_callback": (_instance_in("success_callback", "failure_callback"), "native"),
+    "instance_in_async_lists": (_instance_in("_async_success_callback", "_async_failure_callback"), "native"),
+    "dynamic_only": (_dynamic(False), "native"),
 }
 _PYTHON_EMITS_NOTHING: Final = frozenset(
     {
@@ -1044,9 +1044,10 @@ async def test_every_registration_path_emits_each_request_exactly_once_as_python
         assert "litellm_total_tokens_metric_total{" not in native_text
         return
     expected_event: Final = "failure" if scenario == "failure" else "success"
-    assert native_recordings == ([expected_event] if _REGISTRATIONS[registration][1] == "native" else [])
     if (registration, scenario) in _PYTHON_EMITS_NOTHING:
+        assert native_recordings == []
         return
+    assert native_recordings == ([expected_event] if _REGISTRATIONS[registration][1] == "native" else [])
     if scenario == "failure":
         assert "litellm_llm_api_failed_requests_metric_total{" in native_text
     else:
