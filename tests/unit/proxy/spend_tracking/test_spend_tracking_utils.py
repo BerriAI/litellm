@@ -6928,3 +6928,62 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+@pytest.mark.asyncio
+async def test_the_spend_row_of_a_fallback_reply_counts_the_tokens_of_the_refused_attempt_it_bills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _schedule_async_success_logging
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="refused-then-served-row",
+        function_id="refused-then-served-row",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.defer_async_logging = True
+    refused: Final = litellm.ModelResponse(
+        id="refused", model="gpt-4o-mini", usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    )
+    served: Final = litellm.ModelResponse(
+        id="served", model="gpt-4o-mini", usage=litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    now: Final = datetime.datetime.now()
+
+    _schedule_async_success_logging(logging_obj, refused, now, now, is_completion_with_fallbacks=False)
+    logging_obj.carry_failed_attempt_usage()
+    _schedule_async_success_logging(logging_obj, served, now, now, is_completion_with_fallbacks=False)
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+    ((kwargs, response_obj),) = recorder.events
+    row: Final = get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now)
+
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (1010, 505, 1515)
+    assert row["spend"] == pytest.approx(kwargs["response_cost"])

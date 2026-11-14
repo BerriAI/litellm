@@ -1,5 +1,6 @@
 import datetime as real_datetime
 import smtplib
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -2328,6 +2329,71 @@ def test_a_failed_fallback_still_bills_the_refused_reply_it_fell_back_from(
     assert isinstance(usage, Usage)
     assert (usage.prompt_tokens, usage.completion_tokens) == expected_tokens
     assert lifted["response_cost"] == pytest.approx(expected_cost)
+
+
+def _settle_nothing(logging_obj: object) -> None:
+    return None
+
+
+def _post_call_hook_raised(logging_obj: object) -> None:
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj, exception_raised=True)
+
+
+def _router_fell_back(logging_obj: object) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    assert isinstance(logging_obj, Logging)
+    logging_obj.carry_failed_attempt_usage()
+
+
+@pytest.mark.parametrize(
+    "settle_parked_log, fallback_dispatched",
+    [(_settle_nothing, False), (_post_call_hook_raised, False), (_router_fell_back, True)],
+    ids=["hook-raised-before-the-log-was-sent", "post-call-hook-raised", "fallback-failed-after-a-refusal"],
+)
+def test_a_failed_request_bills_the_reply_whose_parked_success_log_never_ran(
+    monkeypatch: pytest.MonkeyPatch,
+    settle_parked_log: Callable[[object], None],
+    fallback_dispatched: bool,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import _count_request_input_tokens, _failure_fields_to_lift
+    from litellm.utils import _schedule_async_success_logging
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="parked-then-failed",
+        function_id="parked-then-failed",
+    )
+    logging_obj.update_environment_variables(
+        model=FAILURE_USAGE_MODEL, user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.defer_async_logging = True
+    logging_obj.model_call_details["first_api_call_start_time"] = real_datetime.datetime.now()
+    reply: Final = ModelResponse(
+        id="parked", model=FAILURE_USAGE_MODEL, usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    )
+    now: Final = real_datetime.datetime.now()
+
+    _schedule_async_success_logging(logging_obj, reply, now, now, is_completion_with_fallbacks=False)
+    settle_parked_log(logging_obj)
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
+    fallback_prompt: Final = (
+        _count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None) if fallback_dispatched else 0
+    )
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (1000 + fallback_prompt, 500)
+    assert lifted["response_cost"] == pytest.approx(litellm.completion_cost(reply, model=FAILURE_USAGE_MODEL))
 
 
 def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():

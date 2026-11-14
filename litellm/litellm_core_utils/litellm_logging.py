@@ -2316,6 +2316,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
+        self.bridged_model_response = None
         parked: Final = self.deferred_success_result
         if parked is None or self.enqueue_deferred_logging is None:
             return
@@ -2336,6 +2337,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if usage is None:
             return None
         return usage, self._price_without_recording(response) or 0.0
+
+    def parked_success_round(self) -> ServedRound | None:
+        parked: Final = self.deferred_success_result
+        if parked is None or self.async_success_log_enqueued:
+            return None
+        return self.served_round(parked[0])
 
     def _price_without_recording(self, result: object) -> float | None:
         previous_cost_breakdown: Final = self.cost_breakdown

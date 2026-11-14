@@ -1140,9 +1140,10 @@ def _failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    parked_success: tuple[Usage, float] | None = None,
 ) -> tuple[object, object] | None:
     current_attempt: Final = _current_failure_usage_to_lift(
-        model_call_details, request_body, dispatched, provider_billed, deployment_id, base_model
+        model_call_details, request_body, dispatched, provider_billed, deployment_id, base_model, parked_success
     )
     failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
     if not failed_attempts:
@@ -1158,6 +1159,7 @@ def _current_failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    parked_success: tuple[Usage, float] | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1175,6 +1177,8 @@ def _current_failure_usage_to_lift(
     recovered_usage: Final = model_call_details.get("combined_usage_object")
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
+    if parked_success is not None:
+        return parked_success
     if not dispatched:
         return None
     if model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL) and not provider_billed:
@@ -1633,6 +1637,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
+        parked_success=_logging_obj.parked_success_round() if isinstance(_logging_obj, Logging) else None,
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
