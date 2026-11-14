@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -12,7 +13,21 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
+    get_copilot_default_headers,
 )
+
+
+@pytest.mark.parametrize("empty_value", ("", " \t\n"))
+def test_copilot_api_version_is_read_at_request_time(monkeypatch: pytest.MonkeyPatch, empty_value: str) -> None:
+    monkeypatch.delenv("GITHUB_COPILOT_API_VERSION", raising=False)
+    default_headers: Final = get_copilot_default_headers("test-token")
+    assert default_headers["x-github-api-version"] == "2025-04-01"
+    monkeypatch.setenv("GITHUB_COPILOT_API_VERSION", "2026-08-01")
+    assert get_copilot_default_headers("test-token")["x-github-api-version"] == "2026-08-01"
+    monkeypatch.setenv("GITHUB_COPILOT_API_VERSION", empty_value)
+    assert get_copilot_default_headers("test-token")["x-github-api-version"] == default_headers["x-github-api-version"]
+    monkeypatch.delenv("GITHUB_COPILOT_API_VERSION")
+    assert get_copilot_default_headers("test-token")["x-github-api-version"] == default_headers["x-github-api-version"]
 
 
 def test_github_copilot_config_get_openai_compatible_provider_info():
