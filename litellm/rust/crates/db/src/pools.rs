@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
 
 use litellm_circuit_breaker::{Breaker, Config, Failure};
 use sqlx::{PgPool, Postgres, pool::PoolConnection};
@@ -9,16 +12,46 @@ const RECOVERY: Duration = Duration::from_secs(30);
 
 type Connection = PoolConnection<Postgres>;
 
+#[derive(Default)]
+struct Recycled(Mutex<Option<Instant>>);
+
+impl Recycled {
+    fn mark(&self, now: Instant) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(now);
+    }
+
+    fn predates(&self, now: Instant, age: Duration) -> bool {
+        let Some(recycled_at) = *self.0.lock().unwrap_or_else(PoisonError::into_inner) else {
+            return false;
+        };
+        now.checked_sub(age)
+            .is_none_or(|opened_at| opened_at <= recycled_at)
+    }
+}
+
 #[derive(Clone)]
 struct Side {
     pool: PgPool,
     breaker: Breaker,
+    recycled: Arc<Recycled>,
 }
 
 impl Side {
     fn new(endpoint: &Endpoint) -> Result<Self, Error> {
+        let recycled = Arc::new(Recycled::default());
+        let pool = endpoint
+            .pool_options()?
+            .before_acquire({
+                let recycled = Arc::clone(&recycled);
+                move |_, metadata| {
+                    let fresh = !recycled.predates(Instant::now(), metadata.age);
+                    Box::pin(async move { Ok(fresh) })
+                }
+            })
+            .connect_lazy_with(endpoint.connect_options());
         Ok(Self {
-            pool: endpoint.pool()?,
+            pool,
+            recycled,
             breaker: Breaker::new(
                 Config {
                     failure_threshold: 1,
@@ -99,6 +132,18 @@ impl Pools {
         acquire_preferring(&self.writer, self.reader.as_ref()).await
     }
 
+    pub fn recycle_after(&self, error: &Error) -> bool {
+        if !error.needs_fresh_connections() {
+            return false;
+        }
+        let now = Instant::now();
+        self.writer.recycled.mark(now);
+        if let Some(reader) = &self.reader {
+            reader.recycled.mark(now);
+        }
+        true
+    }
+
     pub async fn close(&self) {
         self.writer.pool.close().await;
         if let Some(reader) = &self.reader {
@@ -109,12 +154,124 @@ impl Pools {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, time::Instant};
+    use std::{
+        error::Error as StdError,
+        time::{Duration, Instant},
+    };
 
-    use sqlx::PgConnection;
+    use rstest::rstest;
+    use sqlx::{Connection as _, PgConnection};
 
-    use super::Pools;
-    use crate::{Endpoint, PoolLimits, test_support::database_endpoint};
+    use super::{Pools, Recycled};
+    use crate::{Endpoint, Error, ErrorKind, PoolLimits, test_support::database_endpoint};
+
+    #[rstest]
+    #[case::never_recycled(None, 5, false)]
+    #[case::opened_before_the_recycle(Some(10), 30, true)]
+    #[case::opened_after_the_recycle(Some(10), 5, false)]
+    fn discards_connections_opened_before_a_recycle(
+        #[case] recycled_seconds_ago: Option<u64>,
+        #[case] age_seconds: u64,
+        #[case] stale: bool,
+    ) {
+        let now = Instant::now() + Duration::from_secs(60);
+        let recycled = Recycled::default();
+        if let Some(ago) = recycled_seconds_ago {
+            recycled.mark(now - Duration::from_secs(ago));
+        }
+
+        assert_eq!(
+            recycled.predates(now, Duration::from_secs(age_seconds)),
+            stale
+        );
+    }
+
+    async fn backend_pid(pools: &Pools) -> Result<i32, sqlx::Error> {
+        #[expect(clippy::disallowed_methods, reason = "A probe query needs no schema")]
+        sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *pools.writer().acquire().await?)
+            .await
+    }
+
+    async fn raised(pools: &Pools, code: &str) -> Result<Error, sqlx::Error> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test query must raise the requested SQLSTATE"
+        )]
+        let error = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DO $$ BEGIN RAISE EXCEPTION USING ERRCODE = '{code}'; END $$"
+        )))
+        .execute(pools.writer())
+        .await
+        .expect_err("PostgreSQL must raise the requested error");
+        Ok(Error::from(error))
+    }
+
+    #[rstest]
+    #[case::read_only_writer("25006", true)]
+    #[case::lock_timeout("55P03", false)]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn recycles_pooled_connections_only_after_errors_that_poison_them(
+        #[case] code: &str,
+        #[case] recycled: bool,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pools = Pools::new(&database_endpoint()?, None)?;
+        let before = backend_pid(&pools).await?;
+
+        assert_eq!(pools.recycle_after(&raised(&pools, code).await?), recycled);
+
+        assert_eq!(backend_pid(&pools).await? != before, recycled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn a_schema_change_under_a_cached_plan_is_recovered_by_a_recycle()
+    -> Result<(), Box<dyn StdError>> {
+        let endpoint = database_endpoint()?;
+        let pools = Pools::new(
+            &Endpoint {
+                pool: PoolLimits {
+                    max_connections: 1,
+                    ..endpoint.pool
+                },
+                ..endpoint.clone()
+            },
+            None,
+        )?;
+        let table = format!("native_stale_plan_probe_{}", std::process::id());
+        let select = format!("SELECT * FROM {table}");
+        #[expect(clippy::disallowed_methods, reason = "A scratch table needs no schema")]
+        let run = |sql: &str| sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()));
+        let mut admin = PgConnection::connect_with(&endpoint.connect_options()).await?;
+        run(&format!("CREATE TABLE {table} (id int)"))
+            .execute(&mut admin)
+            .await?;
+
+        let outcome = async {
+            run(&select).fetch_all(pools.writer()).await?;
+            run(&format!("ALTER TABLE {table} ADD COLUMN extra int"))
+                .execute(&mut admin)
+                .await?;
+            let stale = Error::from(
+                run(&select)
+                    .fetch_all(pools.writer())
+                    .await
+                    .expect_err("the cached plan must be stale"),
+            );
+            let recycled = pools.recycle_after(&stale);
+            run(&select).fetch_all(pools.writer()).await?;
+            Ok::<_, Box<dyn StdError>>((stale.kind(), recycled))
+        }
+        .await;
+        run(&format!("DROP TABLE {table}"))
+            .execute(&mut admin)
+            .await?;
+
+        assert_eq!(outcome?, (ErrorKind::StalePlan, true));
+        Ok(())
+    }
 
     fn read_only(endpoint: &Endpoint) -> Endpoint {
         Endpoint {

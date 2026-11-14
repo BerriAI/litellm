@@ -24,7 +24,7 @@ pub use daily_spend::{DailyEndUserRow, DailyTeamRow, DailyUserRow};
 pub use deadline::within;
 pub use end_user::{EndUser, RateLimits, find_end_user};
 pub use endpoint::{ClientIdentity, Endpoint, PoolLimits, SslMode};
-pub use error::Error;
+pub use error::{Error, ErrorKind};
 pub use failure::DbFailure;
 pub use health::health_check;
 pub use observe::{Call, Observer, Outcome, QueryEvent, observe};
