@@ -852,7 +852,22 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @classmethod
     def target_consumes_cache_control(cls, model: str) -> bool:
-        return cls.is_anthropic_claude_model(model) or cls.is_bedrock_arn_model(model) or "gemini" in model.lower()
+        if cls.is_anthropic_claude_model(model) or cls.is_bedrock_arn_model(model):
+            return True
+        if "gemini" in model.lower():
+            from litellm.utils import is_explicitly_disabled_factory
+
+            if "/" not in model:
+                if (
+                    is_explicitly_disabled_factory(f"gemini/{model}", None, "supports_explicit_prompt_caching")
+                    or is_explicitly_disabled_factory(f"vertex_ai/{model}", None, "supports_explicit_prompt_caching")
+                ):
+                    return False
+
+            if is_explicitly_disabled_factory(model, None, "supports_explicit_prompt_caching"):
+                return False
+            return True
+        return False
 
     @staticmethod
     def translate_thinking_for_model(
