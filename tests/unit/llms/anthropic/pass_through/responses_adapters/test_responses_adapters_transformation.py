@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -216,7 +217,7 @@ class TestOutputConfigStructuredOutput:
                         "type": "object",
                         "properties": {
                             "name": {"type": "string"},
-                            "nickname": {"type": "string"},
+                            "nickname": {"type": "string", "default": "none"},
                             "address": {
                                 "type": "object",
                                 "properties": {"city": {"type": "string"}},
@@ -252,6 +253,39 @@ class TestOutputConfigStructuredOutput:
         matches the caller's schema, which a nullable optional would not."""
         kwargs = _ADAPTER.translate_request(_make_request(**fields))
         assert kwargs.get("text", {}).get("format") == expected_format
+
+    _ANSWER: Final = {"type": "object", "properties": {"text": {"type": "string"}}}
+    _CLOSED_ANSWER: Final = {**_ANSWER, "required": ["text"], "additionalProperties": False}
+    _LABELS: Final = {"type": "object", "additionalProperties": {"type": "string"}}
+
+    @pytest.mark.parametrize(
+        ("schema", "expected_schema"),
+        [
+            pytest.param(
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _ANSWER}, "description": "The answer"},
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _CLOSED_ANSWER}, "description": "The answer"},
+                id="root-ref-keeps-defs-and-siblings",
+            ),
+            pytest.param(
+                {"type": "object", "properties": {"labels": _LABELS, "extra": {"type": "object"}}},
+                {
+                    "type": "object",
+                    "properties": {"labels": _LABELS, "extra": {"type": "object"}},
+                    "required": ["labels", "extra"],
+                    "additionalProperties": False,
+                },
+                id="maps-and-free-form-objects-stay-open",
+            ),
+        ],
+    )
+    def test_strict_schema_closes_only_objects_with_properties_on_both_adapters(
+        self, schema: Dict[str, object], expected_schema: Dict[str, object]
+    ):
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == expected_schema
+        assert chat["response_format"]["json_schema"]["schema"] == expected_schema
 
     def test_strict_schema_keeps_properties_named_like_schema_keywords(self):
         schema: Final = {
@@ -2748,10 +2782,25 @@ def test_allowed_callers_answers_400_unless_drop_params_drops_it(allowed_callers
     assert _translate(True, tools=tools)["tools"] == _ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])
 
 
-def test_container_answers_400_unless_drop_params_drops_it():
-    message: Final = _unsupported_message(container={"id": "container_abc"})
+@pytest.mark.parametrize("container", ["container_abc", {"id": "container_abc"}])
+def test_container_answers_400_unless_drop_params_drops_it(container: str | Dict[str, object]):
+    message: Final = _unsupported_message(container=container)
     assert "no equivalent for container. To drop it, set `litellm.drop_params=True`" in message
-    assert "container" not in _translate(True, container={"id": "container_abc"})
+    assert "container" not in _translate(True, container=container)
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        pytest.param("docs", id="string"),
+        pytest.param(7, id="number"),
+        pytest.param({"type": "url", "name": "docs"}, id="no-url"),
+        pytest.param({**DOCS_SERVER, "tool_configuration": "all"}, id="tool-configuration-string"),
+    ],
+)
+def test_a_malformed_mcp_server_answers_400_unless_drop_params_drops_it(server: object):
+    assert "a malformed mcp_servers entry" in _unsupported_message(mcp_servers=[server, DOCS_SERVER])
+    assert _translate(True, mcp_servers=[server, DOCS_SERVER])["tools"] == [DOCS_MCP_TOOL]
 
 
 def test_one_400_names_every_unsupported_field_and_how_to_drop_them():

@@ -31,9 +31,10 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
-from litellm.llms.base_llm.base_utils import as_json_object, strict_json_schema
+from litellm.llms.base_llm.base_utils import as_json_object
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -63,6 +64,7 @@ REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 _MCP_TOOLSET_TYPE: Final = "mcp_toolset"
 _MCP_TOOLSET: Final = TypeAdapter(AnthropicMcpToolset)
+_MCP_SERVER: Final = TypeAdapter(AnthropicMcpServerTool)
 _WEB_SEARCH_FILTER_KEYS: Final = ("allowed_domains", "blocked_domains")
 _STRUCTURED_OUTPUT_NAME: Final = "structured_output"
 _OBJECT_MAP: Final = TypeAdapter(Mapping[str, object])
@@ -202,7 +204,7 @@ def _is_mcp_toolset(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == _MCP_TOOLSET_TYPE
 
 
-def _requested_mcp_servers(request: AnthropicMessagesRequest) -> Sequence[AnthropicMcpServerTool]:
+def _requested_mcp_servers(request: AnthropicMessagesRequest) -> Sequence[object]:
     match request:
         case {"mcp_servers": list() as servers}:
             return servers
@@ -210,10 +212,14 @@ def _requested_mcp_servers(request: AnthropicMessagesRequest) -> Sequence[Anthro
             return ()
 
 
-def _mcp_server_translation(server: AnthropicMcpServerTool, tools: Sequence[Mapping[str, object]]) -> _ResponsesTools:
+def _mcp_server_translation(requested: object, tools: Sequence[Mapping[str, object]]) -> _ResponsesTools:
     """One Responses ``mcp`` tool per server, its access read from the server's ``mcp_toolset`` entry in ``tools``,
     else from the deprecated ``tool_configuration``."""
-    name: Final = server.get("name")
+    try:
+        server: Final = _MCP_SERVER.validate_python(requested)
+    except ValidationError:
+        return _ResponsesTools(unsupported=("a malformed mcp_servers entry",))
+    name: Final = server["name"]
     toolset: Final = next(
         (tool for tool in tools if _is_mcp_toolset(tool) and tool.get("mcp_server_name") == name),
         None,
@@ -291,7 +297,7 @@ def _text_format(output_format: Mapping[str, object] | None) -> _Translation:
     strict: Final = {
         "type": "json_schema",
         "name": _STRUCTURED_OUTPUT_NAME,
-        "schema": strict_json_schema(dict(strict_schema)),
+        "schema": openai_strict_json_schema(strict_schema),
         "strict": True,
     }
     return _Translation(fields={"text": {"format": strict}})

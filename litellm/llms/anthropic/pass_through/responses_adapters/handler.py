@@ -176,7 +176,7 @@ def _build_responses_kwargs(
     output_format: AnthropicOutputSchema | None = None,
     speed: str | None = None,
     mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
-    container: Mapping[str, object] | None = None,
+    container: str | Mapping[str, object] | None = None,
     extra_kwargs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -247,7 +247,7 @@ def _build_responses_kwargs(
     if sent_mcp_servers:
         request_data["mcp_servers"] = list(sent_mcp_servers)
     if container is not None:
-        request_data["container"] = dict(container)
+        request_data["container"] = container if isinstance(container, str) else dict(container)
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
@@ -418,7 +418,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         output_format: AnthropicOutputSchema | None = None,
         speed: str | None = None,
         mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
-        container: Mapping[str, object] | None = None,
+        container: str | Mapping[str, object] | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
 
@@ -485,7 +485,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         output_format: AnthropicOutputSchema | None = None,
         speed: str | None = None,
         mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
-        container: Mapping[str, object] | None = None,
+        container: str | Mapping[str, object] | None = None,
         _is_async: bool = False,
         **kwargs: object,
     ) -> (
