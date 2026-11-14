@@ -195,8 +195,8 @@ def test_undecodable_line_is_an_error_value():
 
 
 def test_batch_retrieves_stay_in_process():
-    assert is_offloadable_success(_response()) is True
-    assert is_offloadable_success(None) is True
+    assert is_offloadable_success(_response(), {}) is True
+    assert is_offloadable_success(None, {}) is True
     assert (
         is_offloadable_success(
             LiteLLMBatch(
@@ -207,7 +207,8 @@ def test_batch_retrieves_stay_in_process():
                 input_file_id="f",
                 object="batch",
                 status="completed",
-            )
+            ),
+            {},
         )
         is False
     )

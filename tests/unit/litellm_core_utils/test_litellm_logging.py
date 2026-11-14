@@ -12597,6 +12597,8 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
 
 @pytest.mark.asyncio
 async def test_an_unpriced_continuation_logs_the_cut_partials_tokens_without_a_cost():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
     recorder: Final = _SuccessCapturingLogger()
     start: Final = dt_object(2026, 1, 1)
     logging_obj: Final = Logging(
@@ -12620,16 +12622,15 @@ async def test_an_unpriced_continuation_logs_the_cut_partials_tokens_without_a_c
     logging_obj.record_partial_usage_for_failure(cut_usage, 0.001)
     logging_obj.record_continued_partial(usage=cut_usage, response_cost=0.001)
 
-    await logging_obj.async_success_handler(
-        result=ModelResponse(
-            model="litellm-unpriced-continuation",
-            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
-            usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-        ),
-        start_time=start,
-        end_time=start,
+    continuation: Final = ModelResponse(
+        model="litellm-unpriced-continuation",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
     )
+    await logging_obj.async_success_handler(result=continuation, start_time=start, end_time=start)
 
     assert recorder.success_payload is not None
     assert (recorder.success_payload["prompt_tokens"], recorder.success_payload["completion_tokens"]) == (45, 9)
     assert not recorder.success_payload["response_cost"]
+    spend_row: Final = get_logging_payload(dict(logging_obj.model_call_details), continuation, start, start)
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"]) == (45, 9)

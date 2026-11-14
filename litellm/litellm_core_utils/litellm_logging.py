@@ -43,6 +43,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALLBACK_NAMES,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    MID_STREAM_PARTIAL_COST_KEY,
     PROVIDER_REQUEST_ID_HEADERS,
     REDACTED_BY_LITELLM,
 )
@@ -781,6 +782,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._continued_partial: tuple[Usage, float] | None = None
+        self._continued_partial_billed: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2315,35 +2318,38 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def record_continued_partial(self, usage: Usage, response_cost: float) -> None:
         self.model_call_details.pop("combined_usage_object", None)
-        self.model_call_details["continued_partial_usage"] = usage
-        self.model_call_details["continued_partial_cost"] = response_cost
+        self._continued_partial = (usage, response_cost)
+
+    @property
+    def continued_partial(self) -> tuple[Usage, float] | None:
+        return None if self._continued_partial_billed else self._continued_partial
+
+    @property
+    def continued_partial_billed(self) -> bool:
+        return self._continued_partial_billed
 
     def _add_continued_partial_spend(self, response: object) -> None:
-        partial_usage: Final = self.model_call_details.get("continued_partial_usage")
-        partial_cost: Final = self.model_call_details.get("continued_partial_cost")
         own_usage: Final = (
             ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
             if isinstance(response, ResponsesAPIResponse)
             else getattr(response, "usage", None)
         )
         own_cost: Final = self.model_call_details.get("response_cost")
-        if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
+        if self._continued_partial is None or not isinstance(own_usage, Usage):
             return
+        partial_usage, partial_cost = self._continued_partial
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, partial_usage]
         )
-        self.model_call_details["continued_partial_billed"] = True
+        self._continued_partial_billed = True
+        prior_breakdown: Final = self.cost_breakdown or CostBreakdown()
+        self.cost_breakdown = prior_breakdown | CostBreakdown(
+            additional_costs={**prior_breakdown.get("additional_costs", {}), MID_STREAM_PARTIAL_COST_KEY: partial_cost}
+        )
         if not isinstance(own_cost, (int, float)):
             return
         self.model_call_details["response_cost"] = own_cost + partial_cost
-        if self.cost_breakdown is not None:
-            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
-                total_cost=own_cost + partial_cost,
-                additional_costs={
-                    **self.cost_breakdown.get("additional_costs", {}),
-                    "mid_stream_partial_cost": partial_cost,
-                },
-            )
+        self.cost_breakdown = self.cost_breakdown | CostBreakdown(total_cost=own_cost + partial_cost)
 
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves

@@ -3195,3 +3195,63 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+class _CutGeminiSSE(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield (
+            b'data: {"candidates":[{"content":{"parts":[{"text":"Once upon a time there was"}],"role":"model"},'
+            b'"index":0}],"modelVersion":"gemini-3.5-flash"}\n\n'
+        )
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+@pytest.mark.asyncio
+async def test_a_cut_stream_without_a_carried_partial_bills_its_relayed_tokens_on_failure(
+    monkeypatch, respx_mock
+):
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutGeminiSSE())
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        model="gemini/gemini-3.5-flash",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        litellm_call_id="cut-stream",
+    )
+    response = await litellm.acompletion(
+        model="gemini/gemini-3.5-flash",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        api_key="k",
+        litellm_logging_obj=logging_obj,
+        continued_partial_billed=True,
+    )
+    with pytest.raises(MidStreamFallbackError):
+        _ = [chunk async for chunk in response]
+
+    row = get_logging_payload(
+        dict(_failure_fields_to_lift({"litellm_logging_obj": logging_obj})),
+        None,
+        real_datetime.datetime.now(),
+        real_datetime.datetime.now(),
+    )
+    assert row["completion_tokens"] > 0
+    assert row["spend"] == pytest.approx(
+        sum(
+            litellm.cost_per_token(
+                model="gemini/gemini-3.5-flash",
+                prompt_tokens=row["prompt_tokens"],
+                completion_tokens=row["completion_tokens"],
+            )
+        )
+    )
+

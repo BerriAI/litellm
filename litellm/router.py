@@ -3507,7 +3507,7 @@ class Router:
         stashed_leg: Final = (details.get("combined_usage_object"), details.get("response_cost"))
         candidate_legs: Final = (
             stashed_leg if bridged or isinstance(stashed_leg[0], Usage) else Router._relayed_responses_leg(cut_stream),
-            (details.get("continued_partial_usage"), details.get("continued_partial_cost")),
+            cut_logging.continued_partial or (None, None),
         )
         billed_legs: Final = tuple(
             (usage, float(cost) if isinstance(cost, (int, float)) else 0.0)
@@ -3520,6 +3520,18 @@ class Router:
             BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[usage for usage, _ in billed_legs]),
             sum((cost for _, cost in billed_legs), 0.0),
         )
+
+    @staticmethod
+    def _without_own_usage(event: "ResponseIncompleteEvent | None") -> "ResponseIncompleteEvent | None":
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        if event is None:
+            return None
+        unpriced: Final = event.response.model_copy(
+            update={"usage": ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)}
+        )
+        unpriced.hidden_params = {**event.response.hidden_params, "response_cost": 0.0}
+        return event.model_copy(update={"response": unpriced})
 
     @staticmethod
     def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: tuple[Usage, float] | None) -> None:
@@ -3760,6 +3772,9 @@ class Router:
                 if self._billing_source is source_iterator:
                     return current
                 primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
+                fallback_logging: Final = getattr(self._billing_source, "logging_obj", None)
+                if isinstance(fallback_logging, LiteLLMLogging) and fallback_logging.continued_partial is not None:
+                    return current or Router._without_own_usage(primary)
                 if current is None or primary is None:
                     return current or primary
                 if primary.response.usage is not None:

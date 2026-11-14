@@ -62,6 +62,7 @@ from litellm.proxy._types import (
     SpendLogsRouterMetadata,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.spend_event import bills_usage_beyond_its_response
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
@@ -585,11 +586,13 @@ def get_logging_payload(
     # streaming handler may have recovered the usage from the chunks already
     # delivered. Honor that override so the partial usage lands in spend tracking.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if (not usage or "continued_partial_billed" in kwargs) and isinstance(_combined_usage, litellm.Usage):
+    standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
+    if (not usage or bills_usage_beyond_its_response(standard_logging_payload)) and isinstance(
+        _combined_usage, litellm.Usage
+    ):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
-    standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 

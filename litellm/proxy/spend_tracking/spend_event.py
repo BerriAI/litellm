@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm.constants import MID_STREAM_PARTIAL_COST_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
@@ -205,9 +206,19 @@ class SpendEventDecodeError:
     reason: str
 
 
-def is_offloadable_success(response_obj: object) -> bool:
-    """Batch retrieves and interaction polls branch on the concrete response class, so they stay in-process."""
-    return not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES)
+def bills_usage_beyond_its_response(standard_logging_object: object) -> bool:
+    logged: Final = _mapping_or_none(standard_logging_object)
+    cost_breakdown: Final = _mapping_or_none(logged.get("cost_breakdown")) if logged else None
+    additional_costs: Final = _mapping_or_none(cost_breakdown.get("additional_costs")) if cost_breakdown else None
+    return additional_costs is not None and MID_STREAM_PARTIAL_COST_KEY in additional_costs
+
+
+def is_offloadable_success(response_obj: object, kwargs: ObjectMapping) -> bool:
+    """Batch retrieves and interaction polls branch on the concrete response class, so they stay in-process.
+    A success that also bills a cut stream's partial needs the combined usage its row takes."""
+    return not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES) and not bills_usage_beyond_its_response(
+        kwargs.get("standard_logging_object")
+    )
 
 
 def _json_fallback(value: object) -> str:

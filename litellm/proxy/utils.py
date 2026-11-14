@@ -135,6 +135,7 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
@@ -1121,6 +1122,8 @@ def _failure_usage_to_lift(
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    continued_partial: tuple[Usage, float] | None = None,
+    continued_partial_billed: bool = False,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1135,9 +1138,11 @@ def _failure_usage_to_lift(
     deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
     failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
-    if model_call_details.get("continued_partial_billed"):
+    if continued_partial_billed:
         return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), 0.0
     recovered_usage: Final = model_call_details.get("combined_usage_object")
+    if continued_partial is not None:
+        return _with_continued_partial(recovered_usage, model_call_details.get("response_cost"), continued_partial)
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched:
@@ -1153,6 +1158,17 @@ def _failure_usage_to_lift(
         return estimated_usage, 0.0
     return estimated_usage, _estimated_input_cost(
         model_call_details, estimated_usage.prompt_tokens, deployment_id=deployment_id, base_model=base_model
+    )
+
+
+def _with_continued_partial(
+    recovered_usage: object, recovered_cost: object, continued_partial: tuple[Usage, float]
+) -> tuple[Usage, float]:
+    if not isinstance(recovered_usage, Usage):
+        return continued_partial
+    return (
+        BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[recovered_usage, continued_partial[0]]),
+        (recovered_cost if isinstance(recovered_cost, (int, float)) else 0.0) + continued_partial[1],
     )
 
 
@@ -1598,6 +1614,8 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
+        continued_partial=_logging_obj.continued_partial if isinstance(_logging_obj, Logging) else None,
+        continued_partial_billed=isinstance(_logging_obj, Logging) and _logging_obj.continued_partial_billed,
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
