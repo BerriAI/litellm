@@ -23,7 +23,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 from litellm.integrations.custom_logger_v2.call import CallContext, CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -1865,6 +1867,29 @@ async def test_fail_closed_refuses_with_503_when_redis_is_down_like_python(
     ]
     _GOLDEN.agree(outcomes[0], outcomes[1])
     assert (outcomes[0] is not None and outcomes[0][:2] == ("RateLimitUnverifiableError", 503)) == refused, outcomes
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_refuses_in_a_request_batch_with_the_breaker_open_like_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_rate_limit_enforcement": True})
+    clock: Final = Clock()
+    request: Final = Request(_auth(rpm_limit=50, tpm_limit=100000), {**_CHAT, "max_tokens": 20})
+    outcomes: Final[list[object]] = []
+    for native in (False, True):
+        side = _side(clock, native=native, port=_free_port())
+        redis_cache = side.limiter.internal_usage_cache.dual_cache.redis_cache
+        assert redis_cache is not None
+        health = redis_cache._health  # pyright: ignore[reportPrivateUsage]  # the breaker every client on this Redis shares
+        assert health is not None
+        for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+            health.breaker.failed(False)
+        assert health.breaker.state == "open"
+        with request_redis_batch_scope():
+            outcomes.append(await _run(side, 0, _admit, request))
+    _GOLDEN.agree(outcomes[0], outcomes[1])
+    assert outcomes[1] is not None and outcomes[1][:2] == ("RateLimitUnverifiableError", 503), outcomes  # pyright: ignore[reportIndexIssue]  # an outcome is the refusal tuple
 
 
 class _Lines(logging.Handler):
