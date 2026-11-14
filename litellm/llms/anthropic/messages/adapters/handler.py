@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.tool_fields import (
 )
 from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
 from litellm.llms.anthropic.messages.adapters.transformation import (
+    ANTHROPIC_ONLY_REQUEST_KEYS,
     AnthropicAdapter,
     openai_thinking_routes_to_responses,
 )
@@ -67,8 +68,6 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-# Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
-ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})
 _REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
