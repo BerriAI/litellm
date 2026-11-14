@@ -5,6 +5,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.cohere.embed.transformation import COHERE_DEFAULT_EMBED_URL
 
 BEDROCK_COHERE_INVOKE_URL: Final = (
     "https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-english-v3/invoke"
@@ -35,20 +36,21 @@ async def test_bedrock_cohere_embedding_sends_the_caller_timeout(
     assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
-COHERE_DEFAULT_EMBED_URL: Final = "https://api.cohere.ai/v2/embed"
 
-
-async def test_cohere_embedding_honors_cohere_api_base_env(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("cohere_api_base", "expected_url"),
+    [
+        ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
+        ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+    ],
+)
+async def test_cohere_embedding_sends_the_request_to_cohere_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, cohere_api_base: str, expected_url: str
 ) -> None:
-    """`COHERE_API_BASE` must be honored for embeddings, like the rerank path and
-    the databricks/hosted_vllm embedding branches already do (#49411 family)."""
-    gateway: Final = "https://gateway.example.com"
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("COHERE_API_BASE", gateway)
-    route: Final = respx_mock.post(f"{gateway}/v2/embed").mock(
-        return_value=httpx.Response(200, json=COHERE_EMBED_RESPONSE)
-    )
+    monkeypatch.setenv("COHERE_API_BASE", cohere_api_base)
+    route: Final = respx_mock.post(expected_url).mock(return_value=httpx.Response(200, json=COHERE_EMBED_RESPONSE))
 
     response: Final = await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
 
@@ -56,39 +58,26 @@ async def test_cohere_embedding_honors_cohere_api_base_env(
     assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
-async def test_cohere_embedding_env_with_full_embed_path_is_used_verbatim(
+async def test_cohere_embedding_prefers_the_caller_api_base_over_cohere_api_base(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A gateway exposing the embed route at a non-default path (`/v1/embed`)
-    is used verbatim — ensure_api_route only joins when the route is missing
-    (review of #50249: a bare-host test cannot distinguish join from verbatim)."""
-    gateway: Final = "https://gateway.example.com/v1/embed"
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("COHERE_API_BASE", gateway)
-    route: Final = respx_mock.post(gateway).mock(
+    monkeypatch.setenv("COHERE_API_BASE", "https://env-gateway.example.com")
+    route: Final = respx_mock.post("https://caller-gateway.example.com/v2/embed").mock(
         return_value=httpx.Response(200, json=COHERE_EMBED_RESPONSE)
     )
 
-    response: Final = await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
+    await litellm.aembedding(
+        model="cohere/embed-english-v3.0",
+        input=["hello"],
+        api_key="mock-key",
+        api_base="https://caller-gateway.example.com",
+    )
 
     assert route.calls.call_count == 1
-    assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
-async def test_cohere_embedding_rejects_a_chat_endpoint_as_api_base(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Chat reads COHERE_API_BASE as a complete URL, so a chat-configured
-    deployment upgrading into the embeddings env var would 404 on the joined
-    route. Fail fast with an actionable error instead (review of #50249)."""
-    monkeypatch.setenv("COHERE_API_BASE", "https://gateway.example.com/v2/chat")
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-
-    with pytest.raises(litellm.BadRequestError, match="chat endpoint"):
-        await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
-
-
-async def test_cohere_embedding_keeps_the_default_url_without_the_env(
+async def test_cohere_embedding_keeps_the_default_url_without_cohere_api_base(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

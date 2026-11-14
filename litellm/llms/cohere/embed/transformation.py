@@ -10,11 +10,12 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
+import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from enum import Enum
 from itertools import chain, starmap
 from typing import Final, Protocol, TypeAlias, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -37,6 +38,8 @@ from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
+COHERE_DEFAULT_EMBED_URL: Final = "https://api.cohere.ai/v2/embed"
+_COHERE_CHAT_ROUTE: Final = re.compile(r"(?:/v\d+)?/chat/*$", re.IGNORECASE)
 
 
 class _SupportsEncode(Protocol):
@@ -207,35 +210,13 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        # ensure_api_route keeps the route-exists form working verbatim and
-        # joins the route onto a bare host, so a gateway host and a full
-        # endpoint are both usable as COHERE_API_BASE (see #50248).
-        base = api_base or "https://api.cohere.ai/v2/embed"
-        # Fail fast when the value is a chat endpoint: the chat branch reads
-        # COHERE_API_BASE as a complete URL, so a chat-configured deployment
-        # would otherwise get embeddings joined onto it and 404 on upgrade
-        # (review of #50249). An explicit, actionable error beats a silent
-        # break of a working chat-only setup.
-        last_segment = (
-            urlsplit(base.rstrip("/")).path.rstrip("/").rsplit("/", 1)[-1].lower()
-        )
-        if last_segment == "chat":
-            raise litellm.BadRequestError(
-                message=(
-                    "COHERE_API_BASE points at a chat endpoint, but embeddings "
-                    "need a base URL ending in /v2/embed (or a bare gateway "
-                    "host). Chat and embeddings share this variable with "
-                    "different semantics - configure them separately."
-                ),
-                model=model,
-                llm_provider="cohere",
-            )
-        if "embed" in last_segment:
-            # The caller already named the embedding endpoint, so an explicit
-            # path (Cohere's /v2/embed, or a gateway exposing /v1/embed or
-            # /embeddings) is used verbatim instead of getting a second route.
-            return base
-        return ensure_api_route(base, "v2/embed")
+        if not api_base:
+            return COHERE_DEFAULT_EMBED_URL
+        parts: Final = urlsplit(api_base)
+        if "embed" in parts.path.rstrip("/").rsplit("/", 1)[-1].lower():
+            return api_base
+        host_and_prefix: Final = urlunsplit(parts._replace(path=_COHERE_CHAT_ROUTE.sub("", parts.path)))
+        return ensure_api_route(host_and_prefix, "v2/embed")
 
     def _transform_request(
         self, model: str, input: list[str], inference_params: dict

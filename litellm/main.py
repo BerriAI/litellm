@@ -7255,9 +7255,7 @@ def embedding(
                 or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
-            cohere_api_base: Final = (
-                api_base or litellm.api_base or get_secret_str("COHERE_API_BASE")
-            )
+            cohere_api_base: Final = api_base or litellm.api_base or get_secret_str("COHERE_API_BASE")
 
             response = base_llm_http_handler.embedding(
                 model=model,

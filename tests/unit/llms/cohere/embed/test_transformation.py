@@ -445,52 +445,24 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
 
 
-# --------------------------------------------------------------------------------------
-# get_complete_url: COHERE_API_BASE routing semantics (#50248 follow-up)
-# --------------------------------------------------------------------------------------
-
-
-def test_get_complete_url_appends_the_route_to_a_bare_host() -> None:
-    url: Final = CohereEmbeddingConfig().get_complete_url(
-        api_base="https://gateway.example.com",
-        api_key=None,
-        model="embed-english-v3.0",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://gateway.example.com/v2/embed"
-
-
-def test_get_complete_url_keeps_a_full_endpoint_verbatim() -> None:
-    url: Final = CohereEmbeddingConfig().get_complete_url(
-        api_base="https://gateway.example.com/v2/embed",
-        api_key=None,
-        model="embed-english-v3.0",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://gateway.example.com/v2/embed"
-
-
-def test_get_complete_url_default_is_unchanged() -> None:
-    url: Final = CohereEmbeddingConfig().get_complete_url(
-        api_base=None,
-        api_key=None,
-        model="embed-english-v3.0",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.cohere.ai/v2/embed"
 
 @pytest.mark.parametrize(
-    "api_base",
+    ("api_base", "expected_url"),
     [
-        "https://gateway.example.com/v1/embed",
-        "https://gateway.example.com/embeddings",
-        "https://gateway.example.com/cohere/v1/embed/",
+        (None, "https://api.cohere.ai/v2/embed"),
+        ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere", "https://gateway.example.com/cohere/v2/embed"),
+        ("https://gateway.example.com/v2/embed", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
+        ("https://gateway.example.com/embeddings", "https://gateway.example.com/embeddings"),
+        ("https://gateway.example.com/cohere/v1/embed/", "https://gateway.example.com/cohere/v1/embed/"),
+        ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v1/chat/", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/cohere/v2/chat", "https://gateway.example.com/cohere/v2/embed"),
     ],
 )
-def test_get_complete_url_keeps_an_explicit_endpoint_verbatim(api_base: str) -> None:
+def test_get_complete_url_resolves_the_embed_endpoint(api_base: str | None, expected_url: str) -> None:
     url: Final = CohereEmbeddingConfig().get_complete_url(
         api_base=api_base,
         api_key=None,
@@ -498,15 +470,4 @@ def test_get_complete_url_keeps_an_explicit_endpoint_verbatim(api_base: str) -> 
         optional_params={},
         litellm_params={},
     )
-    assert url == api_base
-
-
-def test_get_complete_url_rejects_a_chat_endpoint() -> None:
-    with pytest.raises(litellm.BadRequestError, match="chat endpoint"):
-        CohereEmbeddingConfig().get_complete_url(
-            api_base="https://gateway.example.com/v1/chat",
-            api_key=None,
-            model="embed-english-v3.0",
-            optional_params={},
-            litellm_params={},
-        )
+    assert url == expected_url
