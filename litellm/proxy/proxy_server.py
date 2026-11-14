@@ -1165,6 +1165,12 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 from litellm.utils import add_custom_logger_callback_to_specific_event
+from litellm.vector_stores.deployments import (
+    parse_vector_store_deployments,
+    vector_store_deployment_cooldowns,
+    vector_store_deployment_problems,
+    vector_store_deployment_registry,
+)
 
 try:
     from litellm._version import version
@@ -5604,6 +5610,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=litellm.default_redis_ttl,
     )
     spend_counter_store.attach_redis(connect(redis_cache))
+    vector_store_deployment_cooldowns.attach_redis_cache(redis_cache)
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -7915,6 +7922,11 @@ class ProxyConfig:
             await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
 
         ## VECTOR STORES
+        config_view: Final = _GENERAL_SETTINGS_VIEW.validate_python(config)
+        vector_store_problems: Final = vector_store_deployment_problems(config_view)
+        if vector_store_problems:
+            raise ValueError("; ".join(vector_store_problems))
+        vector_store_deployment_registry.load(parse_vector_store_deployments(config_view))
         vector_store_registry_config: Final = config.get("vector_store_registry", None)
         if vector_store_registry_config:
             from litellm.vector_stores.vector_store_registry import VectorStoreRegistry

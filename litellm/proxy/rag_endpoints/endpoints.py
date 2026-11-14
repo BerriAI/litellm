@@ -81,6 +81,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rag import RAGIngestResponse
 from litellm.types.utils import Choices, ModelResponse
+from litellm.vector_stores.deployments import primary_connection
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -341,7 +342,7 @@ def _store_provider(config: Mapping[str, object]) -> object:
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
-    stored: Final = build_request_data_from_managed_vector_store(managed_store)
+    stored: Final = primary_connection(build_request_data_from_managed_vector_store(managed_store))
     return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
 
 

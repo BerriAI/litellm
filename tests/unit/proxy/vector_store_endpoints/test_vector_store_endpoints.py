@@ -16,7 +16,6 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
-from litellm.vector_stores.search_query import with_caller_query_params
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     build_request_data_from_managed_vector_store,
@@ -39,6 +38,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from litellm.vector_stores.search_query import with_caller_query_params
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -3658,3 +3658,40 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
     written = mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
     assert json.loads(written["vector_store_metadata"]) == {"owner": "search-team", "tier": 2}
+
+
+@pytest.mark.parametrize(
+    ("caller_body", "rejected"),
+    [
+        ({"query": "x", "api_base": "https://attacker.example"}, "'api_base'"),
+        ({"query": "x", "api_key": "caller-key"}, "'api_key'"),
+        ({"query": "x", "api_version": "2024-07-01"}, "'api_version'"),
+    ],
+)
+def test_a_grouped_store_search_rejects_caller_connection_settings(caller_body, rejected):
+    from litellm.proxy.vector_store_endpoints.endpoints import reject_caller_deployment_connection
+    from litellm.vector_stores.deployments import parse_vector_store_deployments, vector_store_deployment_registry
+
+    vector_store_deployment_registry.load(
+        parse_vector_store_deployments(
+            {
+                "vector_store_deployments": [
+                    {
+                        "deployment_name": "kb-search",
+                        "litellm_params": {"custom_llm_provider": "azure_ai", "api_base": "https://eastus.example"},
+                    }
+                ]
+            }
+        )
+    )
+    try:
+        with pytest.raises(HTTPException) as refused:
+            reject_caller_deployment_connection(
+                caller_body, {**caller_body, "vector_store_deployment": "kb-search"}, "the search request body"
+            )
+        reject_caller_deployment_connection({"query": "x"}, {"vector_store_id": "plain"}, "the search request body")
+    finally:
+        vector_store_deployment_registry.load(())
+
+    assert refused.value.status_code == 400
+    assert rejected in str(refused.value.detail)

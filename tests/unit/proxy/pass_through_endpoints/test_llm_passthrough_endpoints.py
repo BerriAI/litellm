@@ -15,7 +15,6 @@ from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-
 pytestmark: Final = pytest.mark.usefixtures("drained_logging_worker")
 
 
@@ -525,3 +524,22 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert "anthropic-beta" not in upstream.calls.last.request.headers
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint", "is_read"),
+    [
+        ("POST", "indexes/claims-docs/docs/search?api-version=2024-07-01", True),
+        ("POST", "indexes/claims-docs/docs/suggest", True),
+        ("POST", "indexes/claims-docs/docs/autocomplete", True),
+        ("POST", "indexes/claims-docs/docs/search.post.search", True),
+        ("GET", "indexes/claims-docs/docs/doc-1", True),
+        ("POST", "indexes/claims-docs/docs/index", False),
+        ("PUT", "indexes/claims-docs", False),
+        ("DELETE", "indexes/claims-docs", False),
+    ],
+)
+def test_is_azure_search_read_fails_over_reads_and_keeps_writes_on_the_primary(method, endpoint, is_read):
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_azure_search_read
+
+    assert is_azure_search_read(method, endpoint) is is_read

@@ -63,6 +63,7 @@ from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
 )
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.passthrough.transformation import is_bedrock_streaming_endpoint
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
@@ -198,6 +199,19 @@ from litellm.types.utils import (
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 from litellm.utils import ProviderConfigManager, with_named_credential
+from litellm.vector_stores.deployments import (
+    Attempt,
+    Failed,
+    Served,
+    VectorStoreDeployment,
+    classify_error,
+    classify_status,
+    group_of,
+    on_deployment,
+    primary_connection,
+    served_headers,
+    with_failover,
+)
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
@@ -1081,15 +1095,13 @@ async def milvus_proxy_route(
         vector_store=vector_store,
         user_api_key_dict=user_api_key_dict,
     )
-    litellm_params = vector_store.get("litellm_params") or {}
+    litellm_params = dict(primary_connection(vector_store.get("litellm_params") or {}))
     auth_credentials: Final = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
     extra_headers = auth_credentials.get("headers") or {}
 
-    litellm_params = vector_store.get("litellm_params") or {}
-
     base_target_url = provider_config.get_complete_url(
-        api_base=litellm_params.get("api_base"), litellm_params=litellm_params
+        api_base=_optional_str(litellm_params.get("api_base")), litellm_params=litellm_params
     )
 
     if base_target_url is None:
@@ -1157,7 +1169,7 @@ async def _opensearch_store_params(
         )
     vector_store: Final = named_stores[0]
     params: Final = with_named_credential(
-        build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store))
+        primary_connection(build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store)))
     )
     provider: Final = params.get("custom_llm_provider")
     if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
@@ -2741,6 +2753,79 @@ async def _relay_azure_body_model_group(
     )
 
 
+_AUTH_HEADERS: Final = TypeAdapter(dict[str, str])
+_AZURE_SEARCH_READ_SUFFIXES: Final = (
+    "/docs/search",
+    "/docs/suggest",
+    "/docs/autocomplete",
+    "/docs/search.post.search",
+    "/docs/suggest.post.suggest",
+    "/docs/autocomplete.post.autocomplete",
+)
+
+
+def is_azure_search_read(method: str, endpoint: str) -> bool:
+    """A read of an Azure AI Search index: any GET, or a POST to its search, suggest or autocomplete action."""
+    path: Final = endpoint.split("?", 1)[0].rstrip("/")
+    return method.upper() == "GET" or (method.upper() == "POST" and path.endswith(_AZURE_SEARCH_READ_SUFFIXES))
+
+
+@dataclass(frozen=True, slots=True)
+class _AzureSearchIndexCall:
+    endpoint: str
+    request: Request
+    fastapi_response: Response
+    user_api_key_dict: UserAPIKeyAuth
+    provider_config: BaseVectorStoreConfig
+    index_name: str
+
+    async def to(self, params: Mapping[str, object]) -> object:
+        base_target_url: Final = _optional_str(params.get("api_base"))
+        if base_target_url is None:
+            raise Exception(f"API base not found for {self.index_name}")
+        return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
+            endpoint=self.endpoint,
+            request=self.request,
+            fastapi_response=self.fastapi_response,
+            user_api_key_dict=self.user_api_key_dict,
+            base_target_url=base_target_url,
+            api_key=None,
+            custom_llm_provider=litellm.LlmProviders.AZURE_AI,
+            extra_headers=_AUTH_HEADERS.validate_python(
+                self.provider_config.get_auth_credentials(litellm_params=dict(params)).get("headers") or {}  # pyright: ignore[reportUnknownMemberType]  # the provider config's credentials are untyped
+            ),
+        )
+
+
+async def _azure_search_index_passthrough(call: _AzureSearchIndexCall, store_params: Mapping[str, object]) -> object:
+    """A grouped store's reads fail over across its deployments; its writes go to the primary."""
+    group: Final = group_of(store_params)
+    if group is None:
+        return await call.to(store_params)
+    if not is_azure_search_read(call.request.method, call.endpoint):
+        return await call.to(primary_connection(store_params))
+
+    async def attempt(deployment: VectorStoreDeployment) -> Attempt[object]:
+        try:
+            response: Final = await call.to(on_deployment(store_params, deployment))
+        except Exception as error:  # noqa: BLE001  # every passthrough failure is classified, retried or raised below
+            return classify_error(deployment, error)
+        status: Final = getattr(response, "status_code", 200)
+        if not isinstance(status, int) or status < 400:
+            return Served(deployment=deployment, value=response, failed_over=0)
+        retryable, cools_down = classify_status(status)
+        return Failed(deployment=deployment, retryable=retryable, cools_down=cools_down, error=None, value=response)
+
+    outcome: Final = await with_failover(group, attempt)
+    if isinstance(outcome, Served):
+        if isinstance(outcome.value, Response):
+            outcome.value.headers.update(served_headers(outcome))
+        return outcome.value
+    if outcome.value is not None:
+        return outcome.value
+    raise outcome.error or Exception(f"vector_store_deployment '{group}' served nothing")
+
+
 @router.api_route(
     "/azure_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -2842,23 +2927,16 @@ async def azure_proxy_route(
                     vector_store=vector_store,
                     user_api_key_dict=user_api_key_dict,
                 )
-                litellm_params = vector_store.get("litellm_params") or {}
-                auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
-
-                extra_headers = auth_credentials.get("headers") or {}
-
-                base_target_url = _optional_str(litellm_params.get("api_base"))
-                if base_target_url is None:
-                    raise Exception(f"API base not found for {part}")
-                return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
-                    endpoint=endpoint,
-                    request=request,
-                    fastapi_response=fastapi_response,
-                    user_api_key_dict=user_api_key_dict,
-                    base_target_url=base_target_url,
-                    api_key=None,
-                    custom_llm_provider=litellm.LlmProviders.AZURE_AI,
-                    extra_headers=extra_headers,
+                return await _azure_search_index_passthrough(
+                    _AzureSearchIndexCall(
+                        endpoint=endpoint,
+                        request=request,
+                        fastapi_response=fastapi_response,
+                        user_api_key_dict=user_api_key_dict,
+                        provider_config=provider_config,
+                        index_name=part,
+                    ),
+                    vector_store.get("litellm_params") or {},
                 )
 
     body_model_group_relay: Final = await _relay_azure_body_model_group(

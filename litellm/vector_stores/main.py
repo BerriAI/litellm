@@ -10,14 +10,17 @@ from functools import partial
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
+    OncePerRequestEmbeddingExecutor,
     VectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
@@ -34,6 +37,18 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResult,
 )
 from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
+from litellm.vector_stores.deployments import (
+    VECTOR_STORE_DEPLOYMENT_PARAM,
+    Attempt,
+    Failed,
+    Served,
+    VectorStoreDeployment,
+    classify_error,
+    on_deployment,
+    served_api_base,
+    served_headers,
+    with_failover,
+)
 from litellm.vector_stores.search_query import searched_query, sent_query_image
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
@@ -289,6 +304,51 @@ def create(
         )
 
 
+_SEARCH_REQUEST: Final = TypeAdapter(dict[str, object])
+_EMBEDDING_EXECUTOR_KWARG: Final = "_direct_vector_store_embedding_executor"
+
+
+def _as_router(value: object) -> "Router | None":
+    from litellm.router import Router
+
+    return value if isinstance(value, Router) else None
+
+
+async def _asearch_with_failover(group: str, request: Mapping[str, object]) -> VectorStoreSearchResponse:
+    """Searches the group's deployments in order, each with its own connection over the request's.
+
+    The query is embedded once and every attempt reuses it. A failed embedding ends the search: it is
+    no fault of a search deployment, so it neither cools one down nor moves on to the next."""
+    embedding: Final = OncePerRequestEmbeddingExecutor(
+        inner=_direct_vector_store_embedding_executor(
+            request.get(_EMBEDDING_EXECUTOR_KWARG), _as_router(request.get("router")), request
+        )
+    )
+
+    async def attempt(deployment: VectorStoreDeployment) -> Attempt[VectorStoreSearchResponse]:
+        attempt_request: Final = {**on_deployment(request, deployment), _EMBEDDING_EXECUTOR_KWARG: embedding}
+        try:
+            response: Final = await asearch(**attempt_request)  # pyright: ignore[reportArgumentType]  # the request as asearch received it
+        except Exception as error:  # noqa: BLE001  # every search failure is classified, retried or raised below
+            if embedding.failure is not None:
+                return Failed(deployment=deployment, retryable=False, cools_down=False, error=error)
+            return classify_error(deployment, error)
+        return Served(deployment=deployment, value=response, failed_over=0)
+
+    outcome: Final = await with_failover(group, attempt)
+    if not isinstance(outcome, Served):
+        raise outcome.error or ValueError(f"vector_store_deployment '{group}' served nothing")
+    set_hidden_params(
+        outcome.value,
+        {
+            "api_base": served_api_base(outcome.deployment),
+            "model_id": outcome.deployment.deployment_id,
+            "additional_headers": dict(served_headers(outcome)),
+        },
+    )
+    return outcome.value
+
+
 @client
 async def asearch(
     vector_store_id: str,
@@ -313,6 +373,28 @@ async def asearch(
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
+    if VECTOR_STORE_DEPLOYMENT_PARAM in kwargs:
+        grouped_request: Final = _SEARCH_REQUEST.validate_python(
+            {
+                "vector_store_id": vector_store_id,
+                "query": query,
+                "filters": filters,
+                "max_num_results": max_num_results,
+                "ranking_options": ranking_options,
+                "rewrite_query": rewrite_query,
+                "extra_headers": extra_headers,
+                "extra_query": extra_query,
+                "extra_body": extra_body,
+                "timeout": timeout,
+                "custom_llm_provider": custom_llm_provider,
+                "router": router,
+                "query_image": query_image,
+                **kwargs,
+            }
+        )
+        deployment_group: Final = grouped_request.get(VECTOR_STORE_DEPLOYMENT_PARAM)
+        if isinstance(deployment_group, str):
+            return await _asearch_with_failover(deployment_group, grouped_request)
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )

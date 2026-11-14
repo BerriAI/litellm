@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
 
@@ -60,6 +61,46 @@ class LiteLLMVectorStoreEmbeddingExecutor:
             input=[query],
             **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OncePerRequestEmbeddingExecutor:
+    """Embeds a request's query once per embedding setup, so every search attempt reuses the vector or its failure."""
+
+    inner: VectorStoreEmbeddingExecutor
+    outcomes: dict[str, EmbeddingResponse | Exception] = field(default_factory=dict)  # mutable-ok: one request's memo
+
+    @staticmethod
+    def _key(model: str, query: str, configuration: Mapping[str, object]) -> str:
+        return json.dumps([model, query, configuration], sort_keys=True, default=str)
+
+    @property
+    def failure(self) -> Exception | None:
+        return next((outcome for outcome in self.outcomes.values() if isinstance(outcome, Exception)), None)
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        key: Final = self._key(model, query, configuration)
+        if key not in self.outcomes:
+            try:
+                self.outcomes[key] = self.inner.embed(model, query, configuration)
+            except Exception as error:  # noqa: BLE001  # the failure is the request's outcome, reused by every attempt
+                self.outcomes[key] = error
+        return _embedding_or_raise(self.outcomes[key])
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        key: Final = self._key(model, query, configuration)
+        if key not in self.outcomes:
+            try:
+                self.outcomes[key] = await self.inner.aembed(model, query, configuration)
+            except Exception as error:  # noqa: BLE001  # the failure is the request's outcome, reused by every attempt
+                self.outcomes[key] = error
+        return _embedding_or_raise(self.outcomes[key])
+
+
+def _embedding_or_raise(outcome: EmbeddingResponse | Exception) -> EmbeddingResponse:
+    if isinstance(outcome, Exception):
+        raise outcome
+    return outcome
 
 
 _REQUEST_METADATA: Final = TypeAdapter(dict[str, object])
