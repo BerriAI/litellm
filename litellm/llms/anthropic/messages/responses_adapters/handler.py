@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
@@ -45,17 +46,19 @@ from litellm.types.utils import CountContextManagement
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import (
+    ANTHROPIC_ADAPTER,
     context_management_explicitly_dropped,
     messages_without_rejected_reasoning,
     request_safeguards_evaluator,
     resent_without_rejected_reasoning,
 )
+from ..adapters.streaming_iterator import estimated_chat_prompt_tokens
 from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
 from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import litellm_logging_obj_from_kwargs, local_model_name, object_mapping
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -433,12 +436,12 @@ def _messages_without_rejected_reasoning(
 
 async def _aresponses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
-) -> tuple[Mapping[str, object], _ResponsesResult]:
+) -> tuple[AnthropicRequestMessages, Mapping[str, object], _ResponsesResult]:
     responses_kwargs: Final = responses_kwargs_for(messages)
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, await litellm.aresponses(**responses_kwargs)
+            return messages, responses_kwargs, await litellm.aresponses(**responses_kwargs)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -446,17 +449,17 @@ async def _aresponses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, await litellm.aresponses(**replay_kwargs)
+        return replayed_messages, replay_kwargs, await litellm.aresponses(**replay_kwargs)
 
 
 def _responses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
-) -> tuple[Mapping[str, object], _SyncResponsesResult]:
+) -> tuple[AnthropicRequestMessages, Mapping[str, object], _SyncResponsesResult]:
     responses_kwargs: Final = responses_kwargs_for(messages)
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, litellm.responses(**responses_kwargs)
+            return messages, responses_kwargs, litellm.responses(**responses_kwargs)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -464,7 +467,40 @@ def _responses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, litellm.responses(**replay_kwargs)
+        return replayed_messages, replay_kwargs, litellm.responses(**replay_kwargs)
+
+
+def _function_tools(tools: object) -> tuple[object, ...]:
+    return tuple(tool for tool in as_object_list(tools) or () if (as_str_mapping(tool) or {}).get("type") == "function")
+
+
+def _opening_input_tokens(
+    model: str,
+    max_tokens: int,
+    messages: AnthropicRequestMessages,
+    system: str | None,
+    tools: Sequence[AllAnthropicToolsValues | Mapping[str, object]] | None,
+    custom_llm_provider: object,
+) -> int:
+    try:
+        chat_request, _ = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(  # pyright: ignore[reportUnknownMemberType]  # the translator's kwargs parameter is untyped
+            {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                **({"system": system} if system else {}),
+                **({"tools": tools} if tools else {}),
+            },
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+    except Exception:  # noqa: BLE001  # a prompt the chat translator rejects opens at zero, like a failed count
+        return 0
+    request: Final = object_mapping(chat_request)
+    if request is None:
+        return 0
+    return estimated_chat_prompt_tokens(
+        model=model, messages=request.get("messages"), tools=_function_tools(request.get("tools")) or None
+    )
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
@@ -521,17 +557,25 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        responses_kwargs, result = await _aresponses_without_rejected_reasoning(
+        sent_messages, responses_kwargs, result = await _aresponses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages, responses_kwargs_for
         )
 
         if stream:
+            opening_input_tokens: Final = (
+                await offload_token_count(_opening_input_tokens)(
+                    model, max_tokens, sent_messages, system, tools, kwargs.get("custom_llm_provider")
+                )
+                if litellm.anthropic_messages_estimate_initial_input_tokens is True
+                else 0
+            )
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 safeguards_evaluator=safeguards_evaluator,
                 applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
+                opening_input_tokens=opening_input_tokens,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -628,16 +672,24 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
-        responses_kwargs, result = _responses_without_rejected_reasoning(
+        sent_messages, responses_kwargs, result = _responses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages, responses_kwargs_for
         )
 
         if stream:
+            opening_input_tokens: Final = (
+                _opening_input_tokens(
+                    model, max_tokens, sent_messages, system, tools, kwargs.get("custom_llm_provider")
+                )
+                if litellm.anthropic_messages_estimate_initial_input_tokens is True
+                else 0
+            )
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
+                opening_input_tokens=opening_input_tokens,
             )
             return wrapper.async_anthropic_sse_wrapper()
 

@@ -132,9 +132,11 @@ class AnthropicResponsesStreamWrapper:
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
         applied_edits: Sequence[AppliedEdit] | None = None,
+        opening_input_tokens: int = 0,
     ) -> None:
         self.responses_stream = responses_stream
         self._applied_edits: Final = tuple(applied_edits or ())
+        self._opening_input_tokens: Final = opening_input_tokens
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
         self.safeguards_evaluator: Final = safeguards_evaluator
@@ -168,7 +170,7 @@ class AnthropicResponsesStreamWrapper:
                 "stop_reason": None,
                 "stop_sequence": None,
                 "usage": {
-                    "input_tokens": 0,
+                    "input_tokens": self._opening_input_tokens,
                     "output_tokens": 0,
                     "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0,
