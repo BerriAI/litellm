@@ -14,8 +14,27 @@ export const browserLanguageStore: LanguageStore = {
   write: (language) => setLocalStorageItem(LANGUAGE_STORAGE_KEY, language),
 };
 
-export const resolveLanguage = (stored: string | null, locales: Locales): string =>
-  stored !== null && locales.has(stored) ? stored : DEFAULT_LANGUAGE;
+export const resolveLanguage = (
+  stored: string | null,
+  locales: Locales,
+  browserLanguages: readonly string[] = [],
+): string => {
+  if (stored !== null && locales.has(stored)) return stored;
+
+  const supported = [DEFAULT_LANGUAGE, ...locales.keys()];
+  for (const candidate of browserLanguages) {
+    const subtags = candidate.trim().replace(/_/g, "-").toLowerCase().split("-").filter(Boolean);
+    // Try the full browser locale first, then progressively less-specific tags
+    // (for example, fr-CA -> fr) when only a base translation is available.
+    for (let length = subtags.length; length > 0; length -= 1) {
+      const tag = subtags.slice(0, length).join("-");
+      const match = supported.find((language) => language.toLowerCase() === tag);
+      if (match) return match;
+    }
+  }
+
+  return DEFAULT_LANGUAGE;
+};
 
 export const supportedLanguages = (locales: Locales): readonly string[] => [DEFAULT_LANGUAGE, ...locales.keys()];
 

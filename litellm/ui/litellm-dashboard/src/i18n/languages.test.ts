@@ -9,12 +9,42 @@ describe("resolveLanguage", () => {
     expect(resolveLanguage("ja", locales)).toBe("ja");
   });
 
+  it("prefers the stored language over the browser preference", () => {
+    expect(resolveLanguage("ja", locales, ["fr-FR"])).toBe("ja");
+  });
+
   it.each([null, "", "en", "fr", "JA", "ja-JP", "__proto__"])("shows English when the stored value is %j", (stored) => {
     expect(resolveLanguage(stored, locales)).toBe("en");
   });
 
   it("shows English when no language besides English has translations", () => {
     expect(resolveLanguage("ja", new Map())).toBe("en");
+  });
+
+  it("matches a browser locale case-insensitively", () => {
+    expect(resolveLanguage(null, locales, ["JA-jp"])).toBe("ja");
+  });
+
+  it("falls back from a regional browser locale to its base translation", () => {
+    expect(resolveLanguage(null, locales, ["ja-JP"])).toBe("ja");
+  });
+
+  it("uses browser language preferences in order", () => {
+    const available: Locales = new Map([
+      ["ja", async () => ({})],
+      ["fr", async () => ({})],
+    ]);
+
+    expect(resolveLanguage(null, available, ["de-DE", "fr-CA", "ja-JP"])).toBe("fr");
+  });
+
+  it("does not guess between regional variants for an ambiguous base language", () => {
+    const chinese: Locales = new Map([
+      ["zh-CN", async () => ({})],
+      ["zh-TW", async () => ({})],
+    ]);
+
+    expect(resolveLanguage(null, chinese, ["zh"])).toBe("en");
   });
 });
 

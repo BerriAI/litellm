@@ -18,10 +18,15 @@ type LanguageGateProps = {
 
 const neverChanges = () => () => undefined;
 
+const browserLanguages = (): readonly string[] => {
+  if (typeof navigator === "undefined") return [];
+  return navigator.languages?.length ? navigator.languages : navigator.language ? [navigator.language] : [];
+};
+
 export function LanguageGate({ i18n, locales, store, children }: LanguageGateProps) {
   const language = useSyncExternalStore(
     neverChanges,
-    () => resolveLanguage(store.read(), locales),
+    () => resolveLanguage(store.read(), locales, browserLanguages()),
     () => DEFAULT_LANGUAGE,
   );
   const [settled, setSettled] = useState(DEFAULT_LANGUAGE);
