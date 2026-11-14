@@ -438,3 +438,64 @@ def test_muse_chat_completions_bridge_rejects_a_regional_deployment_location(res
             num_retries=0,
         )
     assert not route.called
+
+
+@pytest.mark.parametrize("param", [{"stop": ["END"]}, {"seed": 7}, {"n": 2}, {"logprobs": True}])
+def test_muse_chat_completions_bridge_refuses_params_it_cannot_forward(
+    param: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model="vertex_ai/meta/muse-ember-1.0",
+            messages=[{"role": "user", "content": "Say hello"}],
+            vertex_project="unit-project",
+            num_retries=0,
+            **param,
+        )
+    assert not route.called
+    litellm.completion(
+        model="vertex_ai/meta/muse-ember-1.0",
+        messages=[{"role": "user", "content": "Say hello"}],
+        vertex_project="unit-project",
+        drop_params=True,
+        num_retries=0,
+        **param,
+    )
+    assert route.called
+
+
+def test_muse_chat_completions_bridge_forwards_user_and_reasoning_effort(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+    litellm.completion(
+        model="vertex_ai/meta/muse-ember-1.0",
+        messages=[{"role": "user", "content": "Say hello"}],
+        vertex_project="unit-project",
+        user="unit-user",
+        reasoning_effort="low",
+        num_retries=0,
+    )
+    body: Final = FIELDS.validate_json(route.calls.last.request.content)
+    assert body["user"] == "unit-user"
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("surface", ["responses", "chat"])
+def test_muse_refuses_automatic_truncation_unless_dropped(surface: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-ember-1.0")))
+
+    def call(**kwargs: object) -> None:
+        if surface == "responses":
+            _ = litellm.responses(model="vertex_ai/meta/muse-ember-1.0", input="Say hello", **kwargs)
+        else:
+            _ = litellm.completion(
+                model="vertex_ai/meta/muse-ember-1.0", messages=[{"role": "user", "content": "Say hello"}], **kwargs
+            )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="truncation"):
+        call(vertex_project="unit-project", truncation="auto", num_retries=0)
+    assert not route.called
+    call(vertex_project="unit-project", truncation="auto", drop_params=True, num_retries=0)
+    assert "truncation" not in FIELDS.validate_json(route.calls.last.request.content)
+    call(vertex_project="unit-project", truncation="disabled", num_retries=0)
+    assert FIELDS.validate_json(route.calls.last.request.content)["truncation"] == "disabled"
