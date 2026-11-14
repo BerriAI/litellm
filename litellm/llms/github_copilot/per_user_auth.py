@@ -19,7 +19,7 @@ from typing import (
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, SecretStr, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -138,14 +138,26 @@ _COPILOT_ENDPOINTS: Final = TypeAdapter(_CopilotEndpointsPayload)
 _CACHED_SESSION_ENTRY: Final = TypeAdapter(tuple[str, str, str, float])
 
 
-@dataclass(frozen=True, slots=True, repr=False)
+@dataclass(frozen=True, slots=True, repr=False, init=False)
 class GithubCopilotUserSession:
-    """A resolved per-user Copilot token plus the validated host it may be sent
-    to. Only this module constructs it, so ``isinstance`` checks downstream are
-    unforgeable by request JSON."""
+    """Resolved caller or App credentials, never accepted from request JSON."""
 
-    token: str = field(repr=False)
+    _token: SecretStr = field(repr=False)
     api_base: str
+    is_app: bool = False
+
+    def __init__(self, token: str, api_base: str, is_app: bool = False) -> None:
+        object.__setattr__(self, "_token", SecretStr(token))
+        object.__setattr__(self, "api_base", api_base)
+        object.__setattr__(self, "is_app", is_app)
+
+    @property
+    def token(self) -> str:
+        return self._token.get_secret_value()
+
+    @property
+    def integration_id(self) -> str | None:
+        return "copilot-developer-cli" if self.is_app else None
 
     def __repr__(self) -> str:
         return f"GithubCopilotUserSession(api_base={self.api_base!r}, token=REDACTED)"
@@ -701,22 +713,32 @@ def require_github_copilot_user_session(litellm_params: object) -> GithubCopilot
     session: Final = github_copilot_user_session_from(litellm_params)
     if session is not None:
         return session
+    from .app_auth import app_config
+
+    if app_config(litellm_params) is not None:
+        raise BadRequestError(
+            message="GitHub App authentication requires a resolved installation session.",
+            llm_provider=_LLM_PROVIDER,
+            model="",
+        )
     credential_name: Final = github_copilot_per_user_credential_name(litellm_params)
     if credential_name is not None:
         raise _connect_error(credential_name)
     return None
 
 
-def is_github_copilot_per_user_request(kwargs: Mapping[str, object]) -> bool:
+def is_github_copilot_per_user_request(kwargs: object) -> bool:
     """True when this call carries a resolved per-user Copilot session, meaning it
     must bypass the shared response cache (cache keys ignore caller identity).
     The session kwarg is attached in ``utils.wrapper``/``wrapper_async`` after
     ``load_credentials_from_list``, before the cache lookup runs."""
-    return isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession)
+    session: Final = github_copilot_user_session_from(kwargs)
+    return session is not None and not session.is_app
 
 
-def _without_authorization(headers: Mapping[str, object]) -> dict[str, object]:
-    return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+def _without_authorization(headers: Mapping[str, object], integration_id: str | None = None) -> dict[str, object]:
+    protected: Final = frozenset({"authorization", "copilot-integration-id"} if integration_id else {"authorization"})
+    return {k: v for k, v in headers.items() if k.lower() not in protected}
 
 
 def _str_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -729,6 +751,7 @@ def _str_keyed_mapping(value: object) -> Mapping[str, object] | None:
 
 def _strip_caller_authorization(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    integration_id: str | None = None,
 ) -> None:
     """Once a per-user session is attached, its token owns Authorization on the
     wire. Caller-supplied bearer headers would be re-merged by the HTTP handler
@@ -738,7 +761,8 @@ def _strip_caller_authorization(
         value = kwargs.get(key)
         if isinstance(value, Mapping):
             stripped = _without_authorization(
-                cast("Mapping[str, object]", value)  # cast-ok: Mapping-checked request header dict
+                cast("Mapping[str, object]", value),  # cast-ok: Mapping-checked request header dict
+                integration_id,
             )
             if len(stripped) != len(
                 cast("Mapping[object, object]", value)  # cast-ok: Mapping-checked request header dict
@@ -754,7 +778,7 @@ def _strip_caller_authorization(
         if eh is not None:
             kwargs["optional_params"] = {  # rebind-ok: kwargs is the request mutation channel
                 **optional_params,
-                "extra_headers": _without_authorization(eh),
+                "extra_headers": _without_authorization(eh, integration_id),
             }
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
@@ -766,13 +790,21 @@ def _strip_caller_authorization(
         if eh2 is not None:
             kwargs["litellm_params"] = {  # rebind-ok: kwargs is the request mutation channel
                 **litellm_params,
-                "extra_headers": _without_authorization(eh2),
+                "extra_headers": _without_authorization(eh2, integration_id),
             }
 
 
 def attach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
+    from .app_auth import APP_TOKEN_MANAGER, app_config
+
+    config: Final = app_config(kwargs)
+    if config is not None:
+        app_session: Final = APP_TOKEN_MANAGER.resolve(config)
+        kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = app_session  # rebind-ok: kwargs is the request mutation channel
+        _strip_caller_authorization(kwargs, app_session.integration_id)
+        return
     credential_name_obj: Final[object] = kwargs.get("litellm_credential_name")
     auth_type_obj: Final[object] = kwargs.get(GITHUB_COPILOT_AUTH_TYPE_KEY)
     if not github_copilot_auth_mode(credential_name_obj, auth_type_obj):
@@ -795,6 +827,14 @@ def attach_github_copilot_user_session(
 async def aattach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
+    from .app_auth import APP_TOKEN_MANAGER, app_config
+
+    config: Final = app_config(kwargs)
+    if config is not None:
+        app_session: Final = await APP_TOKEN_MANAGER.aresolve(config)
+        kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = app_session  # rebind-ok: kwargs is the request mutation channel
+        _strip_caller_authorization(kwargs, app_session.integration_id)
+        return
     credential_name_obj: Final[object] = kwargs.get("litellm_credential_name")
     auth_type_obj: Final[object] = kwargs.get(GITHUB_COPILOT_AUTH_TYPE_KEY)
     if not github_copilot_auth_mode(credential_name_obj, auth_type_obj):

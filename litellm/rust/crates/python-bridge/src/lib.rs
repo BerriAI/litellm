@@ -37,7 +37,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -53,6 +53,8 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
     #[pymodule_export]
+    use crate::redis::store::deployment_health::NativeDeploymentHealth;
+    #[pymodule_export]
     use crate::redis::store::rate_limits::{
         NativeRateLimits, PyAtomicApplied, PyAtomicOverLimit, PyGaugeOverLimit, PyGaugesAcquired,
         PyGuardedReply, PyWindowCount,
@@ -60,7 +62,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::request::{NativeRequestRedis, NativeSend};
     #[pymodule_export]
-    use crate::redis::store::router_usage::NativeRouterUsage;
+    use crate::redis::store::router_session_pins::NativeRouterSessionPins;
+    #[pymodule_export]
+    use crate::redis::store::router_usage::{NativeRouterUsage, NativeUsageRead};
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
@@ -147,12 +151,15 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTokenRedactor",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
                 "NativeAuthCache",
+                "NativeDeploymentHealth",
+                "NativeRouterSessionPins",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",
@@ -163,6 +170,7 @@ mod tests {
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
+                "NativeUsageRead",
                 "NativeSensitiveRoutePins",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",

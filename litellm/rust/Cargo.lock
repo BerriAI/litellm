@@ -3477,18 +3477,28 @@ dependencies = [
 name = "litellm-auth-azure"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "azure_core",
  "azure_identity",
+ "futures-util",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-http",
  "litellm-secret-value",
  "litellm-secrets",
  "moka",
+ "rcgen",
+ "reqwest",
  "rstest",
+ "rustls 0.23.42",
  "serde_json",
  "sha2 0.10.9",
  "strum",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tokio-rustls 0.26.4",
  "url",
 ]
 
@@ -3610,6 +3620,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-testing",
+ "parking_lot",
  "rstest",
  "tokio",
 ]
@@ -3681,6 +3692,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-coroutine",
+ "litellm-host",
+ "rstest",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
@@ -3691,9 +3716,27 @@ dependencies = [
  "proptest",
  "pyo3",
  "rstest",
+ "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-callbacks-python"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-coroutine",
+ "litellm-host-python",
+ "litellm-python-compat",
+ "pyo3",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3831,6 +3874,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -3852,6 +3896,7 @@ dependencies = [
  "tracing",
  "uuid",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
@@ -4009,6 +4054,7 @@ dependencies = [
 name = "litellm-host"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "litellm-coroutine",
  "litellm-secret-value",
@@ -4309,6 +4355,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4345,6 +4392,8 @@ dependencies = [
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
+ "fancy-regex 0.19.2",
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
@@ -4370,10 +4419,14 @@ dependencies = [
  "aws-credential-types",
  "backon",
  "bytes",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
  "litellm-error",
  "litellm-http",
  "litellm-s3",
+ "litellm-secret-value",
  "litellm-tracing",
+ "percent-encoding",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",
@@ -4387,6 +4440,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-sdk-secretsmanager",
+ "azure_core",
  "bytes",
  "criterion",
  "fancy-regex 0.19.2",
@@ -4394,6 +4448,7 @@ dependencies = [
  "indexmap 2.14.0",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-azure",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
@@ -4546,11 +4601,14 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-secret-value",
  "litellm-tracing",
+ "parking_lot",
  "rstest",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4582,8 +4640,11 @@ dependencies = [
  "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-llms",
+ "litellm-model-catalog",
  "litellm-router-types",
  "rstest",
+ "serde_json",
 ]
 
 [[package]]
@@ -4940,9 +5001,11 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
  "percent-encoding",
+ "regex",
  "rstest",
  "serde_json",
  "tokio",

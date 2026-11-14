@@ -48,10 +48,11 @@ from litellm.llms.volcengine.responses.transformation import (
     VolcEngineResponsesAPIConfig,
 )
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.types.utils import GenericStreamingChunk
 
 if TYPE_CHECKING:
-    from litellm.caching.dual_cache import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.responses.streaming_iterator import ResponsesWsTurnAdmission
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
@@ -1704,8 +1705,8 @@ def _guard_recording(bill_refusal: MagicMock):
     return guard
 
 
-_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-34"
-_TURNED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-35"
+_OPENED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-34", "otpm")
+_TURNED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-35", "otpm")
 _OPENED_AT: Final = datetime(2026, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
 _TURNED_AT: Final = datetime(2026, 1, 1, 12, 35, 5, tzinfo=timezone.utc)
 _WS_DEPLOYMENT: Final = {
@@ -1731,12 +1732,12 @@ def _turn_completed() -> str:
     )
 
 
-async def _socket_opened_on(dual_cache: "DualCache") -> Mapping[str, object]:
+async def _socket_opened_on(usage: RouterUsageStore) -> Mapping[str, object]:
     from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 
-    await dual_cache.async_increment_cache(key=_OPENED_ON, value=_OTHER_USAGE, ttl=60)
-    await dual_cache.async_increment_cache(key=_TURNED_ON, value=_OTHER_USAGE, ttl=60)
-    return await async_admit_io_token_turn(dual_cache, _WS_DEPLOYMENT, _OPENED_AT)
+    usage.increment_local(CounterIncrement(_OPENED_ON, _OTHER_USAGE, 60))
+    usage.increment_local(CounterIncrement(_TURNED_ON, _OTHER_USAGE, 60))
+    return await async_admit_io_token_turn(usage, _WS_DEPLOYMENT, _OPENED_AT)
 
 
 def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> None:
@@ -1745,13 +1746,13 @@ def _turns_finish_at(monkeypatch: pytest.MonkeyPatch, finished_at: datetime) -> 
     )
 
 
-def _later_turns_admitted_through(dual_cache: "DualCache") -> "ResponsesWsTurnAdmission":
+def _later_turns_admitted_through(usage: RouterUsageStore) -> "ResponsesWsTurnAdmission":
     from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 
-    return partial(async_admit_io_token_turn, dual_cache, _WS_DEPLOYMENT, _TURNED_AT)
+    return partial(async_admit_io_token_turn, usage, _WS_DEPLOYMENT, _TURNED_AT)
 
 
-_ITPM_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:itpm:12-34"
+_ITPM_OPENED_ON: Final = UsageCounter("global_router", "ws-dep", "openai/gpt-5-mini", "12-34", "itpm")
 _ITPM_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 40_000},
     "model_info": {"id": "ws-dep"},
@@ -1776,6 +1777,16 @@ def _turn_completed_reading_cache(cached_tokens: int) -> str:
             },
         }
     )
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
+
+def _rate_limit_check(usage: RouterUsageStore) -> "ModelRateLimitingCheck":
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    return ModelRateLimitingCheck(usage=usage)
 
 
 def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_with: Mapping[str, object]) -> "Logging":
@@ -2137,13 +2148,11 @@ class TestWebSocketTurnAdmission:
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        from litellm.caching.dual_cache import DualCache
         from litellm.responses.streaming_iterator import drain_logging_tasks
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _TURNED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await _socket_opened_on(dual_cache)
+        usage: Final = _memory_usage()
+        opened_with: Final = await _socket_opened_on(usage)
         first, second, third = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
@@ -2154,18 +2163,18 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(second, third),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(usage), opened_with),
             first_message=first,
-            turn_admission=_later_turns_admitted_through(dual_cache),
+            turn_admission=_later_turns_admitted_through(usage),
         )
 
         await handler.client_to_backend()
         await handler.backend_to_client()
         await drain_logging_tasks()
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
         assert (
-            await dual_cache.async_get_cache(key=_TURNED_ON)
+            usage.get_local(_TURNED_ON)
             == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
         )
 
@@ -2182,14 +2191,12 @@ class TestWebSocketTurnAdmission:
     ) -> None:
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        from litellm.caching.dual_cache import DualCache
         from litellm.responses.streaming_iterator import drain_logging_tasks
         from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _OPENED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await async_admit_io_token_turn(dual_cache, _ITPM_DEPLOYMENT, _OPENED_AT)
+        usage: Final = _memory_usage()
+        opened_with: Final = await async_admit_io_token_turn(usage, _ITPM_DEPLOYMENT, _OPENED_AT)
         first, _, _ = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
@@ -2198,7 +2205,7 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(usage), opened_with),
             first_message=first,
         )
 
@@ -2206,7 +2213,7 @@ class TestWebSocketTurnAdmission:
         await handler.backend_to_client()
         await drain_logging_tasks()
 
-        assert await dual_cache.async_get_cache(key=_ITPM_OPENED_ON) == counted_input_tokens
+        assert usage.get_local(_ITPM_OPENED_ON) == counted_input_tokens
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2219,25 +2226,23 @@ class TestWebSocketTurnAdmission:
     async def test_managed_relay_counts_every_turn_on_the_minute_it_finishes(
         self, monkeypatch: pytest.MonkeyPatch, failing_turns: frozenset[int], first_turn_tokens: int
     ) -> None:
-        from litellm.caching.dual_cache import DualCache
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         _turns_finish_at(monkeypatch, _TURNED_AT)
-        dual_cache: Final = DualCache()
-        opened_with: Final = await _socket_opened_on(dual_cache)
+        usage: Final = _memory_usage()
+        opened_with: Final = await _socket_opened_on(usage)
 
         await _run_managed_relay(
             monkeypatch,
             _TwoOutputTokenTurns(failing_turns),
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(usage),
             _turn_frames(),
-            _later_turns_admitted_through(dual_cache),
+            _later_turns_admitted_through(usage),
             opened_with,
         )
 
-        assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE
+        assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
         assert (
-            await dual_cache.async_get_cache(key=_TURNED_ON)
+            usage.get_local(_TURNED_ON)
             == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
         )
 
@@ -2246,26 +2251,24 @@ class TestWebSocketTurnAdmission:
         self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
     ) -> None:
         import litellm
-        from litellm.caching.dual_cache import DualCache
-        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         _turns_finish_at(monkeypatch, _TURNED_AT)
         provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_provider_turn_stream)
         client_metadata: Final = {"session": "abc", "team": "search"}
-        dual_cache: Final = DualCache()
+        usage: Final = _memory_usage()
 
         await _relay_turns_to(
             monkeypatch,
             "openai/gpt-5-mini",
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(usage),
             tuple(
                 json.dumps({"type": "response.create", "input": word, "metadata": client_metadata})
                 for word in ("one", "two")
             ),
-            _later_turns_admitted_through(dual_cache),
-            await _socket_opened_on(dual_cache),
+            _later_turns_admitted_through(usage),
+            await _socket_opened_on(usage),
             api_key="sk-fake",
         )
 
@@ -2273,7 +2276,7 @@ class TestWebSocketTurnAdmission:
             client_metadata,
             client_metadata,
         ]
-        assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert usage.get_local(_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
 
     @pytest.mark.asyncio
     async def test_native_relay_sends_the_provider_only_the_metadata_the_socket_opened_with(

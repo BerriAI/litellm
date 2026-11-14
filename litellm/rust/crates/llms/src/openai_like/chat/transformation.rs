@@ -7,7 +7,9 @@
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::core_helpers::unix_now;
+use litellm_core_utils::{
+    core_helpers::unix_now, decline::Decline, prompt_templates::factory::THINKING_BLOCKS_FIELD,
+};
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
@@ -20,7 +22,8 @@ use crate::{
         auth::AuthScheme,
         chat::transformation::{
             BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            ValidatedEnvironment, unsupported_message_content, unsupported_message_fields,
+            unsupported_param,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -60,6 +63,8 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 /// Call configuration the caller may pass that never enters the request body.
 const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
 
+const REASONING_FIELDS: &[&str] = &[THINKING_BLOCKS_FIELD, "reasoning_content"];
+
 pub struct OpenAILikeChatConfig;
 
 pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILikeChatConfig;
@@ -71,6 +76,19 @@ impl BaseConfig for OpenAILikeChatConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        optional_params: &Map<String, Value>,
+    ) -> Option<Decline> {
+        unsupported_param(SUPPORTED_PARAMS, CONFIG_PARAMS, optional_params).or_else(|| {
+            messages.iter().find_map(|message| {
+                unsupported_message_fields(message, REASONING_FIELDS)
+                    .or_else(|| unsupported_message_content(message.content.as_ref()))
+            })
+        })
     }
 
     fn get_complete_url(
@@ -107,7 +125,15 @@ impl BaseConfig for OpenAILikeChatConfig {
         let body = Map::from_iter(
             [
                 ("model".to_string(), json!(model)),
-                ("messages".to_string(), json!(messages)),
+                (
+                    "messages".to_string(),
+                    json!(
+                        messages
+                            .into_iter()
+                            .map(without_null_fields)
+                            .collect::<Vec<_>>()
+                    ),
+                ),
             ]
             .into_iter()
             .chain(params),
@@ -223,6 +249,17 @@ impl BaseConfig for OpenAILikeChatConfig {
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
 /// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
 /// every top-level usage key ending in `_tokens`.
+fn without_null_fields(message: ChatMessage) -> ChatMessage {
+    ChatMessage {
+        extra: message
+            .extra
+            .into_iter()
+            .filter(|(_, value)| !value.is_null())
+            .collect(),
+        ..message
+    }
+}
+
 fn sanitize_usage(body: &mut Value) {
     if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
         for (key, value) in usage.iter_mut() {
@@ -275,6 +312,8 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            reasoning_content: None,
+            thinking_blocks: None,
         },
         finish_reason: choice
             .get("finish_reason")
@@ -623,6 +662,50 @@ mod tests {
                 }),
             ),
             None
+        );
+    }
+
+    #[rstest]
+    #[case::thinking(json!({"type": "thinking", "thinking": "t", "signature": "sig"}))]
+    #[case::redacted_thinking(json!({"type": "redacted_thinking", "data": "d"}))]
+    fn sends_a_reasoning_reply_from_another_provider_on_verbatim(#[case] block: Value) {
+        let conversation = json!([
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "4", "reasoning_content": "t", "thinking_blocks": [block]},
+            {"role": "user", "content": "add 1"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation.clone(), json!({}))["messages"],
+            conversation
+        );
+    }
+
+    #[rstest]
+    fn drops_null_reasoning_fields_like_python() {
+        let conversation = json!([
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "4", "reasoning_content": null, "thinking_blocks": null},
+            {"role": "user", "content": "add 1"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation, json!({}))["messages"][1],
+            json!({"role": "assistant", "content": "4"})
+        );
+    }
+
+    #[rstest]
+    fn other_unrecognized_message_fields_still_decline() {
+        assert_eq!(
+            reason(
+                json!([
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "4", "thinking_blocks": [], "audio": {"id": "a"}},
+                ]),
+                json!({}),
+            ),
+            Some(Decline::new("unrecognized message field"))
         );
     }
 

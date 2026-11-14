@@ -29,6 +29,78 @@ it.each([false, true])("preserves the prompt storage restriction %s in key metad
   expect(JSON.parse(String(result.payload.metadata))).toEqual({ note: "keep", store_prompts_in_spend_logs: store });
 });
 
+it("merges the budget alert rows into the metadata JSON box content", () => {
+  const result = build(
+    {
+      metadata: JSON.stringify({ cost_center: "ops" }),
+      max_budget_alert_emails: [
+        { threshold: 80, emails: "shared-mailbox@example.com" },
+        { threshold: null, emails: "ignored@example.com" },
+      ],
+    },
+    { disabledCallbacks: ["langfuse"] },
+  );
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(result.payload).not.toHaveProperty("max_budget_alert_emails");
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    litellm_disabled_callbacks: ["langfuse"],
+    max_budget_alert_emails: { "80": ["shared-mailbox@example.com"] },
+  });
+});
+
+it("keeps typed recipient entries the rows cannot show and lets the rows own every threshold they can", () => {
+  const result = build({
+    metadata: JSON.stringify({
+      cost_center: "ops",
+      max_budget_alert_emails: { "500": "typed@example.com", "80": ["stale@example.com"] },
+    }),
+    max_budget_alert_emails: [{ threshold: 50, emails: "row@example.com" }],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: { "500": "typed@example.com", "50": ["row@example.com"] },
+  });
+});
+
+it("stores a typed max_budget_alert_emails string as typed when no row is set", () => {
+  const result = build({ metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }) });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: "ops@qa.test",
+  });
+});
+
+it("replaces a typed max_budget_alert_emails string with the threshold rows", () => {
+  const result = build({
+    metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }),
+    max_budget_alert_emails: [{ threshold: 80, emails: "row@example.com" }],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: { "80": ["row@example.com"] },
+  });
+});
+
+it("keeps the budget alert rows when the metadata JSON box holds null", () => {
+  const result = build({
+    metadata: "null",
+    max_budget_alert_emails: [{ threshold: 80, emails: "shared-mailbox@example.com" }],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    max_budget_alert_emails: { "80": ["shared-mailbox@example.com"] },
+  });
+});
+
 const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");

@@ -34,7 +34,12 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    MidStreamFallbackError,
+    ModifyResponseException,
+    RequestOverDeploymentTpmError,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -387,11 +392,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
@@ -14369,6 +14370,29 @@ class TestAutoRouterTraceProvenance:
         assert retry.attributes["error.type"] == "ValueError"
         assert retry.attributes["litellm.retry.count"] == 1
         assert "private-error-text" not in str(retry.attributes)
+
+    @pytest.mark.asyncio
+    async def test_retry_records_name_the_over_tpm_refusal_as_its_logs_do(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+        )
+        request: Final = {"metadata": {}}
+        refusal: Final = RequestOverDeploymentTpmError(message="over tpm", model="answer", llm_provider="openai")
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, refusal)
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == refusal.logged_error_class
+        assert request["metadata"]["previous_models"][-1]["exception_type"] == refusal.logged_error_class
 
 
 @pytest.fixture()
