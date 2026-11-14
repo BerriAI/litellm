@@ -19504,6 +19504,7 @@ async def async_queue_request(
 
     Now using a FastAPI background task + /chat/completions compatible endpoint
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     data = {}
     try:
         data = await request.json()
@@ -19530,7 +19531,6 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
         data["litellm_call_id"] = litellm_call_id
 
         if not isinstance(data.get("metadata"), dict):
@@ -19627,13 +19627,19 @@ async def async_queue_request(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        if isinstance(e, litellm.BadRequestError):
-            raise ProxyException(
-                message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
-            ) from e
-        if isinstance(e, ProxyException):
+        failure: Final = _queued_call_failure(e)
+        failure.headers = {**failure.headers, LITELLM_CALL_ID_HEADER: litellm_call_id}
+        if failure is e:
             raise
-        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
+        raise failure from e
+
+
+def _queued_call_failure(e: Exception) -> ProxyException:
+    if isinstance(e, litellm.BadRequestError):
+        return ProxyException(
+            message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
+        )
+    return proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST)
 
 
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)

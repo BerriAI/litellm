@@ -416,6 +416,34 @@ def test_a_queued_stream_error_carries_the_call_id_in_its_header_and_body(
     assert response.json()["error"]["litellm_call_id"] == "queue-call-1"
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_a_queued_call_the_provider_rejects_carries_the_call_id_in_its_header_and_body(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+) -> None:
+    router: Final = MagicMock()
+    router.health.return_value.split_priority.return_value = (0, {})
+    router.health.return_value.priority_header_fields.return_value = {}
+    router.registry.return_value.deployments.return_value = []
+    router.schedule_acompletion = AsyncMock(
+        side_effect=litellm.NotFoundError(message="no such model", llm_provider="gemini", model="gemini-missing")
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+    monkeypatch.setattr(proxy_server, "general_settings", {"include_call_id_in_error_body": True})
+    with auth_as():
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={"model": "gemini-missing", "messages": [{"role": "user", "content": "hi"}], "stream": stream},
+            headers={"x-litellm-call-id": "queue-call-2"},
+        )
+    assert response.status_code == 404, response.text
+    assert response.headers.get("x-litellm-call-id") == "queue-call-2"
+    assert response.json()["error"]["litellm_call_id"] == "queue-call-2"
+
+
 class _QueueSuccessLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
