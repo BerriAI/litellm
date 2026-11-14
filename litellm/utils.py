@@ -84,6 +84,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     HOSTED_TOOL_CHOICE_TYPES,
@@ -135,21 +136,6 @@ from litellm.rust_bridge.configuration import Decision
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
 _CustomGuardrail = None
-_CustomLogger = None
-
-
-def _get_cached_custom_logger():
-    """
-    Get cached CustomLogger class.
-    Lazy imports on first call to avoid loading custom_logger at import time.
-    Subsequent calls use cached class for better performance.
-    """
-    global _CustomLogger
-    if _CustomLogger is None:
-        from litellm.integrations.custom_logger import CustomLogger
-
-        _CustomLogger = CustomLogger
-    return _CustomLogger
 
 
 @lru_cache(maxsize=None)
@@ -336,7 +322,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -551,6 +537,21 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from litellm import MockException
+
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.hook_point_fields import ResultFields
+from litellm.integrations.custom_logger_v2.legacy import (
+    PROXY_REQUEST_KEYS,
+    Admit,
+    KwargsFields,
+    hook_subscribers,
+    kwargs_after,
+    kwargs_patch,
+    run_subscribers,
+)
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.outcomes import Patch
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -1843,7 +1844,9 @@ def _deployment_provider(kwargs: Mapping[str, object]) -> str:
         return ""
 
 
-async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type: str) -> dict[str, Any]:
+async def async_pre_call_deployment_hook(
+    kwargs: Mapping[str, object], call_type: str, *, include_v2: bool = False
+) -> dict[str, Any]:  # mutable-ok: callers merge the returned kwargs
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -1864,15 +1867,40 @@ async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type
             body={"type": "invalid_request_error", "param": resolved.field},
         )
     modified_kwargs = dict(resolved)
+    callbacks: Final = litellm.callbacks
+    if (
+        include_v2
+        and Hook.pre_deployment_call in CustomLoggerV2.declared_hooks
+        and (subscribers := hook_subscribers(Hook.pre_deployment_call, callbacks, admit=Admit.every_logger)).has_v2
+    ):
+        modified_kwargs = kwargs_after(  # rebind-ok: whatever the last hook returned
+            await run_subscribers(
+                subscribers,
+                KwargsFields(modified_kwargs, PROXY_REQUEST_KEYS),
+                partial(_start_pre_deployment, typed_call_type),
+            )
+        )
+    else:
+        for callback in callbacks:
+            if isinstance(callback, CustomLogger):
+                result = await callback.async_pre_call_deployment_hook(modified_kwargs, typed_call_type)
+                if result is not None:
+                    modified_kwargs = result
 
-    custom_logger_class: Final = _get_cached_custom_logger()
-    for callback in litellm.callbacks:
-        if isinstance(callback, custom_logger_class):
-            result = await callback.async_pre_call_deployment_hook(modified_kwargs, typed_call_type)
-            if result is not None:
-                modified_kwargs = result
+    return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)  # pyright: ignore[reportArgumentType]  # whatever the last hook returned, as before
 
-    return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)
+
+def _start_pre_deployment(
+    call_type: CallTypes | None, callback: object, kwargs: object
+) -> Awaitable[Patch | None] | None:
+    if not isinstance(callback, CustomLogger):
+        return None
+    return _pre_deployment(callback, kwargs, call_type)
+
+
+async def _pre_deployment(callback: CustomLogger, kwargs: object, call_type: CallTypes | None) -> Patch | None:
+    result: Final = await callback.async_pre_call_deployment_hook(kwargs, call_type)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # the request dict as the previous hook left it
+    return None if result is None else kwargs_patch(kwargs, result)  # pyright: ignore[reportUnknownArgumentType]  # see above
 
 
 def _unstreamed_when_post_call_guardrails_apply(
@@ -1897,7 +1925,11 @@ def _unstreamed_when_post_call_guardrails_apply(
 
 
 async def async_post_call_success_deployment_hook(
-    request_data: dict, response: object, call_type: CallTypes | None
+    request_data: dict,  # mutable-ok: the attempt's request dict the hooks receive
+    response: object,
+    call_type: CallTypes | None,
+    *,
+    include_v2: bool = False,
 ) -> object:
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
@@ -1907,33 +1939,65 @@ async def async_post_call_success_deployment_hook(
     except ValueError:
         typed_call_type = None  # unknown call type
 
-    modified_response = response
+    callbacks: Final = litellm.callbacks
+    if (
+        include_v2
+        and Hook.post_deployment_success in CustomLoggerV2.declared_hooks
+        and (subscribers := hook_subscribers(Hook.post_deployment_success, callbacks, admit=Admit.every_logger)).has_v2
+    ):
+        fields: Final = ResultFields(request_data, PROXY_REQUEST_KEYS, Field.response, response)  # pyright: ignore[reportUnknownArgumentType]  # the attempt's request dict
+        _ = kwargs_after(
+            await run_subscribers(subscribers, fields, partial(_start_post_deployment_success, fields, typed_call_type))
+        )
+        return fields.value
 
-    custom_logger_class: Final = _get_cached_custom_logger()
-    CustomGuardrail: Final = _get_cached_custom_guardrail()
-    for callback in litellm.callbacks:
-        if isinstance(callback, custom_logger_class):
-            try:
-                result = await callback.async_post_call_success_deployment_hook(
-                    request_data, cast(LLMResponseTypes, modified_response), typed_call_type
-                )
-            except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
-                if isinstance(callback, CustomGuardrail):
-                    raise
-                verbose_logger.exception(
-                    "async_post_call_success_deployment_hook error in %s for call_type=%s",
-                    type(callback).__name__,
-                    typed_call_type,
-                )
-                continue
+    modified_response = response  # rebind-ok: each hook may replace it
+    for callback in callbacks:
+        if isinstance(callback, CustomLogger):
+            result = await _post_deployment_success(callback, request_data, modified_response, typed_call_type)
             if result is not None:
                 modified_response = result
 
     return modified_response
 
 
+def _start_post_deployment_success(
+    fields: ResultFields, call_type: CallTypes | None, callback: object, request_data: object
+) -> Awaitable[Patch | None] | None:
+    if not isinstance(callback, CustomLogger):
+        return None
+    return _post_deployment_success_patch(callback, request_data, fields.value, call_type)
+
+
+async def _post_deployment_success_patch(
+    callback: CustomLogger, request_data: object, response: object, call_type: CallTypes | None
+) -> Patch | None:
+    result: Final = await _post_deployment_success(callback, request_data, response, call_type)
+    return None if result is None else Patch().set(Field.deprecated_response_obj, result)
+
+
+async def _post_deployment_success(
+    callback: CustomLogger, request_data: object, response: object, call_type: CallTypes | None
+) -> object:
+    try:
+        return await callback.async_post_call_success_deployment_hook(
+            request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
+            cast(LLMResponseTypes, response),
+            call_type,
+        )
+    except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
+        if isinstance(callback, CustomGuardrail):
+            raise
+        verbose_logger.exception(
+            "async_post_call_success_deployment_hook error in %s for call_type=%s",
+            type(callback).__name__,
+            call_type,
+        )
+        return None
+
+
 async def async_post_call_failure_deployment_hook(
-    request_data: Mapping[str, object], exception: Exception, call_type: str
+    request_data: Mapping[str, object], exception: Exception, call_type: str, *, include_v2: bool = False
 ) -> None:
     """
     Notify CustomLogger callbacks that a deployment attempt failed.
@@ -1965,24 +2029,63 @@ async def async_post_call_failure_deployment_hook(
     safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
     safe_exception: Final = _snapshot_exception_for_hook(exception)
 
-    custom_logger_class: Final = _get_cached_custom_logger()
-    for callback in litellm.callbacks:
-        if isinstance(callback, custom_logger_class):
-            try:
-                if _accepts_fallback_depth_kwarg_for_class(type(callback)):
-                    await callback.async_post_call_failure_deployment_hook(
-                        safe_request_data, safe_exception, typed_call_type, fallback_depth=fallback_depth
-                    )
-                else:
-                    await callback.async_post_call_failure_deployment_hook(
-                        safe_request_data, safe_exception, typed_call_type
-                    )
-            except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
-                verbose_logger.debug(
-                    "async_post_call_failure_deployment_hook error in %s: %s",
-                    type(callback).__name__,
-                    callback_error,
-                )
+    callbacks: Final = litellm.callbacks
+    if (
+        include_v2
+        and Hook.post_deployment_failure in CustomLoggerV2.declared_hooks
+        and (subscribers := hook_subscribers(Hook.post_deployment_failure, callbacks, admit=Admit.every_logger)).has_v2
+    ):
+        fields: Final = ResultFields(safe_request_data, PROXY_REQUEST_KEYS, Field.error, safe_exception)
+        _ = kwargs_after(
+            await run_subscribers(
+                subscribers, fields, partial(_start_post_deployment_failure, fields, typed_call_type, fallback_depth)
+            )
+        )
+        return
+    for callback in callbacks:
+        if isinstance(callback, CustomLogger):
+            await _post_deployment_failure(callback, safe_request_data, safe_exception, typed_call_type, fallback_depth)
+
+
+def _start_post_deployment_failure(
+    fields: ResultFields,
+    call_type: CallTypes | None,
+    fallback_depth: int | None,
+    callback: object,
+    request_data: object,
+) -> Awaitable[None] | None:
+    if not isinstance(callback, CustomLogger):
+        return None
+    return _post_deployment_failure(callback, request_data, fields.value, call_type, fallback_depth)
+
+
+async def _post_deployment_failure(
+    callback: CustomLogger,
+    request_data: object,
+    exception: object,
+    call_type: CallTypes | None,
+    fallback_depth: int | None,
+) -> None:
+    try:
+        if _accepts_fallback_depth_kwarg_for_class(type(callback)):
+            await callback.async_post_call_failure_deployment_hook(
+                request_data,  # pyright: ignore[reportArgumentType]  # the attempt's read-only request view
+                exception,  # pyright: ignore[reportArgumentType]  # the exception snapshot
+                call_type,
+                fallback_depth=fallback_depth,
+            )
+        else:
+            await callback.async_post_call_failure_deployment_hook(
+                request_data,  # pyright: ignore[reportArgumentType]  # see above
+                exception,  # pyright: ignore[reportArgumentType]  # see above
+                call_type,
+            )
+    except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
+        verbose_logger.debug(
+            "async_post_call_failure_deployment_hook error in %s: %s",
+            type(callback).__name__,
+            callback_error,
+        )
 
 
 def post_call_processing(
@@ -2455,7 +2558,7 @@ def client(original_function):
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             kwargs["litellm_logging_obj"] = logging_obj
-            modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
+            modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type, include_v2=True)
             transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, kwargs, modified_kwargs)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2535,6 +2638,7 @@ def client(original_function):
                         request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
+                        include_v2=True,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -2598,6 +2702,7 @@ def client(original_function):
                     else call_kwargs,
                     response=result,
                     call_type=_call_type_enum,
+                    include_v2=True,
                 )
 
             ## Add response to cache
@@ -4362,7 +4467,7 @@ def cost_map_omits_token_price(*keys: object) -> bool:
 
 
 def register_model(
-    model_cost: str | dict,
+    model_cost: str | dict | None,
     *,
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
@@ -4402,6 +4507,8 @@ def register_model(
     keys are opaque ids rather than model names (e.g. router deployment ids).
     """
 
+    if model_cost is None:
+        return None
     loaded_model_cost: Final = (
         model_cost if isinstance(model_cost, dict) else (fetch_registration_document(model_cost) or {})
     )
@@ -6763,6 +6870,7 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
 
 
 _model_cost_lowercase_map: Final[None] = None
+_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: main's name, always empty
 
 
 def _invalidate_model_cost_lowercase_map() -> None:  # pyright: ignore[reportUnusedFunction]  # downstream code calls main's name
@@ -7490,6 +7598,7 @@ def get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_video_clip=_model_info.get("output_cost_per_video_clip", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
                 output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
                 output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),

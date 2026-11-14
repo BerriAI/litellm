@@ -216,6 +216,12 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
+        "user_api_key_customer_org_id",
+        "user_api_key_customer_org_alias",
+        "user_api_key_customer_team_id",
+        "user_api_key_customer_team_alias",
+        "user_api_key_customer_member_id",
+        "user_api_key_customer_member_alias",
     )
 )
 
@@ -227,6 +233,30 @@ class _UpstreamProviderMetadata(TypedDict, total=False):
 def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
     email: Final = metadata.get("user_api_key_user_email")
     return email if isinstance(email, str) and email.strip() else None
+
+
+_CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+class _CustomerIdentityMetadata(TypedDict, total=False):
+    user_api_key_customer_org_id: ReadOnly[str]
+    user_api_key_customer_org_alias: ReadOnly[str]
+    user_api_key_customer_team_id: ReadOnly[str]
+    user_api_key_customer_team_alias: ReadOnly[str]
+    user_api_key_customer_member_id: ReadOnly[str]
+    user_api_key_customer_member_alias: ReadOnly[str]
+
+
+_CUSTOMER_IDENTITY_ADAPTER: Final[TypeAdapter[_CustomerIdentityMetadata]] = TypeAdapter(_CustomerIdentityMetadata)
+
+
+def _stored_customer_identity(metadata: Mapping[object, object]) -> _CustomerIdentityMetadata:
+    values: Final = {
+        key: value
+        for key in _CustomerIdentityMetadata.__annotations__
+        if isinstance(value := metadata.get(key), str) and value.strip()
+    }
+    return _CUSTOMER_IDENTITY_ADAPTER.validate_python(values)
 
 
 def _get_spend_logs_metadata(
@@ -312,10 +342,12 @@ def _get_spend_logs_metadata(
     retry_key: Final = BILLED_RETRY_ATTEMPT_METADATA_KEY
     billed_retry_attempt: Final = retry_key in metadata and metadata[retry_key] is True
     # Filter the metadata dictionary to include only the specified keys
+    customer_metadata: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(metadata)
     clean_metadata: Final = SpendLogsMetadata(
         **MappingProxyType(
             {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
         ),
+        **_stored_customer_identity(customer_metadata),
         **upstream_provider_metadata,
         autorouter_savings=autorouter_savings,
         autorouter_savings_estimate=autorouter_savings_estimate,
@@ -636,7 +668,7 @@ async def get_logging_payload_async(
     from litellm.proxy.proxy_server import general_settings_view
 
     call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
-    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is not False
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is True
     build: Final = partial(
         get_logging_payload,
         kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
@@ -1503,7 +1535,7 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 def _without_tokens(value: str) -> str:
     from litellm.proxy.proxy_server import general_settings_view
 
-    if general_settings_view().get("redact_tokens_in_spend_logs") is False:
+    if general_settings_view().get("redact_tokens_in_spend_logs") is not True:
         return value
     return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
@@ -1552,7 +1584,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs. Token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
+    and logprobs. When enabled, token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()

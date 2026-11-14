@@ -19,6 +19,19 @@ from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.legacy import (
+    PROXY_REQUEST_KEYS,
+    Admit,
+    KwargsFields,
+    hook_subscribers,
+    kwargs_after,
+    kwargs_patch,
+    run_subscribers,
+)
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.outcomes import Patch
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -374,7 +387,7 @@ async def _execute_pre_request_hooks(
             pass
 
     # Build complete request kwargs dict
-    request_kwargs = {
+    request_kwargs: dict[str, object] = {  # mutable-ok: the hooks take and may replace the request dict
         "tools": tools,
         "stream": stream,
         "litellm_params": {
@@ -386,10 +399,21 @@ async def _execute_pre_request_hooks(
     if not litellm.callbacks:
         return request_kwargs
 
-    from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
+    callbacks: Final = litellm.callbacks
+    if (
+        Hook.pre_deployment_call in CustomLoggerV2.declared_hooks
+        and (subscribers := hook_subscribers(Hook.pre_deployment_call, callbacks, admit=Admit.every_logger)).has_v2
+    ):
+        return kwargs_after(  # pyright: ignore[reportReturnType]  # whatever the last hook returned, as before
+            await run_subscribers(
+                subscribers,
+                KwargsFields(request_kwargs, PROXY_REQUEST_KEYS),
+                partial(_start_pre_request_hook, model, messages),
+            )
+        )
 
-    for callback in litellm.callbacks:
-        if not isinstance(callback, _CustomLogger):
+    for callback in callbacks:
+        if not isinstance(callback, CustomLogger):
             continue
 
         # Call the pre-request hook
@@ -400,6 +424,27 @@ async def _execute_pre_request_hooks(
             request_kwargs = modified_kwargs
 
     return request_kwargs
+
+
+def _start_pre_request_hook(
+    model: str,
+    messages: list[dict[str, object]],  # mutable-ok: the hook takes the messages list
+    callback: object,
+    request_kwargs: object,
+) -> Awaitable[Patch | None] | None:
+    if not isinstance(callback, CustomLogger):
+        return None
+    return _pre_request_hook(callback, model, messages, request_kwargs)
+
+
+async def _pre_request_hook(
+    callback: CustomLogger,
+    model: str,
+    messages: list[dict[str, object]],  # mutable-ok: see above
+    request_kwargs: object,
+) -> Patch | None:
+    modified_kwargs: Final = await callback.async_pre_request_hook(model, messages, request_kwargs)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # the request dict as the previous hook left it
+    return None if modified_kwargs is None else kwargs_patch(request_kwargs, modified_kwargs)  # pyright: ignore[reportUnknownArgumentType]  # see above
 
 
 async def _try_websearch_short_circuit(

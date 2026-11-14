@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import AfterValidator, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
-from litellm.proxy.list_api.common import reject_unknown_query_params
+from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem, reject_unknown_query_params
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     InvalidDateRange,
@@ -32,6 +32,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import DatabaseClient, TableActions
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendAnalyticsPaginatedResponse
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 
 class CustomerEntity(str, Enum):
@@ -139,7 +140,9 @@ router: Final = APIRouter(
 )
 
 
-def bounded_organizations(value: str) -> str:
+def bounded_organizations(value: str | None) -> str | None:
+    if value is None:
+        return None
     ids: Final = tuple(part.strip() for part in value.split(",") if part.strip())
     if not ids or len(ids) > 100:
         raise ValueError("Provide between 1 and 100 customer organization IDs")
@@ -153,6 +156,7 @@ def bounded_organizations(value: str) -> str:
         "Get complete daily usage totals for up to 100 customer organizations in one response. "
         "Uses shared SQL daily-spend aggregation with per-organization breakdowns. "
         "Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. "
+        "Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. "
         "Key breakdowns show the top key; totals include every key. No raw-row pagination is required. "
         "Budget counters are returned separately by organization reads. Proxy admins only."
     ),
@@ -164,17 +168,29 @@ async def customer_organization_daily_activity_aggregated(
         str, Query(description="Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start")
     ],
     customer_org_ids: Annotated[
-        str,
+        str | None,
         Query(description="Comma-separated IDs for up to 100 visible customer organizations"),
         AfterValidator(bounded_organizations),
-    ],
+    ] = None,
+    customer_org_id: Annotated[
+        str | None, Query(min_length=1, description="One exact customer organization ID, without splitting or trimming")
+    ] = None,
     model: str | None = None,
     api_key: str | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     date_error: Final = aggregated_date_range_error(start_date, end_date)
     if date_error is not None:
         raise_activity_error(InvalidDateRange(reason=date_error))
-    ids: Final = customer_org_ids.split(",")
+    if (customer_org_ids is None) == (customer_org_id is None):
+        raise ManagementProblem(
+            ProblemDetail(
+                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+                title="Invalid organization filter",
+                status=400,
+                detail="Provide exactly one of customer_org_ids or customer_org_id.",
+            )
+        )
+    ids: Final = [customer_org_id] if customer_org_id is not None else (customer_org_ids or "").split(",")
     scope: Final = daily_activity_scope(
         "litellm_dailycustomermemberspend",
         CustomerEntity.ORGANIZATION.value,

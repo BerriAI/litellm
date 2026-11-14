@@ -1,11 +1,14 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Final, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 CustomerIdentifier: TypeAlias = Annotated[str, Field(strict=True, min_length=1, max_length=256)]
 _IDENTITY_FIELDS: Final = ("customer_org_id", "customer_team_id", "customer_member_id")
@@ -29,7 +32,23 @@ class CustomerUsageAttribution(BaseModel):
     customer_member_id: CustomerIdentifier | None = None
 
 
-class _Team(BaseModel):
+@dataclass(frozen=True, slots=True)
+class ResolvedCustomerUsage:
+    attribution: CustomerUsageAttribution
+    model_scopes: tuple[tuple[str, ...], ...]
+
+
+class _HierarchyBudget(Budget):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+
+class _Organization(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    budget: _HierarchyBudget | None = None
+
+
+class _Team(_Organization):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     parent_org_id: str
@@ -38,7 +57,34 @@ class _Team(BaseModel):
 class _Member(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    parent_team_id: str
+    parent_team_ids: tuple[str, ...] = ()
+    budget: _HierarchyBudget | None = None
+    budget_override: _HierarchyBudget | None = None
+    budget_override_expires_at: datetime | None = None
+
+
+def _budget_models(budget: Budget | None) -> tuple[str, ...]:
+    if budget is None:
+        return ()
+    return budget.allowed_models or ()
+
+
+def _model_scopes(
+    organization: _Organization, team: _Team | None, member: _Member | None
+) -> tuple[tuple[str, ...], ...]:
+    member_budget: Final = (
+        effective_member_budget(
+            member.budget, member.budget_override, member.budget_override_expires_at, datetime.now(timezone.utc)
+        )
+        if member is not None
+        else None
+    )
+    scopes: Final = (
+        _budget_models(organization.budget),
+        _budget_models(team.budget if team is not None else None),
+        _budget_models(member_budget),
+    )
+    return tuple(scope for scope in scopes if scope)
 
 
 class _KeyMetadata(BaseModel):
@@ -119,7 +165,7 @@ async def resolve_customer_usage(
     administrator: bool,
     database: CustomerUsageDatabase | None,
     ledger_enabled: bool,
-) -> CustomerUsageAttribution | CustomerUsageFailure | None:
+) -> ResolvedCustomerUsage | CustomerUsageFailure | None:
     if not customer_usage_requested(metadata, key_metadata):
         return None
     candidate: Final = _input(metadata, key_metadata)
@@ -131,39 +177,47 @@ async def resolve_customer_usage(
         return CustomerUsageFailure(CustomerUsageError.UNAVAILABLE)
     member: Final = (
         await database.litellm_customermembertable.find_unique(
-            where={"customer_member_id": candidate.customer_member_id}
+            where={"customer_member_id": candidate.customer_member_id},
+            include={"budget": True, "budget_override": True},
         )
         if candidate.customer_member_id is not None
         else None
     )
     if candidate.customer_member_id is not None and member is None:
         return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
-    member_team: Final = _Member.model_validate(member).parent_team_id if member is not None else None
-    if candidate.customer_team_id is not None and member_team is not None and candidate.customer_team_id != member_team:
+    member_record: Final = _Member.model_validate(member) if member is not None else None
+    member_teams: Final = member_record.parent_team_ids if member_record is not None else ()
+    if candidate.customer_team_id is not None and member_teams and candidate.customer_team_id not in member_teams:
         return _hierarchy_failure(CustomerUsageError.MISMATCH, administrator=administrator)
-    team_id: Final = candidate.customer_team_id or member_team
+    team_id: Final = candidate.customer_team_id or (member_teams[0] if member_teams else None)
     team: Final = (
-        await database.litellm_customerteamtable.find_unique(where={"customer_team_id": team_id})
+        await database.litellm_customerteamtable.find_unique(
+            where={"customer_team_id": team_id}, include={"budget": True}
+        )
         if team_id is not None
         else None
     )
     if team_id is not None and team is None:
         return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
-    team_org: Final = _Team.model_validate(team).parent_org_id if team is not None else None
+    team_record: Final = _Team.model_validate(team) if team is not None else None
+    team_org: Final = team_record.parent_org_id if team_record is not None else None
     if candidate.customer_org_id is not None and team_org is not None and candidate.customer_org_id != team_org:
         return _hierarchy_failure(CustomerUsageError.MISMATCH, administrator=administrator)
     organization_id: Final = candidate.customer_org_id or team_org
     if organization_id is None:
         return CustomerUsageFailure(CustomerUsageError.INVALID)
     organization: Final = await database.litellm_customerorganizationtable.find_unique(
-        where={"customer_org_id": organization_id}
+        where={"customer_org_id": organization_id}, include={"budget": True}
     )
     if organization is None:
         return _hierarchy_failure(CustomerUsageError.NOT_FOUND, administrator=administrator)
-    return CustomerUsageAttribution(
-        customer_org_id=organization_id,
-        customer_team_id=team_id,
-        customer_member_id=candidate.customer_member_id,
+    return ResolvedCustomerUsage(
+        attribution=CustomerUsageAttribution(
+            customer_org_id=organization_id,
+            customer_team_id=team_id,
+            customer_member_id=candidate.customer_member_id,
+        ),
+        model_scopes=_model_scopes(_Organization.model_validate(organization), team_record, member_record),
     )
 
 

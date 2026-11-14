@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ConnectFlowStatus } from "@/components/networking";
-import ConnectFlowBanner, { isLoopbackOrigin } from "./ConnectFlowBanner";
+import ConnectFlowBanner, { isLoopbackOrigin, type FinishSelection } from "./ConnectFlowBanner";
 
 const { startOAuthFlow } = vi.hoisted(() => ({ startOAuthFlow: vi.fn() }));
 
@@ -27,7 +27,7 @@ const unscoped = (client_origin: string): ConnectFlowStatus => ({
   servers: null,
 });
 
-const renderBanner = (clientOrigin: string) =>
+const renderBanner = (clientOrigin: string, finish?: FinishSelection) =>
   render(
     <ConnectFlowBanner
       flowHandle="flow-handle-123"
@@ -35,6 +35,7 @@ const renderBanner = (clientOrigin: string) =>
       accessToken="tok"
       onConnected={vi.fn()}
       failed={false}
+      finish={finish}
     />,
   );
 
@@ -49,6 +50,31 @@ describe("ConnectFlowBanner", () => {
     expect(form.innerHTML).not.toContain("token");
     expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("posts the id of each server that is on with Finish", () => {
+    renderBanner("https://claude.ai", { status: "ready", serverIds: ["catalog-id", "orders-id"] });
+
+    expect(screen.getByDisplayValue("catalog-id")).toHaveAttribute("name", "server");
+    expect(screen.getByDisplayValue("orders-id")).toHaveAttribute("name", "server");
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toBeEnabled();
+  });
+
+  it("holds Finish until the page has loaded its servers", () => {
+    renderBanner("https://claude.ai", { status: "waiting" });
+
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toBeDisabled();
+    expect(screen.queryByText("Turn on at least one server to finish connecting.")).not.toBeInTheDocument();
+  });
+
+  it("holds Finish and says why when every server is off", () => {
+    renderBanner("https://claude.ai", { status: "nothing-on" });
+
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /finish connecting/i })).toHaveAccessibleDescription(
+      "Turn on at least one server to finish connecting.",
+    );
+    expect(screen.queryByDisplayValue(/./, { exact: false })).toHaveAttribute("name", "flow");
   });
 
   it("lists multi-server consent and requires every server before finishing", () => {
