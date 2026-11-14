@@ -707,6 +707,30 @@ def test_resolve_token_rates_covers_the_service_tier_and_the_regional_uplift():
     assert regional.output_rate == pytest.approx(3e-05 * 1.1)
 
 
+def test_resolve_token_rates_reserves_what_a_fedramp_request_bills():
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 3e-05,
+        "fedramp_uplift_multiplier": 1.1,
+    }
+    usage: Final = Usage(prompt_tokens=10_000, completion_tokens=100, total_tokens=10_100)
+
+    rates: Final = resolve_token_rates(
+        model_info=model_info, usage=usage, custom_llm_provider="openai", data_residency="fedramp"
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency="fedramp",
+        model_info=model_info,
+    )
+
+    assert rates.input_rate * usage.prompt_tokens == pytest.approx(prompt_cost)
+    assert rates.output_rate * usage.completion_tokens == pytest.approx(completion_cost)
+    assert rates.input_rate > model_info["input_cost_per_token"]
+
+
 def test_is_within_off_peak_window_same_day():
     from datetime import datetime, timezone
 

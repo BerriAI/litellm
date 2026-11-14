@@ -1643,8 +1643,8 @@ def resolve_token_rates(
     """The highest per-token rates a request with this usage can be billed at.
 
     Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
-    *_above_Nk_tokens thresholds, service-tier rates, the uplift of the regional OpenAI host or
-    non-global Vertex location the request is sent to, and the provider's threshold inclusivity),
+    *_above_Nk_tokens thresholds, service-tier rates, the uplift of the regional or FedRAMP OpenAI
+    host or non-global Vertex location the request is sent to, and the provider's threshold inclusivity),
     so a caller that only knows the token counts ahead of the request, such as budget reservation,
     prices them the way the finished request will be. One of those can still move between the
     estimate and the bill: an off-peak window open right now can close before the response lands,
@@ -1667,6 +1667,7 @@ def resolve_token_rates(
             for info in off_peak_variants
         ),
         multiplier=get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location),
     )
 
