@@ -68,6 +68,7 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
         "codestral-2501",
         "openai/gpt-oss-120b-maas",
         "google/gemma-4-26b-a4b-it-maas",
+        "meta/muse-spark-1.3",
     ),
 )
 async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(

@@ -7296,3 +7296,33 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "forwards"),
+    [
+        ("meta/muse-ember-1.0", "vertex_ai", True),
+        ("gemini-4-argon", "vertex_ai", False),
+        ("muse-ember-1.0", "openai", False),
+    ],
+)
+def test_transform_request_forwards_vertex_credentials_only_for_vertex_muse_models(
+    model: str, custom_llm_provider: str, forwards: bool
+) -> None:
+    credentials: Final = {
+        "vertex_project": "unit-project",
+        "vertex_location": "europe-west4",
+        "vertex_credentials": "{}",
+    }
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=dict(credentials),
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert {key: request.get(key) for key in credentials} == (
+        credentials if forwards else dict.fromkeys(credentials)
+    )

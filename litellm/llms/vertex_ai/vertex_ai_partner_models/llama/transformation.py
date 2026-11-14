@@ -9,6 +9,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.llms.vertex_ai.responses.transformation import MUSE_CHAT_PARAMS, is_vertex_muse_model
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionResponse
 from litellm.types.utils import (
     Delta,
@@ -72,6 +73,8 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> list[str]:
+        if is_vertex_muse_model(model):
+            return list(MUSE_CHAT_PARAMS)
         unsupported_params: Final = (
             VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
             if is_vertex_self_deployed_openai_compatible_endpoint(model)

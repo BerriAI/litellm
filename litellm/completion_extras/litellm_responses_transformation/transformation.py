@@ -64,6 +64,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
@@ -230,6 +231,30 @@ def _effort_with_requested_summary(nested_effort: object, top_level_effort: obje
             return {**reasoning, "summary": summary}
         case _:
             return nested_effort
+
+
+_VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
+    {
+        "vertex_project": ("vertex_project", "vertex_ai_project"),
+        "vertex_location": ("vertex_location", "vertex_ai_location"),
+        "vertex_credentials": ("vertex_credentials", "vertex_ai_credentials"),
+    }
+)
+
+
+def _first_non_empty(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+    return next((params[name] for name in names if params.get(name)), None)
+
+
+def _vertex_credential_params(
+    model: str, custom_llm_provider: str | None, optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if custom_llm_provider != LlmProviders.VERTEX_AI.value or not is_vertex_muse_model(model):
+        return {}
+    found: Final = {
+        name: _first_non_empty(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()
+    }
+    return {name: value for name, value in found.items() if value is not None}
 
 
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -1406,6 +1431,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
+            **_vertex_credential_params(model, _served_provider(litellm_params), typed_optional_params),
             "client": client,
         }
 

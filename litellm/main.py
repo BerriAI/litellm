@@ -1356,6 +1356,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    serves_only_responses,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -5707,7 +5708,9 @@ def completion(
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
     # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
+    # Responses API config (get_provider_responses_api_config -> None). A route
+    # with no chat endpoint bridges anyway, since its native Responses config
+    # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
@@ -6082,8 +6085,11 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        may_bridge_to_responses_api: Final = not skip_responses_api_bridge or serves_only_responses(
+            model, custom_llm_provider
+        )
         bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+            responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
         allowed_openai_params: Final[list[str] | None] = (
             [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
@@ -6411,7 +6417,7 @@ def completion(
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
