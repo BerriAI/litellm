@@ -1978,12 +1978,20 @@ def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.Mo
         {"X-Foo": 1},
         {"X-Foo": "caf\u00e9"},
         {"X-Foo": "a\r\nX-Injected: 1"},
+        {"X Foo": "bar"},
+        {"Authorization ": "Bearer caller"},
+        {"Authorization: Bearer caller": "x"},
+        {"": "x"},
     ),
     ids=(
         *_MALFORMED_EXTRA_HEADERS_IDS,
         "non_string_value",
         "non_ascii_value",
         "crlf_value",
+        "space_in_name",
+        "reserved_name_with_trailing_space",
+        "colon_in_name",
+        "empty_name",
     ),
 )
 async def test_malformed_extra_headers_is_rejected_before_http(
@@ -2091,8 +2099,9 @@ async def test_malformed_extra_headers_is_dropped_under_drop_params(
         ({"X-Kept": "yes", 1: "x-bad"}, "1"),
         ({"X-Kept": "yes", "X-Bad": "a\r\nX-Injected: 1"}, "x-bad"),
         ({"X-Kept": "yes", "X-Bad": "caf\u00e9"}, "x-bad"),
+        ({"X-Kept": "yes", "Authorization ": "Bearer caller"}, "authorization "),
     ),
-    ids=("non_string_value", "non_string_name", "crlf_value", "non_ascii_value"),
+    ids=("non_string_value", "non_string_name", "crlf_value", "non_ascii_value", "reserved_name_with_trailing_space"),
 )
 async def test_drop_params_keeps_the_well_formed_extra_headers(
     extra_headers: Mapping[object, object],
@@ -2124,9 +2133,9 @@ async def test_drop_params_keeps_the_well_formed_extra_headers(
     (
         ({"X-Foo": b"plain"}, "x-foo", "plain"),
         ({"X-Foo": " plain\t"}, "x-foo", "plain"),
-        ({"X Foo": "bar"}, "x foo", "bar"),
+        ({"X-Foo_1.v2~": "bar"}, "x-foo_1.v2~", "bar"),
     ),
-    ids=("ascii_bytes", "surrounding_whitespace", "space_in_name"),
+    ids=("ascii_bytes", "surrounding_whitespace", "token_punctuation_in_name"),
 )
 async def test_extra_headers_entry_is_sent_as_its_http_field(
     extra_headers: Mapping[str, object],

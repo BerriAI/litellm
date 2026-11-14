@@ -91,13 +91,15 @@ def _without_surrounding_whitespace(value: str) -> str:
     return value.strip(" \t")
 
 
-_SendableHeaderText: TypeAlias = Annotated[str, Field(pattern=r"^[\t\x20-\x7e]*$")]
-_HeaderValue: TypeAlias = Annotated[_SendableHeaderText, AfterValidator(_without_surrounding_whitespace)]
+_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")]
+_HeaderValue: TypeAlias = Annotated[
+    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
+]
 _EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
-    Mapping[_SendableHeaderText, _HeaderValue] | None,
+    Mapping[_HeaderName, _HeaderValue] | None,
     config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
 )
-_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_SendableHeaderText, _HeaderValue])
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
