@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, override
@@ -10,10 +10,12 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -33,32 +35,40 @@ from litellm.integrations._types.open_inference import (
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
         messages: Final = kwargs.get("messages")
 
         # for /chat/completions
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         if messages:
-            last_message: Final = messages[-1]
+            last_message: Final = subscript(messages, -1)
             safe_set_attribute(
                 span,
                 SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
+                require_attributes(last_message, _SupportsGetWithDefault, "get").get("content", ""),
             )
 
             # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
+            for idx, msg in enumerate(iter_items(messages)):
                 prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
                 # Set the role per message.
-                safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role"))
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("role"),
+                )
                 # Set the content per message.
                 safe_set_attribute(
                     span,
                     f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("content", ""),
                 )
 
                 # Additive: emit structured tool_calls / multimodal content
@@ -663,12 +673,11 @@ def _to_plain_dict(value):
 
 
 def _get_tool_calls(message) -> list | None:
-    """Return ``message.tool_calls`` only when it's a non-empty list.
-
-    Works for dicts and Pydantic message objects via ``_safe_get``.
+    """Return the message's tool calls, Claude's server tool calls first, or
+    ``None`` when there are none. Works for dicts and Pydantic message objects.
     """
-    tool_calls: Final = _safe_get(message, "tool_calls")
-    return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    return list(tool_calls) if tool_calls else None
 
 
 class _NormalizedToolCallFunction(TypedDict):

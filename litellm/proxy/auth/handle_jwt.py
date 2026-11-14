@@ -30,6 +30,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -164,6 +165,10 @@ class _UserInfoResponse(Protocol):
     def json(self) -> dict[str, object]: ...
 
 
+class _JWKSResponse(Protocol):
+    def json(self) -> object: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JWTIdentity:
     user_id: str | None
@@ -215,6 +220,10 @@ def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
 
 def _userinfo_document(response: _UserInfoResponse) -> dict[str, object]:
     """Decode an OIDC UserInfo response body into its JSON object form."""
+    return response.json()
+
+
+def _jwks_document(response: _JWKSResponse) -> object:
     return response.json()
 
 
@@ -960,12 +969,12 @@ class JWTHandler:
             )
 
         try:
-            response_json: Final = response.json()
+            response_json: Final = _jwks_document(response)
         except Exception as e:
             verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
             raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
 
-        keys: Final = response_json["keys"] if "keys" in response_json else response_json
+        keys: Final = subscript(response_json, "keys") if json_contains(response_json, "keys") else response_json
         return cast(JWKKeyValue, keys)  # cast-ok: JWTKeyItem declares only `kid`, validating would drop key material
 
     async def _get_public_key_from_jwks_url(self, jwks_url: str, kid: str | None) -> JWTKeyItem:
@@ -1768,6 +1777,7 @@ class JWTAuthManager:
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
         route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed candidate
 
         if not team_ids:
             if (
@@ -1796,6 +1806,21 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
+                    if (
+                        fallback_team is None
+                        and allowed_routes_check(
+                            user_role=LitellmUserRoles.TEAM,
+                            user_route=route,
+                            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        and JWTAuthManager._team_has_passthrough_route_access(
+                            team_object=team_object,
+                            route=route,
+                            request_method=request_method,
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                        )
+                    ):
+                        fallback_team = (team_id, team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
                         or await can_team_access_model(
@@ -1827,6 +1852,9 @@ class JWTAuthManager:
                             return team_id, team_object
             except Exception:
                 continue
+
+        if fallback_team is not None:
+            return fallback_team
 
         if denied_pass_through_team is not None:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=denied_pass_through_team)
@@ -2380,6 +2408,7 @@ class JWTAuthManager:
             route=route, request_method=request_method, jwt_handler=jwt_handler
         )
         any_team_resolved = False
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed membership
         for candidate_team_id in user_team_ids:
             try:
                 team_object = await get_team_object(
@@ -2393,6 +2422,17 @@ class JWTAuthManager:
             except HTTPException:
                 continue
             any_team_resolved = True
+            if (
+                team_route_allowed
+                and fallback_team is None
+                and JWTAuthManager._team_has_passthrough_route_access(
+                    team_object=team_object,
+                    route=route,
+                    request_method=request_method,
+                    team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                )
+            ):
+                fallback_team = (candidate_team_id, team_object)
             if requested_model:
                 try:
                     await can_team_access_model(
@@ -2423,6 +2463,23 @@ class JWTAuthManager:
                     ),
                 )
             return candidate_team_id, team_object, None
+
+        if fallback_team is not None:
+            fallback_id, fallback_object = fallback_team
+            return (
+                fallback_id,
+                fallback_object,
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=fallback_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id
+                else None,
+            )
 
         if enforce_team_based_model_access:
             if requested_model and any_team_resolved:

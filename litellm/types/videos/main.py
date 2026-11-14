@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
@@ -76,6 +77,19 @@ class VideoResponse(LiteLLMBaseModel):
             return self.dict()
 
 
+class VideoImageURL(TypedDict):
+    url: ReadOnly[str]
+
+
+class VideoInputReference(TypedDict):
+    type: ReadOnly[Literal["image_url"]]
+    image_url: ReadOnly[VideoImageURL]
+
+
+class VideoFrameImage(VideoInputReference):
+    frame_type: ReadOnly[Literal["first_frame", "last_frame"]]
+
+
 class VideoCreateOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's video creation API.
@@ -88,6 +102,12 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
     resolution: ReadOnly[str | None]
+    duration: ReadOnly[int]
+    aspect_ratio: ReadOnly[str]
+    frame_images: ReadOnly[Sequence[VideoFrameImage]]
+    input_references: ReadOnly[Sequence[VideoInputReference]]
+    generate_audio: ReadOnly[bool]
+    seed: ReadOnly[int]
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None

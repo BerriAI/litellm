@@ -200,3 +200,78 @@ async def test_write_back_keeps_real_tool_results_under_modify_params():
     assert "skipped" not in serialized
     assert "Please continue" not in serialized
     assert [m["role"] for m in written] == ["user", "assistant", "user", "user"]
+
+
+@pytest.mark.asyncio
+async def test_write_back_sends_the_client_url_blocks_as_the_client_sent_them(async_only_image_fetch):
+    image_link = "https://img.example/presskit/page.pdf?fm=png"
+    document_link = "https://files.example/reports/q3.pdf"
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tu_1", "name": "fetch_report", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": [
+                        {"type": "document", "source": {"type": "url", "url": document_link}, "title": "Q3 attachment"}
+                    ],
+                },
+                {"type": "text", "text": "compare these"},
+                {"type": "image", "source": {"type": "url", "url": image_link}},
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": document_link},
+                    "title": "Q3 report",
+                    "context": "Board copy",
+                    "citations": {"enabled": True},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "document", "source": {"type": "url", "url": document_link}, "title": "Q3 report, again"},
+            ],
+        },
+    ]
+
+    written = await _write_back_identity([dict(m) for m in messages])
+
+    assert async_only_image_fetch.fetched == []
+    assert [m["content"] for m in written[1:]] == [messages[1]["content"][:1], messages[1]["content"][1:]]
+
+
+@pytest.mark.asyncio
+async def test_write_back_keeps_each_url_document_fields_when_a_tool_result_after_it_has_the_same_link(
+    async_only_image_fetch,
+):
+    document_link = "https://files.example/reports/q3.pdf"
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tu_1", "name": "fetch_report", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": document_link},
+                    "title": "Q3 report",
+                    "context": "Board copy",
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": [
+                        {"type": "document", "source": {"type": "url", "url": document_link}, "title": "Q3 attachment"}
+                    ],
+                },
+            ],
+        },
+    ]
+
+    written = await _write_back_identity([dict(m) for m in messages])
+
+    assert [m["content"] for m in written[1:]] == [messages[1]["content"][1:], messages[1]["content"][:1]]

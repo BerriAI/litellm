@@ -10,7 +10,7 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -22,7 +22,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2AStreamingContext,
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
-from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS, A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
@@ -126,10 +126,7 @@ class A2ACompletionBridgeHandler:
 
     @staticmethod
     async def _acompletion(completion_params: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
-        acompletion_fn: Final[Callable[..., Coroutine[object, object, ModelResponse | CustomStreamWrapper]]] = vars(
-            litellm
-        )["acompletion"]
-        return await acompletion_fn(**completion_params)
+        return await litellm.acompletion(**completion_params)
 
     @staticmethod
     async def handle_non_streaming(
@@ -268,7 +265,7 @@ class A2ACompletionBridgeHandler:
             ctx=ctx,
             state="working",
             final=False,
-            message_text="Processing request...",
+            message_text=A2A_COMPLETION_BRIDGE_WORKING_MESSAGE,
         )
         yield working_event
 

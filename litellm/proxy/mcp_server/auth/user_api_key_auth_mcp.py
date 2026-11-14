@@ -438,6 +438,14 @@ def is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bo
 _is_mcp_admitted_user_subject: Final = is_mcp_admitted_user_subject
 
 
+def has_team_unbound_mcp_admin_view(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+    return (
+        user_api_key_auth is not None
+        and user_api_key_has_admin_view(user_api_key_auth)
+        and (not user_api_key_auth.team_id or user_api_key_auth.team_id == UI_TEAM_ID)
+    )
+
+
 def _gateway_dcr_challenge_target(
     route: str,
     mcp_servers: list[str] | None,
@@ -911,7 +919,6 @@ class MCPRequestHandler:
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 admitted_credential=admitted_credential,
-                preserve_jwt_subject=bool(validated_user_api_key_auth.jwt_claims),
             )
 
             return (
@@ -951,49 +958,29 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
         admitted_credential: str | None,
-        preserve_jwt_subject: bool = False,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
-        """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
-        header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
-        per-server ``x-mcp-{alias}-authorization``. Preserve the raw ``x-litellm-api-key`` admission
-        header; an admitted subject's top-level Authorization is otherwise dropped unconditionally."""
+        """Remove gateway-shaped credentials from every egress header context, and the caller's admitted
+        credential from the implicitly forwarded top-level ``Authorization``. Raw headers (only forwarded
+        when a server lists them in ``extra_headers``), ``x-mcp-auth`` and ``x-mcp-{alias}-authorization``
+        keep the caller's LiteLLM key, since the admin or caller chose to send it there."""
+        gateway_shaped: Final = MCPRequestHandler._is_gateway_admission_credential
 
-        def cred(value: str | None) -> bool:
-            return MCPRequestHandler._is_gateway_admission_credential(
-                value
-            ) or MCPRequestHandler._is_caller_admission_key(value, admitted_credential)
-
-        # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
-        preserve_subject: Final = bool(
-            preserve_jwt_subject
-            and not admitted
-            and authz
-            and not _normalize_caller_admission_credential(authz).startswith("sk-")
-            and not MCPRequestHandler._is_gateway_admission_credential(authz)
-            and MCPRequestHandler._is_caller_admission_key(authz, admitted_credential)
-        )
-        if admitted or cred(authz):
+        if admitted or gateway_shaped(authz) or MCPRequestHandler._is_caller_admission_key(authz, admitted_credential):
             oauth2_headers = None
 
-        # 2. raw_headers: drop the admitted subject's Authorization, and ANY header whose value is a
-        #    gateway credential (covers x-mcp-auth and x-mcp-{alias}-authorization in their raw form).
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key"
-            or (preserve_subject and k.lower() == "authorization")
-            or not ((admitted and k.lower() == "authorization") or cred(v))
+            if not ((admitted and k.lower() == "authorization") or gateway_shaped(v))
         }
 
-        # 3. Deprecated x-mcp-auth value.
-        if cred(mcp_auth_header):
+        if gateway_shaped(mcp_auth_header):
             mcp_auth_header = None
 
-        # 4. Per-server x-mcp-{alias}-authorization values (drop the value, then any now-empty server dict).
         if mcp_server_auth_headers:
             stripped: Final = {
-                alias: {h: val for h, val in hdrs.items() if not cred(val)}
+                alias: {h: val for h, val in hdrs.items() if not gateway_shaped(val)}
                 for alias, hdrs in mcp_server_auth_headers.items()
             }
             mcp_server_auth_headers = {alias: hdrs for alias, hdrs in stripped.items() if hdrs}
@@ -1883,6 +1870,14 @@ class MCPRequestHandler:
         if not auth.jwt_claims and MCPRequestHandler._is_caller_admission_key(value, admitted_credential):
             return None
         return bearer
+
+    @staticmethod
+    def guardrail_bearer_from_raw_headers(
+        raw_headers: Mapping[str, str] | None, auth: UserAPIKeyAuth | None
+    ) -> SecretStr | None:
+        if auth is None:
+            return MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+        return MCPRequestHandler.get_guardrail_bearer_token(Headers(headers=dict(raw_headers or {})), auth)
 
     @staticmethod
     def get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:
@@ -4290,19 +4285,19 @@ class MCPRequestHandler:
         """Whether this principal's admin-view role grants the unscoped MCP resolution, whatever
         credential carries it (admin key, dashboard session, or OAuth-admitted session subject).
 
-        Two bounds disqualify, one per ownership of the row. A CREDENTIAL's explicit
-        ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
-        admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is
-        [] by DB default, so for that shape the row binds through the entitlement ceiling instead
-        (any non-empty entitlement, or an unresolved one, disqualifies), exactly as
-        ``operator_open_server_ids`` reads the same row. The one owner of this predicate: the
-        server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
-        channel in ``resolve_admitted_subject_tools`` both consult it, so the two axes cannot
-        disagree."""
+        A credential on a real team never qualifies, a virtual key or a ``lite login`` session alike: its team
+        bounds its MCP access whoever owns it, as it bounds the credential's model access. Two more bounds disqualify, one per ownership of the row. A CREDENTIAL's
+        explicit ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
+        admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is [] by DB
+        default, so for that shape the row binds through the entitlement ceiling instead (any non-empty
+        entitlement, or an unresolved one, disqualifies), exactly as ``operator_open_server_ids`` reads the same
+        row. The one owner of this predicate: the server-axis registry resolution in ``get_allowed_mcp_servers``
+        and the tools-axis open channel in ``resolve_admitted_subject_tools`` both consult it, so the two axes
+        cannot disagree."""
         if (
             user_api_key_auth is None
             or user_api_key_auth.mcp_explicit_grants_only
-            or not user_api_key_has_admin_view(user_api_key_auth)
+            or not has_team_unbound_mcp_admin_view(user_api_key_auth)
         ):
             return False
         object_permission: Final = user_api_key_auth.object_permission

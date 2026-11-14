@@ -456,7 +456,7 @@ def _inner_response_id(identity: str) -> str:
 
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _chat_text(body: Mapping[str, JsonValue]) -> str:
@@ -911,7 +911,7 @@ async def test_k06_openai_sdk_async_responses_stream_reaches_kimi_without_a_cach
     received: Final = _only_received(rig.wire)
     assert received.model == _KIMI_US and received.streaming, received
     assert received.cache_points == 0, received.body
-    _success_row(_inner_response_id(completed[0].id))
+    _success_row(completed[0].id)
 
 
 _LOCATIONS: Final = (
@@ -1251,17 +1251,19 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 
 
 @pytest.mark.timeout(600)
-def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_it_in_place(gateway: Gateway) -> None:
+def test_s10_s11_two_deployments_of_one_arn_keep_their_own_flags_and_a_delete_changes_neither(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("shared")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         flagged: Final = _deployment(
             gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}, cleanup=False
         )
         plain: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}")
-        for name in (flagged, plain):
+        for name, cache_points in ((flagged, 0), (plain, 2)):
             outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
             _assert_answered(outcome)
-            assert received.cache_points == 0, (name, received.body)
+            assert received.cache_points == cache_points, (name, received.body)
             _success_row(outcome.response_id)
         flagged_identity: Final = _model_id(flagged)
         gateway.post("/model/delete", {"id": flagged_identity})
@@ -1276,7 +1278,7 @@ def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_i
         wire.drain()
         after, after_received = _observe_at(gateway, wire, "chat", _chat_body(plain, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(after)
-        assert after_received.cache_points == 0, after_received.body
+        assert after_received.cache_points == 2, after_received.body
         _success_row(after.response_id)
 
 
@@ -1325,7 +1327,9 @@ def test_x01_flipping_the_flag_to_true_through_a_patch_update_turns_cache_points
 
 
 @pytest.mark.timeout(600)
-def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone(gateway: Gateway) -> None:
+def test_x06_flipping_the_flag_to_true_through_the_legacy_post_update_turns_cache_points_back_on(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("legacy")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
@@ -1333,6 +1337,7 @@ def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
+        assert before_received.cache_points == 0, before_received.body
         identity: Final = _model_id(name)
         updated: Final = gateway.request(
             "POST",
@@ -1344,13 +1349,14 @@ def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone
             },
         )
         assert updated.status_code == 200, updated.text
-        assert _stored_flag(identity) is False
-        _settled(gateway, name, wire)
-        after, after_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
-        _assert_answered(after)
-        assert after_received.cache_points == before_received.cache_points, (before_received.body, after_received.body)
+        assert _stored_flag(identity) is True
+        points: Final = eventually(
+            lambda: _six_cache_point_counts(gateway, wire, name),
+            lambda counts: len(counts) == 6 and all(count == 2 for count in counts),
+            seconds=60,
+        )
+        assert points == (2,) * 6, points
         _success_row(before.response_id)
-        _success_row(after.response_id)
 
 
 @dataclass(frozen=True, slots=True)

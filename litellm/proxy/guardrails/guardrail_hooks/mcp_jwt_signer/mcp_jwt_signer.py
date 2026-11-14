@@ -81,6 +81,7 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -89,12 +90,15 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
     from jwt.types import Options
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -131,7 +135,7 @@ _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None
 _MCP_JWT_CALL_TYPES: Final = frozenset({"call_mcp_tool", "list_mcp_tools"})
 
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
-_jwks_cache: Final[dict[str, tuple[Sequence[Mapping[str, object]], float]]] = {}
+_jwks_cache: Final[dict[str, tuple[object, float]]] = {}
 _JWKS_CACHE_TTL: Final = 3600  # 1 hour
 
 
@@ -177,7 +181,7 @@ def _compute_kid(public_key: RSAPublicKey) -> str:
     return hashlib.sha256(der_bytes).hexdigest()[:16]
 
 
-async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = None) -> Sequence[Mapping[str, object]]:
+async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = None) -> object:
     """
     Fetch and cache a JWKS from the given URI.
 
@@ -198,7 +202,7 @@ async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = Non
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
-    jwks_body: Final[Mapping[str, Sequence[Mapping[str, object]]]] = resp.json()
+    jwks_body: Final = decoded_json_object(_DECODED_JSON.validate_python(resp.json()))
     fetched_keys: Final = jwks_body.get("keys", [])
     _jwks_cache[jwks_uri] = (fetched_keys, now)
     return fetched_keys
@@ -496,7 +500,7 @@ class MCPJWTSigner(CustomGuardrail):
         payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
-    async def _introspect_opaque_token(self, token: str) -> dict[str, object]:
+    async def _introspect_opaque_token(self, token: str) -> Mapping[str, object]:
         """
         Perform RFC 7662 token introspection for opaque (non-JWT) tokens.
 
@@ -522,7 +526,7 @@ class MCPJWTSigner(CustomGuardrail):
             timeout=self.timeout,
         )
         resp.raise_for_status()
-        result: Final[dict[str, object]] = resp.json()
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(resp.json()))
         if not result.get("active", False):
             raise jwt.exceptions.ExpiredSignatureError(
                 "MCPJWTSigner: incoming token is inactive (introspection returned active=false)"
@@ -821,7 +825,7 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # FR-5: Verify incoming token before re-signing
         # ------------------------------------------------------------------
-        jwt_claims: dict[str, object] | None = None
+        jwt_claims: Mapping[str, object] | None = None
         raw_token: Final[str | None] = hook_data.get("incoming_bearer_token")
 
         if self.access_token_discovery_uri and raw_token:
@@ -937,15 +941,13 @@ async def inject_mcp_jwt_headers_for_upstream(
     if signer is None or user_api_key_dict is None:
         return merged
 
-    normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-    incoming_bearer_token: str | None = None
-    auth_hdr: Final = normalized_raw.get("authorization", "")
-    if auth_hdr.lower().startswith("bearer "):
-        incoming_bearer_token = auth_hdr[len("bearer ") :]
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    incoming_bearer_token: Final = MCPRequestHandler.guardrail_bearer_from_raw_headers(raw_headers, user_api_key_dict)
 
     hook_data: Final = {
         "mcp_tool_name": "" if for_list_tools else mcp_tool_name,
-        "incoming_bearer_token": incoming_bearer_token,
+        "incoming_bearer_token": incoming_bearer_token.get_secret_value() if incoming_bearer_token else None,
         "extra_headers": merged,
     }
     call_type: Final[CallTypesLiteral] = "list_mcp_tools" if for_list_tools else "call_mcp_tool"

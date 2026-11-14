@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from typing import Final
@@ -581,3 +582,44 @@ def test_xai_grok_4_frequency_penalty_not_supported(model):
     """
     supported_params = XAIChatConfig().get_supported_openai_params(model=model)
     assert "frequency_penalty" not in supported_params
+
+
+def _strict_weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def test_xai_tools_are_rewritten_without_touching_the_callers_tool() -> None:
+    tools: Final = [_strict_weather_tool()]
+    tools_before: Final = copy.deepcopy(tools)
+
+    optional_params: Final = XAIChatConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="grok-4.3", drop_params=False
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    assert tools == tools_before

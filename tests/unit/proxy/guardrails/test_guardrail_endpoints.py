@@ -1,19 +1,22 @@
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Dict, Final, List, Optional
-from unittest.mock import AsyncMock
+from typing import Final, List, Literal, Optional
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 import yaml
-
-
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from pydantic import JsonValue
+from pytest_mock import MockerFixture
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     ListGuardrailsResponse,
@@ -37,7 +40,6 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     reject_guardrail_submission,
     update_guardrail,
 )
-from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
@@ -46,15 +48,15 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
-    IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
     encrypt_guardrail_litellm_params,
+    guardrail_from_db_row,
 )
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
     BaseLitellmParams,
-    GuardrailEventHooks,
     Guardrail,
+    GuardrailEventHooks,
     GuardrailInfoResponse,
     LitellmParams,
 )
@@ -1018,7 +1020,7 @@ def test_optional_params_not_returned_when_not_overridden():
     """Test that optional_params is not returned when the config model doesn't override it"""
     from typing import Optional
 
-    from pydantic import BaseModel, Field
+    from pydantic import Field
 
     from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -1078,7 +1080,7 @@ def test_optional_params_returned_when_properly_overridden():
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_prepare_request_with_api_key():
     """Test _prepare_request method uses Bearer token when api_key is provided in data"""
-    from unittest.mock import Mock, patch
+    from unittest.mock import Mock
 
     from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
         BedrockGuardrail,
@@ -2027,6 +2029,286 @@ async def test_delete_guardrail_endpoint(
             assert "Failed to remove guardrail" in str(mock_logger.warning.call_args)
 
 
+PLANTED_API_KEY: Final = "sk-planted-guardrail-api-key"
+PLANTED_AUTH_HEADER: Final = "Bearer planted-guardrail-auth-header"
+PLANTED_APIKEY_HEADER: Final = "planted-guardrail-apikey-header"
+ROTATED_API_KEY: Final = "sk-planted-rotated-api-key"
+PLANTED_SECRETS: Final = (PLANTED_API_KEY, ROTATED_API_KEY, PLANTED_AUTH_HEADER, PLANTED_APIKEY_HEADER, "litellm_enc::")
+AUDIT_ADMIN: Final = UserAPIKeyAuth(
+    user_role=LitellmUserRoles.PROXY_ADMIN, user_id="security-admin", api_key="hashed-admin-key"
+)
+STORED_PARAMS: Final = MappingProxyType(
+    {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": "https://guardrails.example.com/validate",
+        "api_key": PLANTED_API_KEY,
+        "headers": {"Authorization": PLANTED_AUTH_HEADER, "apikey": PLANTED_APIKEY_HEADER, "X-Tenant": "acme"},
+    }
+)
+STORED_GUARDRAIL_SNAPSHOT: Final = MappingProxyType(
+    {
+        "guardrail_id": "gr-audit",
+        "guardrail_name": "audited-guard",
+        "guardrail_info": {"description": "audited"},
+        "status": "active",
+        "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "pre_call", "default_on": False},
+    }
+)
+SAVED_AT: Final = datetime(2026, 11, 11, 12, 0, 0)
+
+
+def _requested_guardrail(**params: object) -> Guardrail:
+    return Guardrail(
+        guardrail_name="audited-guard",
+        litellm_params=LitellmParams(**{**STORED_PARAMS, **params}),
+        guardrail_info={"description": "audited"},
+    )
+
+
+def _row_as_written(where: Mapping[str, object], data: Mapping[str, object]):
+    """The guardrails table row holding exactly what the registry wrote, as Prisma returns it."""
+    from prisma.models import LiteLLM_GuardrailsTable
+
+    return LiteLLM_GuardrailsTable(
+        **{"guardrail_id": where["guardrail_id"], "status": "active", "created_at": SAVED_AT, **data}
+    )
+
+
+def _stored_row():
+    return _row_as_written(
+        {"guardrail_id": "gr-audit"},
+        {
+            "guardrail_name": "audited-guard",
+            "litellm_params": json.dumps(
+                encrypt_guardrail_litellm_params(LitellmParams(**STORED_PARAMS).model_dump()), default=str
+            ),
+            "guardrail_info": json.dumps({"description": "audited"}),
+            "updated_at": SAVED_AT,
+        },
+    )
+
+
+@pytest.fixture
+def audit_prisma(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch) -> Mock:
+    """Audit logging on, with a prisma client whose LiteLLM_AuditLog inserts are recorded and whose guardrails
+    table holds one stored guardrail and returns whatever the registry writes."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(litellm, "audit_log_callbacks", [])
+    monkeypatch.delenv("GENERIC_GUARDRAIL_API_BASE", raising=False)
+    mocker.patch("litellm.proxy.proxy_server.premium_user", True)
+    prisma: Final = Mock()
+    prisma.db.litellm_auditlog.create = AsyncMock()
+    prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=_stored_row())
+    prisma.db.litellm_guardrailstable.update = AsyncMock(side_effect=_row_as_written)
+    prisma.db.litellm_guardrailstable.create = AsyncMock(
+        side_effect=lambda data: _row_as_written({"guardrail_id": "gr-audit"}, data)
+    )
+    prisma.db.litellm_guardrailstable.delete = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+    return prisma
+
+
+def _live_guardrails(mocker: MockerFixture, loaded: Sequence[object] = ()) -> InMemoryGuardrailHandler:
+    handler: Final = InMemoryGuardrailHandler()
+    for row in loaded:
+        handler.initialize_guardrail(guardrail=guardrail_from_db_row(row), source="db")
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    return handler
+
+
+async def _written_audit_rows(prisma: Mock) -> tuple[Mapping[str, object], ...]:
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+    await drain_audit_tasks()
+    insert: Final[AsyncMock] = prisma.db.litellm_auditlog.create
+    return tuple(MappingProxyType(call.kwargs["data"]) for call in insert.call_args_list)
+
+
+def _audit_snapshot(row: Mapping[str, object], field: str) -> Mapping[str, object]:
+    value: Final = row[field]
+    assert isinstance(value, str), f"{field} should be a JSON string, got {value!r}"
+    return json.loads(value)
+
+
+def _assert_no_planted_secret(row: Mapping[str, object]) -> None:
+    serialized: Final = json.dumps(dict(row), default=str)
+    for secret in PLANTED_SECRETS:
+        assert secret not in serialized, f"{secret!r} leaked into the audit row: {serialized}"
+
+
+@pytest.mark.asyncio
+async def test_create_guardrail_audit_row_records_the_caller_and_no_provider_secret(
+    mocker: MockerFixture, audit_prisma: Mock
+):
+    _live_guardrails(mocker)
+
+    await create_guardrail(CreateGuardrailRequest(guardrail=_requested_guardrail()), user_api_key_dict=AUDIT_ADMIN)
+
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [
+        {
+            k: row.get(k)
+            for k in ("action", "table_name", "object_id", "changed_by", "changed_by_api_key", "before_value")
+        }
+        for row in rows
+    ] == [
+        {
+            "action": "created",
+            "table_name": "LiteLLM_GuardrailsTable",
+            "object_id": "gr-audit",
+            "changed_by": "security-admin",
+            "changed_by_api_key": "hashed-admin-key",
+            "before_value": None,
+        }
+    ], rows
+    assert _audit_snapshot(rows[0], "updated_values") == STORED_GUARDRAIL_SNAPSHOT
+    _assert_no_planted_secret(rows[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "patch"])
+async def test_update_guardrail_audit_row_shows_the_mode_change_and_names_only_the_rotated_key(
+    method: str, mocker: MockerFixture, audit_prisma: Mock
+):
+    _live_guardrails(mocker, loaded=(_stored_row(),))
+
+    if method == "put":
+        await update_guardrail(
+            "gr-audit",
+            UpdateGuardrailRequest(guardrail=_requested_guardrail(mode="post_call", api_key=ROTATED_API_KEY)),
+            user_api_key_dict=AUDIT_ADMIN,
+        )
+    else:
+        await patch_guardrail(
+            "gr-audit",
+            PatchGuardrailRequest(litellm_params={"api_key": ROTATED_API_KEY, "mode": "post_call"}),
+            user_api_key_dict=AUDIT_ADMIN,
+        )
+
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"], r["changed_by"]) for r in rows] == [
+        ("updated", "gr-audit", "security-admin")
+    ], rows
+    assert _audit_snapshot(rows[0], "before_value") == STORED_GUARDRAIL_SNAPSHOT
+    assert _audit_snapshot(rows[0], "updated_values") == {
+        **STORED_GUARDRAIL_SNAPSHOT,
+        "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "post_call", "default_on": False},
+        "changed_litellm_params": ["api_key"],
+    }, "only api_key changed, so headers the live guardrail adds for itself must not show up"
+    _assert_no_planted_secret(rows[0])
+
+
+@pytest.mark.asyncio
+async def test_delete_guardrail_audit_row_keeps_the_deleted_guardrail_without_secrets(
+    mocker: MockerFixture, audit_prisma: Mock
+):
+    _live_guardrails(mocker, loaded=(_stored_row(),))
+
+    await delete_guardrail(guardrail_id="gr-audit", user_api_key_dict=AUDIT_ADMIN)
+
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"], r.get("updated_values")) for r in rows] == [("deleted", "gr-audit", None)], (
+        rows
+    )
+    assert _audit_snapshot(rows[0], "before_value") == STORED_GUARDRAIL_SNAPSHOT
+    _assert_no_planted_secret(rows[0])
+
+
+@pytest.mark.asyncio
+async def test_rejected_guardrail_update_writes_no_audit_row(mocker: MockerFixture, audit_prisma: Mock):
+    _live_guardrails(mocker, loaded=(_stored_row(),))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_guardrail(
+            "gr-audit",
+            UpdateGuardrailRequest(guardrail=_requested_guardrail(mode="post_call", api_base=None)),
+            user_api_key_dict=AUDIT_ADMIN,
+        )
+
+    assert exc_info.value.status_code == 422, exc_info.value.detail
+    assert await _written_audit_rows(audit_prisma) == (), "a rolled-back update must not be audited"
+
+
+def _team_guardrail_row(status: str, params_stored_as_json_string: bool = False):
+    encrypted: Final = encrypt_guardrail_litellm_params(dict(STORED_PARAMS))
+    return _row_as_written(
+        {"guardrail_id": "team-gr"},
+        {
+            "guardrail_name": "team-guard",
+            "litellm_params": json.dumps(json.dumps(encrypted) if params_stored_as_json_string else encrypted),
+            "guardrail_info": json.dumps({"description": "team"}),
+            "status": status,
+            "team_id": "team-1",
+            "updated_at": SAVED_AT,
+        },
+    )
+
+
+def _team_guardrail_snapshot(status: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "guardrail_id": "team-gr",
+            "guardrail_name": "team-guard",
+            "guardrail_info": {"description": "team"},
+            "status": status,
+            "team_id": "team-1",
+            "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "pre_call", "default_on": False},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_audit_row_records_the_pending_submission_without_secrets(
+    audit_prisma: Mock,
+) -> None:
+    audit_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    audit_prisma.db.litellm_guardrailstable.create = AsyncMock(return_value=_team_guardrail_row("pending_review"))
+    request: Final = RegisterGuardrailRequest(
+        guardrail_name="team-guard", litellm_params=dict(STORED_PARAMS), team_id="team-1"
+    )
+
+    await register_guardrail(request, AUDIT_ADMIN)
+
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"]) for r in rows] == [("created", "team-gr")], rows
+    assert _audit_snapshot(rows[0], "updated_values") == _team_guardrail_snapshot("pending_review")
+    _assert_no_planted_secret(rows[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "review, new_status", [(approve_guardrail_submission, "active"), (reject_guardrail_submission, "rejected")]
+)
+@pytest.mark.parametrize("params_stored_as_json_string", [False, True], ids=["json_object", "json_string"])
+async def test_guardrail_submission_review_audit_row_shows_the_status_change(
+    review: Callable[[str, UserAPIKeyAuth], Awaitable[Mapping[str, object]]],
+    new_status: str,
+    params_stored_as_json_string: bool,
+    mocker: MockerFixture,
+    audit_prisma: Mock,
+):
+    audit_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value=_team_guardrail_row("pending_review", params_stored_as_json_string)
+    )
+    audit_prisma.db.litellm_guardrailstable.update = AsyncMock(
+        return_value=_team_guardrail_row(new_status, params_stored_as_json_string)
+    )
+    _live_guardrails(mocker)
+
+    response: Final = await review("team-gr", AUDIT_ADMIN)
+
+    assert response["status"] == new_status, response
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"]) for r in rows] == [("updated", "team-gr")], rows
+    assert _audit_snapshot(rows[0], "before_value") == _team_guardrail_snapshot("pending_review")
+    assert _audit_snapshot(rows[0], "updated_values") == _team_guardrail_snapshot(new_status)
+    _assert_no_planted_secret(rows[0])
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_not_found(mocker):
     """
@@ -2198,6 +2480,205 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     return mock_guardrail
 
 
+class _NativeFindingGuardrail(CustomGuardrail):
+    def __init__(self, findings: tuple[object, ...]):
+        super().__init__(guardrail_name="grounding", event_hook=GuardrailEventHooks.post_call)
+        self.findings = findings
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        for finding in self.findings:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=finding, request_data=request_data, guardrail_status="success"
+            )
+        return inputs
+
+
+class _InputDirectionGuardrail(_NativeFindingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"input_type": input_type},
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        return {"texts": [input_type]}
+
+
+async def _apply_finding_guardrail_over_http(
+    mocker: MockerFixture,
+    findings: tuple[object, ...],
+    body: dict[str, object],
+    hook_result: object = None,
+    guardrail: CustomGuardrail | None = None,
+) -> httpx.Response:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    configured: Final = guardrail if guardrail is not None else _NativeFindingGuardrail(findings)
+    patched: Final = _patch_apply_guardrail_env(mocker, {})
+    patched.apply_guardrail = configured.apply_guardrail
+    patched.event_hook = configured.event_hook
+    mocker.patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_success_hook", AsyncMock(return_value=hook_result)
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        return await client.post("/guardrails/apply_guardrail", json=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_grounded", [True, False])
+async def test_apply_guardrail_native_response_preserves_structured_findings(
+    mocker: MockerFixture, is_grounded: bool
+) -> None:
+    findings: Final = {"is_grounded": is_grounded, "reason": "Compared answer with evidence", "source_ids": ["doc-1"]}
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (findings,),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": "native"},
+    )
+    assert result.status_code == 200
+    assert result.json() == findings
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_standard_response_stays_unchanged_with_native_findings(mocker: MockerFixture) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker, ({"is_grounded": False},), {"guardrail_name": "grounding", "text": "answer"}
+    )
+    assert result.status_code == 200
+    assert result.json() == {"response_text": "answer"}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_preserves_all_provider_results(mocker: MockerFixture) -> None:
+    findings: Final = ({"is_grounded": False}, {"response_text": "native text", "additional_finding": [1, 2]})
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker, findings, {"guardrail_name": "grounding", "text": "answer", "response_format": "native"}
+    )
+    assert result.status_code == 200
+    assert result.json() == list(findings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finding", "expected"),
+    [
+        ({"is_grounded": True, "source_ids": ("doc-1",)}, {"is_grounded": True, "source_ids": ["doc-1"]}),
+        ({"response_text": "native", "score": 0.2}, {"response_text": "native", "score": 0.2}),
+        ([{"is_grounded": False}], [{"is_grounded": False}]),
+    ],
+)
+async def test_apply_guardrail_native_preserves_provider_json_shape(
+    mocker: MockerFixture, finding: object, expected: JsonValue
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (finding,),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": "native"},
+    )
+    assert result.status_code == 200
+    assert result.json() == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("findings", [(), ("allow",)])
+async def test_apply_guardrail_native_rejects_missing_findings_and_caller_supplied_verdicts(
+    mocker: MockerFixture, findings: tuple[JsonValue, ...]
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        findings,
+        {
+            "guardrail_name": "grounding",
+            "text": "answer",
+            "response_format": "native",
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "grounding", "guardrail_response": {"is_grounded": True}}
+                ]
+            },
+        },
+    )
+    assert result.status_code == 422
+    assert "did not report structured native findings" in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_format", ["standard", "native"])
+async def test_apply_guardrail_omitted_direction_uses_configured_post_call_hook(
+    mocker: MockerFixture, response_format: str
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": response_format},
+        guardrail=_InputDirectionGuardrail(()),
+    )
+    assert result.status_code == 200
+    assert result.json() == (
+        {"response_text": "response"} if response_format == "standard" else {"input_type": "response"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_honors_explicit_input_direction(mocker: MockerFixture) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (),
+        {"guardrail_name": "grounding", "text": "prompt", "input_type": "request", "response_format": "native"},
+        guardrail=_InputDirectionGuardrail(()),
+    )
+    assert result.status_code == 200
+    assert result.json() == {"input_type": "request"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [{"is_grounded": False, "reason": "Revised"}, [{"score": 0.5}]])
+async def test_apply_guardrail_native_preserves_success_hook_replacements(
+    mocker: MockerFixture, replacement: JsonValue
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        ({"is_grounded": True},),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": "native"},
+        hook_result=replacement,
+    )
+    assert result.status_code == 200
+    assert result.json() == replacement
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_ignores_malformed_caller_logging_records(mocker: MockerFixture) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        ({"is_grounded": False},),
+        {
+            "guardrail_name": "grounding",
+            "text": "answer",
+            "response_format": "native",
+            "metadata": {"standard_logging_guardrail_information": "caller-controlled"},
+        },
+    )
+    assert result.status_code == 200
+    assert result.json() == {"is_grounded": False}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("vendor_status", "expected_type"),
@@ -2212,9 +2693,7 @@ async def test_a_guardrail_vendors_rejection_is_labelled_the_way_chat_labels_it(
     mock_guardrail.apply_guardrail.side_effect = HTTPException(
         status_code=vendor_status, detail="vendor refused the request"
     )
-    mocker.patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None)
-    )
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None))
 
     with pytest.raises(ProxyException) as raised:
         await apply_guardrail(
@@ -3673,6 +4152,7 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
     from litellm.proxy.guardrails.guardrail_endpoints import _emit_guardrail_success_logs
+    from litellm.proxy.guardrails.response_handlers import StandardGuardrailResponseHandler
     from litellm.types.guardrails import ApplyGuardrailResponse
 
     class OverlappingHook(CustomLogger):
@@ -3711,7 +4191,7 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
     response: Final = ApplyGuardrailResponse(response_text="masked")
 
     returned: Final = await _emit_guardrail_success_logs(
-        proxy_logging, logging_obj, {}, UserAPIKeyAuth(), response, start
+        StandardGuardrailResponseHandler(), proxy_logging, logging_obj, {}, UserAPIKeyAuth(), response, start
     )
     submissions: Final = tuple(queued_executor.submit.call_args_list)
     assert submissions

@@ -11,7 +11,7 @@ Tests cover:
 
 import base64
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
@@ -1292,3 +1292,49 @@ async def test_inject_mcp_jwt_signs_for_tool_call_path():
     scopes = set(decoded["scope"].split())
     assert "mcp:tools/call" in scopes
     assert "mcp:tools/search_web:call" in scopes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_headers", "introspected"),
+    [
+        ({"Authorization": "Bearer sk-admission-key"}, False),
+        ({"x-litellm-api-key": "sk-admission-key", "Authorization": "Bearer upstream-opaque"}, True),
+    ],
+)
+async def test_inject_mcp_jwt_never_introspects_the_admission_key(
+    raw_headers: dict[str, str], introspected: bool
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+        token_introspection_endpoint="https://idp.example.com/introspect",
+    )
+    inactive_introspection: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"active": False}))
+    )
+
+    async def sign() -> dict[str, str]:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+            return_value=inactive_introspection,
+        ):
+            return await inject_mcp_jwt_headers_for_upstream(
+                user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-admission-key"), user_id="alice"),
+                raw_headers=raw_headers,
+                for_list_tools=True,
+            )
+
+    if introspected:
+        with pytest.raises(HTTPException):
+            await sign()
+    else:
+        assert (await sign())["Authorization"].startswith("Bearer ")

@@ -1,21 +1,20 @@
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a client input item before its type is read
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
-
-
-class _InputItemType(LiteLLMBaseModel):
-    type: str = ""
+_NAMESPACE_TOOL_TYPE: Final = "namespace"
+_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _ToolList(LiteLLMBaseModel):
@@ -29,11 +28,14 @@ class HoistedAdditionalTools:
     hoisted: tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]
 
 
+def _is_an_input_item(
+    item: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: auth scans every list input, and a pydantic error per item is slow
+    return isinstance(item, Mapping)
+
+
 def _is_additional_tools_item(item: object) -> bool:
-    try:
-        return _InputItemType.model_validate(item).type == ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
-    except ValidationError:
-        return False
+    return _is_an_input_item(item) and item.get("type") == ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 
 
 def _tool_list_of(value: object) -> tuple[Mapping[str, object], ...]:
@@ -61,7 +63,7 @@ def _members_of_copies(copies: Sequence[Mapping[str, object]]) -> Iterator[Mappi
 
 def _merged(copies: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
     newest: Final = copies[-1]
-    if newest.get("type") != "namespace" or len(copies) == 1:
+    if newest.get("type") != _NAMESPACE_TOOL_TYPE or len(copies) == 1:
         return newest
     members: Final = tuple(_members_of_copies(copies))
     return {**newest, "tools": list(_unique_tools(members))} if members else newest
@@ -84,6 +86,11 @@ def _unique_tools(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, o
     )
     first_seen_order: Final = tuple(dict.fromkeys(identity for identity, _ in keyed))
     return tuple(_merged(copies_by_identity[identity]) for identity in first_seen_order)
+
+
+def additional_tools_in_input(input: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    items: Final = _ITEMS.validate_python(input) if isinstance(input, list) else ()
+    return tuple(chain.from_iterable(_tools_of_item(item) for item in items if _is_additional_tools_item(item)))
 
 
 def hoist_additional_tools(
@@ -112,3 +119,26 @@ def hoist_additional_tools(
         for tool in _unique_tools((*existing, *hoisted))
     )
     return HoistedAdditionalTools(input=remaining_input, tools=unique, hoisted=hoisted)
+
+
+def _top_level_tools(request: Mapping[str, object]) -> tuple[object, ...] | None:
+    try:
+        return _ITEMS.validate_python(request.get("tools") or ())
+    except ValidationError:
+        return None
+
+
+def with_additional_tools_hoisted(request: Mapping[str, object], *, drop_params: bool) -> Mapping[str, object]:
+    request_input: Final = request.get("input")
+    top_level_tools: Final = _top_level_tools(request)
+    if not isinstance(request_input, list) or top_level_tools is None:
+        return request
+    input_items: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as inference does
+    hoisted: Final = hoist_additional_tools(
+        input_items,
+        cast("tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", top_level_tools),  # cast-ok: forwarded as sent
+        drop_params=drop_params,
+    )
+    if not hoisted.hoisted:
+        return request
+    return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}

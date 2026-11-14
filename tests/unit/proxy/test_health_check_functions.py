@@ -4,10 +4,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
+from starlette.requests import Request
 
-from litellm.proxy._types import UserAPIKeyAuth
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.chatgpt import authenticator as chatgpt_authenticator
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.health_check import _same_health_check_model, update_litellm_params_for_health_check
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -16,8 +25,10 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
     latest_health_checks_endpoint,
+    test_model_connection as probe_model_connection,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
@@ -944,6 +955,214 @@ def test_filter_deployments_to_model_groups():
     assert filter_deployments_to_model_groups(model_list, None) == tuple(model_list)
     assert filter_deployments_to_model_groups(model_list, frozenset({"prod-openai"})) == (model_list[0], model_list[2])
     assert filter_deployments_to_model_groups(model_list, frozenset()) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing", [{"base_model": "gpt-5.4"}, {"input_cost_per_token": 0.02, "output_cost_per_token": 0.03}]
+)
+@pytest.mark.parametrize("deployment_id", [None, "alternate-probe-deployment"])
+@pytest.mark.parametrize("override", ["health_check_model", "health_check_params", "same_model"])
+async def test_alternate_health_check_model_uses_its_own_price(
+    pricing: dict[str, object], deployment_id: str | None, override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://test:test@localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "health-probe",
+        {
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-5.4",
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "litellm_provider": "openai", "mode": "chat"},
+    )
+    if deployment_id is not None:
+        monkeypatch.setitem(
+            litellm.model_cost, deployment_id, {**pricing, "litellm_provider": "openai", "mode": "chat"}
+        )
+    params: Final = {"api_base": "https://health-test.example/v1", "api_key": "test-key"}
+    model_info: Final = {
+        **pricing,
+        **(
+            {"health_check_params": {"model": "openai/health-probe"}}
+            if override == "health_check_params"
+            else {"health_check_model": "openai/health-probe"}
+        ),
+        **({"id": deployment_id} if deployment_id is not None else {}),
+    }
+    payload: Final = {
+        "id": "chatcmpl-health-probe",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "health-probe",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with respx.mock:
+        respx.post("https://health-test.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        await litellm.acompletion(
+            model="openai/health-probe",
+            messages=[{"role": "user", "content": "test"}],
+            litellm_metadata={"model_info": model_info} if override == "same_model" else {},
+            **params,
+        )
+        normal: Final = await asyncio.wait_for(events.get(), timeout=10)
+        result: Final = await probe_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="chat",
+            litellm_params={"model": "openai/health-probe" if override == "same_model" else "openai/gpt-5.4", **params},
+            model_info=model_info,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["status"] == "success", result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["call_type"] == normal["call_type"]
+    assert health["model"] == normal["model"]
+    assert health["response_cost"] == normal["response_cost"]
+    assert health["response_cost"] > 0
+    assert health["model_id"] == (deployment_id or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_model", "requested_model"),
+    [("openai/health-probe", "health-probe"), ("health-probe", "openai/health-probe")],
+)
+async def test_equivalent_health_check_model_names_keep_deployment_prices(
+    stored_model: str, requested_model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "health-probe",
+        {
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    params: Final = {
+        "api_base": "https://equivalent-health.example/v1",
+        "api_key": "test-key",
+        "custom_llm_provider": "openai",
+    }
+    deployment_id: Final = "priced-health-deployment"
+    model_info: Final = {
+        "id": deployment_id,
+        "mode": "chat",
+        "input_cost_per_token": 0.02,
+        "output_cost_per_token": 0.03,
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-health",
+                "litellm_params": {"model": stored_model, **params},
+                "model_info": model_info,
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://test:test@localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    payload: Final = {
+        "id": "chatcmpl-equivalent-health",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "health-probe",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with respx.mock:
+        respx.post("https://equivalent-health.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        result: Final = await probe_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="chat",
+            litellm_params={"model": requested_model, "custom_llm_provider": "openai"},
+            model_info={"id": deployment_id},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["status"] == "success", result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["response_cost"] == 10 * model_info["input_cost_per_token"] + 5 * model_info["output_cost_per_token"]
+    assert health["model"] == "health-probe"
+    assert health["model_id"] == deployment_id
+
+
+def test_health_check_without_deployment_model_keeps_probe_but_drops_deployment_prices() -> None:
+    deployment_info: Final = {
+        "id": "probe-deployment",
+        "base_model": "openai/deployment-model",
+        "input_cost_per_token": 0.02,
+        "output_cost_per_token": 0.03,
+    }
+    probe_model: Final = "openai/health-probe"
+
+    probe_params: Final = update_litellm_params_for_health_check(
+        model_info={"mode": "chat", "health_check_model": probe_model},
+        litellm_params={"model_info": deployment_info},
+    )
+
+    assert probe_params["model"] == probe_model
+    assert probe_params["model_info"] == {"id": deployment_info["id"]}
+
+
+@pytest.mark.parametrize(("model", "expected"), [("health-probe", True), ("other-health-probe", False)])
+def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
+    model: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_auth_file_access(*args: object, **kwargs: object) -> None:
+        pytest.fail("Health-check model comparison accessed the ChatGPT auth file")
+
+    monkeypatch.setattr(chatgpt_authenticator, "open", forbidden_auth_file_access, raising=False)
+
+    assert (
+        _same_health_check_model("chatgpt/health-probe", {"model": model, "custom_llm_provider": "chatgpt"}) is expected
+    )
 
 
 if __name__ == "__main__":

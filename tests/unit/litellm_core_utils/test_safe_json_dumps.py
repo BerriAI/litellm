@@ -230,9 +230,7 @@ def test_pydantic_base_model():
         inner: InnerModel
         tags: list
 
-    outer = OuterModel(
-        name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"]
-    )
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
 
     # Test a pydantic model at the top level
     result = json.loads(safe_dumps(outer))
@@ -261,3 +259,9 @@ def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
     assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
     assert type(structure["models"]) is tuple
     assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}
+
+
+def test_integer_limit_clamps_both_signs_and_leaves_bools_and_floats_alone() -> None:
+    assert safe_json_structure(
+        {"big": 10**400, "small": -(10**400), "inside": 7, "flag": True, "ratio": 1e300}, integer_limit=100
+    ) == {"big": 100, "small": -100, "inside": 7, "flag": True, "ratio": 1e300}

@@ -298,11 +298,11 @@ class TestGeminiTTSTransformation:
 
         # Test invalid format
         non_default_params = {
-            "audio": {"voice": "Kore", "format": "wav"}  # Invalid format
+            "audio": {"voice": "Kore", "format": "mp3"}  # Invalid format
         }
         optional_params = {}
 
-        with pytest.raises(ValueError, match="Unsupported audio format for Gemini TTS models"):
+        with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,

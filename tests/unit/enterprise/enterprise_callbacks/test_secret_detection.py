@@ -29,6 +29,7 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import hash_token
+from litellm.types.responses.main import build_web_search_call
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
@@ -112,6 +113,51 @@ async def test_deeply_nested_tool_arguments_are_redacted():
     await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
     rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
     assert json.loads(rewritten) == json.loads(arguments.replace(AWS_KEY, "[REDACTED]"))
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_server_tool_call_cannot_forward_unredacted_credentials():
+    arguments = json.dumps({"query": f"AWS_ACCESS_KEY_ID={AWS_KEY}"})
+    server_call = {"id": "srvtoolu_1", "type": "function", "function": {"name": "web_search", "arguments": arguments}}
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "provider_specific_fields": {"server_tool_calls": [server_call]},
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["provider_specific_fields"]["server_tool_calls"][0]["function"]["arguments"]
+    assert json.loads(rewritten) == {"query": "AWS_ACCESS_KEY_ID=[REDACTED]"}
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_server_web_search_keeps_no_credentials_in_its_hosted_copy():
+    query = f"AWS_ACCESS_KEY_ID={AWS_KEY}"
+    server_call = {
+        "id": "srvtoolu_1",
+        "type": "function",
+        "function": {"name": "web_search", "arguments": json.dumps({"query": query})},
+    }
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "provider_specific_fields": {
+                    "server_tool_calls": [server_call],
+                    "web_search_calls": [
+                        build_web_search_call("srvtoolu_1", {"query": query}, {"content": []}).model_dump()
+                    ],
+                },
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    hosted = json.loads(json.dumps(data["messages"][0]["provider_specific_fields"]["web_search_calls"]))
+    assert [call["action"]["query"] for call in hosted] == ["AWS_ACCESS_KEY_ID=[REDACTED]"]
 
 
 @pytest.mark.parametrize("password", ("hunter2\\brahms9x", "hunter2\tbrahms9x"))

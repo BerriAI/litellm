@@ -149,11 +149,11 @@ class TestRouterCredentialResolutionS3OutputBucket:
     """Same strict-dump trap as azure_ad_token (#30235), for Bedrock batch
     file retrieval (#26335). Bedrock batch outputs land in a per-model
     ``s3_output_bucket_name`` when it differs from the input bucket. The
-    file-content retrieval path validates a file id against the buckets in the
-    trusted credential snapshot, and that snapshot is built by round-tripping
-    the deployment's ``litellm_params`` through ``CredentialLiteLLMParams``. If
-    the field is undeclared it is dropped, so the output bucket never reaches
-    retrieval and output-bucket file ids are rejected as foreign."""
+    file-content retrieval path validates a file id against the buckets the
+    proxy passes along, and those are built by round-tripping the deployment's
+    ``litellm_params`` through ``CredentialLiteLLMParams``. If the field is
+    undeclared it is dropped, so the output bucket never reaches retrieval and
+    output-bucket file ids are rejected as foreign."""
 
     def test_credentials_preserve_s3_output_bucket_name(self):
         from litellm import Router
@@ -184,6 +184,33 @@ class TestRouterCredentialResolutionS3OutputBucket:
             "file ids as foreign for model-routed deployments (#26335)"
         )
         assert credentials.get("s3_bucket_name") == "in-bucket"
+
+    def test_credentials_preserve_allow_legacy_cloud_file_ids(self):
+        """An admin who sets allow_legacy_cloud_file_ids on a deployment expects
+        legacy (pre-managed-prefix) file ids in its bucket to stay readable
+        through the proxy's model-routed file endpoints."""
+        from litellm import Router
+
+        deployment_id = "bedrock-batch-legacy-ids-fixed-uuid"
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-legacy-ids",
+                    "litellm_params": {
+                        "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+                        "s3_bucket_name": "in-bucket",
+                        "allow_legacy_cloud_file_ids": True,
+                        "aws_region_name": "us-west-2",
+                    },
+                    "model_info": {"id": deployment_id},
+                }
+            ]
+        )
+
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
+
+        assert credentials is not None
+        assert credentials.get("allow_legacy_cloud_file_ids") is True
 
     def test_credentials_without_output_bucket_unaffected(self):
         """A deployment that configures only the input bucket keeps it and does

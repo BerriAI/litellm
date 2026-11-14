@@ -17,11 +17,15 @@ execute it.
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import TYPE_CHECKING, Any, Final, cast
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.types.integrations.custom_logger import AgenticLoopLimitError, AgenticLoopSafetyError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -35,10 +39,17 @@ SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
     b'data: {"type": "error", "error": {"type": "api_error", "message": '
     b'"Server-side tool retrieval failed, so this turn could not be completed. Please retry."}}\n\n'
 )
+AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES: Final = (
+    b"event: error\n"
+    b'data: {"type": "error", "error": {"type": "api_error", "message": '
+    b'"The agentic loop reached its limit before this turn finished. '
+    b'Raise max_agentic_loops to allow more loops."}}\n\n'
+)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def is_server_fulfilled_tool_leak_error(chunk: object) -> bool:
-    return chunk == SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
+    return chunk in (SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES, AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES)
 
 
 async def _anext_or_none(iterator: AsyncIterator) -> bytes | None:
@@ -69,10 +80,10 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
             continue
         data_str = stripped[len("data:") :].strip()
         try:
-            data = json.loads(data_str)
+            data = _DECODED_JSON.validate_python(json.loads(data_str))
         except (json.JSONDecodeError, ValueError):
             continue
-        event_type = current_event_type or data.get("type", "")
+        event_type = current_event_type or decoded_json_object(data).get("type", "")
         current_event_type = None
         events.append((event_type, data))
     return events
@@ -216,6 +227,7 @@ class AgenticAnthropicStreamingIterator:
         self._follow_up_chunk_task: asyncio.Task | None = None
         self._replay_index = 0
         self._error_emitted = False
+        self._loop_limit_reached = False
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -288,6 +300,8 @@ class AgenticAnthropicStreamingIterator:
                 "tool_use [model=%s]; emitting an SSE error instead of leaking the tool call to the client",
                 self._model,
             )
+            if self._loop_limit_reached:
+                return AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES
             return SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
 
         if self._replay_index < len(self._collected_bytes):
@@ -361,7 +375,7 @@ class AgenticAnthropicStreamingIterator:
                 verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
 
-            result: Final = await self._http_handler._call_agentic_completion_hooks(
+            result: Final[object] = await self._http_handler._call_agentic_completion_hooks(
                 response=rebuilt,
                 model=self._model,
                 messages=self._messages,
@@ -376,7 +390,7 @@ class AgenticAnthropicStreamingIterator:
             if result is None:
                 return
 
-            if hasattr(result, "__aiter__"):
+            if has_attributes(result, AsyncIterable[object], "__aiter__"):
                 self._follow_up_iterator = result.__aiter__()
             elif isinstance(result, dict):
                 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
@@ -393,14 +407,9 @@ class AgenticAnthropicStreamingIterator:
                     "AgenticStreamingIterator: Unexpected result type from hooks: %s",
                     type(result).__name__,
                 )
-        except Exception as e:
-            _call_id: Final = getattr(self._logging_obj, "litellm_call_id", "unknown")
-            verbose_logger.exception(
-                "AgenticStreamingIterator: Error in agentic hook processing [call_id=%s model=%s]: %s",
-                _call_id,
-                self._model,
-                str(e),
-            )
+        except AgenticLoopSafetyError as e:
+            self._loop_limit_reached = isinstance(e, AgenticLoopLimitError)
+            verbose_logger.warning("AgenticStreamingIterator: agentic loop refused [rail=%s]", type(e).__name__)
 
     @staticmethod
     def _rebuild_anthropic_response_from_sse(

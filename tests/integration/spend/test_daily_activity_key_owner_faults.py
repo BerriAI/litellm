@@ -199,7 +199,7 @@ def test_key_stops_being_reported_with_an_owner_once_a_second_user_spends_with_i
             with daily_rows((user_row(second, api_key, DAY),)):
                 shared: Final = activity_of_key(gateway, AGGREGATED_USER_ACTIVITY, api_key)
     assert_key_reported(alone, api_key, DAY, key_metadata(user=first, email=email), seeded_metrics(1))
-    assert_key_reported(shared, api_key, DAY, key_metadata(), seeded_metrics(2))
+    assert_key_reported(shared, api_key, DAY, key_metadata(), seeded_metrics(2), entity_rows={first: 1, second: 1})
 
 
 @pytest.mark.timeout(300)

@@ -16,7 +16,7 @@ from litellm.types.utils import ModelResponse
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
 )
 from ..per_user_auth import require_github_copilot_user_session
@@ -56,7 +56,7 @@ class GithubCopilotConfig(OpenAIConfig):
         dynamic_api_base: Final = self.api_base_without_login(api_base)
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -104,7 +104,7 @@ class GithubCopilotConfig(OpenAIConfig):
             return get_copilot_default_headers(session_token)
         try:
             return get_copilot_default_headers(self.authenticator.get_api_key())
-        except GetAPIKeyError:
+        except GetAccessTokenError:
             return {}
 
     def validate_environment(

@@ -10,7 +10,7 @@ import httpx
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm.rust_bridge import _native
-from litellm.rust_bridge.host.timeouts import timeout_to_seconds
+from litellm.rust_bridge.public_call import timeout_to_seconds
 
 
 class RustResponsesWebSocket(Protocol):

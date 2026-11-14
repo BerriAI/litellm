@@ -1,5 +1,4 @@
 import json
-import uuid
 from pathlib import Path
 from typing import Final
 
@@ -147,6 +146,7 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
             "agent": None,
             "updated": None,
             "outputs": None,
+            "continuation_token": None,
         }, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -179,6 +179,7 @@ def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: s
             "agent": None,
             "updated": None,
             "outputs": None,
+            "continuation_token": None,
         }, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -218,6 +219,7 @@ def test_agent_interaction_uses_env_gemini_credentials(gateway: Gateway, tmp_pat
                 "agent": "deep-research-pro-preview-12-2025",
                 "updated": None,
                 "outputs": None,
+                "continuation_token": None,
             }, response.text
             assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -277,3 +279,78 @@ def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway
         expected: Final = b"".join(_proxy_stream_event(payload, model) for _event_type, payload in _STREAM_EVENTS)
         assert response.content == expected, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]
+
+
+_LONG_DECODE_MODEL: Final = "gemini/gemini-4-argon"
+_LONG_DECODE_BODY: Final = {
+    "input": "prove the prime number theorem",
+    "generation_config": {"max_output_tokens": 120000, "thinking_level": "high"},
+}
+
+
+def _hop(hop_id: str, status: str, text: str, token: str | None, input_tokens: int, output_tokens: int) -> dict:
+    return {
+        "id": hop_id,
+        "object": "interaction",
+        "model": "gemini-4-argon",
+        "status": status,
+        "created": "2026-11-05T00:00:00Z",
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}],
+        "usage": {
+            "total_input_tokens": input_tokens,
+            "total_output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "initial_input_tokens": 79,
+        },
+        "continuation_token": token,
+    }
+
+
+_FIRST_HOP: Final = _hop("interaction-hop-1", "requires_continuation", "Lemma 1.", "tok-1", 79, 32768)
+_SECOND_HOP: Final = _hop("interaction-hop-2", "completed", " QED.", None, 32847, 1533)
+
+
+def test_interaction_keeps_requires_continuation_status_and_token_for_the_caller(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions"
+        return Reply(body=json.dumps(_FIRST_HOP).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_LONG_DECODE_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST", "/v1beta/interactions", {"model": model, **_LONG_DECODE_BODY}, key=key
+        )
+        assert response.status_code == 200, response.text
+        sent: Final = [json.loads(r.body) for r in wire.drain()]
+
+    assert sent == [{"model": "gemini-4-argon", **_LONG_DECODE_BODY}], sent
+    payload: Final = response.json()
+    assert payload["id"] == "interaction-hop-1", response.text
+    assert payload["status"] == "requires_continuation", response.text
+    assert payload["continuation_token"] == "tok-1", response.text
+    assert payload["usage"]["initial_input_tokens"] == 79, response.text
+
+
+def test_interaction_forwards_a_caller_continuation_token_to_resume_a_long_decode(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions"
+        return Reply(body=json.dumps(_SECOND_HOP).encode())
+
+    resume: Final = {
+        "generation_config": _LONG_DECODE_BODY["generation_config"],
+        "previous_interaction_id": "interaction-hop-1",
+        "continuation_token": "tok-1",
+    }
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_LONG_DECODE_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request("POST", "/v1beta/interactions", {"model": model, **resume}, key=key)
+        assert response.status_code == 200, response.text
+        sent: Final = [json.loads(r.body) for r in wire.drain()]
+
+    assert sent == [{"model": "gemini-4-argon", **resume}], sent
+    payload: Final = response.json()
+    assert payload["id"] == "interaction-hop-2", response.text
+    assert payload["status"] == "completed", response.text
+    assert payload["continuation_token"] is None, response.text

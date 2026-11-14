@@ -22,6 +22,13 @@ def names_gateway_explicitly(tool: object) -> bool:
     return (_mcp_server_url(tool) or "").startswith(LITELLM_PROXY_MCP_SERVER_URL)
 
 
+def names_whole_gateway(tool: object) -> bool:
+    server_url: Final = _mcp_server_url(tool) or ""
+    return server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL) and not server_url.startswith(
+        LITELLM_PROXY_MCP_SERVER_URL_PREFIX
+    )
+
+
 def proxy_path_mcp_name(tool: object) -> str | None:
     server_url: Final = _mcp_server_url(tool)
     match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)
