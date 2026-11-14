@@ -9,11 +9,15 @@ import itertools
 import json
 import os
 import sys
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, Mock
 
 import anyio
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
@@ -27,8 +31,11 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.llms.anthropic.messages.native.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
+    AnthropicResponsesSSEByteStream,
     AnthropicResponsesStreamWrapper,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
 
@@ -896,3 +903,269 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         asyncio.run(_disconnect_mid_hook())
         assert len(finished) == 1
+
+
+_RESPONSE_CREATED: Final = (
+    b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+_MESSAGE_ADDED: Final = (
+    b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
+    b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
+)
+_TEXT_DELTA: Final = (
+    b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
+    b'"content_index": 0, "delta": "word "}\n\n'
+)
+
+
+class _EndlessProviderStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        while True:
+            yield _TEXT_DELTA
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _EndlessSyncProviderStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        while True:
+            yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ProviderStreamThatPausesAfterTheFirstTextDelta(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.paused = asyncio.Event()
+        self.resume = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.paused.set()
+        await self.resume.wait()
+        yield _TEXT_DELTA
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("provider_stream", "upstream_class"),
+    [
+        (_EndlessProviderStream(), ResponsesAPIStreamingIterator),
+        (_EndlessSyncProviderStream(), SyncResponsesAPIStreamingIterator),
+    ],
+    ids=["async_responses_call", "sync_responses_call"],
+)
+def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
+    provider_stream: _EndlessProviderStream | _EndlessSyncProviderStream,
+    upstream_class: type[ResponsesAPIStreamingIterator] | type[SyncResponsesAPIStreamingIterator],
+):
+    async def _close_after_the_first_text_delta() -> bool:
+        upstream: Final = upstream_class(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        async for frame in sse:
+            if b'"text_delta"' in frame:
+                await sse.aclose()
+                return provider_stream.closed
+        pytest.fail("the stream ended without a text delta")
+
+    assert asyncio.run(_close_after_the_first_text_delta())
+
+
+def test_a_close_refused_while_another_task_reads_leaves_the_provider_response_to_that_read():
+    async def _close_from_another_task_mid_read() -> tuple[bool, bytes]:
+        provider_stream: Final = _ProviderStreamThatPausesAfterTheFirstTextDelta()
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        text_deltas: Final = (frame async for frame in sse if b'"text_delta"' in frame)
+        await text_deltas.__anext__()
+        second_text_delta: Final = asyncio.ensure_future(text_deltas.__anext__())
+        await provider_stream.paused.wait()
+        with pytest.raises(RuntimeError, match="already running"):
+            await sse.aclose()
+        closed_by_the_refused_close: Final = provider_stream.closed
+        provider_stream.resume.set()
+        return closed_by_the_refused_close, await second_text_delta
+
+    closed_by_the_refused_close, second_frame = asyncio.run(_close_from_another_task_mid_read())
+    assert not closed_by_the_refused_close
+    assert b'"text_delta"' in second_frame
+
+
+class _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.quiet = threading.Event()
+        self.next_bytes = threading.Event()
+        self.sent_next_bytes = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.quiet.set()
+        self.sent_next_bytes = self.next_bytes.wait(timeout=5)
+        if self.closed:
+            raise httpx.ReadError("[Errno 9] Bad file descriptor")
+        yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _logging_obj_that_records_failures() -> Mock:
+    logging_obj: Final = Mock(spec=LitellmLogging)
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.async_failure_handler = AsyncMock()
+    return logging_obj
+
+
+_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM: Final = pytest.mark.parametrize(
+    "sse_byte_stream",
+    [
+        AnthropicResponsesStreamWrapper.async_anthropic_sse_wrapper,
+        AnthropicResponsesStreamWrapper.anthropic_sse_wrapper,
+    ],
+    ids=["async_sse_wrapper", "sync_sse_wrapper"],
+)
+
+
+async def _close_after_cancelling_a_quiet_read(
+    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta,
+    logging_obj: Mock,
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+) -> None:
+    upstream: Final = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=provider_stream),
+        model="m",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+    )
+    sse: Final = sse_byte_stream(AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m"))
+    while b'"text_delta"' not in await sse.__anext__():
+        pass
+    quiet_read: Final = asyncio.ensure_future(sse.__anext__())
+    assert await asyncio.to_thread(provider_stream.quiet.wait, 5)
+    _ = quiet_read.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await quiet_read
+    await sse.aclose()
+
+
+@_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM
+def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_response_once_that_read_returns(
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+):
+    provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
+    logging_obj: Final = _logging_obj_that_records_failures()
+
+    async def _give_up_while_the_provider_is_quiet() -> None:
+        await _close_after_cancelling_a_quiet_read(provider_stream, logging_obj, sse_byte_stream)
+        provider_stream.next_bytes.set()
+
+    asyncio.run(_give_up_while_the_provider_is_quiet())
+    assert provider_stream.sent_next_bytes
+    assert provider_stream.closed
+    assert logging_obj.async_failure_handler.await_count == 0
+
+
+@_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM
+def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threads_free(
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+):
+    provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
+
+    async def _run_other_work_while_the_provider_is_quiet() -> int:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
+        try:
+            await _close_after_cancelling_a_quiet_read(
+                provider_stream, _logging_obj_that_records_failures(), sse_byte_stream
+            )
+            return await asyncio.wait_for(asyncio.to_thread(threading.get_ident), timeout=2)
+        finally:
+            provider_stream.next_bytes.set()
+
+    _ = asyncio.run(_run_other_work_while_the_provider_is_quiet())
+    assert provider_stream.closed
+
+
+_RESPONSE_IN_PROGRESS: Final = (
+    b'data: {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+
+
+class _SyncProviderStreamThatSendsNoTextAfterGoingQuiet(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.quiet = threading.Event()
+        self.next_bytes = threading.Event()
+        self.read_after_close = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.quiet.set()
+        _ = self.next_bytes.wait(timeout=5)
+        yield _RESPONSE_IN_PROGRESS
+        self.read_after_close = self.closed
+        if self.closed:
+            raise httpx.ReadError("[Errno 9] Bad file descriptor")
+        yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_reading_the_closed_provider_response():
+    provider_stream: Final = _SyncProviderStreamThatSendsNoTextAfterGoingQuiet()
+    logging_obj: Final = _logging_obj_that_records_failures()
+
+    async def _close_while_the_provider_is_quiet() -> None:
+        upstream: Final = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").anthropic_sse_wrapper()
+        while b'"text_delta"' not in await sse.__anext__():
+            pass
+        quiet_read: Final = asyncio.ensure_future(sse.__anext__())
+        assert await asyncio.to_thread(provider_stream.quiet.wait, 5)
+        sse.close()
+        provider_stream.next_bytes.set()
+        with pytest.raises(StopAsyncIteration):
+            await quiet_read
+
+    asyncio.run(_close_while_the_provider_is_quiet())
+    assert provider_stream.closed
+    assert not provider_stream.read_after_close
+    assert logging_obj.async_failure_handler.await_count == 0

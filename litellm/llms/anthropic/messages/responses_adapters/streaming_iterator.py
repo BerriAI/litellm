@@ -1,6 +1,7 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
+import threading
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
@@ -160,6 +161,9 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
+        self._sync_upstream_lock: Final = threading.Lock()
+        self._sync_upstream_closed = False
+        self._sync_upstream_to_close: _Closeable | None = None
         self._closed = False
 
     def _make_message_start(self) -> dict[str, object]:
@@ -527,7 +531,7 @@ class AnthropicResponsesStreamWrapper:
             else:
                 sync_iterator: Final = self._sync_upstream()
                 missing: Final = object()
-                while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
+                while (event := await asyncio.to_thread(self._next_sync_event, sync_iterator, missing)) is not missing:
                     self._process_event(event)
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
@@ -536,6 +540,8 @@ class AnthropicResponsesStreamWrapper:
         except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
             self._fail_on_upstream_error(e)
 
+        if self._closed:
+            raise StopAsyncIteration
         last_chunk: Final = self._chunk_after_upstream_ends()
         if last_chunk is None:
             raise StopAsyncIteration
@@ -572,7 +578,7 @@ class AnthropicResponsesStreamWrapper:
     def close(self) -> None:
         self._closed = True
         if isinstance(self.responses_stream, _Closeable):
-            self.responses_stream.close()
+            self._close_sync_upstream(self.responses_stream)
 
     def _sync_upstream(self) -> Iterator[object]:
         if self._sync_responses_iterator is None:
@@ -613,6 +619,36 @@ class AnthropicResponsesStreamWrapper:
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
 
+    def _next_sync_event(self, sync_iterator: Iterator[object], missing: object) -> object:
+        try:
+            with self._sync_upstream_lock:
+                return missing if self._sync_upstream_closed else next(sync_iterator, missing)
+        finally:
+            if (upstream := self._sync_upstream_to_close) is not None:
+                self._close_sync_upstream_unless_reading(upstream)
+
+    async def aclose_upstream(self) -> None:
+        from litellm.llms.anthropic.messages.native.streaming_iterator import SupportsAclose
+
+        upstream: Final = self.responses_stream
+        if isinstance(upstream, SupportsAclose):
+            await upstream.aclose()
+        elif isinstance(upstream, _Closeable):
+            self._close_sync_upstream(upstream)
+
+    def _close_sync_upstream(self, upstream: _Closeable) -> None:
+        self._sync_upstream_to_close = upstream
+        self._close_sync_upstream_unless_reading(upstream)
+
+    def _close_sync_upstream_unless_reading(self, upstream: _Closeable) -> None:
+        if not self._sync_upstream_lock.acquire(blocking=False):
+            return
+        try:
+            self._sync_upstream_closed = True
+            upstream.close()
+        finally:
+            self._sync_upstream_lock.release()
+
 
 class AnthropicResponsesSSEByteStream:
     """
@@ -633,6 +669,7 @@ class AnthropicResponsesSSEByteStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+        await self._wrapper.aclose_upstream()
 
     @property
     def stream_failure(self) -> Exception | None:
@@ -653,5 +690,5 @@ class AnthropicResponsesSyncSSEByteStream(AnthropicResponsesSSEByteStream):
         self._wrapper.close()
 
     async def aclose(self) -> None:
-        self.close()
         await super().aclose()
+        self.close()
