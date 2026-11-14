@@ -527,7 +527,7 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
 
 
 def _redact_standard_logging_object(
-    payload: Mapping[str, object], *, redact_instructions: bool = True
+    payload: Mapping[str, object], *, redact_shared_fields: bool = True
 ) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
@@ -535,19 +535,19 @@ def _redact_standard_logging_object(
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
     guardrail_information: Final = standard_logging_object.get("guardrail_information")
-    if guardrail_information is not None:
+    if guardrail_information is not None and redact_shared_fields:
         standard_logging_object["guardrail_information"] = _guardrail_information_without_prompt_text(
             guardrail_information
         )
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
-    if model_parameters is not None and redact_instructions:
+    if model_parameters is not None and redact_shared_fields:
         standard_logging_object["model_parameters"] = _with_redacted_request_fields(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:
             standard_logging_object["response"] = _redacted_responses_api_response(
-                response, redact_instructions=redact_instructions
+                response, redact_instructions=redact_shared_fields
             )
             redact_vertex_ai_metadata_from_logged_object(standard_logging_object["response"])
         elif isinstance(response, dict) and "choices" in response:
@@ -659,8 +659,8 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
     redact_streaming_responses=False skips the in-place redaction of the shared streaming
     response entries; per-callback redaction hands each opted-out callback its own redacted
     copy via redacted_model_call_details_for_custom_logger instead. It also leaves the shared
-    request instructions, proxy request body and hidden provider fields as they are, since the
-    spend log and the other callbacks read them.
+    request instructions, guardrail prompt text, proxy request body and hidden provider fields
+    as they are, since the spend log and the other callbacks read them.
     """
     # Redact model_call_details
     params: Final = _as_mapping(model_call_details.get("litellm_params"))
@@ -685,7 +685,7 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(
-            standard_logging_object, redact_instructions=redact_streaming_responses
+            standard_logging_object, redact_shared_fields=redact_streaming_responses
         )
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 

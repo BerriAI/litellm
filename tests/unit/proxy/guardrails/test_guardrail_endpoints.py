@@ -4231,8 +4231,8 @@ class _BedrockGuardrailCall(NamedTuple):
 
 
 class _CapturingLogger(CustomLogger):
-    def __init__(self, message_logging: bool = True) -> None:
-        super().__init__(turn_off_message_logging=not message_logging)
+    def __init__(self, message_logging: bool = True, legacy_message_logging: bool = True) -> None:
+        super().__init__(turn_off_message_logging=not message_logging, message_logging=legacy_message_logging)
         self.logged: Final[list[Mapping[str, object]]] = []
         self.failure_hook_requests: Final[list[Mapping[str, object]]] = []
 
@@ -4277,6 +4277,7 @@ async def _apply_bedrock_guardrail_over_http(
     guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
     message_logging: bool = True,
     headers: Mapping[str, str] = MappingProxyType({}),
+    other_loggers: Sequence[CustomLogger] = (),
 ) -> _BedrockGuardrailCall:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.guardrails.guardrail_endpoints import router
@@ -4296,6 +4297,7 @@ async def _apply_bedrock_guardrail_over_http(
         "callbacks",
         [
             guardrail(AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))),
+            *other_loggers,
             capture,
             ProxyDBLogger(spend_writer=lambda: spend_writer),
         ],
@@ -4407,3 +4409,29 @@ async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_c
     assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
     assert "please bill my card" not in str(call.logged["guardrail_information"])
     assert "4111111111111111" not in str(call.logged["guardrail_information"])
+
+
+@pytest.mark.asyncio
+async def test_one_callback_opting_out_of_message_logging_leaves_the_guardrail_details_to_the_others(
+    mocker: MockerFixture,
+) -> None:
+    answer: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "please bill my card {CREDIT_DEBIT_CARD_NUMBER}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+    }
+    opted_out: Final = _CapturingLogger(legacy_message_logging=False)
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (answer,), {"text": "please bill my card 4111111111111111"}, other_loggers=(opted_out,)
+    )
+
+    assert "please bill my card" in str(call.logged["guardrail_information"])
+    assert [record["guardrail_name"] for record in opted_out.logged[0]["guardrail_information"]] == ["bedrock-guard"]
+    assert "please bill my card" not in str(opted_out.logged[0]["guardrail_information"])
