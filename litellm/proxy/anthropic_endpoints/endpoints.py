@@ -243,6 +243,9 @@ async def anthropic_response(
         )
         return JSONResponse(status_code=e.status_code, content=body)
     except Exception as raised:
+        from litellm.proxy.spend_tracking.native_budgets import raise_native_admission_refusal
+
+        await raise_native_admission_refusal(raised)
         answered: Final = with_answered_status(raised)
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,

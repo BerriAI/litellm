@@ -5,6 +5,7 @@ import json
 import math
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
@@ -58,6 +59,16 @@ from litellm.proxy.spend_tracking.input_tokens import (
     inline_pdf_file_count,
     models_counted_for,
     openai_chat_pdf_file_tokens,
+)
+from litellm.proxy.spend_tracking.native_budgets import (
+    await_native_admission,
+    is_native_reservation,
+    native_admission,
+    native_budget_route,
+    native_owner_reserves,
+    new_reservation_id,
+    pending_native_reservation,
+    settle_native_reservation,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -199,7 +210,11 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
 _lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
 
 
-def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+def start_reservation_lease_renewal(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    request_task: asyncio.Task[object] | None = None,
+) -> None:
     """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
     while the request is in flight so a request longer than the TTL does not drop its
     reservation and admit concurrent requests against the DB floor on any worker."""
@@ -213,7 +228,7 @@ def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], c
             budget_reservation=budget_reservation,
             counter_keys=counter_keys,
             interval=redis_ttl / 2,
-            request_task=asyncio.current_task(),
+            request_task=request_task or asyncio.current_task(),
         )
     )
     _lease_renewals.add(task)
@@ -373,6 +388,23 @@ async def reserve_budget_for_request(
     # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
+    if native_owner_reserves() and native_budget_route(route):
+        return await _native_budget_plan(
+            request_body=request_body,
+            route=route,
+            counters=counters,
+            valid_token=valid_token,
+            reservation_cost=reservation_cost,
+            input_token_counts=input_token_counts,
+            input_cost=estimate_request_input_cost(
+                request_body=request_body,
+                route=route,
+                llm_router=llm_router,
+                input_token_counts=input_token_counts,
+                path_params=path_params,
+            ),
+            fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        )
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
@@ -413,11 +445,59 @@ async def reserve_budget_for_request(
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
     }
-    _start_reservation_lease_renewal(
+    start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
         counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
     )
     return budget_reservation
+
+
+async def _native_budget_plan(
+    request_body: Mapping[str, object],
+    route: str,
+    counters: Sequence[_BudgetCounter],
+    valid_token: UserAPIKeyAuth,
+    reservation_cost: float,
+    input_token_counts: Mapping[str, int],
+    input_cost: float | None,
+    fail_closed_budget_enforcement: bool,
+) -> dict | None:  # mutable-ok: settlement stamps finalized on the reservation it returns
+    with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
+        reservable: Final = await _initialize_reservation_counters(
+            counters=counters,
+            fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        )
+    if not reservable:
+        return None
+    input_tokens: Final = max(input_token_counts.values(), default=None)
+    return pending_native_reservation(
+        {
+            "counters": [
+                {
+                    "counter_key": counter.counter_key,
+                    "max_budget": counter.max_budget,
+                    "fallback_spend": counter.fallback_spend,
+                    "entity_type": counter.entity_type,
+                    "entity_id": counter.entity_id,
+                    "spend_log_entity_id": counter.spend_log_entity_id,
+                }
+                for counter in reservable
+            ],
+            "reservation_cost": float(reservation_cost),
+            "input_cost": float(input_cost or 0.0),
+            "input_tokens": input_tokens,
+            "throttle_counter": key_counter(str(valid_token.token))
+            if should_throttle_budget_exceeded(valid_token)
+            else None,
+            "fail_closed": fail_closed_budget_enforcement,
+            "status_code": int(litellm.budget_exceeded_status_code),
+            "reservation_id": new_reservation_id(),
+        },
+        valid_token,
+        route,
+        request_body,
+        {counter.counter_key: counter.reset_at.isoformat() for counter in reservable if counter.reset_at is not None},
+    )
 
 
 async def reconcile_budget_reservation(
@@ -429,16 +509,24 @@ async def reconcile_budget_reservation(
     """Settle every reserved counter on ``actual_cost``. With ``apply_consistent`` False the adjustments for
     counters that still hold the reservation are returned instead of written, so the caller can pipeline them with
     its own increments and then call ``stamp_budget_reservation_actual_cost``."""
+    await await_native_admission(budget_reservation)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
 
     reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
     actual: Final = float(actual_cost or 0.0)
-    pending: Final = await _set_reserved_entries_actual_cost(
-        entries=budget_reservation.get("entries") or [],
-        actual_cost=actual,
-        default_reserved_cost=reserved_cost,
-        apply_consistent=apply_consistent,
+    native: Final = is_native_reservation(budget_reservation)
+    if native:
+        await settle_native_reservation(budget_reservation, actual)
+    pending: Final = (
+        ()
+        if native
+        else await _set_reserved_entries_actual_cost(
+            entries=budget_reservation.get("entries") or [],
+            actual_cost=actual,
+            default_reserved_cost=reserved_cost,
+            apply_consistent=apply_consistent,
+        )
     )
     if finalize:
         budget_reservation["finalized"] = True
@@ -489,6 +577,10 @@ async def release_budget_reservation_on_cancel(
     when success/failure handling already reconciled, so calling it on every
     cancellation path is safe.
     """
+    admission: Final = native_admission(budget_reservation)
+    if admission is not None:
+        with suppress(asyncio.CancelledError, Exception):
+            _ = await asyncio.shield(admission)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
     incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
@@ -1279,11 +1371,15 @@ async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> 
     reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
     increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
     DB, so the reseeded floor excludes it."""
+    await reseed_reserved_counter(item.counter_key, actual_cost)
+
+
+async def reseed_reserved_counter(counter_key: str, actual_cost: float) -> None:
     from litellm.proxy.proxy_server import increment_spend_counter_cache, reseed_spend_counter_from_db
 
-    reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)
+    reseeded: Final = await reseed_spend_counter_from_db(counter_key=counter_key)
     if reseeded and actual_cost > 0:
-        await increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
+        await increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
 
 
 async def _counter_can_apply_adjustment(
