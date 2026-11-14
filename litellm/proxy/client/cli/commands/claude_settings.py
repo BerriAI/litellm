@@ -3,17 +3,23 @@
 `lite up` and `lite autoroute start` patch this file temporarily and restore it on
 exit; `lite configure claude` patches it persistently and records how to undo it.
 All of them need the same merge, and `up` already imports from `auth`, so the
-shared parts live here rather than in any one command module. The credential is
-always a static token in `env.ANTHROPIC_AUTH_TOKEN`: Claude Code's `apiKeyHelper`
-would spawn a `lite` process on every credential refresh, and that process touches
-the keychain, so nothing here writes one; a helper left by an earlier version is
-owned like any other key and stripped.
+shared parts live here rather than in any one command module. The credential is a
+static token in `env.ANTHROPIC_AUTH_TOKEN`, except for a login `lite` renews on its own,
+which gets an `apiKeyHelper` running `lite auth print-token`: Claude Code reruns it
+every few minutes, so the key it sends follows each renewal. A helper is owned like
+any other key, so writing one credential strips the other, and it blanks
+`env.ANTHROPIC_AUTH_TOKEN`, since a token exported in the shell would win over it.
 """
 
 import hashlib
 import json
+import ntpath
+import os
+import posixpath
 import shlex
+import shutil
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -136,6 +142,16 @@ class StaticToken:
     """A long-lived virtual key, written into env.ANTHROPIC_AUTH_TOKEN."""
 
     token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyHelper:
+    """A `lite auth print-token` command Claude Code reruns for a fresh key, written into the top-level apiKeyHelper."""
+
+    command: str
+
+
+ClaudeCredential: TypeAlias = StaticToken | ApiKeyHelper
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +321,56 @@ def _land(
         raise ClaudeSettingsError(f"Could not {'remove' if staged is None else 'write'} {path}: {e}") from e
 
 
+def installed_executable(
+    name: str,
+    scripts_dir: str = sysconfig.get_path("scripts"),
+    environ: Mapping[str, str] = os.environ,
+    platform: str = sys.platform,
+) -> str | None:
+    """This interpreter's own `name` first, since a version manager's shim earlier on PATH may run a Python
+    that lacks it. Each directory is checked by full path, since `shutil.which` on Windows searches the
+    current directory before the ones it is given, and a repo could plant its own `lite.exe` there."""
+    file_name: Final = f"{name}.exe" if platform.startswith("win") else name
+    directories: Final = (scripts_dir, *environ.get("PATH", os.defpath).split(os.pathsep))
+    candidates: Final = (shutil.which(os.path.join(directory, file_name)) for directory in directories if directory)
+    return next((found for found in candidates if found is not None), None)
+
+
+_HELPER_SUBCOMMAND: Final = ("auth", "print-token")
+
+
+def _helper_args(base_url: str) -> tuple[str, ...]:
+    return ("--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND)
+
+
+def lite_api_key_helper(
+    base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = installed_executable
+) -> ApiKeyHelper | None:
+    """Quoted for the shell Claude Code runs it in, `sh` on POSIX and cmd.exe on Windows, with an absolute path
+    so the directory Claude Code starts in cannot pick another `lite`."""
+    lite_path: Final = which("lite")
+    if lite_path is None:
+        return None
+    windows: Final = platform.startswith("win")
+    quote: Final = quote_for_cmd if windows else shlex.quote
+    absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
+    return ApiKeyHelper(" ".join(quote(token) for token in (absolute_path, *_helper_args(base_url))))
+
+
+def _runs_lite_with(command: JsonValue, args: tuple[str, ...]) -> bool:
+    return isinstance(command, str) and any(
+        command.endswith(" " + " ".join(quote(token) for token in args)) for quote in (shlex.quote, quote_for_cmd)
+    )
+
+
+def is_lite_api_key_helper(command: JsonValue) -> bool:
+    return _runs_lite_with(command, _HELPER_SUBCOMMAND)
+
+
+def is_lite_api_key_helper_for(command: JsonValue, base_url: str) -> bool:
+    return _runs_lite_with(command, _helper_args(base_url))
+
+
 def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
     """This interpreter, not a bare `python3`: it is the one the apiKeyHelper already depends on."""
     quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
@@ -378,7 +444,7 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
 def merge_claude_settings(
     settings: Mapping[str, JsonValue],
     base_url: str,
-    credential: StaticToken,
+    credential: ClaudeCredential,
     default_model: str | None = None,
     tier_model: str | None = None,
     *,
@@ -386,8 +452,10 @@ def merge_claude_settings(
 ) -> Mapping[str, JsonValue]:
     """Return a new settings mapping wired to route Claude Code through the proxy.
 
-    The token lands in env.ANTHROPIC_AUTH_TOKEN; the other credential slots (a stray ANTHROPIC_API_KEY,
-    an apiKeyHelper) are removed, since Claude Code given two credentials may send the wrong one.
+    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper with
+    env.ANTHROPIC_AUTH_TOKEN blank, since Claude Code reads a blank one as unset and an ANTHROPIC_AUTH_TOKEN
+    exported in the shell would otherwise win over the helper. The other credential slots are removed either
+    way, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
     missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
     `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
@@ -402,7 +470,8 @@ def merge_claude_settings(
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
             ),
             ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
-            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")), (ANTHROPIC_AUTH_TOKEN_KEY, credential.token)),
+            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
+            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
             ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )
@@ -415,6 +484,7 @@ def merge_claude_settings(
                 if key not in (API_KEY_HELPER_KEY, ENV_KEY)
             ),
             ((ENV_KEY, env),),
+            ((API_KEY_HELPER_KEY, credential.command),) if isinstance(credential, ApiKeyHelper) else (),
             ((MODEL_KEY, default_model),) if default_model is not None else (),
         )
     )
@@ -520,7 +590,7 @@ def preflight_claude_settings(settings_path: Path) -> None:
 
 def configure_claude_settings(
     base_url: str,
-    credential: StaticToken,
+    credential: ClaudeCredential,
     model: ModelChoice,
     settings_path: Path,
     state_path: Path,
@@ -671,6 +741,8 @@ __all__ = (
     "STARTING_MODEL_ROLE",
     "STATUSLINE_SCRIPT_PATH",
     "STATUS_LINE_KEY",
+    "ApiKeyHelper",
+    "ClaudeCredential",
     "ClaudeSettingsError",
     "ConfigureReceipt",
     "KeepModel",
@@ -685,6 +757,10 @@ __all__ = (
     "claude_settings_path",
     "configure_claude_settings",
     "configure_state_path",
+    "installed_executable",
+    "is_lite_api_key_helper",
+    "is_lite_api_key_helper_for",
+    "lite_api_key_helper",
     "load_json_or_empty",
     "merge_claude_settings",
     "read_configure_receipt",
