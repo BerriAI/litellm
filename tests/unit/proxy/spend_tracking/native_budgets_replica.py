@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import socket
+import threading
+import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Final
 
 import pytest
@@ -25,7 +30,7 @@ from litellm.proxy.v2_proxy_fields import PRE_CALL_SOURCES
 from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router import Router
-from litellm.rust_bridge._native import NativeRedisClient
+from litellm.rust_bridge._native import NativeRedisClient, NativeSpendCounters
 
 
 def native_budgets_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
@@ -106,6 +111,168 @@ def refused_redis_client() -> NativeRedisClient:
     )
     assert client is not None
     return client
+
+
+SET_MAX_SCRIPT_MARKER: Final = "tonumber(cur) < tonumber(ARGV[1])"
+
+
+def _bulk(value: float | None) -> bytes:
+    if value is None:
+        return b"$-1\r\n"
+    encoded: Final = repr(value).encode()
+    return b"$%d\r\n%s\r\n" % (len(encoded), encoded)
+
+
+async def _bulk_string(reader: asyncio.StreamReader) -> str:
+    size: Final = int((await reader.readline())[1:])
+    return (await reader.readexactly(size + 2))[:-2].decode()
+
+
+@dataclass
+class RespRedis:
+    values: dict[str, float]
+    failing: frozenset[str] = frozenset()
+    expires_after_increment: str | None = None
+    ttl: float | None = None
+    fail_once: list[Callable[[tuple[str, ...]], bool]] = field(default_factory=list)
+    commands: list[tuple[str, ...]] = field(default_factory=list)
+    expires_at: dict[str, float] = field(default_factory=dict)
+    refresh_attempts: int = 0
+    refresh_count: int = 0
+
+    def get(self, key: str) -> float | None:
+        self._evict(key)
+        return self.values.get(key)
+
+    def _evict(self, key: str) -> None:
+        if self.expires_at.get(key, float("inf")) <= time.monotonic():
+            _ = self.values.pop(key, None)
+            _ = self.expires_at.pop(key, None)
+
+    def _store(self, key: str, value: float) -> None:
+        self.values[key] = value
+        if self.ttl is not None:
+            self.expires_at[key] = time.monotonic() + self.ttl
+
+    def _is_refresh(self, key: str) -> bool:
+        previous: Final = self.commands[-2] if len(self.commands) > 1 else ()
+        return previous[:2] != ("INCRBYFLOAT", key)
+
+    def _set(self, key: str, value: str, options: Sequence[str]) -> bytes:
+        if "NX" in (option.upper() for option in options) and key in self.values:
+            return b"$-1\r\n"
+        self._store(key, float(value))
+        return b"+OK\r\n"
+
+    def _set_max(self, key: str, spend: str) -> bytes:
+        current: Final = self.values.get(key)
+        if current is None or current < float(spend):
+            self._store(key, float(spend))
+            return _bulk(float(spend))
+        return _bulk(current)
+
+    def _refused_once(self, command: tuple[str, ...]) -> bool:
+        refusal: Final = next((matches for matches in self.fail_once if matches(command)), None)
+        if refusal is None:
+            return False
+        self.fail_once.remove(refusal)
+        return True
+
+    def _expire(self, key: str) -> bytes:
+        refresh: Final = self._is_refresh(key)
+        if self.ttl is None:
+            return b":1\r\n"
+        if key not in self.values:
+            return b":0\r\n"
+        self.refresh_count += refresh
+        self.expires_at[key] = time.monotonic() + self.ttl
+        return b":1\r\n"
+
+    def answer(self, command: tuple[str, ...]) -> bytes:
+        self.commands.append(command)
+        name, *args = command
+        for key in self.values.keys() & set(args):
+            self._evict(key)
+        if name.upper() == "EXPIRE":
+            self.refresh_attempts += self._is_refresh(args[0])
+        if name.upper() in self.failing or self._refused_once(command):
+            return b"-ERR refused by the test\r\n"
+        match name.upper():
+            case "GET":
+                return _bulk(self.values.get(args[0]))
+            case "MGET":
+                return b"*%d\r\n" % len(args) + b"".join(_bulk(self.values.get(key)) for key in args)
+            case "INCRBYFLOAT":
+                total: Final = self.values.get(args[0], 0.0) + float(args[1])
+                self._store(args[0], total)
+                if args[0] == self.expires_after_increment:
+                    del self.values[args[0]]
+                return _bulk(total)
+            case "DEL":
+                return b":%d\r\n" % sum(self.values.pop(key, None) is not None for key in args)
+            case "EXPIRE":
+                return self._expire(args[0])
+            case "SET":
+                return self._set(args[0], args[1], args[2:])
+            case "EVAL" if SET_MAX_SCRIPT_MARKER in args[0]:
+                return self._set_max(args[2], args[3])
+            case "EVAL":
+                return b"-ERR script not emulated by the test\r\n"
+            case _:
+                return b"+OK\r\n"
+
+    def writes(self) -> list[tuple[str, ...]]:
+        return [command for command in self.commands if command[0].upper() not in ("GET", "MGET")]
+
+    def deleted(self) -> set[str]:
+        return {key for command in self.commands if command[0].upper() == "DEL" for key in command[1:]}
+
+    def count(self, name: str) -> int:
+        return sum(command[0].upper() == name for command in self.commands)
+
+    async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while header := await reader.readline():
+                command: Final = [await _bulk_string(reader) for _ in range(int(header[1:]))]
+                writer.write(self.answer(tuple(command)))
+                await writer.drain()
+        finally:
+            writer.close()
+
+
+async def _stop_serving(server: asyncio.Server) -> None:
+    server.close()
+    connections: Final = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+    for connection in connections:
+        _ = connection.cancel()
+    _ = await asyncio.gather(*connections, return_exceptions=True)
+
+
+@contextmanager
+def resp_store(redis: RespRedis, default_ttl: float = 60) -> Iterator[SpendCounterStore]:
+    loop: Final = asyncio.new_event_loop()
+    thread: Final = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    server: Final = asyncio.run_coroutine_threadsafe(asyncio.start_server(redis.serve, "127.0.0.1", 0), loop).result(
+        timeout=5
+    )
+    port: Final[int] = server.sockets[0].getsockname()[1]
+    try:
+        client: Final = NativeRedisClient.connect(
+            RedisStoreSettings(
+                redis_kwargs={"host": "127.0.0.1", "port": port},
+                namespace=None,
+                default_ttl=default_ttl,
+                breaker=None,
+            )
+        )
+        assert client is not None
+        yield SpendCounterStore(NativeSpendCounters(client))
+    finally:
+        asyncio.run_coroutine_threadsafe(_stop_serving(server), loop).result(timeout=5)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
 
 
 UNLIMITED_BUDGET: Final = 1e12

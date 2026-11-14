@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import threading
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,16 +25,17 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
-from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.spend_tracking.native_budgets_replica import (
+    RespRedis,
     install_native_owner,
     native_reservation,
     reserve_budget_for_request as native_reserve_budget_for_request,
+    resp_store,
 )
-from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
@@ -469,96 +467,6 @@ RESERVED_KEYS = frozenset(
 )
 
 
-def _bulk(value: float | None) -> bytes:
-    if value is None:
-        return b"$-1\r\n"
-    encoded: Final = repr(value).encode()
-    return b"$%d\r\n%s\r\n" % (len(encoded), encoded)
-
-
-async def _bulk_string(reader: asyncio.StreamReader) -> str:
-    size: Final = int((await reader.readline())[1:])
-    return (await reader.readexactly(size + 2))[:-2].decode()
-
-
-@dataclass
-class _RespRedis:
-    values: dict[str, float]
-    failing: frozenset[str] = frozenset()
-    expires_after_increment: str | None = None
-    commands: list[tuple[str, ...]] = field(default_factory=list)
-
-    def answer(self, command: tuple[str, ...]) -> bytes:
-        self.commands.append(command)
-        name, *args = command
-        if name.upper() in self.failing:
-            return b"-ERR refused by the test\r\n"
-        match name.upper():
-            case "GET":
-                return _bulk(self.values.get(args[0]))
-            case "MGET":
-                return b"*%d\r\n" % len(args) + b"".join(_bulk(self.values.get(key)) for key in args)
-            case "INCRBYFLOAT":
-                total: Final = self.values.get(args[0], 0.0) + float(args[1])
-                self.values[args[0]] = total
-                if args[0] == self.expires_after_increment:
-                    del self.values[args[0]]
-                return _bulk(total)
-            case "DEL":
-                return b":%d\r\n" % sum(self.values.pop(key, None) is not None for key in args)
-            case "EXPIRE":
-                return b":1\r\n"
-            case _:
-                return b"+OK\r\n"
-
-    def writes(self) -> list[tuple[str, ...]]:
-        return [command for command in self.commands if command[0].upper() not in ("GET", "MGET")]
-
-    def deleted(self) -> set[str]:
-        return {key for command in self.commands if command[0].upper() == "DEL" for key in command[1:]}
-
-    async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            while header := await reader.readline():
-                command: Final = [await _bulk_string(reader) for _ in range(int(header[1:]))]
-                writer.write(self.answer(tuple(command)))
-                await writer.drain()
-        finally:
-            writer.close()
-
-
-async def _stop_serving(server: asyncio.Server) -> None:
-    server.close()
-    connections: Final = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-    for connection in connections:
-        _ = connection.cancel()
-    _ = await asyncio.gather(*connections, return_exceptions=True)
-
-
-@contextmanager
-def _resp_store(redis: _RespRedis) -> Iterator[SpendCounterStore]:
-    loop: Final = asyncio.new_event_loop()
-    thread: Final = threading.Thread(target=loop.run_forever, daemon=True)
-    thread.start()
-    server: Final = asyncio.run_coroutine_threadsafe(asyncio.start_server(redis.serve, "127.0.0.1", 0), loop).result(
-        timeout=5
-    )
-    port: Final[int] = server.sockets[0].getsockname()[1]
-    try:
-        client: Final = NativeRedisClient.connect(
-            RedisStoreSettings(
-                redis_kwargs={"host": "127.0.0.1", "port": port}, namespace=None, default_ttl=60, breaker=None
-            )
-        )
-        assert client is not None
-        yield SpendCounterStore(NativeSpendCounters(client))
-    finally:
-        asyncio.run_coroutine_threadsafe(_stop_serving(server), loop).result(timeout=5)
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join(timeout=5)
-        loop.close()
-
-
 def _local_store(values: Mapping[str, float]) -> SpendCounterStore:
     store: Final = SpendCounterStore(connect(None).spend_counters())
     for key, value in values.items():
@@ -651,11 +559,11 @@ async def test_reconcile_settles_a_flushed_counter_on_its_own_after_the_shared_p
 async def test_pre_call_resize_against_an_inconsistent_counter_writes_nothing_and_denies(
     monkeypatch, native_budgets_on
 ):
-    redis = _RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 19.8})
+    redis = RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 19.8})
     redis.expires_after_increment = "spend:team:team"
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    with _resp_store(redis) as spend:
+    with resp_store(redis) as spend:
         _native_reservation_fixture(monkeypatch, spend)
         with pytest.raises(ProxyException, match="inconsistent counter spend:team:team"):
             await _reserve_native(spend, token, team_max_budget=20.0)
@@ -668,9 +576,9 @@ async def test_pre_call_resize_against_an_inconsistent_counter_writes_nothing_an
 async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_and_stamps_nothing(
     monkeypatch, native_budgets_on
 ):
-    redis = _RespRedis(values={key: (0.6 if key in RESERVED_KEYS else 1.0) for key in POST_CALL_KEYS})
+    redis = RespRedis(values={key: (0.6 if key in RESERVED_KEYS else 1.0) for key in POST_CALL_KEYS})
 
-    with _resp_store(redis) as spend:
+    with resp_store(redis) as spend:
         monkeypatch.setattr(ps, "spend_counter_store", spend)
         monkeypatch.setattr(ps, "prisma_client", None)
         reservation = await _held(spend, reserved_cost=0.4, counter_keys=RESERVED_KEYS)
@@ -728,10 +636,10 @@ async def test_reservation_inside_the_admission_scope_reuses_its_mget_and_reserv
 
 @pytest.mark.asyncio
 async def test_a_failed_reservation_pipeline_drops_every_counter_and_reserves_nothing(monkeypatch, native_budgets_on):
-    redis = _RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 2.0}, failing=frozenset({"INCRBYFLOAT"}))
+    redis = RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 2.0}, failing=frozenset({"INCRBYFLOAT"}))
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    with _resp_store(redis) as spend:
+    with resp_store(redis) as spend:
         _native_reservation_fixture(monkeypatch, spend)
         reservation = await _reserve_native(spend, token, team_max_budget=20.0)
 
@@ -812,10 +720,10 @@ async def _reserve_native(
 async def test_a_rejected_counter_is_charged_alone_so_the_counters_after_it_are_never_touched(
     monkeypatch, native_budgets_on
 ):
-    redis = _RespRedis(values={"spend:key:hashed": 10.0, "spend:team:team": 2.0})
+    redis = RespRedis(values={"spend:key:hashed": 10.0, "spend:team:team": 2.0})
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    with _resp_store(redis) as spend:
+    with resp_store(redis) as spend:
         _native_reservation_fixture(monkeypatch, spend)
         with pytest.raises(litellm.BudgetExceededError):
             await _reserve_native(spend, token, team_max_budget=20.0)
@@ -849,10 +757,10 @@ async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(mon
 
     from litellm.caching.dual_cache import DualCache
 
-    redis = _RespRedis(values={}, failing=frozenset({"INCRBYFLOAT"}))
+    redis = RespRedis(values={}, failing=frozenset({"INCRBYFLOAT"}))
     token = UserAPIKeyAuth(token="key-budget-reserve-fail-closed", spend=0.0, max_budget=1.0)
 
-    with _resp_store(redis) as spend:
+    with resp_store(redis) as spend:
         _native_reservation_fixture(monkeypatch, spend)
         with pytest.raises(HTTPException) as exc_info:
             await native_reserve_budget_for_request(
