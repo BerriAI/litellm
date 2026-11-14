@@ -1155,6 +1155,66 @@ async def test_gemini_batch_embedding_cache_hits_give_a_videos_extracted_audio_t
     assert tuple(hit.usage.prompt_tokens_details.audio_tokens for hit in hits) == expected_audio_tokens
 
 
+@pytest.mark.parametrize(
+    ("embed_params", "expected_audio_tokens"),
+    [
+        pytest.param({"audio_track_extraction": True}, (100, 100), id="named-param"),
+        pytest.param({"audio_track_extraction": "true"}, (100, 100), id="named-param-as-a-string"),
+        pytest.param({"audio_track_extraction": "false"}, (200, 0), id="named-param-false-as-a-string"),
+        pytest.param(
+            {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}}, (100, 100), id="extra-body"
+        ),
+        pytest.param(
+            {"extra_body": {"embedContentConfig": {"audio_track_extraction": 1}}},
+            (100, 100),
+            id="extra-body-snake-case-field",
+        ),
+        pytest.param(
+            {"extra_body": {"embed_content_config": {"audioTrackExtraction": "TRUE"}}},
+            (100, 100),
+            id="extra-body-snake-case-config",
+        ),
+        pytest.param(
+            {"audio_track_extraction": False, "extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}},
+            (200, 0),
+            id="named-param-off-over-extra-body",
+        ),
+        pytest.param({}, (200, 0), id="not-set"),
+    ],
+)
+def test_gemini_batch_embedding_gives_a_videos_extracted_audio_tokens_to_the_video_on_sync_calls(
+    respx_mock: respx.MockRouter,
+    embed_params: Mapping[str, object],
+    expected_audio_tokens: tuple[int, int],
+) -> None:
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}],
+                "usageMetadata": {
+                    "promptTokenCount": 530,
+                    "promptTokenDetails": [
+                        {"modality": "AUDIO", "tokenCount": 200},
+                        {"modality": "VIDEO", "tokenCount": 330},
+                    ],
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=[AUDIO_DATA_URI, VIDEO_DATA_URI],
+        api_key="gemini-test-key",
+        **embed_params,
+    )
+
+    assert tuple(usage.prompt_tokens_details.audio_tokens for usage in response.item_usage) == expected_audio_tokens
+
+
 @pytest.mark.parametrize("use_embed_content", [False, True])
 def test_a_usage_detail_entry_without_a_token_count_keeps_googles_other_counts(use_embed_content: bool) -> None:
     usage_metadata: Final = {

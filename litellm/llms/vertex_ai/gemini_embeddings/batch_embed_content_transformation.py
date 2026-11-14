@@ -382,6 +382,9 @@ def _build_part_for_input(
 _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
 _GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
 _EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
+_EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_content_config")
+_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = ("audioTrackExtraction", "audio_track_extraction")
+_GOOGLE_TRUE_VALUES: Final = frozenset({"true", "1"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
     {
@@ -403,7 +406,14 @@ def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[s
 
 def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
     request_fields: Final = {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
-    return embed_content_config_fields(request_fields).get("audioTrackExtraction") is True
+    return any(_turns_on_audio_track_extraction(request_fields.get(field)) for field in _EMBED_CONTENT_CONFIG_SPELLINGS)
+
+
+def _turns_on_audio_track_extraction(config: object) -> bool:
+    fields: Final[Mapping[str, object]] = (
+        _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
+    )
+    return any(str(fields.get(field)).lower() in _GOOGLE_TRUE_VALUES for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
 
 
 def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:

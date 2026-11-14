@@ -34,10 +34,10 @@ from .batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
 )
 
-_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class _GeminiFileResource(TypedDict, total=False):
@@ -221,6 +221,9 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         ### TRANSFORMATION (sync path) ###
+        audio_track_extraction: Final = not use_embed_content and audio_track_extraction_enabled(
+            _OPTIONAL_PARAMS.validate_python(optional_params)
+        )
         request_data: VertexAIBatchEmbeddingsRequestBody | dict[str, object]
         flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
@@ -292,9 +295,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 _predictions=_json_response,
                 input=input,
                 resolved_files=resolved_files,
-                audio_track_extraction=audio_track_extraction_enabled(
-                    _OPTIONAL_PARAMS.validate_python(optional_params)
-                ),
+                audio_track_extraction=audio_track_extraction,
             )
 
     async def async_batch_embeddings(
@@ -331,6 +332,9 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client
 
         ### TRANSFORMATION (async path) ###
+        audio_track_extraction: Final = not use_embed_content and audio_track_extraction_enabled(
+            _OPTIONAL_PARAMS.validate_python(optional_params or {})
+        )
         flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
@@ -402,7 +406,5 @@ class GoogleBatchEmbeddings(VertexLLM):
                 _predictions=_json_response,
                 input=input,
                 resolved_files=resolved_files,
-                audio_track_extraction=audio_track_extraction_enabled(
-                    _OPTIONAL_PARAMS.validate_python(optional_params or {})
-                ),
+                audio_track_extraction=audio_track_extraction,
             )
