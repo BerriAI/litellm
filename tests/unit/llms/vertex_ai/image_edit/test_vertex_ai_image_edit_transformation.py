@@ -1,14 +1,16 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from io import BytesIO
+from types import MappingProxyType
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -636,3 +638,69 @@ def test_imagen_image_edit_maps_malformed_predictions_to_a_connection_error_with
         500,
         False,
     )
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.Request:
+    sent: Final[list[httpx.Request]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200, json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]}
+        )
+
+    litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+        prompt="mountains",
+        api_base="https://vertex.test/edit",
+        metadata=dict(_PROXY_METADATA),
+        labels=dict(_FORGED),
+        extra_headers=dict(extra_headers or {}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+    return sent[0]
+
+
+def _sent_gemini_edit_body() -> Mapping[str, object]:
+    return _SENT_BODY.validate_json(_sent_gemini_edit().content)
+
+
+def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit_body()
+
+    assert sorted(setting_off) == ["contents", "generationConfig"]
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert list(_SENT_LABELS.validate_python(setting_on["labels"]).items()) == [
+        *_IDENTITY.items(),
+        ("app", "bot"),
+        ("cost-center", "cc-1"),
+    ]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit(caller_headers).headers
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit(caller_headers).headers
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"
