@@ -334,6 +334,7 @@ class _RequestRecorder:
         self.card_requests = []
         self.card_urls = []
         self.rpc_requests = []
+        self.rpc_urls = []
         self.rpc_bodies = []
         self.client = None
 
@@ -344,6 +345,7 @@ class _RequestRecorder:
             self.card_urls.append(str(request.url))
             return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
+        self.rpc_urls.append(str(request.url))
         self.rpc_bodies.append(json.loads(request.content))
         if self.rpc_stream_events is not None:
             body = "".join(f"data: {json.dumps(event)}\n\n" for event in self.rpc_stream_events)
@@ -644,6 +646,35 @@ async def test_agent_card_path_param_fetches_that_path_with_the_agents_headers(i
 
     assert recorder.card_urls == ["http://127.0.0.1:9/agentCard/v1.0"]
     assert recorder.card_requests[-1]["x-agent-token"] == "token-for-a"
+
+
+_SUBPATH_AGENT_URL = "http://127.0.0.1:9/jsonrpc"
+_SUBPATH_AGENT_CARD = {**_AGENT_CARD, "url": _SUBPATH_AGENT_URL}
+
+
+class _CardAtOriginRecorder(_RequestRecorder):
+    """An agent whose JSON-RPC endpoint is a sub-path and whose card sits at the origin, as A2A 1.0 places it."""
+
+    def __init__(self) -> None:
+        super().__init__(card=_SUBPATH_AGENT_CARD)
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path != "/.well-known/agent-card.json":
+            self.card_urls.append(str(request.url))
+            return httpx.Response(404, json={"error": "not found"}, request=request)
+        return super().__call__(request)
+
+
+@pytest.mark.asyncio
+async def test_asend_message_resolves_the_card_at_the_origin_of_a_sub_path_agent_url(isolated_client_cache):
+    recorder = await _seed_shared_a2a_client(recorder=_CardAtOriginRecorder())
+
+    response = await asend_message(request=_send_request("req-subpath"), api_base=_SUBPATH_AGENT_URL)
+
+    assert recorder.card_urls[-1] == "http://127.0.0.1:9/.well-known/agent-card.json"
+    assert response.error is None
+    assert recorder.rpc_bodies[-1]["method"] == "message/send"
+    assert recorder.rpc_urls[-1] == _SUBPATH_AGENT_URL
 
 
 @pytest.mark.asyncio
