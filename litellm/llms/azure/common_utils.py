@@ -1165,10 +1165,14 @@ class BaseAzureLLM(BaseOpenAILLM):
         return api_version is not None and api_version.lower() == "none"
 
     @classmethod
+    def opt_out_client_api_version(cls, api_version: str | None) -> str | None:
+        return "v1" if cls.is_api_version_opt_out(api_version) else api_version
+
+    @classmethod
     def chat_client_api_version(cls, api_base: str | None, api_version: str | None) -> str | None:
-        if cls.is_foundry_project_v1_base(api_base) or cls.is_api_version_opt_out(api_version):
+        if cls.is_foundry_project_v1_base(api_base):
             return "v1"
-        return api_version
+        return cls.opt_out_client_api_version(api_version)
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str

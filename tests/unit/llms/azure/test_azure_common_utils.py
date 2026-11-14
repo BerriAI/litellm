@@ -3078,6 +3078,128 @@ def test_o_series_chat_on_a_v1_base_sends_no_api_version(
     assert response.choices[0].message.content == "ok"
 
 
+_CHAT_STREAM_BODY: Final = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-nano",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n'
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-nano",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+async def _model_router_chat_text(mode: str, api_base: str, api_version: str) -> str:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    match mode:
+        case "sync_stream":
+            chunks: Final = litellm.completion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+                stream=True,
+            )
+            return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+        case "async":
+            response: Final = await litellm.acompletion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+            )
+            return response.choices[0].message.content
+        case _:
+            async_chunks: Final = await litellm.acompletion(
+                model="azure/model-router",
+                api_base=api_base,
+                api_key="stream-key",
+                api_version=api_version,
+                messages=messages,
+                stream=True,
+            )
+            return "".join([chunk.choices[0].delta.content or "" async for chunk in async_chunks])
+
+
+@pytest.mark.parametrize("mode", ["sync_stream", "async", "async_stream"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", "2025-04-01-preview"),
+        ("https://apim.example.com/my-foundry/openai/v1", "none"),
+    ],
+)
+async def test_async_and_streaming_chat_on_a_v1_base_send_no_api_version(
+    respx_mock, monkeypatch, mode: str, api_base: str, api_version: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = (
+        httpx.Response(200, json=_CHAT_COMPLETION_BODY)
+        if mode == "async"
+        else httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_CHAT_STREAM_BODY)
+    )
+    route: Final = respx_mock.post().mock(return_value=upstream)
+
+    text: Final = await _model_router_chat_text(mode, api_base, api_version)
+
+    assert route.calls.last.request.url == httpx.URL(f"{api_base}/chat/completions")
+    assert text == "ok"
+
+
+_EMBEDDING_BODY: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        ("https://r.openai.azure.com", "none", "https://r.openai.azure.com/openai/v1/embeddings"),
+        (
+            "https://apim.example.com/my-foundry/openai/v1",
+            "None",
+            "https://apim.example.com/my-foundry/openai/v1/embeddings",
+        ),
+        (
+            "https://r.openai.azure.com",
+            "2025-04-01-preview",
+            "https://r.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings"
+            "?api-version=2025-04-01-preview",
+        ),
+    ],
+)
+async def test_embeddings_send_no_api_version_when_the_deployment_opts_out(
+    respx_mock, monkeypatch, use_async: bool, api_base: str, api_version: str, expected_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=_EMBEDDING_BODY))
+
+    response: Final = (
+        await litellm.aembedding(
+            model="azure/text-embedding-3-small",
+            input=["hi"],
+            api_base=api_base,
+            api_key="embedding-key",
+            api_version=api_version,
+        )
+        if use_async
+        else litellm.embedding(
+            model="azure/text-embedding-3-small",
+            input=["hi"],
+            api_base=api_base,
+            api_key="embedding-key",
+            api_version=api_version,
+        )
+    )
+
+    assert route.calls.last.request.url == httpx.URL(expected_url)
+    assert response.data[0]["embedding"] == [0.5]
+
+
 _TEXT_COMPLETION_BODY: Final = {
     "id": "cmpl-1",
     "object": "text_completion",

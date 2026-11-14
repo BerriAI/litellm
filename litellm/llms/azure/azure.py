@@ -695,7 +695,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         response = None
         try:
             openai_aclient: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
@@ -817,7 +817,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     api_version=api_version,
                 )
             azure_client: Final = self.get_azure_openai_client(
-                api_version=api_version,
+                api_version=self.opt_out_client_api_version(api_version),
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
