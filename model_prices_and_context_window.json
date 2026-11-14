@@ -101882,7 +101882,7 @@
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true
-    }
+    },
     "cloudflare/@cf/thinkingmachines/inkling-2-small": {
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 3e-07,
@@ -102468,5 +102468,5 @@
         "supported_output_modalities": [
             "video"
         ]
-    },
+    }
 }
