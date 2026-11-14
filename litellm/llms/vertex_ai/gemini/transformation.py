@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PositiveInt, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -67,6 +67,8 @@ from ..common_utils import (
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    with_forced_bare_root_unions_on_parameters,
+    with_integer_enums_that_fit,
 )
 from .long_decode import with_default_output_budget
 
@@ -1068,6 +1070,35 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+class _CallerToolConfig(TypedDict, total=False):
+    toolConfig: ReadOnly[JsonValue]
+    tool_config: ReadOnly[JsonValue]
+
+
+_CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
+
+
+def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
+    extra_body_fields: Final = as_str_mapping(extra_body)
+    if extra_body_fields is None:
+        return tools
+    try:
+        caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
+    except ValidationError:
+        return tools
+    tool_config: Final = caller.get("toolConfig", caller.get("tool_config"))
+    if tool_config is None:
+        return tools
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    json_tools: Final = cast(JsonValue, tools)  # cast-ok: LiteLLM built these tools as JSON request data
+    fitted: Final = with_integer_enums_that_fit(
+        partial(with_forced_bare_root_unions_on_parameters, json_tools, tool_config),
+        VertexGeminiConfig.is_gemini_3_or_newer(model),
+    )
+    return cast(Tools, fitted)  # cast-ok: same shape back
+
+
 def _has_google_maps_tool(tools: object) -> bool:
     """Return True if any tool object in the list has a 'googleMaps' key."""
     if not isinstance(tools, list):
@@ -1212,7 +1243,9 @@ def transform_request_body(
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
-                data["tools"] = tools
+                built_tools: Final = cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
+                caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
             if include_server_side_tool_invocations:
