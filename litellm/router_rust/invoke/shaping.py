@@ -25,10 +25,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
+    github_copilot_caller_endpoint_keys,
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, drops_unsupported_params, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
@@ -190,6 +191,37 @@ def _forwarded_alias_marker_keys_the_deployment_sets(
         return ()
     keys: Final[tuple[object, ...]] = forwarded_keys  # pyright: ignore[reportUnknownVariableType]  # the router's own marker
     return tuple(key for key in keys if isinstance(key, str) and _deployment_sets_litellm_param(deployment_params, key))
+
+
+def _github_copilot_caller_endpoint_keys_to_drop(
+    deployment_params: Mapping[str, object],
+    request: Mapping[str, object],
+    defaults: Mapping[str, object],
+    model_name: object,
+) -> tuple[str, ...]:
+    caller_endpoint_keys: Final = github_copilot_caller_endpoint_keys(deployment_params, request)
+    call_drop_params: Final = next(
+        (
+            value
+            for value in (
+                request.get("drop_params"),
+                deployment_params.get("drop_params"),
+                defaults.get("drop_params"),
+            )
+            if value is not None
+        ),
+        None,
+    )
+    if caller_endpoint_keys and not drops_unsupported_params(call_drop_params):
+        raise litellm_exceptions.BadRequestError(
+            message=(
+                f"GitHub Copilot deployments do not accept {' or '.join(caller_endpoint_keys)} from the caller. "
+                "Set api_base on the deployment, or set drop_params to drop it"
+            ),
+            model=str(model_name),
+            llm_provider="github_copilot",
+        )
+    return caller_endpoint_keys
 
 
 # --- reasoning effort -------------------------------------------------------------------------
@@ -407,12 +439,18 @@ def update_kwargs_with_deployment(
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
-    for key in _forwarded_alias_marker_keys_the_deployment_sets(
-        deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+    defaults: Final = shaping.default_litellm_params
+    caller_endpoint_keys: Final = _github_copilot_caller_endpoint_keys_to_drop(
+        deployment_params, kwargs, defaults, deployment.get("model_name")
+    )
+    for key in (
+        *_forwarded_alias_marker_keys_the_deployment_sets(
+            deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        ),
+        *caller_endpoint_keys,
     ):
         kwargs.pop(key, None)
     kwargs.pop("daily_reset_time", None)
-    defaults: Final = shaping.default_litellm_params
     merge_tools_from_deployment(deployment_params, kwargs, defaults)
 
     model_info: Mapping[str, object] = as_dict(  # rebind-ok: rebound as the Python router rebinds it

@@ -29,6 +29,10 @@ GITHUB_HOST: Final = "github.com"
 GITHUB_API_HOST: Final = "api.github.com"
 COPILOT_API_HOST: Final = "api.githubcopilot.com"
 AUTH_HOSTS: Final = (CHATGPT_AUTH_HOST, GITHUB_HOST, GITHUB_API_HOST)
+GHE_HOST: Final = "octo.ghe.com"
+GHE_API_HOST: Final = "api.octo.ghe.com"
+GHE_COPILOT_HOST: Final = "copilot-api.octo.ghe.com"
+TUNNELED_HOSTS: Final = (*AUTH_HOSTS, GHE_HOST, GHE_API_HOST, GHE_COPILOT_HOST, COPILOT_API_HOST)
 CHATGPT_ACCOUNT: Final = "acct-device-login"
 _FAR_FUTURE: Final = 4102444800
 _LONG_AGO: Final = 946684800
@@ -78,8 +82,9 @@ COPILOT_REJECTED_ACCESS: Final = "device-login-github-access-rejected"
 COPILOT_FIRST_LOGIN_ACCESS: Final = "device-login-github-access-first-login"
 COPILOT_UNSAVED_KEY_ACCESS: Final = "device-login-github-access-unsaved-key"
 COPILOT_STORED_KEY: Final = "tid=device-login;stored"
-COPILOT_MINTED_KEY: Final = "tid=device-login;minted"
 COPILOT_REJECTED_KEY: Final = "tid=device-login;rejected"
+GHE_ACCESS: Final = "device-login-ghe-access"
+GHE_LOGIN: Final = "octo-user"
 CONTROL_KEY: Final = "device-login-control-key"
 ACCEPTED_BEARERS: Final = frozenset(
     {
@@ -89,8 +94,6 @@ ACCEPTED_BEARERS: Final = frozenset(
         COPILOT_ACCESS,
         COPILOT_FIRST_LOGIN_ACCESS,
         COPILOT_UNSAVED_KEY_ACCESS,
-        COPILOT_STORED_KEY,
-        COPILOT_MINTED_KEY,
         CONTROL_KEY,
     }
 )
@@ -145,26 +148,19 @@ def _oauth_token(request: Request, grant: threading.Event) -> Reply:
     return _json(400, {"error": "invalid_grant", "error_description": "refresh token was revoked"})
 
 
-def _copilot_api_key(request: Request, api_url: str) -> Reply:
-    if request.headers.get("authorization") not in (
-        f"token {COPILOT_ACCESS}",
-        f"token {COPILOT_FIRST_LOGIN_ACCESS}",
-        f"token {COPILOT_UNSAVED_KEY_ACCESS}",
-    ):
-        return _json(401, {"message": "Bad credentials"})
-    return _json(
-        200,
-        {"token": COPILOT_MINTED_KEY, "expires_at": int(time.time()) + 1800, "endpoints": {"api": api_url}},
-    )
-
-
 def _switched_off() -> Reply:
     return _json(503, {"error": "device login is switched off in this scenario"})
 
 
-def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Reply]:
+def _ghe_token(request: Request) -> str:
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    return token if scheme in ("token", "Bearer") else ""
+
+
+def _auth_hosts(grant: threading.Event, vendor: rv.ResponsesVendor) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        match (request.headers.get("host", ""), request.method, urlsplit(request.target).path):
+        host: Final = request.headers.get("host", "")
+        match (host, request.method, urlsplit(request.target).path):
             case ("auth.openai.com", "POST", "/oauth/token"):
                 return _oauth_token(request, grant)
             case ("auth.openai.com", "POST", "/api/accounts/deviceauth/usercode") if grant.is_set():
@@ -191,12 +187,31 @@ def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Rep
                 )
             case ("github.com", "POST", "/login/oauth/access_token") if grant.is_set():
                 return _json(200, {"access_token": COPILOT_FIRST_LOGIN_ACCESS, "token_type": "bearer"})
-            case ("api.github.com", "GET", "/copilot_internal/v2/token"):
-                return _copilot_api_key(request, api_url)
             case ("api.github.com", "GET", "/copilot_internal/user"):
                 if request.headers.get("authorization") == f"token {COPILOT_REJECTED_ACCESS}":
                     return _json(401, {"message": "Bad credentials"})
                 return _json(200, {"endpoints": {"api": f"https://{COPILOT_API_HOST}"}})
+            case ("octo.ghe.com", "POST", "/login/device/code") if grant.is_set():
+                return _json(
+                    200,
+                    {
+                        "device_code": _GITHUB_DEVICE_CODE,
+                        "user_code": COPILOT_USER_CODE,
+                        "verification_uri": f"https://{GHE_HOST}/login/device",
+                        "expires_in": 900,
+                        "interval": 5,
+                    },
+                )
+            case ("octo.ghe.com", "POST", "/login/oauth/access_token") if grant.is_set():
+                return _json(200, {"access_token": GHE_ACCESS, "token_type": "bearer"})
+            case _ if host in (GHE_API_HOST, GHE_COPILOT_HOST) and _ghe_token(request) != GHE_ACCESS:
+                return _json(401, {"message": "Bad credentials"})
+            case ("api.octo.ghe.com", "GET", "/copilot_internal/user"):
+                return _json(200, {"endpoints": {"api": f"https://{GHE_COPILOT_HOST}"}})
+            case ("api.octo.ghe.com", "GET", "/user"):
+                return _json(200, {"login": GHE_LOGIN})
+            case ("copilot-api.octo.ghe.com", _, _):
+                return vendor.respond(request)
             case _:
                 return _switched_off()
 
@@ -344,10 +359,10 @@ def _tunnel(
                 return
             authority: Final = request_line[1]
             host: Final = authority.rsplit(":", 1)[0]
-            if host not in (*AUTH_HOSTS, COPILOT_API_HOST):
+            if host not in TUNNELED_HOSTS:
                 self.wfile.write(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
                 return
-            is_auth: Final = host in AUTH_HOSTS
+            is_auth: Final = host != COPILOT_API_HOST
             if is_auth:
                 authorities.put(authority)
             if is_auth and switches.refuse_connect.is_set():
@@ -381,15 +396,16 @@ def _tunnel(
 
 @contextmanager
 def device_login_peers(directory: Path, provider: Callable[[Request], Reply] | None = None) -> Generator[Peers]:
-    cert, key = write_self_signed_cert(directory, (*AUTH_HOSTS, COPILOT_API_HOST))
+    cert, key = write_self_signed_cert(directory, TUNNELED_HOSTS)
     switches: Final = Switches(threading.Event(), threading.Event(), threading.Event(), threading.Event())
     authorities: Final[SimpleQueue[str]] = SimpleQueue()
     hangups: Final[SimpleQueue[Hangup]] = SimpleQueue()
-    respond: Final = provider if provider is not None else _provider_api(rv.ResponsesVendor())
+    vendor: Final = rv.ResponsesVendor()
+    respond: Final = provider if provider is not None else _provider_api(vendor)
     with (
         wire_server(respond) as api,
         wire_server(respond, tls=server_context(cert, key)) as copilot_api,
-        wire_server(_auth_hosts(api.url, switches.grant), tls=server_context(cert, key)) as auth,
+        wire_server(_auth_hosts(switches.grant, vendor), tls=server_context(cert, key)) as auth,
         _tunnel(auth, copilot_api, switches, authorities, hangups) as tunnel,
     ):
         yield Peers(_ProviderAPI(api, copilot_api), auth, tunnel, cert, authorities, hangups, switches)

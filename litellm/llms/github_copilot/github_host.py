@@ -5,12 +5,10 @@ from typing import Final
 
 from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 
-from .authenticator import (
-    DEFAULT_GITHUB_ACCESS_TOKEN_URL,
-    DEFAULT_GITHUB_CLIENT_ID,
-    DEFAULT_GITHUB_COPILOT_USER_URL,
-    DEFAULT_GITHUB_DEVICE_CODE_URL,
-)
+DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
+DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
+DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
+DEFAULT_GITHUB_COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
 
 _GHE_SUBDOMAIN_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
@@ -26,6 +24,12 @@ class GithubHostEndpoints:
     copilot_api_hosts: frozenset[str]
     copilot_api_host_suffix: str | None
     default_copilot_api_base: str
+    configured_copilot_api_base: str | None
+
+    def is_copilot_api_host(self, hostname: str) -> bool:
+        return hostname in self.copilot_api_hosts or (
+            self.copilot_api_host_suffix is not None and hostname.endswith(self.copilot_api_host_suffix)
+        )
 
 
 def normalized_github_host(raw: object) -> str | None:
@@ -60,6 +64,7 @@ def github_host_endpoints(host: str) -> GithubHostEndpoints:
             copilot_api_hosts=frozenset({"githubcopilot.com"}),
             copilot_api_host_suffix=".githubcopilot.com",
             default_copilot_api_base="https://api.githubcopilot.com",
+            configured_copilot_api_base=os.getenv("GITHUB_COPILOT_API_BASE"),
         )
 
     subdomain: Final = normalized.removesuffix(".ghe.com")
@@ -75,4 +80,5 @@ def github_host_endpoints(host: str) -> GithubHostEndpoints:
         copilot_api_hosts=frozenset({copilot_api_host}),
         copilot_api_host_suffix=None,
         default_copilot_api_base=f"https://{copilot_api_host}",
+        configured_copilot_api_base=None,
     )

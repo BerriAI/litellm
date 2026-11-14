@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from functools import reduce
 from types import SimpleNamespace
 from typing import Final, Protocol
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -20,7 +20,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
-from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
 from litellm.models.credentials import (
     CreateCredentialItem,
     CredentialSource,
@@ -1825,12 +1824,6 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
         redis_cache.async_get_cache = AsyncMock(side_effect=get_cache)
         monkeypatch.setattr(proxy_server, "user_api_key_cache", shared_cache(connection=redis_cache)[0])
 
-        session_key: Final = _session_cache_key("user-a", "copilot", "github.com")
-        _SESSION_CACHE.set_cache(
-            session_key,
-            ("gho_secret", "copilot-token", "https://api.githubcopilot.com", 4102444800),
-            ttl=3600,
-        )
         response = _patch_credential(
             "copilot",
             {
@@ -1841,15 +1834,9 @@ def test_update_credential_purges_connections_when_github_host_changes(monkeypat
         )
 
     assert response.status_code == 200, response.text
-    table.find_many.assert_has_awaits(
-        [
-            call(where={"credential_name": "copilot"}),
-            call(where={"credential_name": "copilot"}),
-        ]
-    )
+    table.find_many.assert_awaited_once_with(where={"credential_name": "copilot"})
     table.delete_many.assert_awaited_once_with(where={"credential_name": "copilot"})
     assert cached_values[upc._cache_key("user-a", "copilot")] == upc._NOT_CONNECTED
-    assert _SESSION_CACHE.get_cache(session_key) is None
 
 
 def test_update_credential_does_not_purge_connections_for_case_only_host_change(restore_credential_list):
@@ -1865,12 +1852,6 @@ def test_update_credential_does_not_purge_connections_for_case_only_host_change(
         proxy_server.prisma_client.db.litellm_userprovidercredentials = table
         proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
 
-        session_key: Final = _session_cache_key("user-a", "copilot", "octo.ghe.com")
-        _SESSION_CACHE.set_cache(
-            session_key,
-            ("gho_secret", "copilot-token", "https://copilot-api.octo.ghe.com", 4102444800),
-            ttl=3600,
-        )
         response = _patch_credential(
             "copilot",
             {
@@ -1883,8 +1864,6 @@ def test_update_credential_does_not_purge_connections_for_case_only_host_change(
     assert response.status_code == 200, response.text
     table.find_many.assert_not_awaited()
     table.delete_many.assert_not_awaited()
-    assert _SESSION_CACHE.get_cache(session_key) is not None
-    _SESSION_CACHE.delete_cache(session_key)
 
 
 def test_update_credential_does_not_purge_connections_for_legacy_host_case_difference(restore_credential_list):
@@ -1900,12 +1879,6 @@ def test_update_credential_does_not_purge_connections_for_legacy_host_case_diffe
         proxy_server.prisma_client.db.litellm_userprovidercredentials = table
         proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
 
-        session_key: Final = _session_cache_key("user-a", "copilot", "octo.ghe.com")
-        _SESSION_CACHE.set_cache(
-            session_key,
-            ("gho_secret", "copilot-token", "https://copilot-api.octo.ghe.com", 4102444800),
-            ttl=3600,
-        )
         response = _patch_credential(
             "copilot",
             {
@@ -1918,8 +1891,6 @@ def test_update_credential_does_not_purge_connections_for_legacy_host_case_diffe
     assert response.status_code == 200, response.text
     table.find_many.assert_not_awaited()
     table.delete_many.assert_not_awaited()
-    assert _SESSION_CACHE.get_cache(session_key) is not None
-    _SESSION_CACHE.delete_cache(session_key)
 
 
 def test_update_credential_purges_connections_when_github_host_is_deleted(restore_credential_list):
@@ -2076,18 +2047,18 @@ def test_update_credential_still_accepts_a_body_without_credential_values(creden
 
 from contextlib import contextmanager as _ctx
 
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from tests.unit.redis.stores.auth_cache_double import shared_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-_COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
-_COPILOT_API_BASE = "https://api.githubcopilot.com"
-_COPILOT_MODELS_URL = f"{_COPILOT_API_BASE}/models"
-_COPILOT_USER_RESPONSE = {"endpoints": {"api": _COPILOT_API_BASE}}
+_COPILOT_MODELS_URL: Final = f"{DEFAULT_GITHUB_COPILOT_API_BASE}/models"
 _GITHUB_USER_URL = "https://api.github.com/user"
+_COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
+_DEFAULT_PLAN: Final = {"endpoints": {"api": DEFAULT_GITHUB_COPILOT_API_BASE}}
 
 
 def _as_user(user_id="user-a"):
@@ -2135,6 +2106,7 @@ def _connection_row(
 @pytest.fixture(autouse=True)
 def _connection_master_key(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
 
 
 @_ctx
@@ -2152,6 +2124,15 @@ def _github_http(mapping):
     client = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
     with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client):
         yield
+
+
+def _copilot_models_response(github_token):
+    def respond(request):
+        assert request.method == "GET"
+        assert request.headers["Authorization"] == f"Bearer {github_token}"
+        return {"data": []}
+
+    return respond
 
 
 _DEVICE_FLOW_START = {
@@ -2256,14 +2237,28 @@ def test_user_connection_poll_rejects_an_undecryptable_flow_handle(monkeypatch):
     assert response.status_code == 400
 
 
-def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
-    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+@pytest.mark.parametrize(
+    ("api_base", "plan_lookup", "seat_check_base"),
+    [
+        (None, {_COPILOT_USER_URL: _DEFAULT_PLAN}, DEFAULT_GITHUB_COPILOT_API_BASE),
+        (
+            None,
+            {_COPILOT_USER_URL: {"endpoints": {"api": "https://api.business.githubcopilot.com"}}},
+            "https://api.business.githubcopilot.com",
+        ),
+        ("https://copilot.test/gateway/", {}, "https://copilot.test/gateway"),
+    ],
+)
+def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch, api_base, plan_lookup, seat_check_base):
+    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    if api_base is not None:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", api_base)
     with _github_http(
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
-            _COPILOT_MODELS_URL: {},
+            **plan_lookup,
+            f"{seat_check_base}/models": _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -2282,11 +2277,10 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     assert poll.status_code == 200, poll.text
     assert poll.json() == {"status": "connected", "interval": None, "github_login": "octo"}
     table.upsert.assert_awaited_once()
-    stored_connection: Final = upc.decode_user_provider_credential(
-        table.upsert.await_args.kwargs["data"]["create"]["credential_b64"]
-    )
-    assert stored_connection is not None
-    assert stored_connection.github_host == "github.com"
+    written = table.upsert.await_args.kwargs["data"]
+    for operation in ("create", "update"):
+        stored_connection = upc.decode_user_provider_credential(written[operation]["credential_b64"])
+        assert stored_connection == upc.GithubCopilotUserConnectionPayload(access_token="gho_1", github_login="octo")
 
 
 def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatch):
@@ -2294,18 +2288,18 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
 
     table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
 
-    def change_host_after_access_token(request: httpx.Request) -> dict[str, str]:
+    def change_host_after_device_flow(request: httpx.Request) -> dict[str, str]:
         monkeypatch.setattr(litellm, "credential_list", [_per_user_credential()])
         return {"access_token": "gho_1"}
 
     with _github_http(
         {
             "https://octo.ghe.com/login/device/code": _DEVICE_FLOW_START,
-            "https://octo.ghe.com/login/oauth/access_token": change_host_after_access_token,
+            "https://octo.ghe.com/login/oauth/access_token": change_host_after_device_flow,
             "https://api.octo.ghe.com/copilot_internal/user": {
                 "endpoints": {"api": "https://copilot-api.octo.ghe.com"}
             },
-            "https://copilot-api.octo.ghe.com/models": {},
+            "https://copilot-api.octo.ghe.com/models": _copilot_models_response("gho_1"),
             "https://api.octo.ghe.com/user": {"login": "octo"},
         }
     ):
@@ -2335,7 +2329,7 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
         },
     }
     module_level_client: Final = MagicMock()
-    module_level_client.get.side_effect = AssertionError("unexpected GitHub user lookup")
+    module_level_client.get.side_effect = AssertionError("unexpected GitHub request")
     with _github_http({}), patch.object(litellm, "module_level_client", module_level_client):
         with pytest.raises(litellm.CallerCredentialAuthenticationError) as exc:
             attach_github_copilot_user_session(kwargs)
@@ -2343,7 +2337,7 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
     assert stored_connection.github_host == "octo.ghe.com"
 
 
-def test_ghe_user_connection_uses_tenant_urls_for_device_flow_and_user_lookup(monkeypatch):
+def test_ghe_user_connection_uses_tenant_urls_for_device_flow_seat_check_and_login(monkeypatch):
     table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
     with _github_http(
         {
@@ -2352,7 +2346,7 @@ def test_ghe_user_connection_uses_tenant_urls_for_device_flow_and_user_lookup(mo
             "https://api.octo.ghe.com/copilot_internal/user": {
                 "endpoints": {"api": "https://copilot-api.octo.ghe.com"}
             },
-            "https://copilot-api.octo.ghe.com/models": {},
+            "https://copilot-api.octo.ghe.com/models": _copilot_models_response("gho_1"),
             "https://api.octo.ghe.com/user": {"login": "octo"},
         }
     ):
@@ -2475,7 +2469,7 @@ def test_user_connections_isolated_per_user(monkeypatch):
     table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
 
 
-@pytest.mark.parametrize("seat_status", [403, 404])
+@pytest.mark.parametrize("seat_status", [401, 403, 404])
 def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
     """A GitHub seat check that rejects the user's token maps to no_copilot_seat, stores
     nothing, and clears the in-flight device code."""
@@ -2488,8 +2482,10 @@ def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_seat"}, request=request)
         if url == _COPILOT_USER_URL:
-            return httpx.Response(200, json=_COPILOT_USER_RESPONSE, request=request)
+            return httpx.Response(200, json=_DEFAULT_PLAN, request=request)
         if url == _COPILOT_MODELS_URL:
+            assert request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer gho_seat"
             return httpx.Response(seat_status, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -2518,6 +2514,10 @@ def test_user_connection_poll_rate_limit_returns_429(monkeypatch):
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_limited"}, request=request)
         if url == _COPILOT_USER_URL:
+            return httpx.Response(200, json=_DEFAULT_PLAN, request=request)
+        if url == _COPILOT_MODELS_URL:
+            assert request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer gho_limited"
             return httpx.Response(429, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -2747,23 +2747,6 @@ def test_pending_device_flow_survives_disconnect_via_stateless_handle(monkeypatc
     assert delete.json() == {"status": "disconnected"}
 
 
-def test_delete_user_connection_evicts_copilot_session(monkeypatch):
-    table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
-    session_key: Final = _session_cache_key("user-a", "copilot-cred", "github.com")
-    _SESSION_CACHE.set_cache(
-        session_key,
-        ("gho_secret", "copilot-token", "https://api.githubcopilot.com", 4102444800),
-        ttl=3600,
-    )
-
-    response: Final = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
-
-    assert response.status_code == 200, response.text
-    assert response.json() == {"status": "disconnected"}
-    assert _SESSION_CACHE.get_cache(session_key) is None
-    table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
-
-
 def test_user_connection_cache_keys_cannot_collide_on_colons():
     """user_id/credential_name are joined losslessly, so ('a:b','c') and ('a','b:c')
     can never share a cache or device-flow entry."""
@@ -2893,8 +2876,8 @@ def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch)
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
-            _COPILOT_MODELS_URL: {},
+            _COPILOT_USER_URL: _DEFAULT_PLAN,
+            _COPILOT_MODELS_URL: _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -2977,8 +2960,8 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
-            _COPILOT_MODELS_URL: {},
+            _COPILOT_USER_URL: _DEFAULT_PLAN,
+            _COPILOT_MODELS_URL: _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):

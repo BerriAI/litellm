@@ -3027,7 +3027,8 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "access-token").write_text("gho_test")
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://api.githubcopilot.com")
+    (tmp_path / "access-token").write_text("token")
     litellm.register_model(
         {
             **{

@@ -2295,9 +2295,9 @@ def client(original_function):
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs, call_type)
-            from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
+            from litellm.llms.github_copilot.per_user_auth import prepare_github_copilot_request
 
-            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            prepare_github_copilot_request(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -2576,9 +2576,9 @@ def client(original_function):
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             kwargs.update(await acredential_updates(kwargs, call_type))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is the untyped request dict
-            from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
+            from litellm.llms.github_copilot.per_user_auth import aprepare_github_copilot_request
 
-            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            await aprepare_github_copilot_request(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
