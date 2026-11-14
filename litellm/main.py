@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -142,6 +142,7 @@ from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
+    MockResponseIterator,
     convert_model_response_to_streaming,
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
@@ -1445,6 +1446,35 @@ def _completion_fakes_stream(
     return provider_config is not None and provider_config.should_fake_stream(
         model=model, stream=True, custom_llm_provider=custom_llm_provider
     )
+
+
+def _replayed_stream(
+    response: ModelResponse, logging_obj: LiteLLMLoggingObj, stream_options: Mapping[str, object] | None
+) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=response),
+        model=response.model,
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+    )
+
+
+async def _replayed_when_done(
+    pending: Awaitable[ModelResponse | CustomStreamWrapper], replay: Callable[[ModelResponse], CustomStreamWrapper]
+) -> ModelResponse | CustomStreamWrapper:
+    done: Final = await pending
+    return replay(done) if isinstance(done, ModelResponse) else done
+
+
+def _replayed_as_stream(
+    dispatched: Awaitable[ModelResponse | CustomStreamWrapper] | ModelResponse | CustomStreamWrapper,
+    replay: Callable[[ModelResponse], CustomStreamWrapper] | None,
+) -> Awaitable[ModelResponse | CustomStreamWrapper] | ModelResponse | CustomStreamWrapper:
+    if replay is None or isinstance(dispatched, CustomStreamWrapper):
+        return dispatched
+    if isinstance(dispatched, ModelResponse):
+        return replay(dispatched)
+    return _replayed_when_done(dispatched, replay)
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -5713,6 +5743,8 @@ def completion(
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
+    replays_stream: Final = stream is True and control_options.fake_stream is True
+    dispatch_stream: Final = False if replays_stream else stream
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -6104,8 +6136,8 @@ def completion(
             "temperature": temperature,
             "top_p": top_p,
             "n": n,
-            "stream": stream,
-            "stream_options": stream_options,
+            "stream": dispatch_stream,
+            "stream_options": None if replays_stream else stream_options,
             "stop": stop,
             "max_tokens": max_tokens,
             "max_completion_tokens": max_completion_tokens,
@@ -6414,6 +6446,9 @@ def completion(
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
+        replay_as_stream: Final = (
+            partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
+        )
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
@@ -6431,7 +6466,7 @@ def completion(
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
-            return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+            bridged: Final = responses_api_bridge.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -6446,8 +6481,11 @@ def completion(
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
-                stream=stream,
+                stream=dispatch_stream,
                 cache=kwargs.get("cache"),
+            )
+            return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                bridged, replay_as_stream
             )
 
         reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
@@ -6487,7 +6525,7 @@ def completion(
                 _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
             ),
             shared_session=shared_session,
-            stream=stream,
+            stream=dispatch_stream,
             temperature=temperature,
             text_completion=text_completion,
             timeout=timeout,
@@ -6715,7 +6753,9 @@ def completion(
 
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
-        return response
+        return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # a dispatch returns a coroutine on the acompletion path; awaited by the async caller
+            response, replay_as_stream
+        )
     except Exception as e:
         reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception

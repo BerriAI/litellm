@@ -987,8 +987,7 @@ def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
         return data
 
 
-def filter_internal_params(data: dict) -> dict:
-    """Drop the MCP handler keys only, since fallback callers send the rest of the kwargs back into acompletion."""
+def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
     return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 

@@ -306,6 +306,10 @@ def _int_from_decimal_string(value: object) -> object:
     return value
 
 
+def _bool_from_true_false_string(value: object) -> object:
+    return value == "true" if value in ("true", "false") else value
+
+
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
 class ControlOptions:
     stream_chunk_size: (
@@ -316,7 +320,7 @@ class ControlOptions:
         ]
         | None
     ) = None
-    fake_stream: bool | None = None
+    fake_stream: Annotated[bool, BeforeValidator(_bool_from_true_false_string), Field(strict=True)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
