@@ -21,6 +21,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash, get_request_stash
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
@@ -59,10 +60,22 @@ def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
     return passthrough_payload is not None and passthrough_payload.get("request_method") == "WEBSOCKET"
 
 
+def _holds_admitted_slot() -> bool:
+    stash: Final = get_request_stash()
+    return stash is not None and stash.v1_parallel_slot_held
+
+
 def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
+    """A websocket turn callback releases nothing, the socket's slot is released once at disconnect. Within a request
+    whose admission is on the stash, only the first callback to run releases the slot ``async_pre_call_hook`` took."""
     if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
         return 0
+    stash: Final = get_request_stash()
+    if stash is None:
+        return 1
+    if not stash.v1_parallel_slot_held:
+        return 0
+    stash.v1_parallel_slot_held = False
     return 1
 
 
@@ -517,6 +530,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # don't block execution for cache updates
         )
+        get_or_create_request_stash().v1_parallel_slot_held = True
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
@@ -725,7 +739,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
-            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
             user_api_key: Final = _metadata.get("user_api_key", None)
             self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
@@ -739,6 +752,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
+                released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
 
                 if global_max_parallel_requests is not None:
                     # get value from cache
@@ -792,7 +806,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot ``async_pre_call_hook`` took for a connection whose per-turn callbacks released none."""
+        """Release the slot ``async_pre_call_hook`` took for a request that ended without a callback releasing it."""
+        if not _holds_admitted_slot():
+            return
         from litellm.proxy.proxy_server import (
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # module-level settings dict is untyped
         )

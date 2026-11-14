@@ -5572,25 +5572,30 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
-        Release an ended request's v3 concurrency acquisition independently of logging.
+        Release a completed request's v3 concurrency acquisition independently of logging.
         The request stash serializes release with callbacks and clears the acquisition,
-        so repeated cleanup cannot release another request's slot.
+        so repeated cleanup cannot release another request's slot. The legacy limiter's
+        slot is settled by its own success callback.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-    arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
-    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
-
-    async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
-        the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
+    async def arelease_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """
+        Release the slot of a request that ended without a callback firing, a client
+        hanging up before the first chunk or a Responses WebSocket closing. Both limiters
+        record their admission on the request stash and settle it once, so a refused
+        request or a repeated cleanup releases nothing.
+        """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, (PROXY_MaxParallelRequestsHandler_v3, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+    arelease_responses_websocket_slot = arelease_max_parallel_requests_on_disconnect
 
     async def enforce_mcp_server_rate_limits(
         self,
