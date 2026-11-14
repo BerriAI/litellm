@@ -392,6 +392,79 @@ async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
     )
 
 
+@pytest.mark.parametrize(
+    "background_kwargs",
+    [{"background": True}, {"extra_body": {"background": True}}, {"background": "true"}, {"background": 0}],
+    ids=["top-level", "extra-body", "truthy-string", "falsy-int"],
+)
+@_BRIDGED_PROVIDERS
+def test_bridged_chat_rejects_background_before_any_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    request: Final = {**_bridged_request(model, provider_kwargs, stream=False), **background_kwargs}
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_searched_responses_body(model))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(**request)
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "background_kwargs"),
+    [
+        (False, {"background": True, "drop_params": True}),
+        (False, {"extra_body": {"background": True}, "drop_params": True}),
+        (False, {"background": True, "additional_drop_params": ["background"]}),
+        (False, {"extra_body": {"background": True}, "additional_drop_params": ["background"]}),
+        (True, {"background": True}),
+        (False, {"background": False}),
+        (False, {"extra_body": {"background": False}}),
+    ],
+    ids=[
+        "drop-params",
+        "drop-params-extra-body",
+        "additional-drop-params",
+        "additional-drop-params-extra-body",
+        "global-drop-params",
+        "false",
+        "false-extra-body",
+    ],
+)
+@_BRIDGED_PROVIDERS
+def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: bool,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    request: Final = {**_bridged_request(model, provider_kwargs, stream=False), **background_kwargs}
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_searched_responses_body(model))
+        )
+        response: Final = litellm.completion(**request)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
 def _json_message(item_id: str, document: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "type": "message",
