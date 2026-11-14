@@ -5,6 +5,7 @@ Test OpenAI Moderation Guardrail
 
 import json
 import os
+from pathlib import Path
 from typing import Final
 
 
@@ -12,13 +13,22 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+from litellm.proxy.guardrails.guardrail_hooks.openai import (
+    initialize_guardrail as initialize_openai_moderation_guardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER, InMemoryGuardrailHandler
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.guardrails import Guardrail, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.llms.openai import OpenAIModerationResponse, OpenAIModerationResult
 
 
@@ -1089,3 +1099,153 @@ async def test_openai_moderation_responses_api_input_field():
             input_type="request",
         )
     assert "Violated OpenAI moderation policy" in str(chat_error.value)
+
+
+class _ModerationsEndpointThatRecordsTheAuthorization:
+    authorization: str | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.authorization = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "id": "modr-federated",
+                "model": "omni-moderation-latest",
+                "results": [
+                    {"flagged": False, "categories": {}, "category_scores": {}, "category_applied_input_types": {}}
+                ],
+            },
+        )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_moderation_sends_the_federated_bearer_when_only_workload_identity_is_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token")
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_guardrail")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-guardrail")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    _workload_identity_auth.cache_clear()
+    respx.post("https://auth.openai.com/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "guardrail-bearer", "expires_in": 3600})
+    )
+    endpoint: Final = _ModerationsEndpointThatRecordsTheAuthorization()
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(endpoint))
+
+    guardrail: Final = OpenAIModerationGuardrail(guardrail_name="openai-mod")
+    guardrail.async_handler = http_client
+    response: Final = await guardrail.async_make_request("hello")
+
+    assert response.id == "modr-federated"
+    assert endpoint.authorization == "Bearer guardrail-bearer"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_moderation_federates_with_the_identity_in_its_own_guardrail_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token")
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    monkeypatch.setenv("GUARDRAIL_IDENTITY_PROVIDER_ID", "idp_guardrail_config")
+    _workload_identity_auth.cache_clear()
+    exchange: Final = respx.post("https://auth.openai.com/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "guardrail-config-bearer", "expires_in": 3600})
+    )
+    endpoint: Final = _ModerationsEndpointThatRecordsTheAuthorization()
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(endpoint))
+
+    guardrail_config: Final = LitellmParams(
+        guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+        mode="pre_call",
+        openai_identity_provider_id="os.environ/GUARDRAIL_IDENTITY_PROVIDER_ID",
+        openai_service_account_id="user-guardrail-config",
+        openai_identity_token_file=str(token_file),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [])
+    guardrail: Final = initialize_openai_moderation_guardrail(
+        litellm_params=guardrail_config,
+        guardrail=Guardrail(guardrail_name="openai-mod", litellm_params=guardrail_config),
+    )
+    guardrail.async_handler = http_client
+    await guardrail.async_make_request("hello")
+
+    exchange_body: Final = json.loads(exchange.calls.last.request.content)
+    assert exchange_body["identity_provider_id"] == "idp_guardrail_config"
+    assert exchange_body["service_account_id"] == "user-guardrail-config"
+    assert endpoint.authorization == "Bearer guardrail-config-bearer"
+
+
+@pytest.fixture
+def no_ambient_openai_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+
+PARTIAL_IDENTITY_MODERATION: Final = {
+    "guardrail": SupportedGuardrailIntegrations.OPENAI_MODERATION.value,
+    "mode": "pre_call",
+    "openai_identity_provider_id": "idp_without_the_rest",
+}
+
+
+@pytest.mark.usefixtures("no_ambient_openai_credentials")
+def test_openai_moderation_with_a_partial_identity_is_a_configuration_error_naming_the_gap() -> None:
+    with pytest.raises(ValueError, match="openai_service_account_id, openai_identity_token_file"):
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={"guardrail_name": "partial-identity-mod", "litellm_params": PARTIAL_IDENTITY_MODERATION},
+            source="db",
+        )
+
+
+@pytest.mark.usefixtures("no_ambient_openai_credentials")
+def test_proxy_boot_skips_an_openai_moderation_with_a_partial_identity() -> None:
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {"guardrail_name": "partial-identity-mod", "litellm_params": PARTIAL_IDENTITY_MODERATION},
+            {
+                "guardrail_name": "keyed-mod",
+                "litellm_params": {
+                    "guardrail": SupportedGuardrailIntegrations.OPENAI_MODERATION.value,
+                    "mode": "pre_call",
+                    "api_key": "sk-moderation",
+                },
+            },
+        ]
+    )
+
+    booted: Final = IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    assert {guardrail["guardrail_name"] for guardrail in booted} == {"keyed-mod"}

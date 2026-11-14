@@ -1,9 +1,16 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
+)
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    is_vertex_labels_header,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -15,6 +22,18 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+
+def _labels_header_replacement(
+    request_headers: Mapping[str, str], litellm_params: Mapping[str, object]
+) -> tuple[tuple[str, ...], str | None]:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return (), None
+    return (
+        tuple(filter(is_vertex_labels_header, request_headers)),
+        vertex_partner_labels_header(allowed_fields, None, request_headers, litellm_params),
+    )
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -118,7 +137,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
 
-        return headers, api_base
+        replaced_headers, labels_header = _labels_header_replacement(headers, litellm_params)
+        kept_headers: Final = {name: value for name, value in headers.items() if name not in replaced_headers}
+        labelled_headers: Final = (
+            kept_headers if labels_header is None else {**kept_headers, VERTEX_LABELS_HEADER: labels_header}
+        )
+        return labelled_headers, api_base
 
     def get_complete_url(
         self,

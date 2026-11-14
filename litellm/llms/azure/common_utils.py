@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
@@ -25,6 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_FOUNDRY_PROJECT_V1_BASE_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/?$")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -99,6 +101,10 @@ def _cached_entra_id_token_provider(
 @lru_cache(maxsize=128)
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
+
+
+def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
+    return _cached_azure_ad_token_refresh_provider(scope)
 
 
 def get_azure_ad_token_from_entra_id(
@@ -575,9 +581,15 @@ class BaseAzureLLM(BaseOpenAILLM):
 
                 v1_api_key = _async_v1_api_key
 
+            v1_base: Final = httpx.URL(api_base or "")
+            v1_trimmed: Final = str(v1_base.copy_with(query=None)).rstrip("/")
+            v1_root: Final = (
+                v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
+            )
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{api_base}/openai/v1/",
+                "base_url": f"{v1_root}/",
+                "default_query": dict(v1_base.params.remove("api-version")),
             }
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
@@ -799,6 +811,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod
+    def resolve_azure_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
+    @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
         litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
@@ -815,7 +831,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
         """
 
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        api_base = BaseAzureLLM.resolve_azure_api_base(api_base)
         if api_base is None:
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
@@ -891,6 +907,24 @@ class BaseAzureLLM(BaseOpenAILLM):
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
+
+    @staticmethod
+    def is_foundry_project_v1_base(api_base: str | None) -> bool:
+        return api_base is not None and _FOUNDRY_PROJECT_V1_BASE_PATH.search(httpx.URL(api_base).path) is not None
+
+    @staticmethod
+    def is_api_version_opt_out(api_version: str | None) -> bool:
+        return api_version is not None and api_version.lower() == "none"
+
+    @classmethod
+    def opt_out_client_api_version(cls, api_version: str | None) -> str | None:
+        return "v1" if cls.is_api_version_opt_out(api_version) else api_version
+
+    @classmethod
+    def chat_client_api_version(cls, api_base: str | None, api_version: str | None) -> str | None:
+        if cls.is_foundry_project_v1_base(api_base):
+            return "v1"
+        return cls.opt_out_client_api_version(api_version)
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str

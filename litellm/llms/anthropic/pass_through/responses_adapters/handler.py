@@ -14,9 +14,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
-from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -31,7 +32,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
-from ..adapters.handler import request_safeguards_evaluator
+from ..adapters.handler import (
+    messages_without_rejected_reasoning,
+    request_safeguards_evaluator,
+    resent_without_rejected_reasoning,
+)
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -53,6 +58,33 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
+
+
+def _requests_background(forwarded_kwargs: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    return any(
+        value is not None and value is not False
+        for value in (forwarded_kwargs.get("background"), extra_body.get("background"))
+    )
+
+
+def _without_background(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in extra_body.items() if key != "background"}
+
+
+def _reject_background_mode(model: str, forwarded_kwargs: Mapping[str, object]) -> None:
+    if not _requests_background(forwarded_kwargs) or drop_policy(forwarded_kwargs).drops("background"):
+        return
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    raise litellm.UnsupportedParamsError(
+        model=model,
+        llm_provider=provider if isinstance(provider, str) else None,
+        message=(
+            f"/v1/messages does not support parameters: ['background'], for model={model}. "
+            "A background run answers with a response id the Anthropic Messages API has no way to retrieve. "
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+    )
 
 
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
@@ -142,6 +174,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    _reject_background_mode(model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
     request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
@@ -222,7 +255,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "mcp_servers"}
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "background", "mcp_servers"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -236,6 +269,8 @@ def _build_responses_kwargs(
                 # Responses API result back to a ModelResponse for the row.
                 setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
+        elif key == "extra_body" and (extra_body := as_str_mapping(value)) is not None:
+            responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
 
@@ -252,6 +287,78 @@ def _build_responses_kwargs(
         ]
 
     return responses_kwargs
+
+
+_ResponsesKwargsFor: TypeAlias = Callable[[AnthropicRequestMessages], Mapping[str, object]]
+_ResponsesResult: TypeAlias = ResponsesAPIResponse | BaseResponsesAPIStreamingIterator
+_SyncResponsesResult: TypeAlias = _ResponsesResult | Coroutine[object, object, _ResponsesResult]
+
+
+def _is_encrypted_reasoning_item(item: object) -> bool:
+    mapping: Final = as_str_mapping(item)
+    return mapping is not None and mapping.get("type") == "reasoning" and bool(mapping.get("encrypted_content"))
+
+
+def _sends_encrypted_reasoning(responses_kwargs: Mapping[str, object]) -> bool:
+    input_items: Final = responses_kwargs.get("input")
+    sent: Final = iter_items(input_items) if input_items is not None else ()
+    return any(map(_is_encrypted_reasoning_item, sent))
+
+
+def _kwarg_text(responses_kwargs: Mapping[str, object], key: str) -> str:
+    value: Final = responses_kwargs.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _messages_without_rejected_reasoning(
+    messages: AnthropicRequestMessages,
+    error: litellm.BadRequestError,
+    responses_kwargs: Mapping[str, object],
+    sent_encrypted_reasoning: bool,
+) -> AnthropicRequestMessages | None:
+    return messages_without_rejected_reasoning(
+        messages,
+        error,
+        sent_encrypted_reasoning=sent_encrypted_reasoning,
+        provider=_kwarg_text(responses_kwargs, "custom_llm_provider"),
+        model=_kwarg_text(responses_kwargs, "model"),
+    )
+
+
+async def _aresponses_without_rejected_reasoning(
+    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
+) -> tuple[Mapping[str, object], _ResponsesResult]:
+    responses_kwargs: Final = responses_kwargs_for(messages)
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
+    try:
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return responses_kwargs, await litellm.aresponses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, responses_kwargs, sent_encrypted_reasoning
+        )
+        if replayed_messages is None:
+            raise
+        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        return replay_kwargs, await litellm.aresponses(**replay_kwargs)
+
+
+def _responses_without_rejected_reasoning(
+    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
+) -> tuple[Mapping[str, object], _SyncResponsesResult]:
+    responses_kwargs: Final = responses_kwargs_for(messages)
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
+    try:
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return responses_kwargs, litellm.responses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, responses_kwargs, sent_encrypted_reasoning
+        )
+        if replayed_messages is None:
+            raise
+        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        return replay_kwargs, litellm.responses(**replay_kwargs)
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
@@ -281,28 +388,30 @@ class LiteLLMMessagesToResponsesAPIHandler:
         output_format: AnthropicOutputSchema | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=model,
-            context_management=context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
-        )
+
+        def responses_kwargs_for(sent_messages: AnthropicRequestMessages) -> Mapping[str, object]:
+            return _build_responses_kwargs(
+                max_tokens=max_tokens,
+                messages=sent_messages,
+                model=model,
+                context_management=context_management,
+                metadata=metadata,
+                output_config=output_config,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                extra_kwargs=kwargs,
+            )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        result: Final = await litellm.aresponses(**responses_kwargs)
+        responses_kwargs, result = await _aresponses_without_rejected_reasoning(messages, responses_kwargs_for)
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
@@ -366,28 +475,28 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 **kwargs,
             )
 
-        # Sync path
-        responses_kwargs: Final = _build_responses_kwargs(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=model,
-            context_management=context_management,
-            metadata=metadata,
-            output_config=output_config,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            output_format=output_format,
-            extra_kwargs=kwargs,
-        )
+        def responses_kwargs_for(sent_messages: AnthropicRequestMessages) -> Mapping[str, object]:
+            return _build_responses_kwargs(
+                max_tokens=max_tokens,
+                messages=sent_messages,
+                model=model,
+                context_management=context_management,
+                metadata=metadata,
+                output_config=output_config,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                extra_kwargs=kwargs,
+            )
 
-        result: Final = litellm.responses(**responses_kwargs)
+        responses_kwargs, result = _responses_without_rejected_reasoning(messages, responses_kwargs_for)
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(

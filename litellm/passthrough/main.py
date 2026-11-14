@@ -437,6 +437,7 @@ def llm_passthrough_route(
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
+    guardrailConfig: object = None,
     **kwargs,
 ) -> (
     httpx.Response
@@ -547,7 +548,7 @@ def llm_passthrough_route(
     _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
-        litellm_params=litellm_params_dict,
+        litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},
         request_data=_request_data,
         api_base=str(updated_url),
         model=model,

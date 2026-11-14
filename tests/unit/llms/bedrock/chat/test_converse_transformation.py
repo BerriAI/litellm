@@ -362,6 +362,43 @@ def test_bedrock_system_prompt_variants_keep_continue_message(
     ]
 
 
+def test_bedrock_tool_result_s3_video_reaches_the_converse_request_as_a_video_block() -> None:
+    clip: Final = "s3://media-bucket/clips/demo.mp4"
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.amazon.nova-2-lite-v1:0",
+        messages=[
+            {"role": "user", "content": "What happens in the clip?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fetch_clip", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "video attached"}, {"type": "file", "file": {"file_id": clip}}],
+            },
+        ],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "fetch_clip", "parameters": {"type": "object", "properties": {}}},
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][-1]["content"][0]["toolResult"]["content"] == [
+        {"text": "video attached"},
+        {"video": {"format": "mp4", "source": {"s3Location": {"uri": clip}}}},
+    ]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_json_schema_description_is_sent_in_request(respx_mock: respx.Router) -> None:
     description: Final = "Find the meaning inside a poem"

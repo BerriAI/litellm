@@ -5717,3 +5717,24 @@ def test_developer_prompt_caching_check_answers_without_a_model_lookup(custom_ll
     assert lookups.called is False
     assert list(checked) == [developer, question]
     assert injected == [developer, question]
+
+
+def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_non_string_keys_alone() -> None:
+    unmarked_part: Final = {"type": "text", "text": "Context", 1: "ignored"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "user",
+            "content": [
+                unmarked_part,
+                {"type": "text", "text": "Stable prefix", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    )  # cast-ok: a chat caller passing a Python dict may use keys JSON cannot carry
+
+    renamed: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+
+    assert renamed["content"] == [
+        unmarked_part,
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
