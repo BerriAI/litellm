@@ -261,6 +261,15 @@ def _foundry_reasoning_effort(
     )
 
 
+def _catalog_reasoning_effort_outcome(
+    requested: object, model: str, *, base_model: str | None, level_check_waived: bool
+) -> _SendReasoningEffort | _LeaveReasoningEffortToModel | _UnsendableReasoningEffort | None:
+    catalog_levels: Final = _catalog_reasoning_efforts(model, base_model)
+    if catalog_levels is None:
+        return None
+    return _foundry_reasoning_effort(requested, None if level_check_waived else catalog_levels)
+
+
 def _reasoning_effort_params(
     non_default_params: dict[str, object],  # mutable-ok: a drop removes the effort from the caller's params
     model: str,
@@ -271,12 +280,13 @@ def _reasoning_effort_params(
 ) -> Mapping[str, str]:
     if _REASONING_EFFORT not in non_default_params:
         return {}
-    catalog_levels: Final = _catalog_reasoning_efforts(model, base_model)
-    if catalog_levels is None:
-        return {}
     requested: Final = non_default_params[_REASONING_EFFORT]
-    outcome: Final = _foundry_reasoning_effort(requested, None if level_check_waived else catalog_levels)
+    outcome: Final = _catalog_reasoning_effort_outcome(
+        requested, model, base_model=base_model, level_check_waived=level_check_waived
+    )
     match outcome:
+        case None:
+            return {}
         case _SendReasoningEffort(level=level, dropped_fields=dropped_fields):
             if dropped_fields:
                 warn_dropped_reasoning(
@@ -367,6 +377,12 @@ class AzureAIStudioConfig(OpenAIConfig):
             ),
             **foundry_effort,
         }
+
+    def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
+        return not azureAIGPT5Config.is_model_gpt_5_model(model) and isinstance(
+            _catalog_reasoning_effort_outcome(reasoning_effort, model, base_model=base_model, level_check_waived=False),
+            _UnsendableReasoningEffort,
+        )
 
     def _supports_stop_reason(self, model: str) -> bool:
         """

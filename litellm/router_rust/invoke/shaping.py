@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
+from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, metadata_defaults_under_request
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
@@ -49,7 +50,8 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Params, validate_litellm_params_strictly
-from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, LlmProviders
+from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.redis.stores.router_usage import RouterUsage
@@ -245,36 +247,63 @@ def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
     return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
+def _resolved_upstream(params: Mapping[str, object], group: str, host: "PythonHost") -> tuple[str, str]:
+    model_label: Final = str(params.get("model") or group)
+    provider_param: Final = params.get("custom_llm_provider")
+    authenticating: Final = declared_authenticating_provider(
+        model_label, provider_param if isinstance(provider_param, str) else None
+    )
+    if authenticating is not None:
+        return model_label.removeprefix(f"{authenticating}/"), authenticating
+    model, custom_llm_provider, _, _ = host.invoke("get_llm_provider")(
+        model=model_label,
+        custom_llm_provider=provider_param,
+        litellm_params=LiteLLM_Params.model_validate(params),
+    )
+    return model, custom_llm_provider
+
+
+def _deployment_base_model(deployment: Mapping[str, object], params: Mapping[str, object]) -> str | None:
+    base_model: Final = as_dict(deployment.get("model_info")).get("base_model") or params.get("base_model")
+    return base_model if isinstance(base_model, str) else None
+
+
 def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
-    model_info: Final = as_dict(deployment.get("model_info"))
-    base_model: Final = model_info.get("base_model") or params.get("base_model")
     try:
-        model_label: Final = str(params.get("model") or group)
-        provider_param: Final = params.get("custom_llm_provider")
-        authenticating: Final = declared_authenticating_provider(
-            model_label, provider_param if isinstance(provider_param, str) else None
-        )
-        if authenticating is not None:
-            model, custom_llm_provider = model_label.removeprefix(f"{authenticating}/"), authenticating
-        else:
-            model, custom_llm_provider, _, _ = host.invoke(  # rebind-ok: rebound as the Python router rebinds it
-                "get_llm_provider"
-            )(
-                model=model_label,
-                custom_llm_provider=provider_param,
-                litellm_params=LiteLLM_Params.model_validate(params),
-            )
+        model, custom_llm_provider = _resolved_upstream(params, group, host)
         supported: Final = host.invoke("get_supported_openai_params")(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            base_model=base_model if isinstance(base_model, str) else None,
+            base_model=_deployment_base_model(deployment, params),
         )
     except Exception:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
         return True
     return supported is None or param in supported
+
+
+def _deployment_refuses_reasoning_effort(
+    deployment: Mapping[str, object], group: str, reasoning_effort: object, host: "PythonHost"
+) -> bool:
+    params: Final = as_dict(deployment.get("litellm_params"))
+    if (
+        not params
+        or "reasoning_effort" in _declared_param_allowlist(params)
+        or deployment_reasoning_effort_levels(deployment.get("model_info"))
+    ):
+        return False
+    try:
+        model, custom_llm_provider = _resolved_upstream(params, group, host)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+    except Exception:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
+        return False
+    return chat_config is not None and chat_config.refuses_reasoning_effort(
+        model, reasoning_effort, base_model=_deployment_base_model(deployment, params)
+    )
 
 
 def deployment_accepts_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
@@ -298,9 +327,12 @@ def drop_unsupported_classifier_reasoning_effort(
     host: "PythonHost",
 ) -> None:
     """``_drop_unsupported_classifier_reasoning_effort``."""
-    if kwargs.get("reasoning_effort") is None or not _is_classifier_internal_call(kwargs):
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    if reasoning_effort is None or not _is_classifier_internal_call(kwargs):
         return
-    if deployment_accepts_param(deployment, model, "reasoning_effort", host):
+    if deployment_accepts_param(deployment, model, "reasoning_effort", host) and not (
+        _deployment_refuses_reasoning_effort(deployment, model, reasoning_effort, host)
+    ):
         return
     kwargs.pop("reasoning_effort", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request")
