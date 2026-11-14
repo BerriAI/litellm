@@ -789,7 +789,10 @@ if MCP_AVAILABLE:
         allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
 
-    def _is_mcp_management_route_allowed(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    def _is_mcp_management_route_allowed(
+        user_api_key_dict: UserAPIKeyAuth,
+        server_id: str | None = None,
+    ) -> bool:
         """True if the key's allowed_routes includes MCP management endpoints.
 
         Inference-only virtual keys (e.g. allowed_routes=["llm_api_routes"]) are
@@ -797,15 +800,24 @@ if MCP_AVAILABLE:
         the minimal virtual-key discovery view. Keys with explicit MCP routes
         belonging to admin-tier callers are scoped administrative integrations
         that should receive governance metadata while keeping credentials stripped.
+
+        If server_id is provided, checks for collection-wide access OR access
+        scoped specifically to that server_id.
         """
         allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
         if not allowed_routes:
             return True
-        return any(
-            r in ("all", "/v1/mcp", "/v1/mcp/server", "/v1/mcp/*", "mcp_routes")
-            or r.startswith("/v1/mcp/server")
-            for r in allowed_routes
-        )
+        for r in allowed_routes:
+            if (
+                r in ("all", "/v1/mcp", "/v1/mcp/*", "mcp_routes", "/v1/mcp/server", "/v1/mcp/server/*")
+                or r.rstrip("/") in ("/v1/mcp", "/v1/mcp/server")
+            ):
+                return True
+            if server_id is not None:
+                target = f"/v1/mcp/server/{server_id}"
+                if r == target or r.startswith(f"{target}/"):
+                    return True
+        return False
 
     def _sanitize_mcp_server_for_non_admin(
         mcp_server: LiteLLM_MCPServerTable,
@@ -1520,8 +1532,13 @@ if MCP_AVAILABLE:
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
-            if user_api_key_has_admin_view(user_api_key_dict) and _is_mcp_management_route_allowed(user_api_key_dict):
-                return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
+            if user_api_key_has_admin_view(user_api_key_dict):
+                return [
+                    _sanitize_mcp_server_for_non_admin(s)
+                    if _is_mcp_management_route_allowed(user_api_key_dict, server_id=getattr(s, "server_id", None))
+                    else _sanitize_mcp_server_for_virtual_key(s)
+                    for s in redacted_mcp_servers
+                ]
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
         # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
@@ -2002,7 +2019,7 @@ if MCP_AVAILABLE:
                     not is_restricted_virtual_key
                     or (
                         user_api_key_has_admin_view(user_api_key_dict)
-                        and _is_mcp_management_route_allowed(user_api_key_dict)
+                        and _is_mcp_management_route_allowed(user_api_key_dict, server_id=server_id)
                     )
                 )
                 and resolved is not None
@@ -2032,7 +2049,7 @@ if MCP_AVAILABLE:
 
         redacted: Final = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
-            if user_api_key_has_admin_view(user_api_key_dict) and _is_mcp_management_route_allowed(user_api_key_dict):
+            if user_api_key_has_admin_view(user_api_key_dict) and _is_mcp_management_route_allowed(user_api_key_dict, server_id=server_id):
                 return _sanitize_mcp_server_for_non_admin(redacted)
             return _sanitize_mcp_server_for_virtual_key(redacted)
         # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
