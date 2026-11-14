@@ -1340,7 +1340,8 @@ def function_setup(
                             llm_router=None,
                         )
                         if callback is None or any(
-                            type(cb) is type(callback) or _same_v2_callback(cb, callback)
+                            type(cb) is type(callback)
+                            or (isinstance(cb, CustomLoggerV2) and _same_v2_callback(cb, callback))
                             for cb in litellm._async_success_callback
                         ):  # don't double add a callback
                             continue

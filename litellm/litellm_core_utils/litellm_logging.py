@@ -729,6 +729,10 @@ class _ParamsLookup(Protocol):
     def get(self, key: str, default: object, /) -> object: ...
 
 
+class _DisabledCallbacksLookup(Protocol):
+    get_disabled_callbacks: Callable[[dict[str, object], StandardCallbackDynamicParams], list[str] | None]
+
+
 class _HiddenParamsSlot(Protocol):
     get: Callable[[str], object]
     __setitem__: Callable[[str, object], None]
@@ -3295,9 +3299,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if EnterpriseCallbackControls is None:
             return frozenset()
         try:
-            disabled: Final = EnterpriseCallbackControls.get_disabled_callbacks(
-                _callback_control_params(litellm_params), self.standard_callback_dynamic_params
-            )
+            disabled: Final = require_attributes(
+                EnterpriseCallbackControls, _DisabledCallbacksLookup, "get_disabled_callbacks"
+            ).get_disabled_callbacks(_callback_control_params(litellm_params), self.standard_callback_dynamic_params)
             if not disabled or not EnterpriseCallbackControls._should_allow_dynamic_callback_disabling():  # pyright: ignore[reportPrivateUsage]  # the gate should_run_callback applies
                 return frozenset()
         except Exception as e:  # noqa: BLE001  # should_run_callback treats a failed check as not disabled
