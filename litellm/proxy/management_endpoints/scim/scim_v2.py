@@ -1194,7 +1194,7 @@ async def _sync_requested_teams(
     """
     changed: Final = frozenset(record_teams) ^ frozenset(requested_teams)
     rows: Final = await find_many_in(
-        _table(TeamRepository(prisma_client)),
+        _table(TeamRepository(prisma_client, use_writer=True)),
         "team_id",
         changed,
         chunk_size=SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE,

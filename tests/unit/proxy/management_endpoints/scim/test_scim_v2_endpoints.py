@@ -1430,6 +1430,7 @@ async def test_update_user_success(mocker):
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)
@@ -1544,6 +1545,7 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
     existing_user.metadata = {}
 
     mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(
         return_value={"user_id": "leaver", "user_email": "leaver@example.com", "teams": [], "metadata": "{}"}
     )
@@ -1684,6 +1686,7 @@ async def test_update_user_put_keeps_the_record_order_of_teams_the_user_already_
         ],
     )
     mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "order-user"})
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)
     mocker.patch(  # test-quality-ok: update_user's collaborators are module-level, not injectable
@@ -1770,6 +1773,7 @@ async def test_patch_user_success(mocker):
     # Mock prisma client
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)
@@ -2772,6 +2776,7 @@ async def test_update_user_demotes_admin_when_removed_from_scim_admin_group(mock
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)
@@ -2881,6 +2886,7 @@ async def test_update_user_keeps_the_admin_role_from_a_group_with_no_team_named_
     )
 
     mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(
         return_value={"user_id": "an-admin", "teams": [], "metadata": "{}"}
     )
@@ -2939,6 +2945,7 @@ async def test_update_user_demotes_when_default_params_lack_user_role(mocker, mo
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)
@@ -2999,6 +3006,7 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -3067,6 +3075,7 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -6294,6 +6303,7 @@ async def test_update_user_roster_add_failure_propagates_and_skips_teams_write(m
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock()
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=_every_team_exists)

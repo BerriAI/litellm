@@ -112,6 +112,7 @@ async def test_patch_user_manages_group_memberships():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.writer_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -653,6 +654,7 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
     expected_removed: list[str] | None,
 ):
     mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
     mock_patch_team_membership: Final = AsyncMock()
 
@@ -679,6 +681,7 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
 @pytest.mark.asyncio
 async def test_sync_requested_teams_reads_no_team_rows_when_the_groups_did_not_change():
     mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
 
     teams: Final = await _sync_requested_teams(
@@ -690,6 +693,28 @@ async def test_sync_requested_teams_reads_no_team_rows_when_the_groups_did_not_c
 
     assert teams == ("team-real",)
     mock_client.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_requested_teams_adds_a_team_the_read_replica_has_not_seen_yet():
+    mock_client: Final = MagicMock()
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_client.writer_db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(["team-new"]))
+    mock_patch_team_membership: Final = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        mock_patch_team_membership,
+    ):
+        teams: Final = await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups",
+            record_teams=[],
+            requested_teams=["team-new"],
+        )
+
+    assert teams == ("team-new",)
+    assert mock_patch_team_membership.call_args.kwargs["teams_ids_to_add_user_to"] == ["team-new"]
 
 
 @pytest.mark.asyncio
@@ -706,6 +731,7 @@ async def test_sync_requested_teams_warns_only_about_groups_it_left_out(
     caplog: pytest.LogCaptureFixture,
 ):
     mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
 
     with (
@@ -729,6 +755,7 @@ async def test_sync_requested_teams_warning_stays_on_one_line_when_the_user_id_h
     caplog: pytest.LogCaptureFixture,
 ):
     mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
 
     with (
@@ -757,6 +784,7 @@ async def test_patch_user_ignores_a_group_with_no_team_named_like_the_scim_admin
         metadata={},
     )
     mock_client: Final = MagicMock()
+    mock_client.writer_db = mock_client.db
     mock_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
@@ -791,6 +819,7 @@ async def test_patch_user_deactivates_and_blocks_keys_when_a_group_has_no_team()
     mock_client: Final = MagicMock()
     mock_db: Final = MagicMock()
     mock_client.db = mock_db
+    mock_client.writer_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
 
     async def mock_update(*, where: Mapping[str, object], data: Mapping[str, object]) -> LiteLLM_UserTable:
