@@ -2599,7 +2599,9 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        if not self.send_stream_usage or getattr(processed_chunk, "usage", None) is None:
+                        if getattr(processed_chunk, "usage", None) is None or (
+                            not self.send_stream_usage and processed_chunk.choices
+                        ):
                             self.chunks.append(processed_chunk)
                             return processed_chunk
                         usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
