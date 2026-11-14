@@ -229,6 +229,10 @@ class CallerCredentialAuthenticationError(AuthenticationError):
     caller's credential, so routers must not cool down the shared deployment."""
 
 
+class DeploymentCredentialAuthenticationError(AuthenticationError):
+    pass
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(

@@ -8772,6 +8772,7 @@
     }
   },
   "shared": {
+    "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
       "ownUsage": "Showing your usage only.",
@@ -17588,6 +17589,13 @@
       "staticToken": {
         "label": "Static delegated access token",
         "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      },
+      "githubApp": {
+        "label": "GitHub App",
+        "description": "Authenticate a service with a GitHub App installation. Usage is billed to the organization. LiteLLM refreshes installation tokens automatically.",
+        "uploadHelp": "Upload your GitHub App PEM below. LiteLLM encrypts it in its credential database and only shows a saved-key status. Use HTTPS and protect your proxy encryption key. No Enterprise license is required.",
+        "invalidFile": "Choose a .pem file no larger than 16 KiB.",
+        "keyProvided": "Private key supplied. Upload a replacement to change it."
       }
     },
     "classificationMethodConfig": {

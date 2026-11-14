@@ -592,6 +592,11 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
+
+def _is_proxy_owned_metadata_key(key: str) -> bool:
+    return key.startswith("user_api_key_") or key in _UNTRUSTED_METADATA_CONTROL_FIELDS
+
+
 UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
         "litellm-disable-message-redaction",
@@ -2253,6 +2258,40 @@ class LiteLLMProxyRequestSetup:
         return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
 
     @staticmethod
+    def caller_metadata(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: field
+            for key, field in _REQUEST_FIELDS.validate_python(value).items()
+            if not _is_proxy_owned_metadata_key(key)
+        }
+
+    @staticmethod
+    def merged_request_tags(
+        request: Request,
+        metadata_buckets: tuple[Mapping[str, object], ...],
+        body_tags: object,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> tuple[str, ...]:
+        header: Final = request.headers.get("x-litellm-tags") or ""
+        body_string_tags: Final = _metadata_string_tags(({"tags": body_tags},))
+        caller_tags: Final = (
+            body_string_tags
+            if isinstance(body_tags, list)
+            else tuple(tag.strip() for tag in header.split(",") if tag.strip())
+        )
+        return tuple(
+            dict.fromkeys(
+                (
+                    *_metadata_string_tags(metadata_buckets),
+                    *LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict),
+                    *caller_tags,
+                )
+            )
+        )
+
+    @staticmethod
     def add_user_api_key_auth_to_request_metadata(
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3030,9 +3069,7 @@ async def add_litellm_data_to_request(
                 _user_meta.get("headers"),
                 allow_client_message_redaction_opt_out=(_allow_client_message_redaction_opt_out),
             )
-            for _k in [
-                k for k in _user_meta if k.startswith("user_api_key_") or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
-            ]:
+            for _k in [k for k in _user_meta if isinstance(k, str) and _is_proxy_owned_metadata_key(k)]:
                 _user_meta.pop(_k, None)
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
