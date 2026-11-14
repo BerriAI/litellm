@@ -67,7 +67,7 @@ PROVIDERS = (
         "azure",
         "azure-realtime",
         LiteLLMParamsBody(
-            model="azure/gpt-realtime",
+            model="azure/gpt-realtime-1.5",
             api_key="os.environ/AZURE_API_KEY",
             api_version="2025-08-28",
             realtime_protocol="GA",
@@ -86,7 +86,7 @@ PROVIDERS = (
         "vertex_ai",
         "vertex-realtime",
         LiteLLMParamsBody(
-            model="vertex_ai/gemini-live-2.5-flash-native-audio",
+            model="vertex_ai/gemini-3.8-live",
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
