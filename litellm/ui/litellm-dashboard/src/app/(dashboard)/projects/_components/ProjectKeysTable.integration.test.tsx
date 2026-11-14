@@ -105,13 +105,33 @@ describe("ProjectKeysTable", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
-  it("renders the key alias as plain text and gives its row an accessible name", () => {
+  it("keeps the key alias a real link to the key so it can open in a new tab", () => {
     renderWithProviders(
       <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
     );
     const row = screen.getByRole("row", { name: "Open key My API Key" });
-    expect(within(row).getByText("My API Key")).toBeInTheDocument();
-    expect(within(row).queryByRole("link", { name: "My API Key" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "My API Key" })).toHaveAttribute(
+      "href",
+      "/ui/api-keys?key=tok-abc123",
+    );
+  });
+
+  it("opens the key once from a plain alias click and leaves a cmd-click to the browser", async () => {
+    const user = userEvent.setup();
+    push.mockClear();
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
+    );
+    const link = screen.getByRole("link", { name: "My API Key" });
+
+    await user.click(link);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
+
+    await user.keyboard("{Meta>}");
+    await user.click(link);
+    await user.keyboard("{/Meta}");
+    expect(push).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the key name in the accessible row name when the alias is empty", () => {
@@ -139,7 +159,8 @@ describe("ProjectKeysTable", () => {
     renderWithProviders(
       <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-abc123", key_alias: "My API Key" })]} />,
     );
-    await user.click(screen.getByText("My API Key"));
+    await user.click(within(screen.getByRole("row", { name: "Open key My API Key" })).getAllByRole("cell")[2]);
+    expect(push).toHaveBeenCalledTimes(1);
     expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
   });
 
