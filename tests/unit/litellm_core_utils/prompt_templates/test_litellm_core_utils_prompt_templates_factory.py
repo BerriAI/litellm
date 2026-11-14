@@ -1574,11 +1574,12 @@ def test_vertex_ai_transform_empty_function_call_arguments():
         (None, {}),
         ('{"location": "Boston"', {"location": "Boston"}),
         ({"location": "Boston"}, {"location": "Boston"}),
+        (b'{"location": "Boston"}', {"location": "Boston"}),
     ],
-    ids=["null_arguments", "truncated_arguments", "already_parsed_arguments"],
+    ids=["null_arguments", "truncated_arguments", "already_parsed_arguments", "bytes_arguments"],
 )
 def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_parsed_arguments(
-    arguments: str | dict[str, str] | None, expected_args: dict[str, str]
+    arguments: str | bytes | dict[str, str] | None, expected_args: dict[str, str]
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
@@ -1620,7 +1621,7 @@ def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_jso
             }
         ],
     }
-    with pytest.raises(Exception, match="must be a JSON string"):
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON string"):
         convert_to_gemini_tool_call_invoke(message)
 
 

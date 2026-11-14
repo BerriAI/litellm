@@ -1204,13 +1204,14 @@ def _gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
     already_parsed: Final = as_str_mapping(arguments)
     if already_parsed is not None:
         return VertexFunctionCall(name=name, args=dict(already_parsed))
-    if arguments == "":  # pass empty dict, if arguments is empty string - prevents call from failing
+    text: Final = arguments.decode() if isinstance(arguments, (bytes, bytearray)) else arguments
+    if text == "":  # pass empty dict, if arguments is empty string - prevents call from failing
         return VertexFunctionCall(name=name, args={"type": "object"})
-    if arguments is not None and not isinstance(arguments, str):
-        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(arguments).__name__}")
+    if text is not None and not isinstance(text, str):
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(text).__name__}")
     return VertexFunctionCall(
         name=name,
-        args=parse_tool_call_arguments(arguments, tool_name=name, context="Gemini tool invoke"),
+        args=parse_tool_call_arguments(text, tool_name=name, context="Gemini tool invoke"),
     )
 
 
@@ -1431,7 +1432,11 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}",
+            model=model or "",
+            llm_provider="vertex_ai",
+        ) from e
 
 
 def _json_children(node: JsonValue) -> Iterable[JsonValue]:
