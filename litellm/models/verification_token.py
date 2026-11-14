@@ -35,7 +35,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     tpd_limit: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
-    allowed_cache_controls: list | None = []
+    allowed_cache_controls: list[object] | None = []
     allowed_routes: list | None = []
     key_type: str | None = None
     permissions: dict = {}

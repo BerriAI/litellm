@@ -14,7 +14,7 @@ from litellm.types.integrations.model_deprecation_email import (
 from litellm.types.proxy.model_deprecation import SuccessorModelSource
 
 _LOGO_BASE_URL: Final = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/ui/litellm-dashboard/public/assets/logos"
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/ui/litellm-dashboard/public/assets/logos"
 )
 _EMAIL_LOGO_URL: Final = f"{_LOGO_BASE_URL}/litellm_logo.png"
 # Reuse dashboard brand assets; PNGs also render in email clients that block SVG.

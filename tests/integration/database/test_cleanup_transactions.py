@@ -202,7 +202,6 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
                     "maximum_spend_logs_cleanup_batch_size": 100,
                 }
             )
-            cleanup.pod_lock_manager = None
 
             async def size_check() -> None:
                 database: Final = Prisma(datasource={"url": scoped_url})

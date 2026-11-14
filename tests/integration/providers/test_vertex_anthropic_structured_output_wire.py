@@ -605,6 +605,7 @@ def _delivered(wire: Wire) -> tuple[_Delivery, ...]:
     return tuple(
         _Delivery(request.target, request.headers.get("anthropic-beta"), _JSON_OBJECT.validate_json(request.body))
         for request in wire.drain()
+        if _scripted_target(request)
     )
 
 

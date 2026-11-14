@@ -13,11 +13,13 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn
+from typing import Any, Final, NoReturn, SupportsFloat, SupportsIndex
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import Buffer
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -170,6 +172,12 @@ def _nested_form_param(param: str, fields: tuple[_BracketedField, ...]) -> Mappi
             for name in listed
         },
     }
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not {type(value).__name__!r}")
 
 
 def _is_soniox_context(value: object) -> bool:
@@ -345,7 +353,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response_format: str | None = None,
     ) -> TranscriptionResponse:
         """Shared response-building logic (also used by the handler)."""
-        transcription_meta: dict[str, Any] = {}
+        transcription_meta: object = {}
         transcript: dict[str, Any]
 
         if isinstance(payload, dict) and "transcript" in payload:
@@ -385,9 +393,10 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response["task"] = "transcribe"
 
         # Best-effort metadata fields matching OpenAI's verbose_json shape.
-        if transcription_meta.get("audio_duration_ms") is not None:
+        audio_duration_ms: Final = decoded_json_object(transcription_meta).get("audio_duration_ms")
+        if audio_duration_ms is not None:
             try:
-                response["duration"] = float(transcription_meta["audio_duration_ms"]) / 1000.0
+                response["duration"] = _as_float(audio_duration_ms) / 1000.0
             except (TypeError, ValueError):
                 pass
 
@@ -403,10 +412,12 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             words: Final[list[dict[str, object]]] = []
             for token in tokens:
                 word_entry: dict[str, object] = {"word": token.get("text", "")}
-                if token.get("start_ms") is not None:
-                    word_entry["start"] = float(token["start_ms"]) / 1000.0
-                if token.get("end_ms") is not None:
-                    word_entry["end"] = float(token["end_ms"]) / 1000.0
+                start_ms: object = token.get("start_ms")
+                if start_ms is not None:
+                    word_entry["start"] = _as_float(start_ms) / 1000.0
+                end_ms: object = token.get("end_ms")
+                if end_ms is not None:
+                    word_entry["end"] = _as_float(end_ms) / 1000.0
                 words.append(word_entry)
             if words:
                 response["words"] = words

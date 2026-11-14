@@ -13,9 +13,11 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
@@ -37,7 +39,14 @@ TRACE_INGEST_ROUTE: Final = "/v1/traces"
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _METADATA_VALUE: Final = TypeAdapter(JsonValue)
 _INTERNAL_METADATA_KEYS: Final = frozenset(
-    ("user_api_key", "user_api_key_auth", "user_api_key_budget_reservation", "proxy_server_request")
+    (
+        "user_api_key",
+        "user_api_key_auth",
+        "user_api_key_budget_reservation",
+        "proxy_server_request",
+        ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+        USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+    )
 )
 
 
@@ -47,6 +56,10 @@ class _SupportsGet(Protocol):
 
 class _SupportsItems(Protocol):
     def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _SpendLogKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
@@ -235,7 +248,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self._log(kwargs)
 
-    def _log(self, kwargs: Mapping[str, Any]) -> None:
+    def _log(self, kwargs: _SpendLogKwargs) -> None:
         try:
             payload = kwargs.get("standard_logging_object")
             if payload is None or _is_trace_ingest(payload):

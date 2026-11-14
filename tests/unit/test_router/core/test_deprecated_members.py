@@ -103,6 +103,7 @@ _CONFIGURED_SETTINGS: Final[dict[str, object]] = {  # mutable-ok: expected value
     "provider_default_deployment_ids": ["w"],
     "fallback_access_check": None,
     "fallback_budget_check": None,
+    "fallback_rate_limit_check": None,
     "search_tools": [{"search_tool_name": "s", "litellm_params": {"search_provider": "tavily"}}],
     "guardrail_list": [{"guardrail_name": "g", "litellm_params": {"guardrail": "x"}}],
     "cache_responses": True,

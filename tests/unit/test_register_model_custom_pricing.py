@@ -10,15 +10,25 @@ calculations for DB-sourced models with prompt caching pricing.
 """
 
 import copy
+import datetime
 import itertools
+import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from decimal import Decimal
 from typing import Final, NoReturn
 
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+    model_cost_inputs,
+)
+from litellm.rust_bridge._native import NativeTableSwapped
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.types.utils import (
     Choices,
     CompletionTokensDetailsWrapper,
@@ -27,7 +37,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 def _snapshot_model_cost_entries(keys):
@@ -40,7 +49,7 @@ def _restore_model_cost_entries(original_entries):
             litellm.model_cost.pop(key, None)
         else:
             litellm.model_cost[key] = value
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_register_model_receives_cache_pricing_fields():
@@ -71,6 +80,14 @@ def test_register_model_receives_cache_pricing_fields():
 
     # Cleanup
     litellm.model_cost.pop(model_key, None)
+
+
+def test_register_model_given_neither_a_table_nor_a_url_registers_nothing():
+    registered: Final = model_cost_inputs.registered_keys()
+
+    assert litellm.register_model(None) is None
+
+    assert model_cost_inputs.registered_keys() == registered
 
 
 def test_register_model_strips_none_litellm_provider():
@@ -114,7 +131,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
 
     The companion test above hits the ``except Exception`` branch where
     ``existing_model`` is an empty dict, so the ``pop`` is a no-op. This
-    test patches ``get_model_info`` to return the failure mode the strip
+    test patches the catalog lookup to return the failure mode the strip
     was added to handle, namely a populated dict whose ``litellm_provider``
     is ``None``. Without the strip, the merged entry in
     ``litellm.model_cost`` would carry ``litellm_provider: None`` and
@@ -137,11 +154,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
             "max_tokens": 4096,
         }
 
-    # ``register_model`` calls ``get_model_info.cache_clear`` via
-    # ``_invalidate_model_cost_lowercase_map``, so the replacement must
-    # expose a no-op ``cache_clear`` attribute.
-    _fake_get_model_info.cache_clear = lambda: None
-    monkeypatch.setattr(litellm_utils, "get_model_info", _fake_get_model_info)
+    monkeypatch.setattr(litellm_utils, "get_model_info_helper", _fake_get_model_info)
 
     try:
         litellm.register_model(
@@ -162,7 +175,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
             "register_model failed to strip litellm_provider=None returned "
             f"by get_model_info, got {registered.get('litellm_provider')!r}"
         )
-        # Metadata from the patched ``get_model_info`` must still flow
+        # Metadata from the patched catalog lookup must still flow
         # through, so we know the strip did not nuke the rest of the entry.
         assert registered.get("mode") == "chat"
         assert registered.get("max_tokens") == 4096
@@ -253,9 +266,9 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
         litellm.model_cost.pop(registered_key, None)
         litellm.model_cost = original_model_cost
         os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        from litellm.utils import _invalidate_model_cost_lowercase_map
+        from litellm.litellm_core_utils.model_cost_table import publish
 
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
@@ -620,7 +633,7 @@ def test_embedding_direct_sdk_custom_pricing_prices_the_call_without_writing_the
         assert plain._hidden_params["response_cost"] != response._hidden_params["response_cost"]
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -649,13 +662,15 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
             "anthropic.lit-5853-geo-model": sibling_row,
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_by_a_concurrent_registration)
         litellm.register_model({geo_key: {"mode": "chat"}}, persist_across_reloads=False)
 
     try:
@@ -664,7 +679,7 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
             assert litellm.get_model_info(geo_key)[field] == geo_row[field]
         assert litellm.model_cost[geo_key]["litellm_provider"] == geo_row["litellm_provider"]
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize("route", ["", "converse/", "invoke/"])
@@ -688,17 +703,19 @@ def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
             },
         },
     )
-    _invalidate_model_cost_lowercase_map()
-    real_lookup: Final = litellm.utils.get_model_info
+    publish(litellm.model_cost)
+    real_lookup: Final = litellm.utils.get_model_info_helper
     lookups: Final = itertools.count()
 
-    def lookup_tripped_once_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> object:
+    def lookup_tripped_once_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> object:
         if next(lookups) == 0:
             raise RuntimeError("dictionary changed size during iteration")
-        return real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+        return real_lookup(model=model, custom_llm_provider=custom_llm_provider, catalog_only=catalog_only)
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_once_by_a_concurrent_registration)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_once_by_a_concurrent_registration)
         litellm.register_model({alias: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False)
     litellm.register_model({catalog_key: {"input_cost_per_token": repriced_input_cost}}, persist_across_reloads=False)
 
@@ -706,7 +723,7 @@ def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
         assert litellm.get_model_info(alias)["key"] == catalog_key
         assert litellm.get_model_info(alias)["input_cost_per_token"] == repriced_input_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize("key_prefix", ["", "bedrock/", "bedrock/converse/"])
@@ -728,14 +745,16 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
     builtin_cost_map: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     def long_prompt_cost_after_registering_with(lookup: Callable[..., object]) -> float:
         monkeypatch.setattr(litellm, "model_cost", {**builtin_cost_map, catalog_key: dict(catalog_row)})
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         with pytest.MonkeyPatch.context() as lookup_patch:
-            lookup_patch.setattr(litellm.utils, "get_model_info", lookup)
+            lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup)
             litellm.register_model(
                 {
                     registered_key: {
@@ -757,10 +776,10 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
 
     try:
         assert long_prompt_cost_after_registering_with(lookup_tripped_by_a_concurrent_registration) == pytest.approx(
-            long_prompt_cost_after_registering_with(litellm.utils.get_model_info)
+            long_prompt_cost_after_registering_with(litellm.utils.get_model_info_helper)
         )
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize("lookup_trips", [False, True])
@@ -781,14 +800,16 @@ def test_register_model_prices_a_provider_less_azure_ai_key_without_repricing_th
     monkeypatch.setattr(
         litellm, "open_ai_chat_completion_models", {*litellm.open_ai_chat_completion_models, openai_key}
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
         if lookup_trips:
-            lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+            lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_by_a_concurrent_registration)
         litellm.register_model(
             {azure_ai_key: {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}},
             persist_across_reloads=False,
@@ -800,7 +821,11 @@ def test_register_model_prices_a_provider_less_azure_ai_key_without_repricing_th
             (1e-03, 2e-03)
         )
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
+
+
+def _publish(cost_map: dict[str, dict[str, object]]) -> None:
+    publish(cost_map)
 
 
 def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -816,28 +841,30 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monk
     builtin_cost_map: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", {**builtin_cost_map, catalog_key: dict(catalog_row)})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     reloaded_cost_map: Final = {
         **builtin_cost_map,
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
-    real_lookup: Final = litellm.utils.get_model_info
+    real_lookup: Final = litellm.utils.get_model_info_helper
 
-    def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
-        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+    def lookup_racing_a_price_data_reload(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> object:
+        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider, catalog_only=catalog_only)
         if litellm.model_cost is not reloaded_cost_map:
-            adopt_model_cost_map(reloaded_cost_map)
+            _publish(reloaded_cost_map)
         return info
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_racing_a_price_data_reload)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_racing_a_price_data_reload)
         litellm.register_model({deployment_key: {"litellm_provider": "bedrock"}}, persist_across_reloads=False)
 
     try:
         assert litellm.model_cost[catalog_key]["input_cost_per_token"] == reloaded_input_cost
         assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
@@ -859,19 +886,19 @@ def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
 
-    class CostMapAReloadReplacesAsItIsWritten(dict[str, dict[str, object]]):
-        def update(self, other: Mapping[str, dict[str, object]], /) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # registration writes pass one mapping
-            if litellm.model_cost is self:
-                adopt_model_cost_map(reloaded_cost_map)
-            super().update(other)
+    written_map: Final = {**builtin_cost_map, catalog_key: dict(catalog_row)}
+    registration_base: Final = litellm.utils.registration_base
+
+    def reload_while_resolving(*args: object, **kwargs: object) -> object:
+        resolved = registration_base(*args, **kwargs)
+        if litellm.model_cost is written_map:
+            _publish(reloaded_cost_map)
+        return resolved
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        CostMapAReloadReplacesAsItIsWritten({**builtin_cost_map, catalog_key: dict(catalog_row)}),
-    )
-    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "model_cost", written_map)
+    monkeypatch.setattr(litellm.utils, "registration_base", reload_while_resolving)
+    publish(litellm.model_cost)
 
     litellm.register_model(
         {deployment_key: {"litellm_provider": "bedrock", "output_cost_per_token": registered_output_cost}},
@@ -883,7 +910,35 @@ def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
         assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
         assert litellm.get_model_info(deployment_key)["output_cost_per_token"] == registered_output_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
+
+
+def test_register_model_lands_in_the_live_map_when_a_reload_swaps_it_on_every_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key: Final = "lit-always-swapped-model"
+    builtin_cost_map: Final = litellm.get_model_cost_map(url="")
+    registration_base: Final = litellm.utils.registration_base
+
+    def reload_while_resolving(*args: object, **kwargs: object) -> object:
+        resolved = registration_base(*args, **kwargs)
+        _publish(dict(builtin_cost_map))
+        return resolved
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", dict(builtin_cost_map))
+    monkeypatch.setattr(litellm.utils, "registration_base", reload_while_resolving)
+    publish(litellm.model_cost)
+
+    litellm.register_model(
+        {key: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1e-06}},
+        persist_across_reloads=False,
+    )
+
+    try:
+        assert litellm.model_cost.get(key, {}).get("input_cost_per_token") == 1e-06, sorted(litellm.model_cost)[:3]
+    finally:
+        publish(litellm.model_cost)
 
 
 def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -897,7 +952,7 @@ def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch:
             catalog_key: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-06},
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     walk: Final = iter(litellm.model_cost[catalog_key].items())
     first_field: Final = next(walk)
 
@@ -914,7 +969,7 @@ def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch:
         assert litellm.get_model_info(catalog_key)["input_cost_per_token"] == 1e-06
         assert litellm.get_model_info(catalog_key)["supports_vision"] is True
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 _CANONICAL_KEY: Final = "lit-5853-canonical-model"
@@ -923,23 +978,18 @@ _ALIAS_KEY: Final = "lit-5853-alias-model"
 
 def _install_aliased_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        _expand_model_aliases(
-            {
-                **litellm.get_model_cost_map(url=""),
-                _CANONICAL_KEY: {
-                    "aliases": [_ALIAS_KEY],
-                    "litellm_provider": "openai",
-                    "mode": "chat",
-                    "input_cost_per_token": 2e-06,
-                    "output_cost_per_token": 8e-06,
-                },
-            }
-        ),
-    )
-    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    document: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        _CANONICAL_KEY: {
+            "aliases": [_ALIAS_KEY],
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-06,
+            "output_cost_per_token": 8e-06,
+        },
+    }
+    assert isinstance(install_model_cost_map(json.dumps(document).encode()), ModelCostMapReloaded)
 
 
 def _token_prices(name: str) -> tuple[float | None, float | None]:
@@ -967,7 +1017,7 @@ def test_register_model_prices_every_alias_of_the_registered_entry(
             _ALIAS_KEY: (1e-06, 4e-06),
         }
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_leaves_an_alias_repointed_at_its_own_entry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -989,13 +1039,13 @@ def test_register_model_leaves_an_alias_repointed_at_its_own_entry(monkeypatch: 
             _ALIAS_KEY: (5e-06, 6e-06),
         }
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     builtin_key: Final = "us.anthropic.claude-sonnet-4-6"
     registered_key: Final = f"bedrock/bedrock/bedrock/{builtin_key}"
     builtin: Final = litellm.model_cost[builtin_key]
@@ -1009,7 +1059,7 @@ def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypa
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"] > 0
         assert info["cache_read_input_token_cost"] == builtin["cache_read_input_token_cost"]
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_keeps_the_capabilities_an_unregistered_region_alias_resolves_to(
@@ -1030,7 +1080,7 @@ def test_register_model_keeps_the_capabilities_an_unregistered_region_alias_reso
     }
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", {**litellm.get_model_cost_map(url=""), sibling_key: sibling_row})
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     previous_rules: Final = list(get_fallback_generalization_rules())
     set_fallback_generalizations(
         [
@@ -1057,7 +1107,7 @@ def test_register_model_keeps_the_capabilities_an_unregistered_region_alias_reso
         assert registered["input_cost_per_token"] == sibling_row["input_cost_per_token"]
     finally:
         set_fallback_generalizations(previous_rules)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -1131,7 +1181,7 @@ def test_register_model_keeps_custom_flat_prices_over_inherited_rate_variants(
             builtin_key: {"litellm_provider": "bedrock", "mode": "chat", **builtin_prices},
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
     try:
         litellm.register_model(
@@ -1151,7 +1201,7 @@ def test_register_model_keeps_custom_flat_prices_over_inherited_rate_variants(
         )
         assert cost == pytest.approx(expected_cost)
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1171,7 +1221,7 @@ def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pyt
             },
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     registered_key: Final = f"bedrock/{openai_key}"
 
     try:
@@ -1183,7 +1233,7 @@ def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pyt
         assert "input_cost_per_token" not in registered
         assert "output_cost_per_token" not in registered
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_update_dictionary_merges_nested_dicts_without_aliasing():
@@ -1519,7 +1569,7 @@ def test_direct_call_with_flat_rates_is_priced_from_them_without_writing_the_cos
         assert model_key not in litellm.model_cost
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_direct_call_with_audio_rates_is_priced_per_modality_without_writing_the_cost_map():
@@ -1539,7 +1589,7 @@ def test_direct_call_with_audio_rates_is_priced_per_modality_without_writing_the
         assert model_key not in litellm.model_cost
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_direct_call_with_directional_per_second_rates_is_priced_from_them_without_writing_the_cost_map():
@@ -1559,7 +1609,7 @@ def test_direct_call_with_directional_per_second_rates_is_priced_from_them_witho
         assert model_key not in litellm.model_cost
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_router_call_with_request_prices_bills_them_over_the_deployment_rates():
@@ -1636,7 +1686,7 @@ def test_direct_call_flat_rates_override_the_catalogs_tiers_per_direction():
         assert "input_cost_per_token" not in litellm.model_cost[model_key]
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_direct_call_with_only_a_per_second_rate_on_a_mapped_model_is_billed_per_second():
@@ -1666,7 +1716,7 @@ def test_direct_call_with_only_a_per_second_rate_on_a_mapped_model_is_billed_per
         assert litellm.model_cost[model_key]["input_cost_per_token"] == 1e-06
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def test_direct_call_flat_rate_applies_to_the_callers_own_tiers_not_the_catalogs():
@@ -1698,4 +1748,168 @@ def test_direct_call_flat_rate_applies_to_the_callers_own_tiers_not_the_catalogs
         assert litellm.model_cost[model_key]["tiered_pricing"][0]["output_cost_per_token"] == 6e-07
     finally:
         litellm.model_cost.pop(model_key, None)
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
+
+
+_RELOAD_BASE_KEY: Final = "lit-reload-base-model"
+_RELOAD_NESTED_KEY: Final = "lit-reload-nested-model"
+_RELOAD_DOCUMENT: Final = {
+    **GetModelCostMap.load_local_model_cost_map(),
+    _RELOAD_BASE_KEY: {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 2e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 3e-06,
+    },
+    _RELOAD_NESTED_KEY: {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.03,
+        },
+    },
+}
+
+
+def _reload_cost_map() -> None:
+    assert isinstance(install_model_cost_map(json.dumps(_RELOAD_DOCUMENT).encode()), ModelCostMapReloaded)
+
+
+def test_a_reload_keeps_what_a_registration_inherited_for_a_key_the_document_lacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    _reload_cost_map()
+    registered_key: Final = f"bedrock/bedrock/bedrock/{_RELOAD_BASE_KEY}"
+    litellm.register_model(
+        {registered_key: {"input_cost_per_token": 5e-06, "output_cost_per_token": 6e-06, "litellm_provider": "bedrock"}}
+    )
+    registered: Final = dict(litellm.model_cost[registered_key])
+    assert (
+        registered["cache_read_input_token_cost"] == _RELOAD_DOCUMENT[_RELOAD_BASE_KEY]["cache_read_input_token_cost"]
+    )
+
+    _reload_cost_map()
+
+    assert dict(litellm.model_cost[registered_key]) == registered
+
+
+def test_a_persisted_registration_keeps_values_json_cannot_hold_across_a_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    registered_key: Final = "lit-registered-with-python-values"
+    created_at: Final = datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc)
+    litellm.register_model(
+        {
+            registered_key: {
+                "litellm_provider": "openai",
+                "input_cost_per_token": Decimal("0.000001"),
+                "created_at": created_at,
+            }
+        }
+    )
+
+    _reload_cost_map()
+
+    assert litellm.model_cost[registered_key]["created_at"] is created_at
+    assert litellm.model_cost[registered_key]["input_cost_per_token"] == Decimal("0.000001")
+
+
+def test_a_reload_keeps_the_document_sub_keys_beside_a_registered_nested_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    _reload_cost_map()
+    litellm.register_model({_RELOAD_NESTED_KEY: {"search_context_cost_per_query": {"search_context_size_low": 0.5}}})
+    expected: Final = {
+        **_RELOAD_DOCUMENT[_RELOAD_NESTED_KEY]["search_context_cost_per_query"],
+        "search_context_size_low": 0.5,
+    }
+    assert litellm.model_cost[_RELOAD_NESTED_KEY]["search_context_cost_per_query"] == expected
+
+    _reload_cost_map()
+
+    assert litellm.model_cost[_RELOAD_NESTED_KEY]["search_context_cost_per_query"] == expected
+
+
+def test_a_lookup_that_raises_reaches_the_caller_and_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    error: Final = LookupError("lit-lookup-failed")
+
+    def failing_lookup(*_args: object, **_kwargs: object) -> NoReturn:
+        raise error
+
+    monkeypatch.setattr(litellm.utils, "registration_base", failing_lookup)
+    registered_before: Final = model_cost_inputs.registered_keys()
+
+    with pytest.raises(LookupError) as raised:
+        litellm.register_model({"lit-raise-model": {"input_cost_per_token": 1e-06, "litellm_provider": "openai"}})
+
+    assert raised.value is error
+    assert model_cost_inputs.registered_keys() == registered_before
+    assert "lit-raise-model" not in litellm.model_cost
+
+
+def test_registering_into_a_table_that_is_not_published_reports_it_and_writes_nothing() -> None:
+    other: Final = {"lit-other-model": {"litellm_provider": "openai"}}
+
+    result: Final = model_cost_inputs.register(other, {"lit-swap-model": {"input_cost_per_token": 1e-06}}, False)
+
+    assert isinstance(result, NativeTableSwapped)
+    assert other == {"lit-other-model": {"litellm_provider": "openai"}}
+
+
+def test_an_entry_landing_on_an_earlier_entry_of_the_same_call_merges_onto_that_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    key: Final = "lit-chained-model"
+    litellm.register_model(
+        {
+            key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert litellm.get_model_info(f"openai/{key}")["max_input_tokens"] is None
+
+    litellm.register_model(
+        {key: {"max_input_tokens": 4096}, f"openai/{key}": {"input_cost_per_token": 5e-06}},
+        persist_across_reloads=False,
+    )
+
+    assert litellm.model_cost[key]["max_input_tokens"] == 4096
+    assert litellm.model_cost[key]["input_cost_per_token"] == 5e-06
+
+
+def test_a_router_deployment_registers_a_datetime_in_its_model_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    created_at: Final = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "lit-datetime-model",
+                "litellm_params": {
+                    "model": "openai/lit-datetime-model",
+                    "api_key": "fake-key-for-registration",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"id": "lit-datetime-deployment", "created_at": created_at},
+            }
+        ]
+    )
+
+    assert litellm.model_cost["lit-datetime-deployment"]["created_at"] == created_at
+    assert litellm.model_cost["lit-datetime-deployment"]["input_cost_per_token"] == 1e-06
+    del router

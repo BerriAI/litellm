@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from itertools import chain, groupby
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
@@ -71,13 +71,20 @@ class _SentinelBatchTable(Protocol):
 
 
 class _SentinelBatch(Protocol):
-    litellm_dailyteamspend: _SentinelBatchTable
+    @property
+    def litellm_dailyteamspend(self) -> _SentinelBatchTable: ...
 
 
 class _SentinelBatchManager(Protocol):
     async def __aenter__(self) -> _SentinelBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _SupportsGet(Protocol):

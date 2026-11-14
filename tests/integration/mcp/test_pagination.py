@@ -483,7 +483,7 @@ def test_complete_initial_page_keeps_bare_routes_with_a_cached_database_revision
         subprocess.run(
             [sys.executable, "-I", "-m", "prisma", "db", "execute", "--schema",
              "litellm/proxy/schema.prisma", "--file",
-             "litellm-proxy-extras/litellm_proxy_extras/migrations/20260923000000_add_mcp_catalog_revision_trigger/migration.sql"],
+             "litellm/proxy-extras/litellm_proxy_extras/migrations/20260923000000_add_mcp_catalog_revision_trigger/migration.sql"],
             check=True, capture_output=True, text=True,
         )
         with paginated_mcp_peer(page_size=3) as first, paginated_mcp_peer(page_size=3) as second, httpx.Client() as client:

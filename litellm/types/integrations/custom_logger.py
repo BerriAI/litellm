@@ -81,6 +81,11 @@ class AgenticLoopLimitError(AgenticLoopSafetyError):
     pass
 
 
+class AgenticLoopToolChoiceError(AgenticLoopSafetyError):
+    def __init__(self, model: str) -> None:
+        super().__init__(f"The allowed_tools tool_choice excludes a tool call the model made, model={model}")
+
+
 class StandardCustomLoggerInitParams(LiteLLMBaseModel):
     """
     Params for initializing a CustomLogger.

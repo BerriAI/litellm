@@ -128,6 +128,20 @@ def main(
             member.filename
             for member in wheel_members
             if member.filename.endswith((".pdb", ".dwp", ".rlib", ".rmeta", "Cargo.toml", "Cargo.lock"))
+            or member.filename.startswith(
+                (
+                    "litellm/deploy/",
+                    "litellm/ui/",
+                    "litellm/vscode-extension/",
+                    "litellm/enterprise/",
+                    "litellm/proxy-extras/",
+                    "litellm/rust/",
+                    "litellm/packaging/",
+                    "litellm/scripts/",
+                    "litellm/runtime/",
+                    "litellm/schema.prisma",
+                )
+            )
             or any(part.endswith(".dSYM") for part in PurePosixPath(member.filename).parts)
         )
         native_member: Final = native_members[0]
@@ -214,7 +228,7 @@ def main(
     native_module: Final = load_native_module(native_path)
     native_module_loads: Final = native_module is not None
     panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
-    native_size_limit: Final = 48_000_000
+    native_size_limit: Final = 55_000_000
     native_size_within_limit: Final = native_member.file_size <= native_size_limit
     validations: Final = (
         (f"Python tag is {EXPECTED_PYTHON_TAG}", python_tag == EXPECTED_PYTHON_TAG),

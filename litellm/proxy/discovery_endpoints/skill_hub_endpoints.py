@@ -19,6 +19,8 @@ from litellm.models.plugin_upload import (
     PluginDownloader,
     PluginDownloadsResponse,
     PluginPublication,
+    PluginPublicationBase,
+    PluginPublicationError,
     PluginSnapshot,
     PluginUploadStore,
     PluginVersion,
@@ -56,6 +58,7 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
 from litellm.proxy.discovery_endpoints.skill_hub_mutations import (
     SkillMutationError,
     archive_writer,
+    publication_error,
     write_skill,
     write_target,
 )
@@ -77,6 +80,7 @@ from litellm.types.proxy.skill_hub import (
     SkillHubPendingSkill,
     SkillHubProposal,
     SkillHubPublication,
+    SkillHubRestore,
     SkillHubSkill,
     SkillHubVersion,
     SkillHubVersions,
@@ -633,6 +637,54 @@ async def download_skill_version(
             "ETag": f'"{archive.digest}"',
         },
     )
+
+
+@router.post("/{name}/versions/{version_id}/restore", response_model=SkillHubSkill)
+async def restore_skill_version(
+    request: Request,
+    name: str,
+    version_id: str,
+    body: SkillHubRestore,
+    uploads: PluginUploadRepositoryDep,
+    caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SkillHubSkill:
+    """Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants."""
+    _require_admin(caller)
+    store: Final = _require_store(uploads)
+    metadata: Final = await _version_metadata(name, store, caller)
+    if metadata.id != body.expected_skill_id or metadata.updated_at != body.expected_updated_at:
+        raise HTTPException(409, "The published skill changed. Reload it before restoring a version")
+    version: Final = await store.version(metadata, version_id)
+    if version is None:
+        raise HTTPException(404, "Skill version not found")
+    content: Final = await store.version_content(metadata, version_id) if version.archive_available else None
+    if content is None:
+        raise HTTPException(409, "This version has no verified retained archive to restore")
+    digest: Final = hashlib.sha256(content).hexdigest()
+    review: Final = read_plugin_review(version.manifest)
+    publication: Final = PluginPublication(
+        name=name,
+        version=body.version,
+        description=version.description,
+        manifest={
+            **version.manifest,
+            "source": {
+                "source": "archive",
+                "url": plugin_archive_url(request, name, digest),
+                "sha256": digest,
+            },
+        },
+        content=content,
+        created_by=caller.user_id or "proxy-admin",
+        review=replace(review, approved_by=caller.user_id or "proxy-admin") if review is not None else None,
+    )
+    published: Final = await store.publish(
+        publication, PluginPublicationBase(body.expected_skill_id, body.expected_updated_at)
+    )
+    if isinstance(published, PluginPublicationError):
+        error: Final = publication_error(published)
+        raise HTTPException(error.status, error.message)
+    return skill_publication_response(request, publication, published)
 
 
 async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> VisibleSkillArchive:

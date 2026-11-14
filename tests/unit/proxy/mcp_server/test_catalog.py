@@ -2,9 +2,11 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx2
 import pytest
+from mcp.server.context import ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
     ListPromptsRequest,
@@ -18,17 +20,24 @@ from mcp.types import (
     PaginatedRequestParams,
     Tool,
 )
+from starlette.requests import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.mcp_server import catalog
+from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy.mcp_server.faults.list_outcomes import (
     SERVER_OUTCOMES_META_KEY,
     AggregateToolListing,
+    ServerListFault,
     ServerListOk,
 )
-from litellm.types.mcp import MCPTransport
+from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var, mcp_gateway_server_name
+from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
@@ -772,3 +781,293 @@ def test_partial_optional_catalog_never_advertises_freshness() -> None:
     assert result.ttl_ms == 0
     assert result.cache_scope == "private"
 
+
+_GATEWAY: Final = "https://gateway.example"
+_UNAUTHORIZED: Final = ServerListFault(tag="auth_required", status_code=401)
+
+
+def _server(
+    auth_type: MCPAuth,
+    name: str = "docs",
+    oauth2_flow: str | None = None,
+    delegate_auth_to_upstream: bool = False,
+    authentication_token: str | None = None,
+    alias: str | None = None,
+) -> MCPServer:
+    return MCPServer(
+        server_id=f"{name}-id",
+        name=name,
+        alias=alias or name,
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        oauth2_flow=oauth2_flow,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
+        authentication_token=authentication_token,
+    )
+
+
+_VAULTED: Final = _server(MCPAuth.oauth2, oauth2_flow="authorization_code")
+_PEER: Final = _server(MCPAuth.none, name="wiki")
+_STATIC: Final = _server(MCPAuth.api_key, authentication_token="k")
+_REAUTHORIZABLE: Final = [
+    pytest.param(_VAULTED, id="vaulted-per-user-oauth"),
+    pytest.param(_server(MCPAuth.true_passthrough), id="true-passthrough"),
+    pytest.param(_server(MCPAuth.oauth_delegate), id="oauth-delegate"),
+]
+_NOT_REAUTHORIZABLE: Final = [
+    pytest.param(_server(MCPAuth.none), id="no-auth"),
+    pytest.param(_STATIC, id="static-api-key"),
+    pytest.param(_server(MCPAuth.bearer_token, authentication_token="k"), id="static-bearer"),
+    pytest.param(_server(MCPAuth.oauth2, oauth2_flow="client_credentials"), id="client-credentials"),
+    pytest.param(_server(MCPAuth.oauth2, delegate_auth_to_upstream=True), id="legacy-upstream-delegate"),
+]
+
+
+def _request_context(gate: OAuthScopeResponse, method: str) -> ServerRequestContext:
+    return ServerRequestContext(
+        session=MagicMock(),
+        lifespan_context={},
+        protocol_version="2025-11-25",
+        method=method,
+        request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
+    )
+
+
+def _challenged(
+    server: MCPServer,
+    outcome: ServerListFault | ServerListOk,
+    listed: Sequence[MCPServer] | None = None,
+    reauthorize_as: str | None = "docs",
+    method: str = "tools/list",
+) -> bool:
+    gate: Final = OAuthScopeResponse(AsyncMock(), _GATEWAY, "/docs/mcp", reauthorize_as=reauthorize_as)
+    token: Final = active_mcp_request_ctx_var.set(_request_context(gate, method))
+    try:
+        catalog.challenge_rejected_credential(server, outcome, [server] if listed is None else listed)
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+    return not gate.pending
+
+
+@pytest.mark.parametrize("server", _REAUTHORIZABLE)
+def test_a_rejected_credential_the_caller_can_renew_is_challenged(server: MCPServer) -> None:
+    assert _challenged(server, _UNAUTHORIZED)
+
+
+@pytest.mark.parametrize("server", _NOT_REAUTHORIZABLE)
+def test_a_rejected_credential_the_caller_cannot_renew_stays_absorbed(server: MCPServer) -> None:
+    assert not _challenged(server, _UNAUTHORIZED)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ServerListOk(tool_count=3),
+        ServerListFault(tag="forbidden", status_code=403),
+        ServerListFault(tag="upstream_error", status_code=500),
+        ServerListFault(tag="unreachable"),
+    ],
+)
+def test_only_an_unauthorized_outcome_is_challenged(outcome: ServerListFault | ServerListOk) -> None:
+    assert not _challenged(_VAULTED, outcome)
+
+
+def test_a_listing_that_spans_several_servers_is_not_challenged() -> None:
+    assert not _challenged(_VAULTED, _UNAUTHORIZED, [_VAULTED, _PEER])
+
+
+def test_a_request_that_is_not_a_single_server_listing_is_not_challenged() -> None:
+    assert not _challenged(_VAULTED, _UNAUTHORIZED, reauthorize_as=None)
+
+
+@pytest.mark.parametrize("method", ["tools/call", "server/discover", "initialize"])
+def test_a_request_the_sdk_parsed_as_something_other_than_a_listing_is_not_challenged(method: str) -> None:
+    assert not _challenged(_VAULTED, _UNAUTHORIZED, method=method)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_stored_token_is_answered_with_the_gateways_own_challenge() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, _GATEWAY, "/docs/mcp", reauthorize_as="docs")
+    token: Final = active_mcp_request_ctx_var.set(_request_context(gate, "tools/list"))
+    try:
+        started: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
+        await asyncio.sleep(0)
+        catalog.challenge_rejected_credential(_VAULTED, _UNAUTHORIZED, [_VAULTED])
+        await asyncio.wait_for(started, 1)
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+    start: Final = send.await_args_list[0].args[0]
+    assert start["status"] == 401
+    assert dict(start["headers"])[b"www-authenticate"].decode() == (
+        'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp"'
+    )
+
+
+def _upstream_rejecting_the_token(_request: httpx2.Request) -> httpx2.Response:
+    return httpx2.Response(401, headers={"www-authenticate": 'Bearer error="invalid_token"'})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("server", "peers", "challenged"),
+    [
+        pytest.param(_server(MCPAuth.true_passthrough), (), True, id="true-passthrough"),
+        pytest.param(_server(MCPAuth.oauth_delegate), (), True, id="oauth-delegate"),
+        pytest.param(_STATIC, (), False, id="static-api-key"),
+        pytest.param(_server(MCPAuth.true_passthrough), (_PEER,), False, id="selected-group-of-two"),
+    ],
+)
+async def test_tools_listing_challenges_a_single_server_whose_token_the_upstream_rejected(
+    monkeypatch: pytest.MonkeyPatch, server: MCPServer, peers: Sequence[MCPServer], challenged: bool
+) -> None:
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(_upstream_rejecting_the_token))
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    gate: Final = OAuthScopeResponse(AsyncMock(), _GATEWAY, "/docs/mcp", reauthorize_as="docs")
+    context: Final = mcp_operations.prepare_context(
+        UserAPIKeyAuth(token="h", user_id="u1"), oauth2_headers={"Authorization": "Bearer rejected"}
+    )
+    request_token: Final = active_mcp_request_ctx_var.set(_request_context(gate, "tools/list"))
+    name_token: Final = mcp_gateway_server_name.set("docs")
+    try:
+        listing, outcome = await catalog.get_filtered_server_tools(
+            server, context=context, allowed_mcp_servers=[server, *peers], prefetched_oauth_creds={}
+        )
+    finally:
+        mcp_gateway_server_name.reset(name_token)
+        active_mcp_request_ctx_var.reset(request_token)
+
+    assert listing.tools == []
+    assert outcome.tag == "auth_required"
+    assert (not gate.pending) is challenged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name", ["ListPromptsRequest", "ListResourcesRequest", "ListResourceTemplatesRequest"])
+@pytest.mark.parametrize(
+    ("server", "challenged"),
+    [
+        pytest.param(_VAULTED, True, id="vaulted-per-user-oauth"),
+        pytest.param(_STATIC, False, id="static-api-key"),
+    ],
+)
+async def test_optional_listing_challenges_a_server_whose_stored_token_was_rejected(
+    monkeypatch: pytest.MonkeyPatch, request_name: str, server: MCPServer, challenged: bool
+) -> None:
+    from mcp import types
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "listing-reauth-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(mcp_operations.global_mcp_server_manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))
+    monkeypatch.setattr(
+        catalog, "fetch_optional_catalog_page", AsyncMock(side_effect=MCPUpstreamAuthError(401, None, "docs"))
+    )
+    gate: Final = OAuthScopeResponse(AsyncMock(), _GATEWAY, "/docs/mcp", reauthorize_as="docs")
+    token: Final = active_mcp_request_ctx_var.set(_request_context(gate, "prompts/list"))
+    try:
+        result: Final = await catalog.list_gateway_catalog(
+            mcp_operations.prepare_context(), getattr(types, request_name)()
+        )
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+    assert next(iter(result.meta[SERVER_OUTCOMES_META_KEY].values())) == {"status": "auth_required", "http_status": 401}
+    assert (not gate.pending) is challenged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_name", "result_name", "items"),
+    [
+        ("ListPromptsRequest", "ListPromptsResult", "prompts"),
+        ("ListResourcesRequest", "ListResourcesResult", "resources"),
+        ("ListResourceTemplatesRequest", "ListResourceTemplatesResult", "resource_templates"),
+    ],
+)
+async def test_optional_listing_challenges_when_the_token_is_rejected_on_a_later_page(
+    monkeypatch: pytest.MonkeyPatch, request_name: str, result_name: str, items: str
+) -> None:
+    from mcp import types
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "listing-reauth-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(mcp_operations.global_mcp_server_manager, "registry", {_VAULTED.server_id: _VAULTED})
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[_VAULTED]))
+    first_page: Final = getattr(types, result_name)(**{items: [], "next_cursor": "next"})
+    monkeypatch.setattr(
+        catalog,
+        "fetch_optional_catalog_page",
+        AsyncMock(side_effect=[first_page, MCPUpstreamAuthError(401, None, "docs")]),
+    )
+    gate: Final = OAuthScopeResponse(AsyncMock(), _GATEWAY, "/docs/mcp", reauthorize_as="docs")
+    token: Final = active_mcp_request_ctx_var.set(_request_context(gate, "prompts/list"))
+    request: Final = getattr(types, request_name)
+    try:
+        first: Final = await catalog.list_gateway_catalog(mcp_operations.prepare_context(), request())
+        assert first.next_cursor
+        assert gate.pending
+        with pytest.raises(MCPError, match="Upstream continuation failed"):
+            await catalog.list_gateway_catalog(
+                mcp_operations.prepare_context(),
+                request(params=types.PaginatedRequestParams(cursor=first.next_cursor)),
+            )
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+    assert not gate.pending
+
+
+@pytest.mark.parametrize(
+    ("request_path", "resource"),
+    [("/mcp/docs", "litellm/mcp/docs"), ("/docs/mcp", "litellm/docs/mcp")],
+)
+def test_the_challenge_names_the_metadata_route_under_a_server_root_path(
+    monkeypatch: pytest.MonkeyPatch, request_path: str, resource: str
+) -> None:
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
+
+    challenge: Final = MCPUpstreamAuthError(401, None, "docs").to_http_exception(_GATEWAY, request_path)
+
+    assert (challenge.headers or {})["www-authenticate"] == (
+        f'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/{resource}"'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_path", "addressed", "resource"),
+    [
+        pytest.param("/docs/mcp", "docs", "docs/mcp", id="per-server-path"),
+        pytest.param("/Docs/mcp", "Docs", "Docs/mcp", id="other-case"),
+        pytest.param("/docs_internal/mcp", "docs_internal", "docs_internal/mcp", id="name-not-alias"),
+        pytest.param("/mcp/Docs", "Docs", "mcp/Docs", id="standard-path-other-case"),
+        pytest.param("/mcp/a:b@c+d,e", "a:b@c+d,e", "mcp/a:b@c+d,e", id="path-legal-characters-stay-as-typed"),
+        pytest.param("/mcp/a b%c", "a b%c", "mcp/a%20b%25c", id="path-illegal-characters-are-encoded"),
+        pytest.param("/mcp/日本", "日本", "mcp/%E6%97%A5%E6%9C%AC", id="non-ascii-name"),
+        pytest.param("/日本/mcp", "日本", "%E6%97%A5%E6%9C%AC/mcp", id="non-ascii-name-legacy-path"),
+    ],
+)
+async def test_the_challenge_names_the_url_the_client_addressed(request_path: str, addressed: str, resource: str) -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, _GATEWAY, request_path, reauthorize_as=addressed)
+    aliased: Final = _server(MCPAuth.oauth2, name="docs_internal", oauth2_flow="authorization_code", alias="docs")
+    token: Final = active_mcp_request_ctx_var.set(_request_context(gate, "tools/list"))
+    try:
+        started: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
+        await asyncio.sleep(0)
+        catalog.challenge_rejected_credential(aliased, _UNAUTHORIZED, [aliased])
+        await asyncio.wait_for(started, 1)
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+    start: Final = send.await_args_list[0].args[0]
+    assert dict(start["headers"])[b"www-authenticate"].decode() == (
+        f'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/{resource}"'
+    )

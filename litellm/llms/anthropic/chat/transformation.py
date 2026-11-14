@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, Protocol, cast, runtime_checkable
 
 import httpx
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
@@ -31,6 +31,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
     coerce_token_limit,
     drops_unsupported_params,
     map_finish_reason,
@@ -151,8 +153,10 @@ from ..common_utils import (
     requires_native_compaction_beta,
     stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
+    tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
     validated_object_mapping,
+    without_stale_tool_search_results,
 )
 
 if TYPE_CHECKING:
@@ -411,6 +415,17 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     content: ReadOnly[object]
 
 
+def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:
+    provider_fields: Final = as_str_mapping(message_field(message, "provider_specific_fields"))
+    replayed_results: Final = parts_of(provider_fields.get("tool_results")) if provider_fields is not None else ()
+    if provider_fields is None or not replayed_results:
+        return None
+    return {
+        **provider_fields,
+        "tool_results": [tool_search_result_renamed(result, forward_map) for result in replayed_results],
+    }
+
+
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
@@ -436,6 +451,46 @@ def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     return check is not None and not all(check(value) for value in enum_values)
 
 
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _filtered_output_subschema(value: object) -> object:
+    subschema: Final = _as_json_object(value)
+    return value if subschema is None else AnthropicConfig.filter_anthropic_output_schema(subschema)
+
+
+def _filtered_output_subschemas(value: object) -> object:
+    subschemas: Final = _as_json_object(value)
+    if subschemas is None:
+        return value
+    return {name: _filtered_output_subschema(subschema) for name, subschema in subschemas.items()}
+
+
+def _filtered_output_branches(branches: Sequence[object]) -> Sequence[object]:
+    return [_filtered_output_subschema(branch) for branch in branches]
+
+
+@runtime_checkable
+class _SupportsAdd(Protocol):
+    def __add__(self, other: object, /) -> object: ...
+
+
+def _concatenated(left: object, right: str | Sequence[object]) -> object:
+    if isinstance(left, _SupportsAdd):
+        return left + right
+    raise TypeError(f"unsupported operand type(s) for +: '{type(left).__name__}' and '{type(right).__name__}'")
+
+
+def _extended_any_of(result: Mapping[str, object], branches: Sequence[object]) -> object:
+    filtered: Final = _filtered_output_branches(branches)
+    return _concatenated(result["anyOf"], filtered) if "anyOf" in result else filtered
+
+
+def _described_with_note(description: object, note: str) -> object:
+    return _concatenated(_concatenated(description, " "), note) if description else note
+
+
 # Single, internal-only key on ``litellm_params`` used to thread the per-
 # request reverse map (sanitized -> original) from request build to response
 # parsing. ``litellm_params`` is never serialized to a provider; ``optional_
@@ -457,7 +512,7 @@ def _basic_sanitize_anthropic_tool_name(name: str) -> str:
     return _ANTHROPIC_TOOL_NAME_INVALID_CHARS.sub("_", name)[:_ANTHROPIC_TOOL_NAME_MAX_LEN]
 
 
-def _build_anthropic_tool_name_maps(
+def build_anthropic_tool_name_maps(
     original_names: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build (forward, reverse) tool-name maps for a single request.
@@ -913,7 +968,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    def filter_anthropic_output_schema(schema: Mapping[str, object]) -> Mapping[str, object]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
@@ -1005,16 +1060,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
             constraint_descriptions.append(label.format(note_value))
 
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
 
         # Update description with removed constraint info
         if constraint_descriptions:
-            existing_desc: Final = schema.get("description", "")
             constraint_note: Final = "Note: " + ", ".join(constraint_descriptions) + "."
-            if existing_desc:
-                result["description"] = existing_desc + " " + constraint_note
-            else:
-                result["description"] = constraint_note
+            result["description"] = _described_with_note(schema.get("description"), constraint_note)
 
         drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
 
@@ -1027,26 +1078,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
-                nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
-            elif key == "items" and isinstance(value, dict):
-                nested_schema: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(nested_schema)
-            elif key == "anyOf" and isinstance(value, list):
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
-            elif key == "allOf" and isinstance(value, list):
-                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            branches = as_object_list(value)
+            if key in ("properties", "$defs", "definitions"):
+                result[key] = _filtered_output_subschemas(value)
+            elif key == "items":
+                result[key] = _filtered_output_subschema(value)
+            elif key == "anyOf" and branches is not None:
+                result["anyOf"] = _extended_any_of(result, branches)
+            elif key == "allOf" and branches is not None:
+                result[key] = _filtered_output_branches(branches)
             elif key == "$ref" and isinstance(value, str):
                 result[key] = schema_fragment_ref(value)
-            elif key == "oneOf" and isinstance(value, list):
+            elif key == "oneOf" and branches is not None:
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
+                result["anyOf"] = _extended_any_of(result, branches)
             else:
                 result[key] = value
 
@@ -1458,8 +1504,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         name_forward_map: dict[str, str],
     ) -> list[AllMessageValues]:
-        """Return a copy of `messages` with tool_call/function_call names
-        rewritten using the per-request forward map.
+        """Return a copy of `messages` with tool_call/function_call names, and
+        the tools a replayed tool search found, rewritten using the per-request
+        forward map.
 
         Only mutates messages whose tool_call/function_call name is *in* the
         forward map. Names absent from the map (already valid, no collision)
@@ -1475,7 +1522,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 continue
             tool_calls = msg.get("tool_calls")
             function_call = msg.get("function_call")
-            if not tool_calls and not function_call:
+            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
+            if not tool_calls and not function_call and renamed_provider_fields is None:
                 new_messages.append(msg)
                 continue
             new_msg = dict(msg)
@@ -1501,6 +1549,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_fc = dict(function_call)
                 new_fc["name"] = name_forward_map[fc_name]
                 new_msg["function_call"] = new_fc
+            if renamed_provider_fields is not None:
+                new_msg["provider_specific_fields"] = renamed_provider_fields
             new_messages.append(cast(AllMessageValues, new_msg))
         return new_messages
 
@@ -1517,7 +1567,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         callers that need to compute the maps from the raw OpenAI shape --
         e.g. test setup or future pre-mapping consumers.
 
-        See _build_anthropic_tool_name_maps for the collision rules. Pulls
+        See build_anthropic_tool_name_maps for the collision rules. Pulls
         the original name out of either ``{"function": {"name": ...}}``
         (legacy OpenAI shape) or ``{"name": ...}`` (rare top-level shape).
         """
@@ -1530,7 +1580,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 original = tool.get("name")
             if isinstance(original, str) and original:
                 original_names.append(original)
-        return _build_anthropic_tool_name_maps(original_names)
+        return build_anthropic_tool_name_maps(original_names)
 
     @staticmethod
     def _sanitize_tool_names_in_request(
@@ -1558,7 +1608,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # 1. Collect originals from the Anthropic-shaped custom-tool entries.
         #    Order matters: the first occurrence wins the canonical slot;
         #    later collisions get numeric suffixes (see
-        #    ``_build_anthropic_tool_name_maps``).
+        #    ``build_anthropic_tool_name_maps``).
         original_names: Final[list[str]] = []
         for t in tools:
             if not isinstance(t, dict):
@@ -1572,7 +1622,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not original_names:
             return {}, {}
 
-        forward, reverse = _build_anthropic_tool_name_maps(original_names)
+        forward, reverse = build_anthropic_tool_name_maps(original_names)
         if not forward:
             # Every name was already valid -- nothing to do.
             return forward, reverse
@@ -2544,7 +2594,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # The reverse map only contains entries for names that were actually
         # rewritten -- so a tool legitimately named ``foo_bar`` is never
         # incorrectly retyped to ``foo/bar`` on the response side.
-        # See _build_anthropic_tool_name_maps for the collision-handling
+        # See build_anthropic_tool_name_maps for the collision-handling
         # rules and rationale.
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
@@ -2600,8 +2650,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _all_tools: Final = optional_params.get("tools") or []
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
-        if not _has_advisor:
-            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
+        anthropic_messages = list(
+            without_stale_tool_search_results(
+                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                _TOOLS_ADAPTER.validate_python(_all_tools),
+            )
+        )
 
         ## Add code_execution tool if container_upload is in messages
         _tools: Final = (
@@ -3239,7 +3293,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Reverse-map rewritten tool names back to caller's originals so a
         # downstream OpenAI-style dispatcher can match on the registered name.
-        # See _build_anthropic_tool_name_maps for why this is keyed on the
+        # See build_anthropic_tool_name_maps for why this is keyed on the
         # per-request reverse map (so a tool legitimately named `foo_bar` is
         # never incorrectly retyped to `foo/bar`). No-op when the map is
         # empty (the common case).

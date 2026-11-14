@@ -59,10 +59,8 @@ def test_each_codex_feature_follows_what_the_deployments_declare(flag, field, by
     assert entry.get(field, _ABSENT) == by_value[value]
 
 
-@pytest.mark.parametrize(
-    ("vision", "modalities"), [(False, ["text"]), (True, ["text", "image"]), (None, ["text", "image"])]
-)
-def test_images_are_offered_unless_a_deployment_cannot_read_them(vision, modalities):
+@pytest.mark.parametrize(("vision", "modalities"), [(False, ["text"]), (True, ["text", "image"]), (None, ["text"])])
+def test_images_are_offered_only_when_the_deployments_say_they_read_them(vision, modalities):
     assert _entry(CodexCapabilities(supports_vision=vision))["input_modalities"] == modalities
 
 
@@ -148,7 +146,7 @@ def test_every_entry_carries_the_fields_and_enum_values_every_supported_codex_de
     assert entry["truncation_policy"]["mode"] in _CODEX_TRUNCATION_MODES
 
 
-def test_a_deployment_that_says_nothing_does_not_vote():
+def test_a_deployment_that_says_nothing_does_not_vote_on_tools_or_reasoning():
     declares: Final = CodexDeploymentCapabilities(
         supports_vision=True,
         supports_function_calling=True,
@@ -157,13 +155,30 @@ def test_a_deployment_that_says_nothing_does_not_vote():
     )
 
     assert combined_capabilities((declares, _SILENT)) == CodexCapabilities(
-        supports_vision=True,
         supports_function_calling=True,
         supports_parallel_function_calling=True,
         supports_reasoning=True,
     )
     assert combined_capabilities((_SILENT, _SILENT)) == CodexCapabilities()
     assert combined_capabilities(()) == CodexCapabilities()
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ((True, True), True),
+        ((True, None), None),
+        ((None, None), None),
+        ((), None),
+        ((True, False, None), False),
+    ],
+)
+def test_vision_holds_only_when_every_deployment_says_it_reads_images(
+    flags: tuple[bool | None, ...], expected: bool | None
+) -> None:
+    deployments: Final = tuple(CodexDeploymentCapabilities(supports_vision=flag) for flag in flags)
+
+    assert combined_capabilities(deployments).supports_vision is expected
 
 
 @pytest.mark.parametrize(

@@ -1,12 +1,16 @@
 import re
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm.types.utils import (
     ARIZE_OTLP_PROTOCOLS,
+    BAGGAGE_METADATA_KEYS_VAR,
     CAPTURE_MESSAGE_CONTENT_VALUES,
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
     OTEL_SPAN_SCOPES,
     TRUSTED_CALLBACK_VARS_FIELD,
     StandardCallbackDynamicParams,
@@ -99,6 +103,14 @@ def validate_capture_message_content_value(value: str) -> None:
         )
 
 
+def validate_baggage_metadata_keys_value(value: str) -> None:
+    from litellm.integrations.otel.model.baggage import destination_metadata_keys_error
+
+    error: Final = destination_metadata_keys_error(value)
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_excluded_services_value(value: str) -> None:
     from litellm.integrations.otel.model.config import invalid_excluded_service_names
 
@@ -109,6 +121,15 @@ def validate_excluded_services_value(value: str) -> None:
         raise ValueError(
             f"Invalid excluded_services {value!r}: use {allowed}; 'none' must be used alone and names cannot be empty"
         )
+
+
+OTEL_DESTINATION_VALIDATORS: Final[Mapping[str, Callable[[str], None]]] = MappingProxyType(
+    {
+        CAPTURE_MESSAGE_CONTENT_VAR: validate_capture_message_content_value,
+        EXCLUDED_SERVICES_VAR: validate_excluded_services_value,
+        BAGGAGE_METADATA_KEYS_VAR: validate_baggage_metadata_keys_value,
+    }
+)
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

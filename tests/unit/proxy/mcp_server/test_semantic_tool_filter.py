@@ -7,7 +7,7 @@ an ordered set of top K tools based on semantic similarity.
 
 import asyncio
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -2249,7 +2249,6 @@ async def test_expand_mcp_tools_returns_every_expanded_tool_as_a_dict():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
     from litellm.proxy.mcp_server.semantic_tool_filter import SemanticMCPToolFilter
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
     class _FunctionTool(BaseModel):
         model_config = ConfigDict(frozen=True)
@@ -2277,15 +2276,13 @@ async def test_expand_mcp_tools_returns_every_expanded_tool_as_a_dict():
     auth = UserAPIKeyAuth(api_key="hashed-key")
     gateway_reference = {"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}
 
+    process_tools = AsyncMock(return_value=(pipeline_output, {}))
     hook = SemanticToolFilterHook(
-        SemanticMCPToolFilter(embedding_model="text-embedding-3-small", litellm_router_instance=Mock())
+        SemanticMCPToolFilter(embedding_model="text-embedding-3-small", litellm_router_instance=Mock()),
+        load_openai_tools=process_tools,
     )
-    with patch.object(
-        LiteLLM_Proxy_MCP_Handler,
-        "process_mcp_tools_to_openai_format",
-        new=AsyncMock(return_value=(pipeline_output, {})),
-    ) as process_tools:
-        expanded = await hook._expand_mcp_tools([gateway_reference], auth)
+
+    expanded = await hook._expand_mcp_tools([gateway_reference], auth)
 
     assert expanded == [
         {"type": "function", "name": "v2_tool"},

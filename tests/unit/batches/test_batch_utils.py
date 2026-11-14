@@ -14,27 +14,28 @@ maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
-import asyncio, json, time
+import asyncio
+import json
 import logging
+import time
 from typing import Final, Literal
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
 
-
 import litellm
 import litellm.batches.batch_utils as bu
-from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
-from litellm.batches.batch_utils import(
+from litellm.batches.batch_utils import (
     _aggregate_batch_cost_usage_models,
-    get_file_content_as_dictionary,
     _get_response_from_batch_job_output_file,
     calculate_batch_cost_and_usage,
+    get_file_content_as_dictionary,
 )
 from litellm.cost_calculator import batch_cost_calculator
+from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import AsyncMock, patch
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -1074,6 +1075,28 @@ def respx_interceptable_httpx_client(monkeypatch):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_bedrock_output_written_to_a_request_bucket_is_read_from_that_bucket(respx_interceptable_httpx_client):
+    route: Final = respx.get(
+        "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    ).mock(return_value=httpx.Response(200, content=b'{"recordId": "1"}\n'))
+
+    file_content: Final = await bu.fetch_batch_managed_file_content(
+        "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out",
+        custom_llm_provider="bedrock",  # pyright: ignore[reportArgumentType]  # the cost job passes bedrock at runtime
+        litellm_params={
+            "s3_bucket_name": "model-bucket",
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        },
+    )
+
+    assert route.call_count == 1
+    assert file_content == b'{"recordId": "1"}\n'
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
     managed_output_uri = (
         "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"
@@ -1166,7 +1189,9 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
 
 
 @pytest.mark.asyncio
-async def test_handle_completed_vertex_batch_regional_location_costs_uplift_over_global(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_handle_completed_vertex_batch_regional_location_costs_uplift_over_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm.files.main as files_main
 
     rows = [_vertex_openai_row("request-1", "gemini-3.6-flash", 10, 5)]
@@ -2166,8 +2191,7 @@ GROUNDED_USAGE_METADATA = {
 
 
 PASSTHROUGH_OUTPUT_URI = (
-    "gs://litellm-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash/u/"
-    "predictions.jsonl"
+    "gs://litellm-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash/u/predictions.jsonl"
 )
 
 
@@ -2533,6 +2557,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -2541,6 +2566,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -2558,6 +2584,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 def _copy_litellm_state():
     state = {}
     for attr in _CALLBACK_ATTRS:
@@ -2568,6 +2595,7 @@ def _copy_litellm_state():
         if hasattr(litellm, attr):
             state[attr] = getattr(litellm, attr)
     return state
+
 
 _CALLBACK_ATTRS = (
     "callbacks",
@@ -2591,6 +2619,7 @@ _SCALAR_ATTRS = (
     "cohere_key",
 )
 
+
 def _clear_logging_queue(loop=None) -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -2598,6 +2627,7 @@ def _clear_logging_queue(loop=None) -> None:
         loop.run_until_complete(GLOBAL_LOGGING_WORKER.clear_queue())
         return
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+
 
 def _reset_litellm_callbacks() -> None:
     for attr in _CALLBACK_ATTRS:
@@ -2608,10 +2638,12 @@ def _reset_litellm_callbacks() -> None:
     if callable(reset):
         reset()
 
+
 def _restore_litellm_state(state) -> None:
     for attr, value in state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, value)
+
 
 def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5):
     """Return a single successful batch output line (OpenAI JSONL format)."""
@@ -2641,10 +2673,12 @@ def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5)
         "error": None,
     }
 
+
 CUSTOM_MODEL_INFO = {
     "input_cost_per_token_batches": 0.00125,
     "output_cost_per_token_batches": 0.005,
 }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_batch_cost_calculator_explicit_zero_pricing_not_overridden_by_global(
@@ -2677,6 +2711,7 @@ def test_batch_cost_calculator_explicit_zero_pricing_not_overridden_by_global(
     assert prompt_cost == 0.0
     assert completion_cost == 0.0
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_batch_cost_calculator_uses_custom_model_info():
     """batch_cost_calculator should use model_info override when provided."""
@@ -2696,6 +2731,7 @@ def test_batch_cost_calculator_uses_custom_model_info():
         f"Expected completion cost {expected_completion}, got {completion_cost}"
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_aggregate_batch_cost_uses_custom_model_info():
     """_aggregate_batch_cost_usage_models should thread model_info to batch_cost_calculator."""
@@ -2709,6 +2745,7 @@ def test_aggregate_batch_cost_uses_custom_model_info():
 
     expected = (10 * 0.00125) + (5 * 0.005)
     assert result.cost == pytest.approx(expected), f"Expected total cost {expected}, got {result.cost}"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("data_residency", ["eu", "us", "fedramp"])
@@ -2757,12 +2794,14 @@ async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 5
 
+
 @pytest.fixture
 def sample_file_content():
     return b"""
 {"id": "batch_req_6769ca596b38819093d7ae9f522de924", "custom_id": "request-1", "response": {"status_code": 200, "request_id": "07bc45ab4e7e26ac23a0c949973327e7", "body": {"id": "chatcmpl-AhjSMl7oZ79yIPHLRYgmgXSixTJr7", "object": "chat.completion", "created": 1734986202, "model": "gpt-4o-mini-2024-07-18", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello! How can I assist you today?", "refusal": null}, "logprobs": null, "finish_reason": "stop"}], "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30, "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}}, "system_fingerprint": "fp_0aa8d3e20b"}}, "error": null}
 {"id": "batch_req_6769ca597e588190920666612634e2b4", "custom_id": "request-2", "response": {"status_code": 200, "request_id": "82e04f4c001fe2c127cbad199f5fd31b", "body": {"id": "chatcmpl-AhjSNgVB4Oa4Hq0NruTRsBaEbRWUP", "object": "chat.completion", "created": 1734986203, "model": "gpt-4o-mini-2024-07-18", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello! What can I do for you today?", "refusal": null}, "logprobs": null, "finish_reason": "length"}], "usage": {"prompt_tokens": 22, "completion_tokens": 10, "total_tokens": 32, "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}}, "system_fingerprint": "fp_0aa8d3e20b"}}, "error": null}
 """
+
 
 @pytest.fixture
 def sample_file_content_dict():
@@ -2855,6 +2894,7 @@ def sample_file_content_dict():
         },
     ]
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_file_content_as_dictionary(sample_file_content):
     result = get_file_content_as_dictionary(sample_file_content)
@@ -2864,6 +2904,7 @@ def test_get_file_content_as_dictionary(sample_file_content):
     assert result[0]["response"]["status_code"] == 200
     assert result[0]["response"]["body"]["usage"]["total_tokens"] == 30
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
     with patch("litellm.completion_cost", return_value=0.0):
@@ -2871,6 +2912,7 @@ def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
     assert result.usage.total_tokens == 62  # 30 + 32
     assert result.usage.prompt_tokens == 42  # 20 + 22
     assert result.usage.completion_tokens == 20  # 10 + 10
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -2891,12 +2933,14 @@ async def test_batch_cost_calculator(sample_file_content_dict):
         assert result.prompt_cost == pytest.approx(0.6)
         assert result.completion_cost == pytest.approx(0.4)
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_response_from_batch_job_output_file(sample_file_content_dict):
     result = _get_response_from_batch_job_output_file(sample_file_content_dict[0])
     assert result["id"] == "chatcmpl-AhjSMl7oZ79yIPHLRYgmgXSixTJr7"
     assert result["object"] == "chat.completion"
     assert result["usage"]["total_tokens"] == 30
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -2994,6 +3038,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         assert mock_batch._hidden_params["batch_failed_requests"] == 0
         assert mock_batch.usage == expected_usage
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_handle_completed_batch_computes_real_cost_from_output_file(
@@ -3036,6 +3081,7 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
     assert result.models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
     assert result.successful_requests == 2
     assert result.failed_requests == 0
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -3124,6 +3170,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
         assert mock_batch._hidden_params["batch_models"] == explicit_models
         assert mock_batch.usage == explicit_usage
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
@@ -3173,6 +3220,7 @@ async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
     assert logging_obj.cost_breakdown["input_cost"] == 0.06
     assert logging_obj.cost_breakdown["output_cost"] == 0.04
     assert logging_obj.cost_breakdown["total_cost"] == 0.10
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -3253,6 +3301,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
         assert "response_cost" not in mock_batch._hidden_params
         assert "batch_models" not in mock_batch._hidden_params
         assert not hasattr(mock_batch, "usage") or mock_batch.usage is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -3423,7 +3472,10 @@ def test_batch_ocr_preserves_additive_page_quantities_without_changing_cost():
     assert captured["pages_processed"] == 5
     assert captured["doc_size_bytes"] == 300
     assert result.cost == pytest.approx(5 * 0.01)
-    assert sorted(row["usage"]["pages_processed"] for row in result.usage.model_dump()["batch_usage_by_request"]) == [2, 3]
+    assert sorted(row["usage"]["pages_processed"] for row in result.usage.model_dump()["batch_usage_by_request"]) == [
+        2,
+        3,
+    ]
 
 
 def test_native_vertex_capture_retains_unknown_models_without_changing_legacy_counts():
@@ -3434,3 +3486,76 @@ def test_native_vertex_capture_retains_unknown_models_without_changing_legacy_co
     assert captured["batch_usage_by_request"] == ({"model": "missing-usage-model", "usage": None},)
     assert captured["batch_unknown_usage_requests"] == 1
     assert (result.cost, result.successful_requests, result.failed_requests) == (0, 0, 1)
+
+
+def test_gemini_output_lines_bill_camelcase_usage_with_thinking_tokens_at_batch_rates():
+    row = _success_row(
+        model="gemini-3.8-flash",
+        usage={"promptTokens": 9, "completionTokens": 1, "totalTokens": 75},
+    )
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[row],
+        custom_llm_provider="gemini",
+        model_info=ModelInfo(
+            key="gemini/gemini-3.8-flash",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=7.5e-7,
+            output_cost_per_token=3.75e-6,
+            litellm_provider="gemini",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=3.75e-7,
+            output_cost_per_token_batches=1.875e-6,
+        ),
+    )
+
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (9, 66, 75)
+    assert result.cost == pytest.approx((9 * 3.75e-7) + (66 * 1.875e-6))
+    assert (result.successful_requests, result.failed_requests, result.models) == (1, 0, ["gemini-3.8-flash"])
+
+
+@pytest.mark.asyncio
+async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypatch):
+    native_row = {
+        "key": "r0",
+        "response": {
+            "candidates": [{"content": {"parts": [{"text": "0"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {
+                "promptTokenCount": 3,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 65,
+                "thoughtsTokenCount": 61,
+            },
+            "modelVersion": "gemini-3.8-flash",
+        },
+    }
+    failed_first_row = {"key": "bad", "status": {"code": 3, "message": "Invalid request"}}
+    jsonl = "\n".join(json.dumps(row) for row in (failed_first_row, native_row)).encode()
+    monkeypatch.setattr(bu, "_fetch_batch_managed_file_content", AsyncMock(return_value=jsonl))
+    monkeypatch.setattr(bu, "count_error_file_failed_requests", AsyncMock(return_value=0))
+
+    result = await bu.handle_completed_batch(
+        batch=_batch("batch-la6"),
+        custom_llm_provider="gemini",
+        model_name="gemini-3.8-flash",
+        model_info=ModelInfo(
+            key="gemini/gemini-3.8-flash",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=7.5e-7,
+            output_cost_per_token=3.75e-6,
+            litellm_provider="gemini",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=3.75e-7,
+            output_cost_per_token_batches=1.875e-6,
+        ),
+    )
+
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (3, 62, 65)
+    assert result.cost == pytest.approx((3 * 3.75e-7) + (62 * 1.875e-6))
+    assert (result.successful_requests, result.failed_requests) == (1, 1)

@@ -2297,11 +2297,15 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         return job
 
     async def _run(self, job: MagicMock) -> str:
+        output_file_id, _ = await self._run_capturing(job, self._RAW_OUTPUT_FILE_ID)
+        return output_file_id
+
+    async def _run_capturing(self, job: MagicMock, raw_output_file_id: str) -> tuple[str, Mapping[str, object]]:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
+        from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
-        from enterprise.litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
         from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
         from litellm.types.utils import LiteLLMBatch
 
@@ -2342,7 +2346,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             object="batch",
             status="completed",
         )
-        response.output_file_id = self._RAW_OUTPUT_FILE_ID
+        response.output_file_id = raw_output_file_id
 
         file_content = MagicMock()
         file_content.content = b'{"id":"req-1"}'
@@ -2352,7 +2356,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 "litellm.files.main.afile_content",
                 new_callable=AsyncMock,
                 return_value=file_content,
-            ),
+            ) as provider_file_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"id": "req-1"}],
@@ -2376,7 +2380,17 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 prom_logger=None,
             )
 
-        return response.output_file_id
+        return response.output_file_id, provider_file_content.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_output_written_to_a_team_bucket_is_billed_from_that_bucket(self):
+        team_output: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+
+        _, download = await self._run_capturing(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)), team_output
+        )
+
+        assert (download["file_id"], download["stored_s3_bucket_name"]) == (team_output, "team-a-bucket")
 
     @pytest.mark.asyncio
     async def test_target_model_names_comes_from_input_file_not_provider_model(self):

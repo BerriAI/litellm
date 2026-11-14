@@ -55,7 +55,6 @@ jobs:
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
-        command: -c max_connections=1000 -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -81,6 +80,17 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+      - name: Configure PostgreSQL for integration workers
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" sh -c 'printf "%s\n" "max_connections = 1000" "shared_preload_libraries = pg_stat_statements" "pg_stat_statements.track = all" "pg_stat_statements.max = 20000" >> "$PGDATA/postgresql.conf"'
+          docker restart "$POSTGRES_CONTAINER"
+          for attempt in $(seq 1 30); do
+            if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres; then exit 0; fi
+            sleep 1
+          done
+          exit 1
 
       - name: Set up Python
         timeout-minutes: 3
@@ -106,6 +116,17 @@ jobs:
         timeout-minutes: 20
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
 
+      - name: Install the Rust gateway
+        if: matrix.suite == 'management' || matrix.suite == 'management-replica'
+        timeout-minutes: 15
+        working-directory: litellm/packaging/litellm-proxy
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out "$RUNNER_TEMP/gateway-dist"
+          uv pip install --no-deps --python ../../../.venv/bin/python "$RUNNER_TEMP"/gateway-dist/*.whl
+          test -x ../../../.venv/bin/litellm-gateway
+
       - name: Install redis-server 7.2.16
         timeout-minutes: 3
         run: |
@@ -129,22 +150,22 @@ jobs:
         timeout-minutes: 5
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version-file: ui/litellm-dashboard/.nvmrc
+          node-version-file: litellm/ui/litellm-dashboard/.nvmrc
           cache: "npm"
           cache-dependency-path: |
-            ui/litellm-dashboard/package-lock.json
+            litellm/ui/litellm-dashboard/package-lock.json
             tests/e2e/ui/package-lock.json
 
       - name: Install browser dependencies and build the dashboard
         if: matrix.suite == 'browser'
         timeout-minutes: 20
         run: |
-          (cd ui/litellm-dashboard && npm ci)
+          (cd litellm/ui/litellm-dashboard && npm ci)
           (cd tests/e2e/ui && npm ci)
           sudo env PATH="$PATH" DEBIAN_FRONTEND=noninteractive \
             node tests/e2e/ui/node_modules/@playwright/test/cli.js install-deps chromium
           node tests/e2e/ui/node_modules/@playwright/test/cli.js install chromium
-          (cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build)
+          (cd litellm/ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build)
 
       - name: Run integration contracts
         timeout-minutes: 45
@@ -155,8 +176,8 @@ jobs:
           LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
         run: |
           case "$SUITE" in
-            *-replica) bash .circleci/scripts/run_integration.sh "${SUITE%-replica}" replica ;;
-            *) bash .circleci/scripts/run_integration.sh "$SUITE" ;;
+            *-replica) bash .github/scripts/ci/run_integration.sh "${SUITE%-replica}" replica ;;
+            *) bash .github/scripts/ci/run_integration.sh "$SUITE" ;;
           esac
 
       - name: Verify every case ran exactly once

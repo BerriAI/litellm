@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
 from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
@@ -38,14 +38,16 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -1433,6 +1435,102 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+def _gemini_stream_error(status_code: int, sync_mode: bool) -> Exception:
+    if not sync_mode:
+        return VertexAIError(status_code=status_code, message="upstream said no", headers=None)
+    request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
+    body: Final = b'{"error": {"message": "upstream said no"}}'
+    response: Final = httpx.Response(status_code, request=request, content=body)
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError("upstream said no", request=request, response=response),
+        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+    )
+
+
+def _gemini_stream_opened_by(error: BaseException, sync_mode: bool, logging_obj: Logging) -> CustomStreamWrapper:
+    def make_sync_call(client: object) -> NoReturn:
+        raise error
+
+    async def make_call(client: object) -> NoReturn:
+        raise error
+
+    return CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+
+
+async def _fetch(stream: CustomStreamWrapper, sync_mode: bool) -> object:
+    return stream.fetch_sync_stream() if sync_mode else await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_error_from_fetch(
+    logging_obj: Logging,
+    sync_mode: bool,
+    status_code: int,
+    expected_error: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
+) -> None:
+    provider_error: Final = _gemini_stream_error(status_code, sync_mode)
+    stream: Final = _gemini_stream_opened_by(provider_error, sync_mode, logging_obj)
+    with pytest.raises(expected_error, match="upstream said no") as excinfo:
+        await _fetch(stream, sync_mode)
+    assert (excinfo.value.status_code, excinfo.value.llm_provider) == (status_code, "gemini")
+    assert excinfo.value.__cause__ is provider_error
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_open_error_that_is_already_mapped_is_raised_as_is(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    already_mapped: Final = litellm.BadRequestError(
+        message="already mapped", model="gemini-2.5-flash", llm_provider="gemini"
+    )
+    stream: Final = _gemini_stream_opened_by(already_mapped, sync_mode, logging_obj)
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _fetch(stream, sync_mode)
+    assert excinfo.value is already_mapped
+    assert excinfo.value.__cause__ is None
+
+
+async def test_a_cancelled_stream_open_stays_cancelled(logging_obj: Logging) -> None:
+    stream: Final = _gemini_stream_opened_by(asyncio.CancelledError(), False, logging_obj)
+    with pytest.raises(asyncio.CancelledError):
+        await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_that_opens_is_opened_once(logging_obj: Logging, sync_mode: bool) -> None:
+    def make_sync_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    async def make_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    stream: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+    opened: Final = await _fetch(stream, sync_mode)
+    assert isinstance(opened, ModelResponseListIterator)
+    assert await _fetch(stream, sync_mode) is opened
+
+
 def _bedrock_error_event(exception_type: str):
     """A mocked botocore event-stream error event: status_code is botocore's
     hard-coded 400, with the real type in the :exception-type header."""
@@ -2113,37 +2211,32 @@ async def test_in_body_stream_error_500_wraps_for_midstream_fallback(
     assert "internal engine crash" in str(excinfo.value)
 
 
-@pytest.mark.asyncio
-async def test_async_streaming_read_timeout_triggers_midstream_fallback(
-    logging_obj: Logging,
-):
-    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
-    the Router's FallbackStreamWrapper can switch to a fallback model.
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_read_timeout_while_opening_the_stream_triggers_midstream_fallback(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    read_timeout: Final = httpx.ReadTimeout("Timeout on reading data from socket")
 
-    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
-    which bypassed _handle_stream_fallback_error and prevented stream_timeout
-    from triggering fallbacks the way connection-phase timeout does.
-    """
-    import httpx
+    def make_sync_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    from litellm.exceptions import MidStreamFallbackError
+    async def make_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    async def _raise_read_timeout(**kwargs):
-        raise httpx.ReadTimeout("Timeout on reading data from socket")
-
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-4",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        make_call=_raise_read_timeout,
+        make_call=make_sync_call if sync_mode else make_call,
     )
 
     with pytest.raises(MidStreamFallbackError) as excinfo:
-        await response.__anext__()
+        next(response) if sync_mode else await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.__cause__ is read_timeout
 
 
 def _raw_read_timeout() -> NoReturn:
@@ -3065,6 +3158,148 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert len(usage_chunks) > 0
     assert hasattr(usage_chunks[-1].usage, "cost")
     assert usage_chunks[-1].usage.cost == 0.00025
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("iteration", "stream_options"),
+    [
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("sync", None),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async", None),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async_over_sync_stream", None),
+    ],
+)
+async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
+    logging_obj: Logging,
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    finish_index: Final = next(
+        i for i, chunk in enumerate(collected_chunks) if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    )
+    post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
+    assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
+    assert [chunk.usage.cost for chunk in post_finish_chunks] == (
+        [0.0000088] if stream_options and stream_options.get("include_usage") else []
+    )
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
+
+
+@pytest.mark.parametrize(
+    ("trailer_choice", "read_payload"),
+    [
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+                logprobs=ChoiceLogprobs(content=[ChatCompletionTokenLogprob(token="!", logprob=-0.5, top_logprobs=[])]),
+            ),
+            lambda choice: choice.logprobs,
+        ),
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    images=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+                ),
+            ),
+            lambda choice: getattr(choice.delta, "images", None),
+        ),
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    thinking_blocks=[{"type": "thinking", "thinking": "done", "signature": "sig"}],
+                ),
+            ),
+            lambda choice: getattr(choice.delta, "thinking_blocks", None),
+        ),
+    ],
+    ids=["logprobs", "images", "thinking_blocks"],
+)
+def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
+    logging_obj: Logging,
+    trailer_choice: StreamingChoices,
+    read_payload: Callable[[StreamingChoices], object],
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    expected_payload: Final = read_payload(trailer_choice)
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[trailer_choice],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
+    )
+
+    streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in response))
+
+    assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
 
 
 @pytest.mark.asyncio
@@ -7427,6 +7662,121 @@ def test_azure_chunk_creator_streams_choice_content_filter_results_on_later_chun
     assert ["content_filter_results" in output.choices[0].model_fields_set for output in outputs] == [True]
 
 
+def _parsed_openai_like_chunk(
+    chunk_id: str, delta: Mapping[str, object], finish_reason: str | None = None, **choice_extras: object
+) -> ModelResponseStream:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    return parser.chunk_parser(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "served-model",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, **choice_extras}],
+        }
+    )
+
+
+def _parsed_stream_wrapper(custom_llm_provider: str, logging_obj: Logging) -> CustomStreamWrapper:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="served-model",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_parsed_openai_like_chunk("chunk-0", {"role": "assistant", "content": ""}))
+    return wrapper
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["hosted_vllm", "deepseek", "groq"])
+def test_parsed_openai_like_chunk_creator_builds_one_delta_and_choice_and_no_dump_per_later_chunk(
+    logging_obj: Logging, custom_llm_provider: str
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper(custom_llm_provider, logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hello"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-2", {"reasoning": "thought"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-3", {"content": " world", "reasoning_content": None}, logprobs=None),
+    )
+    delta_init: Final = Delta.__init__.__code__
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+    model_dump: Final = BaseModel.model_dump.__code__
+
+    outputs, calls = _chunk_creator_calls(
+        wrapper, later_chunks, frozenset({delta_init, streaming_choices_init, model_dump})
+    )
+
+    assert sum(call.code is delta_init for call in calls) == len(later_chunks)
+    assert sum(call.code is streaming_choices_init for call in calls) == len(later_chunks)
+    assert sum(call.code is model_dump for call in calls) == 0
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "hello"}}],
+        [{"index": 0, "delta": {"reasoning_content": "thought"}}],
+        [{"index": 0, "delta": {"content": " world"}}],
+    ]
+
+
+def test_parsed_openai_like_chunk_creator_keeps_choice_extras_ahead_of_choice_keys(logging_obj: Logging) -> None:
+    wrapper: Final = _parsed_stream_wrapper("hosted_vllm", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hi"}, stop_reason=None, token_ids=[7, 8]),
+        _parsed_openai_like_chunk("chunk-2", {"content": "!"}, stop_reason=None, matched_stop=2),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    choice_dumps: Final = [output.choices[0].model_dump() for output in outputs if output is not None]
+    assert [list(choice_dump) for choice_dump in choice_dumps] == [
+        ["stop_reason", "token_ids", "finish_reason", "index", "delta", "logprobs"],
+        ["stop_reason", "matched_stop", "finish_reason", "index", "delta", "logprobs"],
+    ]
+    assert [choice_dump["token_ids"] for choice_dump in choice_dumps[:1]] == [[7, 8]]
+    assert [choice_dump["matched_stop"] for choice_dump in choice_dumps[1:]] == [2]
+    assert [choice_dump["delta"]["content"] for choice_dump in choice_dumps] == ["hi", "!"]
+
+
+def test_parsed_openai_like_stream_still_emits_tool_calls_and_finish_after_reused_chunks(
+    logging_obj: Logging,
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper("deepseek", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "checking"}),
+        _parsed_openai_like_chunk(
+            "chunk-2",
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}}
+                ]
+            },
+        ),
+        _parsed_openai_like_chunk("chunk-3", {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+        _parsed_openai_like_chunk("chunk-4", {}, finish_reason="tool_calls"),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "checking"}}],
+        [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"arguments": "", "name": "f"}, "type": "function", "index": 0}
+                    ]
+                },
+            }
+        ],
+        [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"function": {"arguments": "{}"}, "type": "function", "index": 0}]},
+            }
+        ],
+        [{"finish_reason": "tool_calls", "index": 0, "delta": {}}],
+    ]
+
+
 @pytest.mark.parametrize(
     "special_delta",
     [
@@ -7532,6 +7882,85 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assembled = litellm.stream_chunk_builder(chunks=[result])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 20e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
+    ],
+)
+async def test_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, rates: dict[str, object], expected_cost: float | None
+) -> None:
+    model: Final = "stream-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=1.0,
+        litellm_call_id="free-stream",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.stream_options = {"include_usage": True}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    chunks: Final = [
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    emitted: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    usage_chunks: Final = tuple(chunk for chunk in emitted if getattr(chunk, "usage", None) is not None)
+
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].usage.prompt_tokens == 10
+    assert usage_chunks[0].usage.completion_tokens == 5
+    assert getattr(usage_chunks[0].usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
 
 
 def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
@@ -9649,3 +10078,134 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def _stream_of(chunks: Sequence[object], sync_mode: bool) -> Iterator[object] | AsyncIterator[object]:
+    return iter(chunks) if sync_mode else _as_async(iter(chunks))
+
+
+def _streamed_text_and_finish_reasons(received: Sequence[ModelResponseStream]) -> tuple[str, list[str]]:
+    return (
+        "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices),
+        [chunk.choices[0].finish_reason for chunk in received if chunk.choices and chunk.choices[0].finish_reason],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_byte_stream_yields_token_text_then_the_reported_finish_reason(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"token": {"id": 2, "text": "lo"}, "details": {"finish_reason": "length"}}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello", ["length"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_predibase_error_event_fails_the_stream_with_the_upstream_message(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = (
+        b'data: {"token": {"id": 1, "text": "Hel"}}',
+        b'data: {"error": "Request failed during generation: CUDA out of memory"}',
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="llama-3-1-8b-instruct",
+        custom_llm_provider="predibase",
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        await _collect(wrapper, sync_mode)
+
+    assert "CUDA out of memory" in str(raised.value)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_nlp_cloud_stream_drops_the_done_marker_and_finishes_with_stop(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    lines: Final = ('{"generated_text": "Hello"}', '{"generated_text": " world[DONE]"}')
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="finetuned-llama-3-70b",
+        custom_llm_provider="nlp_cloud",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == ("Hello world", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_aleph_alpha_stream_yields_the_completion_text_and_stops(sync_mode: bool, logging_obj: Logging) -> None:
+    lines: Final = (b'{"completions": [{"completion": " Paris", "finish_reason": "maximum_tokens"}]}',)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_stream_of(lines, sync_mode),
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert _streamed_text_and_finish_reasons(received) == (" Paris", ["stop"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passed_functions(
+    sync_mode: bool, logging_obj: Logging
+) -> None:
+    logging_obj.update_environment_variables(
+        model="bedrock/invoke-endpoint",
+        user=None,
+        optional_params={"functions": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}]},
+        litellm_params={"litellm_call_id": "functions-stream"},
+    )
+    tool_use: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        "index": 0,
+    }
+    chunks: Final = [
+        {
+            "text": "",
+            "tool_use": tool_use,
+            "is_finished": True,
+            "finish_reason": "tool_calls",
+            "usage": None,
+            "index": 0,
+        }
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="bedrock/invoke-endpoint",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    deltas: Final = [chunk.choices[0].delta for chunk in received if chunk.choices]
+    assert [
+        (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
+    ] == [("get_weather", '{"city": "Paris"}')]
+    assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []

@@ -11,6 +11,7 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import Request
 from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
@@ -321,6 +322,33 @@ def test_native_catalog_offers_the_declared_reasoning_efforts_the_requesting_cod
     assert response.status_code == 200
     (added,) = response.json()["models"][len(_UPSTREAM_CATALOG["models"]) :]
     assert [level["effort"] for level in added["supported_reasoning_levels"]] == expected_efforts
+
+
+@pytest.mark.parametrize(
+    ("query", "cut"),
+    [
+        pytest.param("?client_version=0.166.0-alpha.1", False, id="first codex that reads any size gets every model"),
+        pytest.param("?client_version=0.166.0", False, id="newer codex gets every model"),
+        pytest.param("?client_version=0.165.0", True, id="last codex with the 1 MiB limit gets a cut catalog"),
+        pytest.param("", True, id="no version gets a cut catalog"),
+    ],
+)
+def test_native_catalog_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, query: str, cut: bool
+) -> None:
+    names: Final = tuple(f"open-weights-{index}" for index in range(60))
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[_open_weights(name) for name in names]))
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG)
+
+    response: Final = client.get(f"/backend-api/codex/models{query}", headers=_HEADERS)
+    models: Final = response.json()["models"]
+    added: Final = [model["slug"] for model in models[len(_UPSTREAM_CATALOG["models"]) :]]
+
+    assert response.status_code == 200
+    assert models[: len(_UPSTREAM_CATALOG["models"])] == _UPSTREAM_CATALOG["models"]
+    assert added == list(names[: len(added)])
+    assert (len(added) < len(names)) is cut
+    assert (len(response.content) <= 1024 * 1024) is cut
 
 
 @pytest.mark.parametrize(
@@ -704,10 +732,23 @@ def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_b
     return key
 
 
+@pytest.mark.parametrize("custom_auth", (False, True), ids=("virtual-key", "custom-auth"))
 def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, custom_auth: bool
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
+    if custom_auth:
+        monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+        identity: Final = proxy_server.user_api_key_cache.get_cache(key=hash_token(key), model_type=UserAPIKeyAuth)
+        assert identity is not None
+
+        async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+            return identity
+
+        monkeypatch.setattr(proxy_server, "user_custom_auth", authenticate)
+        monkeypatch.setattr(
+            proxy_server, "general_settings", {**proxy_server.general_settings, "custom_auth_run_common_checks": True}
+        )
     _account_catalog(respx_mock)
     provider: Final = _open_weights_provider(respx_mock)
     response: Final = client.post(

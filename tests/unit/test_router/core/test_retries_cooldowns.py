@@ -13,6 +13,7 @@ import pytest
 
 import litellm
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, INITIAL_RETRY_DELAY, JITTER
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutNotApplicable, total_deadline
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.router import AllowedFailsPolicy, RetryPolicy
@@ -428,6 +429,60 @@ async def test_lone_deployment_waits_the_retry_after_header(make_core: MakeCore,
 
     assert len(host.sleeps) >= 2
     assert all(7 <= slept < 7 + JITTER for slept in host.sleeps[:2])
+
+
+@pytest.mark.parametrize(
+    ("budget", "expected_calls"),
+    [(10, 2), (100, 4)],
+    ids=["second_backoff_outlasts_the_budget", "every_backoff_fits_the_budget"],
+)
+@pytest.mark.asyncio
+async def test_a_retry_runs_only_while_its_backoff_fits_the_total_timeout(
+    make_core: MakeCore, host: ScriptedHost, budget: float, expected_calls: int
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="6"))
+
+    async with total_deadline(budget, from_body=True, clock=lambda: sum(host.sleeps)):
+        failure: Final = await attempt(core)
+
+    assert isinstance(failure, litellm.RateLimitError)
+    assert len(host.calls_to("acompletion")) == expected_calls
+    assert sum(host.sleeps) < budget
+
+
+@pytest.mark.asyncio
+async def test_a_streaming_attempt_under_a_body_total_timeout_is_refused_before_the_provider_is_called(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a")],
+        num_retries=3,
+    )
+    host.answer("openai/a", lambda **_: litellm.ModelResponse())
+
+    async with total_deadline(10, from_body=True):
+        refused: Final = await attempt(core, stream=True)
+
+    assert isinstance(refused, TotalTimeoutNotApplicable)
+    assert host.calls_to("acompletion") == []
+
+
+@pytest.mark.asyncio
+async def test_a_streaming_attempt_under_a_header_total_timeout_runs_unbounded(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a")],
+        num_retries=3,
+    )
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="6"))
+
+    async with total_deadline(10, from_body=False, clock=lambda: sum(host.sleeps)):
+        failure: Final = await attempt(core, stream=True)
+
+    assert isinstance(failure, litellm.RateLimitError)
+    assert len(host.calls_to("acompletion")) == 4
 
 
 @pytest.mark.asyncio

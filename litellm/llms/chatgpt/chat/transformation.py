@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Any, Final
 
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -118,11 +119,15 @@ class ChatGPTConfig(OpenAIConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+    ) -> dict[str, object]:
+        optional_params = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params, reasoning_drop_logger=reasoning_drop_logger
+        )
         optional_params.setdefault("stream", False)
         return optional_params

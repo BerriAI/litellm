@@ -1,13 +1,16 @@
 import asyncio
 import collections
+import contextlib
 import datetime
 import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import timezone
-from typing import Final, Literal
+from functools import partial
+from types import SimpleNamespace
+from typing import Final, Literal, Protocol, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
@@ -17,14 +20,17 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
 from tests.unit.proxy.db.fake_prisma_engine import (
     ReadTargetOf,
     statement_timeout_error,
     statement_timeout_reads,
 )
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 def _default_date_range():
@@ -135,6 +141,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
         status = re.fullmatch(r"status = \$(\d+)", cond)
         api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
+        api_key_any = re.fullmatch(r"api_key = ANY\(\$(\d+)::text\[\]\)", cond)
         req_or_call = re.fullmatch(r"\(request_id = \$(\d+) OR litellm_call_id = \$\1\)", cond)
         if req_or_call:
             where["request_id_or_call_id"] = params[int(req_or_call.group(1)) - 1]
@@ -163,6 +170,8 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
             where["status"] = {"equals": params[int(status.group(1)) - 1]}
+        elif api_key_any:
+            where["api_key_in"] = list(params[int(api_key_any.group(1)) - 1])
         elif api_key_not_in:
             where["api_key_not_in"] = [
                 params[int(api_key_not_in.group(1)) - 1],
@@ -212,7 +221,18 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None):
+def _emulate_owner_api_key_lookup(mock_spend_logs: list[dict], sql_query: str, params: tuple) -> list[dict]:
+    """The daily spend tables and key table name every api_key an owner's requests ran under, so the
+    lookup answers with the distinct api_keys of the owner's logs."""
+    owner_col = "user" if 'FROM "LiteLLM_DailyUserSpend"' in sql_query else "team_id"
+    owners = {params[0]} if isinstance(params[0], str) else set(params[0])
+    api_keys = {log["api_key"] for log in mock_spend_logs if log.get(owner_col) in owners}
+    return [{"api_key": api_key} for api_key in sorted(api_keys)]
+
+
+def make_ui_spend_logs_mock_prisma(
+    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, owner_api_keys_fn=None
+):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
@@ -222,6 +242,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                    where_conditions, returns the filtered list of logs.
         team_lookup_fn: Optional async callable for team RBAC (find_unique).
                         If provided, adds litellm_teamtable to db.
+        owner_api_keys_fn: Optional Callable[[tuple], list[dict]] answering the
+                           user/team -> api_key lookup instead of deriving it from the logs.
     """
 
     class MockDB:
@@ -245,6 +267,10 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                 return []
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(mock_spend_logs, sql_query, params)
+            if 'FROM "LiteLLM_DailyUserSpend"' in sql_query or 'FROM "LiteLLM_DailyTeamSpend"' in sql_query:
+                if owner_api_keys_fn is not None:
+                    return owner_api_keys_fn(params)
+                return _emulate_owner_api_key_lookup(mock_spend_logs, sql_query, params)
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
             total = len(filtered)
             if "COUNT(*)" in sql_query:
@@ -464,13 +490,15 @@ def test_can_user_view_spend_log_false_for_other_roles():
 
 def _emulate_spend_log_owner_lookup(rows, sql_query, params):
     """Emulate the ownership lookup SQL over an in-memory spend-log corpus,
+    matching only the id columns its WHERE clause compares to the lookup id and
     honoring DISTINCT and any literal LIMIT the query carries so a capped or
     non-distinct query produces the truncated result it would in Postgres."""
     lookup_id = params[0]
+    id_columns = [column for column in ("request_id", "litellm_call_id") if f"{column} = $1" in sql_query]
     matches = [
         {"user": row.get("user"), "team_id": row.get("team_id")}
         for row in rows
-        if lookup_id in (row.get("request_id"), row.get("litellm_call_id"))
+        if any(row.get(column) == lookup_id for column in id_columns)
     ]
     if "DISTINCT" in sql_query:
         deduped = []
@@ -835,6 +863,235 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["user"] == "test_user_1"
+
+
+def _owned_log(request_id: str, api_key: str, user: str, team_id: str) -> dict:
+    return {
+        "id": request_id,
+        "request_id": request_id,
+        "api_key": api_key,
+        "user": user,
+        "team_id": team_id,
+        "spend": 0.01,
+        "startTime": "2026-09-02T10:00:00+00:00",
+        "model": "gpt-4o",
+    }
+
+
+def _owner_filtered_logs(logs: list[dict]) -> Callable[[dict], list[dict]]:
+    """What Postgres returns for the page query: the owner filter and, when present, the api_key list both apply."""
+
+    def filter_fn(where: dict) -> list[dict]:
+        return [
+            log
+            for log in logs
+            if log["user"] == where.get("user", log["user"])
+            and log["team_id"] == where.get("team_id", log["team_id"])
+            and log["api_key"] in where.get("api_key_in", [log["api_key"]])
+        ]
+
+    return filter_fn
+
+
+def _owner_api_keys(daily_rows: dict[str, set[str]], live_keys: dict[str, set[str]]) -> Callable[[tuple], list[dict]]:
+    """The key lookup's two sources, keyed by owner: api_keys on daily spend rows and api_keys of live keys."""
+
+    def lookup(params: tuple) -> list[dict]:
+        owners = {params[0]} if isinstance(params[0], str) else set(params[0])
+        api_keys = set().union(*(daily_rows.get(o, set()) | live_keys.get(o, set()) for o in owners))
+        return [{"api_key": api_key} for api_key in sorted(api_keys)]
+
+    return lookup
+
+
+def _spend_logs_page_query(queries: list[tuple[str, tuple]]) -> tuple[str, tuple, list[str] | None]:
+    sql, params = next((sql, params) for sql, params in queries if '"LiteLLM_SpendLogs"' in sql and "ORDER BY" in sql)
+    key_param = re.search(r"api_key = ANY\(\$(\d+)::text\[\]\)", sql)
+    return sql, params, None if key_param is None else params[int(key_param.group(1)) - 1]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_user_filter_reads_spend_logs_through_the_users_api_keys(client, monkeypatch):
+    from litellm.proxy.spend_tracking.spend_log_api_key_scope import SPEND_LOG_API_KEY_SCOPE_MAX_KEYS
+
+    logs = [
+        _owned_log("req1", "sk-live", "alice", "team1"),
+        _owned_log("req2", "sk-deleted", "alice", "team1"),
+        _owned_log("req3", "sk-bob", "bob", "team1"),
+    ]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={"alice": {"sk-deleted"}, "bob": {"sk-bob"}}, live_keys={"alice": {"sk-live"}}
+            ),
+        ),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={"user_id": "alice", "start_date": "2026-09-01 00:00:00", "end_date": "2026-09-03 23:59:59"},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert {row["request_id"] for row in response.json()["data"]} == {"req1", "req2"}
+    lookup_sql, lookup_params = next((sql, params) for sql, params in queries if '"LiteLLM_DailyUserSpend"' in sql)
+    assert '"LiteLLM_VerificationToken"' in lookup_sql
+    assert lookup_params == ("alice", "2026-08-31", "2026-09-04", SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1)
+    page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
+    assert scoped_api_keys == ["sk-deleted", "sk-live", ""]
+    assert '"user" = $' in page_sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_filter", ["user_id", "team_id"])
+async def test_ui_view_spend_logs_owner_filter_preserves_empty_key_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, owner_filter: str
+) -> None:
+    logs: Final = [
+        _owned_log("known", "sk-live", "alice", "team-alpha"),
+        _owned_log("unknown-key", "", "alice", "team-alpha"),
+        _owned_log("foreign", "", "bob", "team-beta"),
+    ]
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={}, live_keys={"alice": {"sk-live"}, "team-alpha": {"sk-live"}}
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"),
+    )
+    response: Final = client.get(
+        "/spend/logs/ui",
+        params={
+            owner_filter: "alice" if owner_filter == "user_id" else "team-alpha",
+            "start_date": "2026-09-01 00:00:00",
+            "end_date": "2026-09-03 23:59:59",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert response.status_code == 200, response.text
+    assert {row["request_id"] for row in response.json()["data"]} == {"known", "unknown-key"}
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_filter_reads_spend_logs_through_the_teams_api_keys(client, monkeypatch):
+    logs = [
+        _owned_log("req1", "sk-alpha-1", "alice", "team-alpha"),
+        _owned_log("req2", "sk-alpha-2", "bob", "team-alpha"),
+        _owned_log("req3", "sk-beta", "carol", "team-beta"),
+    ]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={"team-alpha": {"sk-alpha-1"}, "team-beta": {"sk-beta"}},
+                live_keys={"team-alpha": {"sk-alpha-2"}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={"team_id": "team-alpha", "start_date": "2026-09-01 00:00:00", "end_date": "2026-09-03 23:59:59"},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert {row["request_id"] for row in response.json()["data"]} == {"req1", "req2"}
+    _, lookup_params = next((sql, params) for sql, params in queries if '"LiteLLM_DailyTeamSpend"' in sql)
+    assert lookup_params[:3] == (["team-alpha"], "2026-08-31", "2026-09-04")
+    page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
+    assert scoped_api_keys == ["sk-alpha-1", "sk-alpha-2", ""]
+    assert "team_id = $" in page_sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_keys", [set(), {f"sk-{i}" for i in range(5001)}])
+async def test_ui_view_spend_logs_without_a_usable_key_list_keeps_the_plain_user_filter(
+    client, monkeypatch, known_keys: set[str]
+):
+    logs = [_owned_log("req1", "sk-live", "alice", "team1")]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(daily_rows={"alice": known_keys}, live_keys={}),
+        ),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={"user_id": "alice", "start_date": "2026-09-01 00:00:00", "end_date": "2026-09-03 23:59:59"},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["request_id"] for row in response.json()["data"]] == ["req1"]
+    page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
+    assert scoped_api_keys is None
+    assert '"user" = $' in page_sql
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_search_with_user_filter_is_not_narrowed_to_the_windows_keys(client, monkeypatch):
+    logs = [_owned_log("req-old", "sk-retired", "alice", "team1")]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(daily_rows={}, live_keys={"alice": {"sk-live"}}),
+        ),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "user_id": "alice",
+            "search": "req-old",
+            "start_date": "2026-09-01 00:00:00",
+            "end_date": "2026-09-03 23:59:59",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["request_id"] for row in response.json()["data"]] == ["req-old"]
+    page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
+    assert scoped_api_keys is None
+    assert "request_id = $" in page_sql and '"user" = $' in page_sql
 
 
 @pytest.mark.asyncio
@@ -2803,15 +3060,17 @@ async def test_ui_view_request_response_custom_logger_is_keyed_by_callers_own_re
     that id as its request_id. The custom logger is asked for the caller's own stored
     request_id, so the caller gets their payload rather than a 403 from the foreign
     payload's owner check, and the foreign payload is never fetched."""
-    prisma = MagicMock(
-        db=MagicMock(
-            query_raw=AsyncMock(
-                side_effect=[
-                    [{"user": "other_user", "team_id": None}, {"user": "caller_user", "team_id": None}],
-                    [_payload_row("caller-req", "shared-id", "caller_user", "caller prompt")],
-                ]
-            )
-        )
+    prisma = MagicMock()
+    statement_timeout_reads(
+        prisma,
+        AsyncMock(
+            side_effect=[
+                [{"user": "other_user", "team_id": None}],
+                [{"user": "caller_user", "team_id": None}],
+                [],
+                [_payload_row("caller-req", "shared-id", "caller_user", "caller prompt")],
+            ]
+        ),
     )
     cold_storage = {
         "shared-id": {
@@ -3838,7 +4097,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"user_api_key_user_email": null, "actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "billed_retry_attempt": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"user_api_key_customer_usage": null, "user_api_key_user_email": null, "actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "billed_retry_attempt": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -6644,7 +6903,8 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
     async def _query_raw(_sql, *_args):
         return [placeholder_row]
 
-    fake_prisma = SimpleNamespace(db=SimpleNamespace(query_raw=_query_raw))
+    fake_db = SimpleNamespace(query_raw=_query_raw)
+    fake_prisma = SimpleNamespace(db=fake_db, read_db=ReadTargetOf(fake_db))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
 
     cold_logger = _FakeColdStorageLogger(
@@ -7731,6 +7991,8 @@ def _fake_prisma_with_owned_spend_log(owner_user_id, messages_json, response_jso
             ]
 
     class _Prisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
+
         def __init__(self):
             self.db = _DB()
 
@@ -7837,7 +8099,8 @@ def test_ui_view_request_response_internal_user_missing_row_forbidden(client, mo
 
     from types import SimpleNamespace
 
-    fake_prisma = SimpleNamespace(db=_DB())
+    fake_db = _DB()
+    fake_prisma = SimpleNamespace(db=fake_db, read_db=ReadTargetOf(fake_db))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
 
     custom_logger = _RecordingAdditionalLoggingUtils(
@@ -7862,6 +8125,168 @@ def test_ui_view_request_response_internal_user_missing_row_forbidden(client, mo
         )
         assert response.status_code == 403
         assert custom_logger.requested_ids == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+_FakeSpendLogRows: TypeAlias = Sequence[Mapping[str, object]]
+
+
+class _FakeRawQuery(Protocol):
+    def __call__(self, statement_timeout_set: bool, sql_query: str, /, *params: object) -> Awaitable[_FakeSpendLogRows]: ...
+
+
+def _started_at_or_after(row: Mapping[str, object], start: object) -> bool:
+    started: Final = row.get("startTime")
+    return (
+        isinstance(started, datetime.datetime)
+        and isinstance(start, str)
+        and started >= datetime.datetime.fromisoformat(start)
+    )
+
+
+class _SpendLogsWithoutCallIdIndex:
+    """A spend-log table missing LiteLLM_SpendLogs_litellm_call_id_idx. A read filtering on
+    litellm_call_id scans the whole table, so it fails the test unless it runs under a
+    statement timeout, which Postgres cancels it at. One that also bounds "startTime" from
+    below reads only the rows of that window, through the startTime index."""
+
+    def __init__(self, rows: _FakeSpendLogRows) -> None:
+        self.rows: Final = rows
+        self.db: Final = SimpleNamespace(query_raw=partial(self._query_raw, False))
+
+    @property
+    def read_db(self) -> SimpleNamespace:
+        return SimpleNamespace(tx=lambda **_kwargs: _StatementTimeoutTransaction(self._query_raw))
+
+    async def _query_raw(self, statement_timeout_set: bool, sql_query: str, *params: object) -> _FakeSpendLogRows:
+        where: Final = sql_query.split("WHERE", 1)[1]
+        by_call_id: Final = "litellm_call_id" in where
+        if by_call_id and not statement_timeout_set:
+            raise AssertionError("unbounded full scan of LiteLLM_SpendLogs")
+        if by_call_id and '"startTime"' not in where:
+            raise statement_timeout_error()
+        matches: Final = (
+            [row for row in self.rows if row["litellm_call_id"] == params[0] and _started_at_or_after(row, params[1])]
+            if by_call_id
+            else [row for row in self.rows if row["request_id"] == params[0]]
+        )
+        if 'SELECT DISTINCT "user", team_id' in sql_query:
+            return [{"user": row["user"], "team_id": row["team_id"]} for row in matches]
+        return matches
+
+
+class _StatementTimeoutTransaction:
+    def __init__(self, query_raw: _FakeRawQuery) -> None:
+        self._query_raw: Final = query_raw
+        self._statement_timeout_set = False
+
+    async def execute_raw(self, sql: str) -> int:
+        self._statement_timeout_set = self._statement_timeout_set or sql.startswith("SET LOCAL statement_timeout")
+        return 0
+
+    async def query_raw(self, sql_query: str, *params: object) -> _FakeSpendLogRows:
+        return await self._query_raw(self._statement_timeout_set, sql_query, *params)
+
+    async def __aenter__(self) -> "_StatementTimeoutTransaction":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        pass
+
+
+@pytest.mark.parametrize("user_role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_ui_view_request_response_opens_request_id_without_call_id_index(client, monkeypatch, user_role):
+    """
+    Regression: the Logs drawer opens a row by its request_id. Matching litellm_call_id in
+    the same read made Postgres scan the whole table when its index was missing, which on a
+    large table ran until the load balancer gave up, so the row must resolve by request_id.
+    """
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _SpendLogsWithoutCallIdIndex([_payload_row("req-1", "call-1", "user_a", "drawer prompt")]),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_active_additional_logging_utils_from_custom_logger", lambda: []
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="user_a")
+    try:
+        response = client.get("/spend/logs/ui/req-1", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 200, response.text
+        assert response.json()["messages"] == [{"role": "user", "content": "drawer prompt"}]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("user_role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_ui_view_request_response_call_id_scan_times_out_with_503(client, monkeypatch, user_role):
+    """An id only a litellm_call_id carries still needs the scan, which Postgres cancels at
+    the read statement timeout, so the caller gets a 503 naming the index, not a hang."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _SpendLogsWithoutCallIdIndex([_payload_row("req-1", "call-1", "user_a", "drawer prompt")]),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_active_additional_logging_utils_from_custom_logger", lambda: []
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="user_a")
+    try:
+        response = client.get("/spend/logs/ui/call-1", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 503, response.text
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" in response.json()["detail"]["error"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("user_role", "start_date", "expected_status", "expected_messages"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "2026-11-09 11:59:59", 200, [{"role": "user", "content": "drawer prompt"}]),
+        (LitellmUserRoles.INTERNAL_USER, "2026-11-09 11:59:59", 200, [{"role": "user", "content": "drawer prompt"}]),
+        (LitellmUserRoles.PROXY_ADMIN, "2026-11-09 12:00:01", 200, None),
+        (LitellmUserRoles.INTERNAL_USER, "2026-11-09 12:00:01", 403, None),
+    ],
+)
+def test_ui_view_request_response_reads_call_id_within_start_date_without_call_id_index(
+    client, monkeypatch, user_role, start_date, expected_status, expected_messages
+):
+    """
+    Regression: the drawer passes start_date, so a call ID lookup reads only the rows from
+    then on instead of scanning the whole table, and a row from before it is not found.
+    """
+    row: Final = {
+        **_payload_row("req-1", "call-1", "user_a", "drawer prompt"),
+        "startTime": datetime.datetime(2026, 11, 9, 12, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _SpendLogsWithoutCallIdIndex([row]))
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_active_additional_logging_utils_from_custom_logger", lambda: []
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="user_a")
+    try:
+        response = client.get(
+            "/spend/logs/ui/call-1", params={"start_date": start_date}, headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == expected_status, response.text
+        if expected_status == 200:
+            assert (response.json() or {}).get("messages") == expected_messages, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_ui_view_request_response_rejects_malformed_start_date_with_400(client, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _SpendLogsWithoutCallIdIndex([_payload_row("req-1", "call-1", "user_a", "drawer prompt")]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="user_a"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-1", params={"start_date": "2026-11-09"}, headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 400, response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -8293,6 +8718,8 @@ class _ReadOnlyReplicaPrisma:
     def __init__(self, journal: _PrismaJournal, role: str) -> None:
         self.journal = journal
         self.role = role
+        self._log_queries: Final = False
+        self._http_config: Final[dict[str, object]] = {}
 
     def is_connected(self) -> bool:
         return False
@@ -8334,6 +8761,109 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+class _ResetTableRows:
+    def __init__(self) -> None:
+        self.update_many: Final = AsyncMock()
+
+
+class _ResetDb:
+    def __init__(self) -> None:
+        self.litellm_verificationtoken: Final = _ResetTableRows()
+        self.litellm_teamtable: Final = _ResetTableRows()
+
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = ["hashed"] if "VerificationToken" in sql_query else ["t1"]
+        return [{"id": row} for row in rows if row > after_id][:limit]
+
+
+class _ResetTransaction:
+    def __init__(self, db: _ResetDb) -> None:
+        self.litellm_verificationtoken: Final = db.litellm_verificationtoken
+        self.litellm_teamtable: Final = db.litellm_teamtable
+
+    async def query_raw(self, sql_query: str) -> list[dict[str, str]]:
+        return []
+
+
+def _reset_prisma(db: _ResetDb) -> SimpleNamespace:
+    @contextlib.asynccontextmanager
+    async def tx() -> AsyncIterator[_ResetTransaction]:
+        yield _ResetTransaction(db)
+
+    return SimpleNamespace(db=db, tx=tx)
+
+
+def _committed_spend(monkeypatch: pytest.MonkeyPatch, twins: Sequence[str]) -> FakeSpendCounters:
+    spend: Final = FakeSpendCounters(redis=None, memory=dict.fromkeys(twins, 7.0))
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    return spend
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registered_callbacks", "twin_after"),
+    [
+        ([MagicMock(spec=PrometheusLogger)], None),
+        ([], 7.0),
+    ],
+)
+async def test_global_spend_reset_drops_the_committed_key_and_team_spend_the_gauges_read(
+    monkeypatch, registered_callbacks, twin_after
+):
+    twins: Final = ("spend:committed:key:hashed", "spend:committed:team:t1")
+    spend: Final = _committed_spend(monkeypatch, twins)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(_ResetDb()))
+    monkeypatch.setattr(litellm, "callbacks", registered_callbacks)
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert [spend.memory.get(twin) for twin in twins] == [twin_after, twin_after]
+
+
+class _PagedResetDb(_ResetDb):
+    def __init__(self, token_count: int) -> None:
+        super().__init__()
+        self._tokens: Final = sorted(f"token-{index}" for index in range(token_count))
+        self.largest_page = 0
+
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = self._tokens if "VerificationToken" in sql_query else []
+        page: Final = [{"id": row} for row in rows if row > after_id][:limit]
+        self.largest_page = max(self.largest_page, len(page))
+        return page
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_count", [999, 1000, 1001, 2500])
+async def test_global_spend_reset_drops_every_key_twin_reading_the_keys_in_bounded_pages(monkeypatch, token_count):
+    db: Final = _PagedResetDb(token_count)
+    twins: Final = tuple(f"spend:committed:key:token-{index}" for index in range(token_count))
+    spend: Final = _committed_spend(monkeypatch, twins)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert spend.memory == {}
+    assert db.largest_page <= 1000
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_still_succeeds_when_listing_the_committed_counters_fails(monkeypatch):
+    db: Final = _ResetDb()
+    db.query_raw = AsyncMock(side_effect=ConnectionError("db unreachable"))
+    _committed_spend(monkeypatch, ("spend:committed:team:t1",))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    db.litellm_teamtable.update_many.assert_awaited_once()
 
 
 def test_spend_calculate_rejection_body_is_openai_shaped(client):

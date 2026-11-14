@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.otel.model.metadata import (
@@ -519,7 +519,7 @@ class LLMCallSpanData:
             promoted_metadata=promoted_metadata,
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
-            messages_in=_dicts(payload.get("messages")) if capture_content else (),
+            messages_in=_message_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
@@ -781,6 +781,27 @@ def _dicts(value: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, dict))
+
+
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+_ANY_KEY_MAPPING: Final = TypeAdapter(Mapping[object, object])
+
+
+def _message_dict(message: object) -> Mapping[str, object] | None:
+    if isinstance(message, dict):
+        return {str(key): value for key, value in _ANY_KEY_MAPPING.validate_python(message).items()}
+    if not isinstance(message, BaseModel):
+        return None
+    try:
+        return message.model_dump(mode="json", fallback=str)
+    except ValueError:
+        return None
+
+
+def _message_dicts(value: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(message for item in _OBJECTS.validate_python(value) if (message := _message_dict(item)) is not None)
 
 
 def _finish_reasons(choices: tuple[Mapping[str, object], ...]) -> tuple[str, ...]:

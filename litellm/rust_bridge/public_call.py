@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
+
+import httpx
+
+from litellm.utils import (
+    _get_wrapper_timeout,  # pyright: ignore[reportPrivateUsage]  # the @client wrapper's own failure stamp
+)
 
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
@@ -42,6 +49,14 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     if isinstance(value, str | bytes) or not isinstance(value, Sequence):
         return None
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
+
+
+def timeout_to_seconds(timeout: float | httpx.Timeout | None) -> float | None:
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
 
 
 def known_params(names: Collection[str], request: Mapping[str, object]) -> Mapping[str, object]:
@@ -115,3 +130,32 @@ def native_call_hook(
     _kwargs: Mapping[str, object],
 ) -> NativeResultT:
     return hook(call)
+
+
+async def native_acall_hook(
+    hook: Callable[[NativeCall], Awaitable[NativeResultT]],
+    call: NativeCall,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> NativeResultT:
+    # Python's async entries leave the event loop (run_in_executor) before they build the provider body, so
+    # tasks scheduled next to the call, such as the proxy's during_call guardrails, edit the request first
+    await asyncio.sleep(0)
+    return await native_acall_hook_on_loop(hook, call, args, kwargs)
+
+
+async def native_acall_hook_on_loop(
+    hook: Callable[[NativeCall], Awaitable[NativeResultT]],
+    call: NativeCall,
+    _args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> NativeResultT:
+    """``native_acall_hook`` for an async entry whose Python path built its request on the loop, as OCR's did."""
+    try:
+        return await hook(call)
+    except Exception as error:
+        # utils.client stamps every async failure, which the proxy reads for x-litellm-timeout and the router for retries
+        if kwargs.get("num_retries") is not None:
+            setattr(error, "num_retries", kwargs.get("num_retries"))  # noqa: B010  # Exception declares no such attribute, as in utils.client
+        setattr(error, "timeout", _get_wrapper_timeout(kwargs=dict(kwargs)))  # noqa: B010  # Exception declares no such attribute, as in utils.client
+        raise

@@ -51,7 +51,7 @@ async def create_view_tolerating_race(db: SupportsExecuteRaw, view_name: str, dd
 async def create_missing_views(db: SupportsRawQueries) -> None:
     """
     --------------------------------------------------
-    NOTE: Copy of `litellm/db_scripts/create_views.py`.
+    NOTE: Copy of `litellm/scripts/db/create_views.py`.
     --------------------------------------------------
     Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
 

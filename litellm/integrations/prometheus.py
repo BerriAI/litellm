@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
+from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -75,8 +76,10 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
-from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth, committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
+    EntitySpendCounterKeys,
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -281,6 +284,11 @@ def _logged_fields(value: object) -> Mapping[str, object]:
         return _NO_LOGGED_FIELDS
 
 
+def _response_cost_of(logged: Mapping[str, object]) -> float:
+    cost: Final = logged.get("response_cost")
+    return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+
 _GOOGLE_PASS_THROUGH_PROVIDERS: Final = frozenset(
     (litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value)
 )
@@ -363,6 +371,104 @@ def _get_budget_metrics_per_request_timeout() -> float:
         )
         return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
     return parsed
+
+
+def _stored_spend(value: object) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+_OWN_CHARGE_MATCH_RATIO: Final = 1 - 1e-9
+
+
+def _committed_floor(stored: float, committed: float | None) -> float:
+    return stored if committed is None else max(stored, committed)
+
+
+def _customer_spend_after_request(cached_spend: float, committed_spend: float | None, response_cost: float) -> float:
+    if committed_spend is None:
+        return cached_spend + response_cost
+    return max(committed_spend + response_cost, cached_spend)
+
+
+def _budgeted_org_counter(org_id: str | None, org: OrgBudgetSnapshot | None) -> EntitySpendCounterKeys:
+    if org is None or org.max_budget is None:
+        return EntitySpendCounterKeys()
+    return EntitySpendCounterKeys.of(token=None, team_id=None, user_id=None, org_id=org_id, end_user_id=None)
+
+
+async def _committed_spend_now(counter_keys: EntitySpendCounterKeys, timeout: float) -> CommittedBudgetSpend:
+    if not counter_keys.tracked():
+        return CommittedBudgetSpend()
+    try:
+        from litellm.proxy.proxy_server import spend_counter_store
+        from litellm.proxy.spend_tracking.committed_spend import read_committed_budget_spend
+
+        return await asyncio.wait_for(
+            read_committed_budget_spend(spend_counter_store, counter_keys),
+            timeout=timeout,
+        )
+    except Exception as e:  # noqa: BLE001  # a gauge read never fails the request; the gauges keep the stored spend
+        verbose_logger.debug("[Non-Blocking] Prometheus: committed spend read failed: %s", e)
+        return CommittedBudgetSpend()
+
+
+OwnCharge: TypeAlias = Literal["unknown", "pending", "counted"]
+
+
+def _own_charge() -> OwnCharge:
+    """Whether this request's committed spend charge is in Redis yet, known only inside a request with Redis."""
+    try:
+        from litellm.proxy.proxy_server import spend_counter_store
+    except ImportError:
+        return "unknown"
+    batches: Final = active_request_redis_batches()
+    if batches is None or not spend_counter_store.has_redis:
+        return "unknown"
+    settlements: Final = batches.post_call_settlements
+    return "counted" if settlements and all(settlement.settled for settlement in settlements) else "pending"
+
+
+def _committed_spend_before_request(
+    at_auth: CommittedBudgetSpend, now: CommittedBudgetSpend, response_cost: float, own_charge: OwnCharge
+) -> CommittedBudgetSpend:
+    def before(at_auth_spend: float | None, now_spend: float | None) -> float | None:
+        if now_spend is None:
+            return at_auth_spend
+        match own_charge:
+            case "pending":
+                return now_spend
+            case "counted":
+                without_own_charge: Final = now_spend - response_cost
+                return without_own_charge if at_auth_spend is None else max(at_auth_spend, without_own_charge)
+            case "unknown":
+                if at_auth_spend is None:
+                    return now_spend - response_cost
+                own_charge_counted: Final = now_spend - at_auth_spend >= response_cost * _OWN_CHARGE_MATCH_RATIO
+                return max(at_auth_spend, now_spend - response_cost) if own_charge_counted else now_spend
+            case _:
+                assert_never(own_charge)
+
+    return CommittedBudgetSpend(
+        key=before(at_auth.key, now.key),
+        team=before(at_auth.team, now.team),
+        user=before(at_auth.user, now.user),
+        org=before(at_auth.org, now.org),
+        end_user=before(at_auth.end_user, now.end_user),
+    )
+
+
+async def _committed_spend_without_own_charge(
+    counter_keys: EntitySpendCounterKeys,
+    at_auth: CommittedBudgetSpend | None,
+    response_cost: float,
+    read_timeout: float,
+) -> CommittedBudgetSpend:
+    own_charge_before_read: Final = _own_charge()
+    now: Final = await _committed_spend_now(counter_keys, read_timeout)
+    own_charge: Final = own_charge_before_read if _own_charge() == own_charge_before_read else "unknown"
+    return _committed_spend_before_request(
+        at_auth=now if at_auth is None else at_auth, now=now, response_cost=response_cost, own_charge=own_charge
+    )
 
 
 def _get_proxy_llm_router() -> Router | None:
@@ -955,16 +1061,37 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_latency_per_output_token"),
             )
 
-            self.litellm_deployment_successful_fallbacks = self._counter_factory(
+            self.litellm_deployment_successful_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
-            self.litellm_deployment_failed_fallbacks = self._counter_factory(
+            self.litellm_deployment_failed_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
+            )
+
+            self.litellm_dynamic_limiter_share_tokens: _MetricLike = self._gauge_factory(
+                "litellm_dynamic_limiter_share_tokens",
+                "Dynamic rate limiter: the team's share of the model's TPM, as of the team's last settled request",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
+                multiprocess_mode="livemostrecent",
+            )
+
+            self.litellm_dynamic_limiter_borrowed_tokens: _MetricLike = self._gauge_factory(
+                "litellm_dynamic_limiter_borrowed_tokens",
+                "Dynamic rate limiter: tokens the team has used above its share this window, 0 while under its share",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
+                multiprocess_mode="livemostrecent",
+            )
+
+            self.litellm_dynamic_limiter_throttled_total: _MetricLike = self._counter_factory(
+                "litellm_dynamic_limiter_throttled_total",
+                "Dynamic rate limiter: requests refused per team, model and reason, "
+                "the reason being the value of the response's rate_limited_by header",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_throttled_total"),
             )
 
             # Callback Logging Failure Metrics
@@ -2229,6 +2356,10 @@ class PrometheusLogger(CustomLogger):
         _user_max_budget: Final = _metadata.get("user_api_key_user_max_budget", None)
         _user_email: Final = _metadata.get("user_api_key_user_email", None)
         _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
+        _carried_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(_metadata)
+        _committed_at_auth: Final = committed_budget_spend_of_row(
+            _carried_metadata, _REQUEST_METADATA_ADAPTER.validate_python(litellm_params)
+        )
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -2238,45 +2369,65 @@ class PrometheusLogger(CustomLogger):
         # so dropping one slow per-request emission only loses sub-cron real-time
         # detail, not correctness.
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
-        gather_coro: Final = asyncio.gather(
-            self._set_api_key_budget_metrics_after_api_request(
-                user_api_key=user_api_key,
-                user_api_key_alias=user_api_key_alias,
+        committed_read_timeout: Final = budget_metrics_timeout / 2
+
+        async def emit_budget_metrics() -> tuple[object, ...]:
+            committed: Final = await _committed_spend_without_own_charge(
+                counter_keys=_committed_at_auth.counter_keys
+                if _committed_at_auth is not None
+                else EntitySpendCounterKeys.of(
+                    token=user_api_key,
+                    team_id=user_api_team,
+                    user_id=user_id,
+                    org_id=user_api_key_org_id,
+                    end_user_id=end_user_id,
+                ),
+                at_auth=_committed_at_auth,
                 response_cost=response_cost,
-                key_max_budget=_api_key_max_budget,
-                key_spend=_api_key_spend,
-                carried=KeyBudgetSnapshot.from_metadata(_metadata),
-            ),
-            self._set_team_budget_metrics_after_api_request(
-                user_api_team=user_api_team,
-                user_api_team_alias=user_api_team_alias,
-                team_spend=_team_spend,
-                team_max_budget=_team_max_budget,
-                response_cost=response_cost,
-                carried=TeamBudgetSnapshot.from_metadata(_metadata),
-            ),
-            self._set_user_budget_metrics_after_api_request(
-                user_id=user_id,
-                user_spend=_user_spend,
-                user_max_budget=_user_max_budget,
-                response_cost=response_cost,
-                carried=UserBudgetSnapshot.from_metadata(_metadata),
-                user_email=_user_email if isinstance(_user_email, str) else None,
-            ),
-            self._set_org_budget_metrics_after_api_request(
-                org_id=user_api_key_org_id,
-                response_cost=response_cost,
-                carried=OrgBudgetSnapshot.from_metadata(_metadata),
-                org_alias=_org_alias if isinstance(_org_alias, str) else None,
-            ),
-            self._set_customer_budget_metrics_after_api_request(
-                end_user_id=end_user_id,
-                response_cost=response_cost,
-            ),
-            return_exceptions=True,
-        )
+                read_timeout=committed_read_timeout,
+            )
+            return await asyncio.gather(
+                self._set_api_key_budget_metrics_after_api_request(
+                    user_api_key=user_api_key,
+                    user_api_key_alias=user_api_key_alias,
+                    response_cost=response_cost,
+                    key_max_budget=_api_key_max_budget,
+                    key_spend=_committed_floor(_stored_spend(_api_key_spend), committed.key),
+                    carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
+                ),
+                self._set_team_budget_metrics_after_api_request(
+                    user_api_team=user_api_team,
+                    user_api_team_alias=user_api_team_alias,
+                    team_spend=_committed_floor(_stored_spend(_team_spend), committed.team),
+                    team_max_budget=_team_max_budget,
+                    response_cost=response_cost,
+                    carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
+                ),
+                self._set_user_budget_metrics_after_api_request(
+                    user_id=user_id,
+                    user_spend=_committed_floor(_stored_spend(_user_spend), committed.user),
+                    user_max_budget=_user_max_budget,
+                    response_cost=response_cost,
+                    carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
+                    user_email=_user_email if isinstance(_user_email, str) else None,
+                ),
+                self._set_org_budget_metrics_after_api_request(
+                    org_id=user_api_key_org_id,
+                    response_cost=response_cost,
+                    carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
+                    org_alias=_org_alias if isinstance(_org_alias, str) else None,
+                    committed_spend=committed.org,
+                ),
+                self._set_customer_budget_metrics_after_api_request(
+                    end_user_id=end_user_id,
+                    response_cost=response_cost,
+                    committed_spend=committed.end_user,
+                ),
+                return_exceptions=True,
+            )
+
         try:
-            results: Final = await asyncio.wait_for(gather_coro, timeout=budget_metrics_timeout)
+            results: Final = await asyncio.wait_for(emit_budget_metrics(), timeout=budget_metrics_timeout)
         except asyncio.TimeoutError:
             verbose_logger.debug(
                 "[Non-Blocking] Prometheus: per-request budget metric emission "
@@ -2745,7 +2896,7 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -2799,9 +2950,27 @@ class PrometheusLogger(CustomLogger):
                 label_context=PrometheusLabelFactoryContext(enum_values),
             )
             self.set_llm_deployment_failure_metrics(kwargs)
+            failure_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(
+                get_litellm_metadata_from_kwargs(kwargs)
+            )
+            failure_org_alias: Final = failure_metadata.get("user_api_key_org_alias")
+            failure_org: Final = OrgBudgetSnapshot.from_metadata(failure_metadata)
+            failure_cost: Final = _response_cost_of(_LOGGED_FIELDS.validate_python(standard_logging_payload))
+            failure_committed: Final = await _committed_spend_without_own_charge(
+                counter_keys=_budgeted_org_counter(user_api_key_org_id, failure_org),
+                at_auth=committed_budget_spend_of_row(
+                    failure_metadata, _REQUEST_METADATA_ADAPTER.validate_python(litellm_params)
+                )
+                or CommittedBudgetSpend(),
+                response_cost=failure_cost,
+                read_timeout=_get_budget_metrics_per_request_timeout(),
+            )
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
-                response_cost=0,
+                response_cost=failure_cost,
+                carried=failure_org,
+                org_alias=failure_org_alias if isinstance(failure_org_alias, str) else None,
+                committed_spend=failure_committed.org,
             )
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
@@ -4024,6 +4193,66 @@ class PrometheusLogger(CustomLogger):
             sanitize_prometheus_label_value(exception_status),
         ).inc()
 
+    def set_dynamic_limiter_share(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        share_tokens: int,
+        borrowed_tokens: int,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+        )
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
+        )
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_borrowed_tokens,
+            "litellm_dynamic_limiter_borrowed_tokens",
+            enum_values,
+            borrowed_tokens,
+        )
+
+    def _set_labeled_gauge(
+        self,
+        gauge: _MetricLike,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        enum_values: UserAPIKeyLabelValues,
+        value: float,
+    ) -> None:
+        from prometheus_client import Gauge
+
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
+        )
+        series: Final = gauge.labels(**labels)
+        if isinstance(series, Gauge):
+            series.set(value)
+
+    def increment_dynamic_limiter_throttled(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        rate_limit_type: str,
+        reason: str,
+    ) -> None:
+        self._inc_labeled_counter(
+            self.litellm_dynamic_limiter_throttled_total,
+            "litellm_dynamic_limiter_throttled_total",
+            UserAPIKeyLabelValues(
+                model_group=model_group,
+                team=team,
+                team_alias=team_alias,
+                priority=priority,
+                rate_limit_type=rate_limit_type,
+                reason=reason,
+            ),
+        )
+
     def increment_callback_logging_failure(
         self,
         callback_name: str,
@@ -4516,6 +4745,7 @@ class PrometheusLogger(CustomLogger):
         response_cost: float,
         carried: OrgBudgetSnapshot | None = None,
         org_alias: str | None = None,
+        committed_spend: float | None = None,
     ):
         """
         Set org budget metrics after an LLM API request
@@ -4533,7 +4763,7 @@ class PrometheusLogger(CustomLogger):
             self._set_org_budget_metrics(
                 org_id=org_id,
                 org_alias=org_alias or "",
-                spend=carried.spend + response_cost,
+                spend=_committed_floor(carried.spend, committed_spend) + response_cost,
                 max_budget=carried.max_budget,
                 budget_reset_at=None,
             )
@@ -4559,7 +4789,7 @@ class PrometheusLogger(CustomLogger):
         if org_info is None:
             return
 
-        _total_org_spend: Final = (org_info.spend or 0.0) + response_cost
+        _total_org_spend: Final = _committed_floor(org_info.spend or 0.0, committed_spend) + response_cost
         budget_table: Final = org_info.litellm_budget_table
         max_budget: Final = budget_table.max_budget if budget_table else None
         budget_reset_at: Final = getattr(budget_table, "budget_reset_at", None) if budget_table else None
@@ -4626,6 +4856,7 @@ class PrometheusLogger(CustomLogger):
         self,
         end_user_id: str | None,
         response_cost: float,
+        committed_spend: float | None = None,
     ):
         if self._customer_budget_gauges_are_noop() or not _customer_budget_metrics_enabled():
             return
@@ -4651,7 +4882,9 @@ class PrometheusLogger(CustomLogger):
         budget_table: Final = cached_customer.litellm_budget_table
         self._set_customer_budget_metrics(
             end_user_id=end_user_id,
-            spend=cached_customer.spend + response_cost,
+            spend=_customer_spend_after_request(
+                cached_spend=cached_customer.spend, committed_spend=committed_spend, response_cost=response_cost
+            ),
             max_budget=budget_table.max_budget if budget_table is not None else None,
             budget_reset_at=None,
         )
@@ -5069,7 +5302,7 @@ def prometheus_label_factory(
     tag: str | None = None,
     *,
     label_context: PrometheusLabelFactoryContext | None = None,
-) -> dict:
+) -> dict[str, str | None]:
     """
     Returns a dictionary of label + values for prometheus.
 

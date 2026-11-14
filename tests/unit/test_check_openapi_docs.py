@@ -1,4 +1,4 @@
-"""Tests for scripts/check_openapi_docs.py, the scan behind scripts/openapi_docs_gate.py."""
+"""Tests for litellm/scripts/check_openapi_docs.py, the scan behind litellm/scripts/openapi_docs_gate.py."""
 
 from collections.abc import Mapping
 from typing import Final
@@ -27,6 +27,26 @@ def _post_with_media_types(request_media_type: str, response_media_type: str) ->
 def test_a_fully_documented_post_has_no_findings(request_type: str, response_type: str) -> None:
     operation: Final = _post_with_media_types(request_type, response_type)
     assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+def test_a_documented_created_response_satisfies_the_success_schema_rule() -> None:
+    operation: Final = {**_DOCUMENTED, "responses": {"201": _RESPONSES["200"]}}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+@pytest.mark.parametrize("responses", (
+    {},
+    {"201": {"description": "Created"}},
+    {"201": {"content": {"application/json": {"schema": {}}}}},
+    {"422": _RESPONSES["200"]},
+))
+def test_an_error_schema_or_an_untyped_created_response_cannot_replace_a_success_schema(
+    responses: Mapping[str, object],
+) -> None:
+    operation: Final = {**_DOCUMENTED, "responses": responses}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == (
+        checker.Violation("POST", "/v1/thing", "OA003"),
+    )
 
 
 def test_a_schema_under_another_media_type_still_counts_as_undocumented() -> None:

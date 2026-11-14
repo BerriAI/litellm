@@ -17,7 +17,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+PRISMA_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras"
 MISSING_MIGRATION: Final = "20260626120000_add_mcp_tool_search_enabled"
 SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
 

@@ -1052,7 +1052,7 @@ async def get_auto_router_session(
     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -1063,6 +1063,11 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
+    total: Final = (
+        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
+        if user_api_key_dict.api_key
+        else None
+    )
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
@@ -1074,6 +1079,7 @@ async def get_auto_router_session(
         turns=row.turns,
         last_model=row.last_model,
         spend=row.spend,
+        total_spend=total,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,

@@ -67,6 +67,7 @@ class _StoredResponse:
     id: str
     unified_object_id: str
     status: str
+    created_at: datetime = datetime(2026, 1, 2)
     model_object_id: str = ""
     file_purpose: str = "response"
     file_object: Mapping[str, object] = dataclasses.field(default_factory=lambda: {"model": "gpt-5"})
@@ -2081,7 +2082,14 @@ def _key_row(metadata: Mapping[str, object]) -> object:
 def _team_row(metadata: Mapping[str, object]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(team_alias=None, organization_id=None, spend=0.0, max_budget=None, metadata=dict(metadata))
+    return SimpleNamespace(
+        team_alias=None,
+        organization_id=None,
+        spend=0.0,
+        max_budget=None,
+        metadata=dict(metadata),
+        created_at=datetime(2026, 1, 1),
+    )
 
 
 def _langfuse_callback_settings(callback_vars: Mapping[str, object]) -> Mapping[str, object]:

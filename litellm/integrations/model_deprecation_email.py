@@ -214,9 +214,13 @@ class ModelDeprecationEmailSender:
         return True
 
     async def run(self, llm_router: Router, *, now: datetime | None = None) -> int:
+        if not os.getenv("SMTP_HOST") or not os.getenv("SMTP_SENDER_EMAIL"):
+            return 0
+        if not await self.config.model_deprecations_enabled():
+            return 0
         current: Final = now or datetime.now(timezone.utc)
         settings: Final = await self.config.get_param("general_settings")
-        if settings is None or not _OptIn.model_validate(settings.param_value).enabled:
+        if not _OptIn.model_validate(settings.param_value if settings else {}).enabled:
             return 0
         base_url: Final = os.getenv("PROXY_BASE_URL", "")
         if not base_url:
@@ -253,7 +257,7 @@ class ModelDeprecationEmailSender:
 
 
 async def run_scheduled_model_deprecation_emails() -> None:
-    """Poll the email opt-in independently; a large owner mailing never delays Slack checks."""
+    """Poll the email settings independently; a large owner mailing never delays Slack checks."""
     from litellm._logging import verbose_proxy_logger
 
     while True:

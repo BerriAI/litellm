@@ -19,6 +19,8 @@ from pydantic import JsonValue
 
 import litellm
 from litellm import Router
+from litellm.router_rust.surface.model_list import HostedModelList
+from litellm.router_rust.surface.registry import HostRegistry
 
 _DEPLOYMENTS: Final = 4
 _TARGET: Final = _DEPLOYMENTS - 1
@@ -28,23 +30,25 @@ _BURST_THREADS: Final = 8
 _BURST_CALLS: Final = 24
 _CHURN_UPSERTS: Final = 120
 _UNREPORTED_MODEL_ID: Final = frozenset({"aresponses-stream", "aanthropic-messages"})
-_REINDEX: Final = Router._update_deployment_indices_after_removal.__code__
+_LIST_REFRESH: Final = HostedModelList.refresh.__code__
+_HAND_CHANGES: Final = HostRegistry._hand_changes.__code__
 
 
 def _router_source_files() -> frozenset[str]:
     facade_files: Final = (sys.modules[cls.__module__].__file__ for cls in Router.__mro__ if cls is not object)
-    return frozenset({_REINDEX.co_filename, *(path for path in facade_files if path is not None)})
+    return frozenset({_HAND_CHANGES.co_filename, *(path for path in facade_files if path is not None)})
 
 
-def _lock_lines(path: str) -> frozenset[int]:
-    return frozenset(
-        number
-        for number, line in enumerate(linecache.getlines(path), start=1)
-        if "with self._deployment_index_lock" in line
-    )
+def _lock_lines(path: str, statement: str) -> frozenset[int]:
+    return frozenset(number for number, line in enumerate(linecache.getlines(path), start=1) if statement in line)
 
 
-_INDEX_LOCK_LINES: Final = MappingProxyType({path: _lock_lines(path) for path in _router_source_files()})
+_INDEX_LOCK_LINES: Final = MappingProxyType(
+    {
+        **{path: _lock_lines(path, "with self._deployment_index_lock") for path in _router_source_files()},
+        _LIST_REFRESH.co_filename: _lock_lines(_LIST_REFRESH.co_filename, "with self._lock"),
+    }
+)
 
 T = TypeVar("T")
 
@@ -88,9 +92,9 @@ def _router(wire: Wire, team: bool = False) -> Router:
 
 
 def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) -> T:
-    """Run `read` on its own thread while `write` waits where the list has shrunk but the index maps have not caught
-    up. The write resumes once `read` returns or reaches the router's index lock, so a read that skips the lock meets
-    the half-updated list and a read that takes the lock waits for the write"""
+    """Run `read` on its own thread while `write` waits where router-core has applied the change but the Python model
+    list has not been read again. The write resumes once `read` returns or reaches the router's index lock, so a read
+    that skips the lock meets the half-updated list and a read that takes the lock waits for the write"""
     held: Final = threading.Event()
     release: Final = threading.Event()
     settled: Final = threading.Event()
@@ -99,7 +103,11 @@ def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) 
     failure: Final[list[BaseException]] = []
 
     def hold_at_reindex(frame: FrameType, event: str, _arg: object) -> None:
-        if event == "call" and frame.f_code is _REINDEX and not held.is_set():
+        caller: Final = frame.f_back
+        refreshes_after_a_write: Final = (
+            frame.f_code is _LIST_REFRESH and caller is not None and caller.f_code is _HAND_CHANGES
+        )
+        if event == "call" and refreshes_after_a_write and not held.is_set():
             held.set()
             released_in_time.append(release.wait(timeout=_SYNC_SECONDS))
 
