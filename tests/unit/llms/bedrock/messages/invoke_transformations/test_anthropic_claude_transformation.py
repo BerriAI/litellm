@@ -4824,9 +4824,6 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_response_and_stops_upstream_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS=0 aborts a detached Bedrock Invoke stream,
-    aclose() must propagate through _promote_message_stop_usage and AWSEventStreamDecoder.aiter_bytes
-    to close the underlying httpx.Response and stop reading further upstream frames (#50514)."""
     import litellm.llms.anthropic.messages.native.streaming_iterator as streaming_iterator_module
 
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
@@ -4902,7 +4899,6 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
 
 @pytest.mark.asyncio
 async def test_aws_event_stream_decoder_aiter_bytes_closes_source_iterator_on_aclose() -> None:
-    """Verify AWSEventStreamDecoder.aiter_bytes closes its byte iterator when closed early."""
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     source_closed: Final = asyncio.Event()

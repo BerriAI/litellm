@@ -952,6 +952,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
 
     response: Final = MagicMock(status_code=200, headers={})
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -964,6 +965,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     )
 
     _assert_moonshot_stream_content([chunk async for chunk in stream])
+    response.aclose.assert_awaited_once()
 
 
 def _truncated_frame() -> bytes:
@@ -1073,6 +1075,7 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1601,6 +1604,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 

@@ -32,11 +32,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-from litellm.llms.bedrock.chat.invoke_handler import (
-    AWSEventStreamDecoder,
-    aclose_if_supported,
-    aiter_bytes_then_close,
-)
+from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
     bedrock_invoke_guardrail_headers,
@@ -67,6 +63,7 @@ from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
@@ -936,7 +933,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            aiter_bytes_then_close(httpx_response.aiter_bytes(), httpx_response),
+            aiter_bytes_then_close(httpx_response),
             response_headers=httpx_response.headers,
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
@@ -1009,7 +1006,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     @staticmethod
     async def _promote_message_stop_usage(
         completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
-    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict]:
+    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]]:
         """
         Promote cache usage fields onto message_delta from message_stop (and,
         when stop lacks them, from message_start).  Ensures the final usage
