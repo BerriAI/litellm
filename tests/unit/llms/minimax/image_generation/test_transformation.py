@@ -89,6 +89,7 @@ def test_minimax_image_generation_is_billed_at_its_cost_map_token_rates(model: s
         ({"extra_body": {"area": "1K"}}, {"area": "1K"}),
         ({"area": "2K", "extra_body": {"area": "1K"}}, {"area": "1K"}),
         ({"extra_body": {"model": "MiniMax-H3-Image-Highspeed", "seed": 7}}, {"seed": 7}),
+        ({"extra_body": {"prompt": "a blue sphere", "seed": 7}}, {"seed": 7}),
     ],
 )
 def test_minimax_image_generation_sends_extra_body_fields_at_the_top_level(
@@ -103,6 +104,30 @@ def test_minimax_image_generation_sends_extra_body_fields_at_the_top_level(
         "prompt": "a red cube",
         **expected_body_params,
     }
+
+
+def test_minimax_image_generation_reports_each_failed_image_and_the_size_minimax_made():
+    body: Final = {
+        **_generation_response("MiniMax-H3-Image"),
+        "data": [
+            {"url": "https://example.com/h3-image/output-0.jpg", "size": "1360x768", "revised_prompt": "a cube"},
+            {"error": {"code": "1027", "message": "generated image failed the content safety check"}},
+        ],
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.post(GENERATIONS_URL).respond(200, json=body)
+        response: Final = litellm.image_generation(
+            model="minimax/MiniMax-H3-Image", prompt="a red cube", api_key="sk-fake", n=2, aspect_ratio="16:9"
+        )
+
+    assert [image.url for image in response.data] == ["https://example.com/h3-image/output-0.jpg", None]
+    assert response.data[0].revised_prompt == "a cube"
+    assert response.data[0].provider_specific_fields is None
+    assert response.data[1].provider_specific_fields == {
+        "error": {"code": "1027", "message": "generated image failed the content safety check"}
+    }
+    assert response.size == "1360x768"
+    assert response.quality is None
 
 
 def test_minimax_image_generation_refuses_stream_before_calling_minimax():
