@@ -2832,8 +2832,13 @@ def test_build_json_schema_declares_a_required_name_from_every_alternatives_keyw
         ({"items": [_UNION]}, ("items", 0)),
         ({"prefixItems": [_UNION]}, ("prefixItems", 0)),
         ({"additionalProperties": _UNION}, ("additionalProperties",)),
-        ({"$defs": {"Item": _UNION}}, ("$defs", "Item")),
-        ({"definitions": {"Item": _UNION}}, ("definitions", "Item")),
+        ({"$defs": {"Item": _UNION}, "items": {"$ref": "#/$defs/Item"}}, ("$defs", "Item")),
+        ({"definitions": {"Item": _UNION}, "items": {"$ref": "#/definitions/Item"}}, ("definitions", "Item")),
+        (
+            {"$defs": {"Item": _UNION, "List": {"items": {"$ref": "#/$defs/Item"}}}, "$ref": "#/$defs/List"},
+            ("$defs", "Item"),
+        ),
+        ({"properties": {"name": {"type": "string"}, "item": _UNION}}, ("properties", "item")),
         ({"anyOf": [_UNION]}, ("anyOf", 0)),
         ({"oneOf": [_UNION]}, ("oneOf", 0)),
         ({"allOf": [_UNION]}, ("allOf", 0)),
@@ -2895,6 +2900,24 @@ def test_build_json_schema_declares_alternatives_inside_a_single_all_of_wrapper(
     assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS}
 
 
+def test_build_json_schema_declares_alternatives_beside_an_all_of_branch_that_defines_other_names() -> None:
+    schema: Final = {
+        "allOf": [{"anyOf": list(_NAME_BRANCHES)}, {"properties": {"id": {"type": "string"}}}],
+        "required": ["name", "id"],
+    }
+
+    assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS, "id": {"type": "string"}}
+
+
+def test_build_json_schema_leaves_a_branch_as_sent_once_its_parent_declares_the_name() -> None:
+    branch: Final = {"anyOf": list(_NAME_BRANCHES), "required": ["name"]}
+
+    built: Final = build_json_schema({"anyOf": [branch], "required": ["name"]})
+
+    assert built["properties"] == {"name": _NAME_AS_ENUMS}
+    assert built["anyOf"] == [branch]
+
+
 @pytest.mark.parametrize("defs_keyword", ["$defs", "definitions"])
 def test_build_json_schema_follows_local_refs_into_branches(defs_keyword: str) -> None:
     schema: Final = {
@@ -2942,13 +2965,23 @@ def test_build_json_schema_merges_a_ref_two_branches_share_into_one_definition()
     assert build_json_schema(schema)["properties"] == {"name": {"type": "string"}}
 
 
-def test_build_json_schema_keeps_values_python_equality_would_merge() -> None:
+def test_build_json_schema_copies_number_values_gemini_enforces() -> None:
     schema: Final = {
-        "anyOf": [{"properties": {"name": {"const": 1}}}, {"properties": {"name": {"const": True}}}],
+        "anyOf": [{"properties": {"name": {"const": 1}}}, {"properties": {"name": {"enum": [1.5, "People"]}}}],
         "required": ["name"],
     }
 
-    assert build_json_schema(schema)["properties"]["name"]["anyOf"] == [{"enum": [1]}, {"enum": [True]}]
+    assert build_json_schema(schema)["properties"] == {"name": {"anyOf": [{"enum": [1]}, {"enum": [1.5, "People"]}]}}
+
+
+def test_build_json_schema_declares_hoisted_names_in_required_order() -> None:
+    schema: Final = {
+        "properties": {"z": {"type": "string"}},
+        "anyOf": [{"properties": {"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}}],
+        "required": ["c", "z", "a", "c", "b"],
+    }
+
+    assert list(build_json_schema(schema)["properties"]) == ["z", "c", "a", "b"]
 
 
 def test_build_json_schema_treats_definitions_with_reordered_keys_as_one() -> None:
@@ -2978,11 +3011,22 @@ def test_build_json_schema_keeps_every_definition_of_every_name_across_branches(
     }
 
 
-@pytest.mark.parametrize("other", [{"type": "null"}, {"type": ["string", "integer"]}], ids=["null", "type-list"])
+@pytest.mark.parametrize(
+    "other",
+    [{"type": "null"}, {"type": ["string", "integer"]}, {"type": "NULL"}, {"type": ["STRING", 1]}],
+    ids=["null", "type-list", "uppercase", "uppercase-type-list"],
+)
 def test_build_json_schema_declares_a_name_beside_alternatives_that_cannot_be_objects(other: JsonValue) -> None:
     schema: Final = {"type": ["object", "null"], "anyOf": [_NAME_BRANCHES[0], other], "required": ["name"]}
 
     assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
+
+
+@pytest.mark.parametrize("node_type", ["OBJECT", ["OBJECT", "NULL"]], ids=["uppercase", "uppercase-type-list"])
+def test_build_json_schema_declares_names_on_nodes_typed_in_uppercase(node_type: JsonValue) -> None:
+    schema: Final = {"type": node_type, "anyOf": list(_NAME_BRANCHES), "required": ["name"]}
+
+    assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS}
 
 
 @pytest.mark.parametrize(
@@ -3063,6 +3107,10 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
             id="unlike-definitions-beside-a-ref",
         ),
         pytest.param(
+            {"anyOf": [{"allOf": list(_NAME_BRANCHES)}, _NAME_BRANCHES[0]], "required": ["name"]},
+            id="unlike-definitions-under-one-alternative",
+        ),
+        pytest.param(
             {"anyOf": [_NAME_BRANCHES[0], {"properties": {"other": {"type": "string"}}}], "required": ["name"]},
             id="one-alternative-defines-the-name",
         ),
@@ -3089,6 +3137,45 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
             id="an-alternative-past-the-search-depth",
         ),
         pytest.param({"type": "string", "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="node-not-an-object"),
+        pytest.param(
+            {"type": "STRING", "anyOf": list(_NAME_BRANCHES), "required": ["name"]}, id="node-not-an-object-uppercase"
+        ),
+        pytest.param(
+            {"anyOf": [_NAME_BRANCHES[0], {"properties": {"name": {"const": True}}}], "required": ["name"]},
+            id="boolean-const",
+        ),
+        pytest.param({"anyOf": [{"properties": {"name": {"const": None}}}], "required": ["name"]}, id="null-const"),
+        pytest.param(
+            {"anyOf": [{"properties": {"name": {"const": {"x": 1}}}}], "required": ["name"]}, id="object-const"
+        ),
+        pytest.param({"anyOf": [{"properties": {"name": {"const": [1]}}}], "required": ["name"]}, id="array-const"),
+        pytest.param(
+            {"anyOf": [{"properties": {"name": {"enum": ["People", None]}}}], "required": ["name"]},
+            id="enum-with-null",
+        ),
+        *(
+            pytest.param(
+                {
+                    "properties": {"name": {"type": "string"}},
+                    keyword: [{"anyOf": list(_NAME_BRANCHES), "required": ["name"]}],
+                },
+                id=f"{keyword}-parent-declares-the-name",
+            )
+            for keyword in ("anyOf", "oneOf", "allOf")
+        ),
+        pytest.param(
+            {
+                "properties": {"name": {"type": "string"}},
+                "anyOf": [{"oneOf": [{"anyOf": list(_NAME_BRANCHES), "required": ["name"]}]}],
+            },
+            id="grandparent-declares-the-name",
+        ),
+        pytest.param({"$defs": {"Item": _UNION}}, id="unreferenced-def"),
+        pytest.param({"definitions": {"Item": _UNION}}, id="unreferenced-definition"),
+        pytest.param(
+            {"$defs": {"Item": _UNION, "Unused": {"items": {"$ref": "#/$defs/Item"}}}},
+            id="def-referenced-only-from-an-unreferenced-def",
+        ),
         pytest.param(
             {"type": ["string", "null"], "anyOf": list(_NAME_BRANCHES), "required": ["name"]},
             id="node-types-without-object",
@@ -3237,7 +3324,10 @@ def test_build_json_schema_shares_one_copy_budget_across_the_schema() -> None:
 
 def test_build_json_schema_declares_names_after_a_copy_larger_than_the_fixed_budget() -> None:
     built: Final = build_json_schema(
-        {"$defs": {"Notes": _union_with_description(_JSON_SCHEMA_HOIST_BUDGET)}, "properties": {"item": _UNION}}
+        {
+            "$defs": {"Notes": _union_with_description(_JSON_SCHEMA_HOIST_BUDGET)},
+            "properties": {"notes": {"$ref": "#/$defs/Notes"}, "item": _UNION},
+        }
     )
 
     assert "properties" in built["$defs"]["Notes"]
