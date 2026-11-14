@@ -26,6 +26,7 @@ MIXPANEL_OTLP_ENDPOINT_BY_REGION: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _DEFAULT_REGION: Final = "us"
+_NO_REGION: Final = frozenset({"", "none"})
 
 
 class _MixpanelSettings(BaseSettings):
@@ -41,11 +42,18 @@ def mixpanel_authorization_header(project_token: str) -> str:
     return f"Basic {encoded}"
 
 
+def mixpanel_region_key(region: str | None) -> str | None:
+    """The lower-cased region ``region`` names, or ``None`` when it is missing, blank or a stringified null."""
+    key: Final = (region or "").strip().lower()
+    return None if key in _NO_REGION else key
+
+
 def _resolve_region_endpoint(region: str | None) -> str:
     default_endpoint: Final = MIXPANEL_OTLP_ENDPOINT_BY_REGION[_DEFAULT_REGION]
-    if not region:
+    key: Final = mixpanel_region_key(region)
+    if key is None:
         return default_endpoint
-    endpoint: Final = MIXPANEL_OTLP_ENDPOINT_BY_REGION.get(region.strip().lower())
+    endpoint: Final = MIXPANEL_OTLP_ENDPOINT_BY_REGION.get(key)
     if endpoint is None:
         verbose_logger.warning(
             "Mixpanel: unknown mixpanel_region %r; supported regions: %s. Using the default (US) endpoint.",

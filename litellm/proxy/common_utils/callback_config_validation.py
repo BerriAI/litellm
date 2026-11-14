@@ -395,8 +395,10 @@ def _logging_entry_error(entry: object) -> str | None:
     )
     callback_name: Final = typed_entry.get("callback_name")
     callback_vars_raw: Final = typed_entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
+    if not isinstance(callback_name, str):
         return None
+    if not isinstance(callback_vars_raw, Mapping):
+        return _mixpanel_v2_error(callback_name)
     callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
         Mapping[object, object], callback_vars_raw
     )
@@ -503,10 +505,11 @@ def _mixpanel_config_error(callback_vars: Mapping[str, str]) -> str | None:
     if not any(key.startswith(_MIXPANEL_VAR_PREFIX) for key in callback_vars):
         return None
 
-    from litellm.integrations.otel.presets.mixpanel import MIXPANEL_OTLP_ENDPOINT_BY_REGION
+    from litellm.integrations.otel.presets.mixpanel import MIXPANEL_OTLP_ENDPOINT_BY_REGION, mixpanel_region_key
 
     region: Final = callback_vars.get("mixpanel_region")
-    if region is not None and region.strip().lower() not in MIXPANEL_OTLP_ENDPOINT_BY_REGION:
+    region_key: Final = mixpanel_region_key(region)
+    if region_key is not None and region_key not in MIXPANEL_OTLP_ENDPOINT_BY_REGION:
         return (
             f"Unknown mixpanel_region {region!r}. "
             f"Supported regions: {', '.join(sorted(MIXPANEL_OTLP_ENDPOINT_BY_REGION))}."

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-from typing import cast
+from typing import Final, cast
 
 from fastapi import FastAPI
 
@@ -621,12 +621,23 @@ class TestMixpanelCallbackValidation:
             with pytest.raises(HTTPException) as exc:
                 raise_on_invalid_key_logging_config(self._key_metadata({}))
             assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            without_vars: Final = {"logging": [{"callback_name": "mixpanel", "callback_type": "success"}]}
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(without_vars)
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            raise_on_invalid_key_logging_config({"logging": [{"callback_name": "langfuse", "callback_type": "success"}]})
             assert callback_config_error("langfuse", {}) is None
 
             monkeypatch.setenv("LITELLM_OTEL_V2", "true")
             is_otel_v2_enabled.cache_clear()
             _validate_team_callback(self._team_data({}))
             raise_on_invalid_key_logging_config(self._key_metadata({}))
+            raise_on_invalid_key_logging_config(without_vars)
+            for no_region in ("", "   ", "None"):
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": no_region}))
+                raise_on_invalid_key_logging_config(
+                    self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_region": no_region})
+                )
             with pytest.raises(HTTPException) as exc:
                 _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "mars"}))
             assert "Unknown mixpanel_region" in str(exc.value.detail)
