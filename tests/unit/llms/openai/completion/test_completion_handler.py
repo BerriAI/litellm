@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 import respx
-from httpx import Response
+from httpx import ConnectError, Response
 
 
 import litellm
@@ -93,7 +93,7 @@ async def test_acompletion_forwards_client_headers_to_provider(
     assert request_headers["x-mycorp-llmcall-id"] == "abc-123"
 
 
-_REJECTION_BODY: Final = '{"error":{"message":"bad prompt","type":"invalid_request_error"}}'
+_REJECTION_BODY: Final = '{"error":{"message":"bad prompt","type":"invalid_request_error","param":"prompt","code":400}}'
 
 
 @pytest.fixture
@@ -113,6 +113,11 @@ def _assert_carries_the_upstream_rejection(rejected: litellm.BadRequestError) ->
     assert rejected.response.text == _REJECTION_BODY
     assert rejected.response.json() == json.loads(_REJECTION_BODY)
     assert rejected.response.headers["x-request-id"] == "req-1"
+    assert rejected.body == json.loads(_REJECTION_BODY)["error"]
+    assert (rejected.param, rejected.code, rejected.type) == ("prompt", 400, "invalid_request_error")
+    assert "bad prompt" in str(rejected)
+    assert '{"error"' not in str(rejected)
+    assert "{'error'" not in str(rejected)
 
 
 @respx.mock
@@ -140,6 +145,22 @@ async def test_acompletion_surfaces_the_status_and_headers_of_a_rejected_request
         await atext_completion(model="gpt-3.5-turbo-instruct", prompt="hello")
 
     _assert_carries_the_upstream_rejection(rejected.value)
+
+
+@respx.mock
+def test_streaming_completion_reports_an_error_event_sent_mid_stream() -> None:
+    respx.post("https://api.openai.com/v1/completions").mock(
+        return_value=Response(
+            200,
+            text='data: {"error": {"message": "upstream overloaded", "type": "server_error"}}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    with pytest.raises(litellm.InternalServerError) as failed:
+        list(text_completion(model="gpt-3.5-turbo-instruct", prompt="hello", stream=True))
+
+    assert failed.value.status_code == 500
+    assert "upstream overloaded" in str(failed.value)
 
 
 @respx.mock
@@ -383,3 +404,23 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
     assert json.loads(route.calls[0].request.content)["stream_options"] == {
         "include_usage": True
     }
+
+
+@respx.mock
+def test_text_completion_transport_failure_leaves_body_and_param_none() -> None:
+    respx.post("https://api.openai.com/v1/completions").mock(
+        side_effect=ConnectError("upstream unreachable")
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        text_completion(
+            model="gpt-3.5-turbo-instruct",
+            prompt="hello",
+            max_tokens=5,
+            max_retries=0,
+        )
+
+    rejected: Final = exc_info.value
+    assert rejected.body is None
+    assert rejected.param is None
+    assert "Connection error" in str(rejected)

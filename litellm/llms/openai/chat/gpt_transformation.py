@@ -80,7 +80,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
-from ..common_utils import OpenAIError, without_cache_control
+from ..common_utils import OpenAIError, openai_sdk_error_body, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -920,6 +920,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             status_code=status_code,
             message=error_message,
             headers=cast(httpx.Headers, headers),
+            body=openai_sdk_error_body(error_message),
         )
 
     def get_complete_url(

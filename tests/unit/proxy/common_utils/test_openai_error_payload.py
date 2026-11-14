@@ -516,3 +516,27 @@ def test_a_router_rejection_is_labelled_by_the_status_it_answers_with(
     wrapped: Final = proxy_exception_for(ValueError(router_rejection), default_status_code=400)
 
     assert (wrapped.code, wrapped.type) == expected
+
+
+@pytest.mark.parametrize(
+    "leakable",
+    [
+        "sk-1234567890abcdef1234567890",
+        "guard-scan.internal.corp",
+        "/srv/secret/app/guard.py",
+    ],
+)
+def test_openai_error_type_and_param_redact_secrets_and_internal_details(leakable: str) -> None:
+    class _Carrier(Exception):
+        type: str = f"BadTypeError {leakable}"
+        param: str = f"bad_field {leakable}"
+
+    carried: Final = _Carrier("boom")
+    relayed_type: Final = openai_error_type(carried, 400)
+    relayed_param: Final = openai_error_param(carried)
+
+    assert leakable not in relayed_type
+    assert relayed_type.startswith("BadTypeError ")
+    assert relayed_param is not None
+    assert leakable not in relayed_param
+    assert relayed_param.startswith("bad_field ")

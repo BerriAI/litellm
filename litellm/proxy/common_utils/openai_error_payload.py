@@ -10,7 +10,10 @@ from typing import Final
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
 
-from litellm._logging import redact_internal_details_from_client_fields
+from litellm._logging import (
+    redact_internal_details_from_client_fields,
+    redact_internal_details_from_client_message,
+)
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -102,7 +105,7 @@ def openai_error_type(exc: object, status_code: int) -> str:
     falls back to the type its status code stands for."""
     carried: Final = attribute_of(exc, "type")
     if isinstance(carried, str) and carried != STRINGIFIED_NONE:
-        return carried
+        return redact_internal_details_from_client_message(carried)
     return openai_error_type_for_status(status_code)
 
 
@@ -119,7 +122,9 @@ def openai_error_param(exc: object) -> str | None:
     """OpenAI types ``error.param`` as nullable, so an exception carrying none
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
-    return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+    if isinstance(carried, str) and carried != STRINGIFIED_NONE:
+        return redact_internal_details_from_client_message(carried)
+    return None
 
 
 def relayed_provider_specific_fields(

@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
@@ -57,7 +58,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
-from ..common_utils import OpenAIError, without_cache_control
+from ..common_utils import OpenAIError, openai_sdk_error_body, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
@@ -1382,6 +1383,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response.hidden_params["headers"] = raw_response_headers
 
         return response
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+    ) -> BaseLLMException:
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+            body=openai_sdk_error_body(error_message),
+        )
 
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########

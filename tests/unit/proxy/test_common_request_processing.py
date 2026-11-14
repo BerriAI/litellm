@@ -15191,6 +15191,109 @@ async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed
     assert [value for value in _DOWNSTREAM_LEAKABLE_VALUES if value in json.dumps(answered)] == []
 
 
+_VLLM_BACKEND: Final = MappingProxyType(
+    {"api_base": "https://vllm-backend.example.com/v1", "api_key": "sk-vllm-key"}
+)
+
+_VLLM_ROUTES: Final = (
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "completions",
+        lambda: litellm.text_completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            prompt="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "responses",
+        lambda: litellm.responses(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            input="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "max_tokens must be at least 1, got -5.",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == ("max_tokens", "BadRequestError", "400")
+    assert str(payload["message"]).endswith("max_tokens must be at least 1, got -5.")
+    assert '{"error"' not in str(payload["message"])
+    assert "{'error'" not in str(payload["message"])
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_secrets_and_internal_details_from_param_and_type(
+    route: str, call: Callable[[], object]
+) -> None:
+    leaks: Final = (
+        "sk-1234567890abcdef1234567890",
+        "guard-scan.internal.corp",
+        "/srv/secret/app/guard.py",
+    )
+    body: Final = {
+        "error": {
+            "message": f"invalid value for {' '.join(leaks)}",
+            "type": f"BadRequestError {' '.join(leaks)}",
+            "param": f"token_field {' '.join(leaks)}",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert str(payload["type"]).startswith("BadRequestError ")
+    assert str(payload["param"]).startswith("token_field ")
+    for secret_or_internal in leaks:
+        assert secret_or_internal not in str(payload["type"])
+        assert secret_or_internal not in str(payload["param"])
+        assert secret_or_internal not in str(payload["message"])
+
+
 _ScenarioT = TypeVar("_ScenarioT")
 
 
