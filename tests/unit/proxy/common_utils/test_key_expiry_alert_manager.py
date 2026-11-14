@@ -212,6 +212,17 @@ async def test_lock_holder_scans_then_releases_the_job_lock(router_redis: tuple[
 
 
 @pytest.mark.asyncio
+async def test_unreachable_redis_still_scans_and_sends() -> None:
+    unreachable: Final = RedisCache(host="127.0.0.1", port=1, socket_timeout=0.2)
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    manager: Final = KeyExpiryAlertManager(
+        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=unreachable)
+    )
+    await manager.process_alerts()
+    assert email.send_key_expiring_email.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_without_redis_the_job_runs_unlocked() -> None:
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
     manager: Final = KeyExpiryAlertManager(
@@ -315,18 +326,31 @@ def _email_enabled_proxy(monkeypatch: pytest.MonkeyPatch, settings: dict[str, ob
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "email_logging_instance", _EmailTransport())
 
 
-def test_startup_builds_expiry_job_with_global_default_shared_pod_lock_and_twelve_hour_interval(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.asyncio
+async def test_startup_built_job_waits_for_the_proxy_pod_lock_then_scans_with_the_global_default(
+    monkeypatch: pytest.MonkeyPatch, router_redis: tuple[RedisCache, object]
 ) -> None:
     from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
+    redis, _ = router_redis
     _email_enabled_proxy(monkeypatch, {"key_expiry_alert_days": 7})
+    db: Final = _database(())
+    monkeypatch.setattr(proxy_server, "prisma_client", db)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj.db_spend_update_writer, "pod_lock_manager", PodLockManager(redis_cache=redis)
+    )
     manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
     assert manager is not None
-    assert manager.default_days == 7
-    assert manager.pod_lock_manager is proxy_server.proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+    other_pod: Final = PodLockManager(redis_cache=redis)
+    assert await other_pod.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    await manager.process_alerts()
+    db.db.query_raw.assert_not_awaited()
+    await other_pod.release_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
+    await manager.process_alerts()
+    _, start, _, default_end = db.db.query_raw.call_args.args
+    assert default_end - start == timedelta(days=7)
     assert LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS == 12 * 60 * 60
 
 

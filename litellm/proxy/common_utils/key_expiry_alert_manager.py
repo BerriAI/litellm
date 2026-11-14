@@ -90,18 +90,23 @@ class KeyExpiryAlertManager:
 
     async def process_alerts(self) -> None:
         """Entry point for the scheduled job. Uses PodLockManager so only one pod scans keys per cycle in
-        multi-pod deployments; the per-key Redis claim still guards each email."""
+        multi-pod deployments. The cycle is skipped only when another pod holds the lock: if Redis cannot answer,
+        this pod scans anyway, because a missed warning can outlive the key while the per-key claim still guards
+        each email."""
         lock: Final = self.pod_lock_manager if self.pod_lock_manager and self.pod_lock_manager.redis_cache else None
-        if lock is not None and not await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME):
-            logger.debug(
-                "Key expiry alerts: another pod is already running this cycle "
-                "or Redis lock acquisition failed - skipping this cycle."
+        acquired: Final = lock is not None and bool(await lock.acquire_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME))
+        if lock is not None and lock.redis_cache is not None and not acquired:
+            holder: Final = await lock.redis_cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # RedisCache.async_get_cache leaves its key parameter untyped
+                PodLockManager.get_redis_lock_key(KEY_EXPIRY_ALERT_JOB_NAME)
             )
-            return
+            if holder is not None:
+                logger.debug("Key expiry alerts: another pod is running this cycle, skipping.")
+                return
+            logger.warning("Key expiry alerts: could not take the job lock from Redis, scanning without it.")
         try:
             await self._send_due_alerts()
         finally:
-            if lock is not None:
+            if acquired and lock is not None:
                 await lock.release_lock(cronjob_id=KEY_EXPIRY_ALERT_JOB_NAME)
 
     async def _send_due_alerts(self) -> None:
