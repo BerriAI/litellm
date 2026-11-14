@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::base_llm::messages::context::{MessagesModelCapabilities, UnparsedMessages};
@@ -629,7 +630,7 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
             let MessageContent::Blocks(blocks) = &message.content else {
                 return message;
             };
-            let advisor_ids: Vec<&str> = blocks
+            let advisor_ids: HashSet<&str> = blocks
                 .iter()
                 .filter(|block| is_advisor_use(block))
                 .filter_map(|block| block.id.as_deref())
@@ -644,7 +645,7 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
                         && block
                             .tool_use_id
                             .as_deref()
-                            .is_some_and(|id| advisor_ids.contains(&id));
+                            .is_some_and(|id| advisor_ids.contains(id));
                     !is_advisor_use(block) && !is_result
                 })
                 .cloned()
@@ -780,7 +781,7 @@ fn server_tool_use_query(block: &ContentBlock) -> Option<(&str, &str)> {
 }
 
 fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let flattenable_ids: Vec<&str> = blocks
+    let flattenable_ids: HashSet<&str> = blocks
         .iter()
         .filter_map(flattenable_web_search_results)
         .map(|(tool_use_id, _)| tool_use_id)
@@ -788,21 +789,18 @@ fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<Conten
     if flattenable_ids.is_empty() {
         return blocks;
     }
-    let queries: Vec<(&str, &str)> = blocks.iter().filter_map(server_tool_use_query).collect();
+    let queries: HashMap<&str, &str> = blocks.iter().filter_map(server_tool_use_query).collect();
     blocks
         .iter()
         .filter_map(|block| {
             if let Some((tool_use_id, results)) = flattenable_web_search_results(block) {
-                let query = queries
-                    .iter()
-                    .rfind(|(id, _)| *id == tool_use_id)
-                    .map_or("", |(_, query)| query);
+                let query = queries.get(tool_use_id).copied().unwrap_or("");
                 return Some(ContentBlock::text(render_web_search_results(
                     query, &results,
                 )));
             }
             if let Some((id, _)) = server_tool_use_query(block)
-                && flattenable_ids.contains(&id)
+                && flattenable_ids.contains(id)
             {
                 return None;
             }
@@ -959,7 +957,7 @@ fn raw_server_tool_use_query(block: &Value) -> Option<(&str, &str)> {
 /// [`flatten_unencrypted_web_search_results`] on a raw message.
 pub fn flatten_unencrypted_raw_web_search_results(message: Value) -> Option<Value> {
     with_raw_blocks(message, |blocks| {
-        let flattenable_ids: Vec<&str> = blocks
+        let flattenable_ids: HashSet<&str> = blocks
             .iter()
             .filter_map(raw_flattenable_web_search_results)
             .map(|(tool_use_id, _)| tool_use_id)
@@ -967,7 +965,7 @@ pub fn flatten_unencrypted_raw_web_search_results(message: Value) -> Option<Valu
         if flattenable_ids.is_empty() {
             return Some(blocks);
         }
-        let queries: Vec<(&str, &str)> = blocks
+        let queries: HashMap<&str, &str> = blocks
             .iter()
             .filter_map(raw_server_tool_use_query)
             .collect();
@@ -975,16 +973,13 @@ pub fn flatten_unencrypted_raw_web_search_results(message: Value) -> Option<Valu
             .iter()
             .filter_map(|block| {
                 if let Some((tool_use_id, results)) = raw_flattenable_web_search_results(block) {
-                    let query = queries
-                        .iter()
-                        .rfind(|(id, _)| *id == tool_use_id)
-                        .map_or("", |(_, query)| query);
+                    let query = queries.get(tool_use_id).copied().unwrap_or("");
                     return Some(
                         json!({"type": "text", "text": render_web_search_results(query, &results)}),
                     );
                 }
                 if let Some((id, _)) = raw_server_tool_use_query(block)
-                    && flattenable_ids.contains(&id)
+                    && flattenable_ids.contains(id)
                 {
                     return None;
                 }
@@ -1018,6 +1013,33 @@ fn is_raw_advisor_use(block: &Value) -> bool {
         && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
+/// A JSON value as a Python dict key: `True`, `1` and `1.0` are one key. Python cannot hash a
+/// list or dict at all, so those keep JSON equality.
+#[derive(PartialEq, Eq, Hash)]
+enum PythonKey<'a> {
+    Integer(i128),
+    Float(u64),
+    Json(&'a Value),
+}
+
+impl<'a> PythonKey<'a> {
+    fn of(value: &'a Value) -> Self {
+        const I128_RANGE: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0;
+        match value {
+            Value::Bool(flag) => Self::Integer(i128::from(*flag)),
+            Value::Number(number) => match (number.as_i128(), number.as_f64()) {
+                (Some(integer), _) => Self::Integer(integer),
+                (None, Some(float)) if float.fract() == 0.0 && float.abs() < I128_RANGE => {
+                    Self::Integer(float as i128)
+                }
+                (None, Some(float)) => Self::Float(float.to_bits()),
+                (None, None) => Self::Json(value),
+            },
+            _ => Self::Json(value),
+        }
+    }
+}
+
 /// Python's `strip_advisor_blocks_from_messages` on a raw assistant message: every advisor
 /// `server_tool_use` with a truthy id goes, with the `advisor_tool_result` answering it.
 pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
@@ -1025,14 +1047,15 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
         return Some(message);
     }
     with_raw_blocks(message, |blocks| {
-        let advisor_ids: Vec<Value> = blocks
+        let advisor_ids: HashSet<PythonKey> = blocks
             .iter()
             .filter(|block| is_raw_advisor_use(block))
             .filter_map(|block| block.get("id"))
             .filter(|id| python_truthy(id))
-            .cloned()
+            .map(PythonKey::of)
             .collect();
-        let answers_advisor = |id: Option<&Value>| id.is_some_and(|id| advisor_ids.contains(id));
+        let answers_advisor =
+            |id: Option<&Value>| id.is_some_and(|id| advisor_ids.contains(&PythonKey::of(id)));
         let kept = blocks
             .iter()
             .filter(|block| {
@@ -1836,6 +1859,177 @@ mod tests {
     #[case::empty_id(turn(advisor_exchange(json!(""))))]
     fn strip_raw_advisor_blocks_leaves_other_turns(#[case] message: Value) {
         assert_eq!(strip_raw_advisor_blocks(message.clone()), Some(message));
+    }
+
+    fn advisor_use(id: Value) -> Value {
+        json!({"type": "server_tool_use", "id": id, "name": "advisor", "input": {}})
+    }
+
+    fn advisor_result(tool_use_id: Value) -> Value {
+        json!({"type": "advisor_tool_result", "tool_use_id": tool_use_id, "content": {"type": "advisor_result", "text": "Advice."}})
+    }
+
+    #[rstest]
+    #[case::int_answered_by_float(
+        json!([advisor_use(json!(1)), advisor_result(json!(1.0)), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::float_answered_by_int(
+        json!([advisor_use(json!(2.0)), advisor_result(json!(2)), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::true_answered_by_one(
+        json!([advisor_use(json!(true)), advisor_result(json!(1)), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::one_answered_by_true(
+        json!([advisor_use(json!(1)), advisor_result(json!(true)), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::string_not_answered_by_int(
+        json!([advisor_use(json!("1")), advisor_result(json!(1)), unparsed_block()]),
+        json!([advisor_result(json!(1)), unparsed_block()])
+    )]
+    #[case::int_beyond_float_precision(
+        json!([advisor_use(json!(9_007_199_254_740_993_u64)), advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()]),
+        json!([advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()])
+    )]
+    #[case::falsy_ids_are_kept(
+        json!([
+            advisor_use(json!(0)), advisor_result(json!(0)),
+            advisor_use(json!(0.0)), advisor_result(json!(0.0)),
+            advisor_use(json!(false)), advisor_result(json!(false)),
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}},
+            advisor_use(json!("srvtoolu_1")), advisor_result(json!("srvtoolu_1"))
+        ]),
+        json!([
+            advisor_use(json!(0)), advisor_result(json!(0)),
+            advisor_use(json!(0.0)), advisor_result(json!(0.0)),
+            advisor_use(json!(false)), advisor_result(json!(false)),
+            advisor_use(Value::Null), advisor_result(Value::Null),
+            {"type": "server_tool_use", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "content": {}}
+        ])
+    )]
+    #[case::only_advisor_blocks_answer_advisor_ids(
+        json!([
+            advisor_use(json!("a")),
+            {"type": "server_tool_use", "id": "w", "name": "web_search", "input": {}},
+            advisor_result(json!("w")),
+            advisor_result(json!("unknown")),
+            {"type": "tool_use", "id": "a", "name": "advisor", "input": {}},
+            {"type": "tool_result", "tool_use_id": "a", "content": "ok"},
+            advisor_result(json!("a"))
+        ]),
+        json!([
+            {"type": "server_tool_use", "id": "w", "name": "web_search", "input": {}},
+            advisor_result(json!("w")),
+            advisor_result(json!("unknown")),
+            {"type": "tool_use", "id": "a", "name": "advisor", "input": {}},
+            {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
+        ])
+    )]
+    #[case::object_ids_compare_regardless_of_key_order(
+        json!([advisor_use(json!({"a": 1, "b": 2})), advisor_result(json!({"b": 2, "a": 1})), unparsed_block()]),
+        json!([unparsed_block()])
+    )]
+    #[case::nested_numbers_compare_as_json(
+        json!([advisor_use(json!([1])), advisor_result(json!([1.0])), unparsed_block()]),
+        json!([advisor_result(json!([1.0])), unparsed_block()])
+    )]
+    fn strip_raw_advisor_blocks_matches_ids_as_python_does(
+        #[case] blocks: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(strip_raw_advisor_blocks(turn(blocks)), Some(turn(expected)));
+    }
+
+    const MANY_BLOCKS: usize = 20_000;
+    const MANY_BLOCKS_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+    fn many_ids() -> impl Iterator<Item = String> {
+        (0..MANY_BLOCKS).map(|index| format!("srvtoolu_{index:08}"))
+    }
+
+    fn many_advisor_exchanges() -> Value {
+        turn(Value::Array(
+            many_ids()
+                .map(|id| advisor_use(json!(id)))
+                .chain(many_ids().map(|id| advisor_result(json!(id))))
+                .chain([json!({"type": "text", "text": "Done."})])
+                .collect(),
+        ))
+    }
+
+    fn many_replayed_searches() -> Value {
+        turn(Value::Array(
+            many_ids()
+                .map(|id| json!({"type": "server_tool_use", "id": id, "name": "web_search", "input": {"query": "q"}}))
+                .chain(many_ids().map(
+                    |id| json!({"type": "web_search_tool_result", "tool_use_id": id, "content": []}),
+                ))
+                .collect(),
+        ))
+    }
+
+    fn timed<T>(rewrite: impl FnOnce() -> T) -> (T, std::time::Duration) {
+        let started = std::time::Instant::now();
+        let rewritten = rewrite();
+        (rewritten, started.elapsed())
+    }
+
+    fn raw_blocks(message: Option<Value>) -> usize {
+        message.unwrap()["content"].as_array().unwrap().len()
+    }
+
+    fn typed_blocks(messages: Vec<Message>) -> usize {
+        match &messages[0].content {
+            MessageContent::Blocks(blocks) => blocks.len(),
+            MessageContent::Text(_) => 0,
+        }
+    }
+
+    fn parsed(message: Value) -> Vec<Message> {
+        serde_json::from_value(json!([message])).unwrap()
+    }
+
+    fn strip_raw_advisor(message: Value) -> (usize, std::time::Duration) {
+        let (rewritten, elapsed) = timed(|| strip_raw_advisor_blocks(message));
+        (raw_blocks(rewritten), elapsed)
+    }
+
+    fn strip_typed_advisor(message: Value) -> (usize, std::time::Duration) {
+        let messages = parsed(message);
+        let (rewritten, elapsed) = timed(|| strip_advisor_blocks(messages));
+        (typed_blocks(rewritten), elapsed)
+    }
+
+    fn flatten_raw_searches(message: Value) -> (usize, std::time::Duration) {
+        let (rewritten, elapsed) = timed(|| flatten_unencrypted_raw_web_search_results(message));
+        (raw_blocks(rewritten), elapsed)
+    }
+
+    fn flatten_typed_searches(message: Value) -> (usize, std::time::Duration) {
+        let messages = parsed(message);
+        let (rewritten, elapsed) = timed(|| flatten_unencrypted_web_search_results(messages));
+        (typed_blocks(rewritten), elapsed)
+    }
+
+    #[rstest]
+    #[case::raw_advisor_exchanges(strip_raw_advisor, many_advisor_exchanges(), 1)]
+    #[case::typed_advisor_exchanges(strip_typed_advisor, many_advisor_exchanges(), 1)]
+    #[case::raw_replayed_searches(flatten_raw_searches, many_replayed_searches(), MANY_BLOCKS)]
+    #[case::typed_replayed_searches(flatten_typed_searches, many_replayed_searches(), MANY_BLOCKS)]
+    fn id_matching_scales_linearly_with_the_blocks(
+        #[case] rewrite: fn(Value) -> (usize, std::time::Duration),
+        #[case] message: Value,
+        #[case] expected_blocks: usize,
+    ) {
+        let (blocks, elapsed) = rewrite(message);
+        assert_eq!(blocks, expected_blocks);
+        assert!(elapsed < MANY_BLOCKS_BUDGET, "{elapsed:?}");
     }
 
     #[rstest]
