@@ -133,7 +133,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[DynamoAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()

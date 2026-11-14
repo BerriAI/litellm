@@ -11,10 +11,11 @@ import re
 from collections.abc import Iterator, Sequence
 from enum import Enum
 from re import Pattern
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
@@ -26,6 +27,7 @@ class _PatternEntry(TypedDict):
     pattern: ReadOnly[str]
     category: ReadOnly[str]
     description: ReadOnly[str]
+    streaming_holdback_chars: ReadOnly[NotRequired[int]]
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -33,7 +35,21 @@ class _PatternsFile(TypedDict):
     patterns: ReadOnly[Sequence[_PatternEntry]]
 
 
+class _CategoryFileSummary(TypedDict, total=False):
+    category_name: ReadOnly[str]
+    display_name: ReadOnly[str]
+    description: ReadOnly[str]
+    default_action: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _PatternExtraConfig(TypedDict, total=False):
+    keyword_pattern: ReadOnly[str]
+    allow_word_numbers: ReadOnly[bool]
+
+
 _PATTERNS_FILE: Final = TypeAdapter(_PatternsFile)
+_PATTERN_EXTRAS: Final = TypeAdapter(_PatternExtraConfig)
 
 
 def _load_patterns_from_json() -> _PatternsFile:
@@ -70,11 +86,14 @@ KNOWN_PATTERN_KEYS: Final = {
     "category",
     "action",
     "description",
+    "streaming_holdback_chars",
 }
 
-PATTERN_EXTRA_CONFIG: Final[dict[str, dict[str, Any]]] = {}
+PATTERN_EXTRA_CONFIG: Final[dict[str, _PatternExtraConfig]] = {}
 for pattern_data in _PATTERNS_DATA["patterns"]:
-    extra_config = {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
+    extra_config = _PATTERN_EXTRAS.validate_python(
+        {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
+    )
     PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
 
 
@@ -116,6 +135,14 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
         PATTERN_CATEGORIES[category] = []
     PATTERN_CATEGORIES[category].append(pattern_data["name"])
 
+PATTERN_STREAMING_HOLDBACK_CHARS: Final = MappingProxyType(
+    {
+        pattern_data["name"]: pattern_data["streaming_holdback_chars"]
+        for pattern_data in _PATTERNS_DATA["patterns"]
+        if "streaming_holdback_chars" in pattern_data
+    }
+)
+
 
 # Build display names mapping from JSON
 PATTERN_DISPLAY_NAMES: Final[dict[str, str]] = {
@@ -154,7 +181,7 @@ def _category_entry(categories_dir: str, filename: str) -> dict[str, str] | None
     if filename.endswith((".yaml", ".yml")):
         try:
             with open(category_file_path, "r") as f:
-                category_data = yaml.safe_load(f)
+                category_data: Final[_CategoryFileSummary] = yaml.safe_load(f)
         except Exception as e:
             from litellm._logging import verbose_proxy_logger
 

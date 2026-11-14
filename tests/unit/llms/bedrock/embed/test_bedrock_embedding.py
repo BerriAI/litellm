@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -61,6 +62,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -187,6 +189,34 @@ def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.
 
     assert json.loads(route.calls.last.request.read()) == {"input_type": "search_document", "texts": ["hello"]}
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.3, 0.2, 0.1]}]
+
+
+def test_bedrock_cohere_embedding_sends_max_tokens_and_priority(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-v4:0/invoke").mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": {"float": [[0.3, 0.2, 0.1]]}, "response_type": "embeddings_by_type"},
+        )
+    )
+
+    litellm.embedding(
+        model="bedrock/cohere.embed-v4:0",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        max_tokens=16,
+        priority=5,
+        truncate="END",
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {
+        "input_type": "search_document",
+        "texts": ["hello"],
+        "max_tokens": 16,
+        "priority": 5,
+        "truncate": "END",
+    }
 
 
 GOVCLOUD_WEST_RUNTIME: Final = "https://bedrock-runtime.us-gov-west-1.amazonaws.com"
@@ -774,6 +804,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -909,6 +940,7 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(cohere_v4_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -1317,6 +1349,7 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(cohere_embedding_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -1848,6 +1881,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -2125,3 +2159,126 @@ def test_bedrock_embedding_region_bug_reproduction():
 
 
 img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+
+
+@pytest.mark.parametrize(
+    ("model_id", "embed_response", "extra_body", "expected_body"),
+    [
+        (
+            "amazon.titan-embed-text-v2:0",
+            titan_embedding_response,
+            {"normalize": False, "dimensions": 256},
+            {"inputText": test_input, "normalize": False, "dimensions": 256},
+        ),
+        (
+            "cohere.embed-english-v3",
+            cohere_embedding_response,
+            {"truncate": "END", "embedding_types": ["float"]},
+            {"texts": [test_input], "truncate": "END", "embedding_types": ["float"]},
+        ),
+    ],
+)
+def test_bedrock_embedding_sends_extra_body_fields_in_the_request_body(
+    respx_mock: respx.MockRouter,
+    model_id: str,
+    embed_response: dict[str, object],
+    extra_body: dict[str, object],
+    expected_body: dict[str, object],
+) -> None:
+    route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=embed_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+    )
+
+    body = json.loads(route.calls.last.request.read())
+    assert "extra_body" not in body
+    assert expected_body.items() <= body.items()
+
+
+def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(respx_mock: respx.MockRouter) -> None:
+    model_id: Final = "amazon.nova-2-multimodal-embeddings-v1:0"
+    route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]})
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body={"segmentationConfig": {"durationSeconds": 10}},
+    )
+
+    body = json.loads(route.calls.last.request.read())
+    assert "extra_body" not in body
+    assert body["segmentationConfig"] == {"durationSeconds": 10}
+
+
+@pytest.mark.parametrize(
+    ("extra_body", "field", "expected"),
+    [
+        ({"dimensions": 512}, "dimensions", 256),
+        ({"inputText": "text the guardrails never saw"}, "inputText", test_input),
+    ],
+    ids=["mapped_param", "input"],
+)
+def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param(
+    respx_mock: respx.MockRouter, extra_body: dict[str, object], field: str, expected: object
+) -> None:
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
+    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+
+    litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        dimensions=256,
+        extra_body=extra_body,
+    )
+
+    assert json.loads(route.calls.last.request.read())[field] == expected
+
+
+def test_bedrock_embedding_signs_the_body_it_sends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    signing_time: Final = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda remove_tzinfo=True: signing_time)
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
+    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+
+    litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        input=[test_input],
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name="us-east-1",
+        dimensions=256,
+        extra_body={"dimensions": 512},
+    )
+
+    sent: Final = route.calls.last.request
+    replay: Final = AWSRequest(
+        method="POST", url=str(sent.url), data=sent.content, headers={"Content-Type": "application/json"}
+    )
+    SigV4Auth(
+        Credentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), "bedrock", "us-east-1"
+    ).add_auth(replay)
+
+    assert sent.headers["x-amz-date"] == "20260102T030405Z"
+    assert json.loads(sent.content)["dimensions"] == 256
+    assert replay.headers["Authorization"] == sent.headers["authorization"]
