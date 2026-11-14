@@ -8859,3 +8859,520 @@ async def test_decode_trusted_assertion_runs_the_configured_custom_validate_on_t
     else:
         assert isinstance(verified, AssertionRejection)
         assert "custom_validate" in verified.reason
+
+
+def _make_cached_json_request(path: str, payload: dict[str, object]):
+    import orjson
+    from starlette.requests import Request
+
+    from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
+
+    raw = orjson.dumps(payload)
+    request = Request({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""})
+    safe_set_request_parsed_body(request=request, parsed_body=dict(payload))
+    request._json = dict(payload)
+    request._body = raw
+    return request
+
+
+@pytest.mark.asyncio
+async def test_resolve_db_team_fallback_resolves_claude_router_picker_id(monkeypatch):
+    """When Claude Code submits a compatibility picker ID (claude-router-*),
+    the DB team fallback resolves the canonical model group for team model
+    access checks without changing its signature or mutating request data."""
+    import litellm
+
+    user_object = LiteLLM_UserTable(
+        user_id="u_claude_code",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_openai"],
+    )
+    teams = {
+        "team_openai": LiteLLM_TeamTable(team_id="team_openai", models=["openai-test"]),
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-test",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    encoded = "claude-router-" + b"openai-test".hex()
+
+    async def fake_get_team(team_id, **kwargs):
+        return teams[team_id]
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        team_id, team_object, _membership = await JWTAuthManager._resolve_db_team_fallback(
+            user_object=user_object,
+            user_id="u_claude_code",
+            requested_model=encoded,
+            route="/v1/messages",
+            jwt_handler=_db_fallback_handler(),
+            enforce_team_based_model_access=True,
+            team_id_upsert=False,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "team_openai"
+    assert team_object is teams["team_openai"]
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_resolves_claude_router_picker_id(monkeypatch):
+    """When Claude Code submits a compatibility picker ID (claude-router-*),
+    find_team_with_model_access resolves the canonical model group against each
+    candidate team without changing its signature or mutating request data."""
+    import litellm
+
+    teams = {
+        "other_team": LiteLLM_TeamTable(team_id="other_team", models=["claude-3"]),
+        "team_openai": LiteLLM_TeamTable(team_id="team_openai", models=["openai-test"]),
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-test",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    encoded = "claude-router-" + b"openai-test".hex()
+
+    async def fake_get_team(team_id, **kwargs):
+        return teams[team_id]
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object",
+        new_callable=AsyncMock,
+        side_effect=fake_get_team,
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids={"other_team", "team_openai"},
+            requested_model=encoded,
+            route="/v1/messages",
+            jwt_handler=_db_fallback_handler(),
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert team_id == "team_openai"
+    assert team_obj is teams["team_openai"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_jwt_normalizes_claude_router_picker_id_after_team_selection(monkeypatch):
+    """authorize_jwt normalizes an unowned compatibility picker ID on /v1/messages
+    once the authorized team context is established and keeps request caches in sync."""
+    import litellm
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-test",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    encoded = "claude-router-" + b"openai-test".hex()
+    request_data: dict[str, object] = {"model": encoded}
+    request = _make_cached_json_request("/v1/messages", request_data)
+
+    handler = _db_fallback_handler()
+    user_object = LiteLLM_UserTable(
+        user_id="u_claude",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_openai"],
+    )
+    teams = {"team_openai": LiteLLM_TeamTable(team_id="team_openai", models=["openai-test"])}
+
+    with (
+        patch.object(JWTAuthManager, "authenticate_jwt", new_callable=AsyncMock, return_value={"sub": "u_claude"}),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_claude", "claude@example.com", True),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, "u_claude"),
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=lambda team_id, **kwargs: teams[team_id],
+        ),
+        patch("litellm.proxy.auth.handle_jwt.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/v1/messages",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request=request,
+        )
+
+    assert result["team_id"] == "team_openai"
+    assert request_data["model"] == "openai-test"
+    assert await request.json() == {"model": "openai-test"}
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("alias_source", "team_models", "use_claim_team"),
+    [
+        ("litellm_model_table", ["long-model"], True),
+        ("litellm_model_table", ["fast[1m]", "long-model"], False),
+        ("litellm_model_table_json", ["long-model"], True),
+        ("router_settings_model_group_alias", ["fast[1m]", "long-model"], True),
+    ],
+)
+async def test_authorize_jwt_preserves_team_owned_1m_alias(monkeypatch, alias_source, team_models, use_claim_team):
+    """When global router groups include ``fast`` and ``long-model`` and the
+    selected team explicitly owns ``fast[1m] -> long-model``, authorize_jwt must
+    not rewrite ``fast[1m]`` to ``fast`` or mark the request normalized before
+    team-aware normalization runs."""
+    import litellm
+    from litellm.proxy.auth.user_api_key_auth import _normalize_claude_model
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "fast", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+            {"model_name": "long-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    raw_model_aliases = (
+        '{"fast[1m]": "long-model"}' if alias_source == "litellm_model_table_json" else {"fast[1m]": "long-model"}
+    )
+    team = LiteLLM_TeamTable(
+        team_id="team_alias",
+        models=team_models,
+        litellm_model_table=(
+            LiteLLM_ModelTable(model_aliases=raw_model_aliases, created_by="admin", updated_by="admin")
+            if alias_source.startswith("litellm_model_table")
+            else None
+        ),
+        router_settings=(
+            {"model_group_alias": {"fast[1m]": "long-model"}}
+            if alias_source == "router_settings_model_group_alias"
+            else None
+        ),
+    )
+
+    request_data: dict[str, object] = {"model": "fast[1m]"}
+    request = _make_cached_json_request("/v1/messages", request_data)
+
+    handler = _db_fallback_handler()
+    if use_claim_team:
+        handler.litellm_jwtauth.team_id_jwt_field = "team_id"
+    user_object = LiteLLM_UserTable(
+        user_id="u_alias",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_alias"],
+    )
+
+    with (
+        patch.object(
+            JWTAuthManager,
+            "authenticate_jwt",
+            new_callable=AsyncMock,
+            return_value={"sub": "u_alias", "team_id": "team_alias"} if use_claim_team else {"sub": "u_alias"},
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_alias", "alias@example.com", True),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, "u_alias"),
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch("litellm.proxy.auth.handle_jwt.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/v1/messages",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request=request,
+        )
+
+    assert result["team_id"] == "team_alias"
+    assert request_data["model"] == "fast[1m]"
+    assert await request.json() == {"model": "fast[1m]"}
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is not True
+
+    valid_token = UserAPIKeyAuth(
+        team_id="team_alias",
+        team_model_aliases={"fast[1m]": "long-model"} if alias_source.startswith("litellm_model_table") else {},
+        router_settings=(
+            {"model_group_alias": {"fast[1m]": "long-model"}}
+            if alias_source == "router_settings_model_group_alias"
+            else None
+        ),
+    )
+    await _normalize_claude_model(request_data, valid_token, request, "/v1/messages")
+    assert request_data["model"] == "fast[1m]"
+
+
+@pytest.mark.asyncio
+async def test_authorize_jwt_normalizes_unowned_1m_picker_id_after_team_selection(monkeypatch):
+    """When the selected team does not own ``fast[1m]`` and instead has access
+    to global group ``fast``, authorize_jwt strips ``[1m]`` after team resolution."""
+    import litellm
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "fast", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    team = LiteLLM_TeamTable(team_id="team_fast", models=["fast"])
+    request_data: dict[str, object] = {"model": "fast[1m]"}
+    request = _make_cached_json_request("/v1/messages", request_data)
+
+    handler = _db_fallback_handler()
+    user_object = LiteLLM_UserTable(
+        user_id="u_fast",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_fast"],
+    )
+
+    with (
+        patch.object(JWTAuthManager, "authenticate_jwt", new_callable=AsyncMock, return_value={"sub": "u_fast"}),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_fast", "fast@example.com", True),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, "u_fast"),
+        ),
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock, return_value=team),
+        patch("litellm.proxy.auth.handle_jwt.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/v1/messages",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request=request,
+        )
+
+    assert result["team_id"] == "team_fast"
+    assert request_data["model"] == "fast"
+    assert await request.json() == {"model": "fast"}
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin", [True, False])
+async def test_authorize_jwt_preserves_opaque_passthrough_payloads_with_1m_suffix(monkeypatch, is_admin):
+    """Non-inference custom/native passthrough routes (e.g. /custom/native) must keep
+    their literal model name and cached JSON/body untouched even when an unrelated
+    global router group shares the prefix."""
+    import orjson
+
+    import litellm
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "fast", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    request_data: dict[str, object] = {"model": "fast[1m]", "temperature": 0}
+    request = _make_cached_json_request("/custom/native", request_data)
+
+    handler = _db_fallback_handler(
+        LiteLLM_JWTAuth(
+            admin_jwt_scope="admin",
+            admin_allowed_routes=["/custom/native"],
+            public_allowed_routes=["/custom/native"],
+            enforce_scope_based_access=False,
+        )
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="u_pt",
+        user_role=LitellmUserRoles.PROXY_ADMIN if is_admin else LitellmUserRoles.INTERNAL_USER,
+        teams=[] if is_admin else ["team_fast"],
+    )
+    team = LiteLLM_TeamTable(
+        team_id="team_fast",
+        models=["all-proxy-models"],
+        metadata={"allowed_passthrough_routes": ["/custom/native"]},
+    )
+
+    claims = {"sub": "u_pt", "scope": "admin" if is_admin else "openid"}
+    with (
+        patch.object(JWTAuthManager, "authenticate_jwt", new_callable=AsyncMock, return_value=claims),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_pt", "pt@example.com", True),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, "u_pt"),
+        ),
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock, return_value=team),
+        patch("litellm.proxy.auth.handle_jwt.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/custom/native",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request=request,
+        )
+
+    assert result["is_proxy_admin"] is is_admin
+    assert request_data == {"model": "fast[1m]", "temperature": 0}
+    assert await request.json() == {"model": "fast[1m]", "temperature": 0}
+    assert orjson.loads(await request.body()) == {"model": "fast[1m]", "temperature": 0}
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is not True
+
+
+@pytest.mark.asyncio
+async def test_authorize_jwt_admin_team_header_preserves_team_owned_1m_alias(monkeypatch):
+    """When a proxy-admin JWT carries x-litellm-team-id on /v1/messages, the attached
+    team's alias namespace prevents premature picker stripping."""
+    import litellm
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "fast", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+            {"model_name": "long-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    team = LiteLLM_TeamTable(
+        team_id="team_alias",
+        models=["long-model"],
+        litellm_model_table=LiteLLM_ModelTable(
+            model_aliases={"fast[1m]": "long-model"},
+            created_by="admin",
+            updated_by="admin",
+        ),
+    )
+    request_data: dict[str, object] = {"model": "fast[1m]"}
+    request = _make_cached_json_request("/v1/messages", request_data)
+
+    handler = _db_fallback_handler(LiteLLM_JWTAuth(admin_jwt_scope="admin", admin_allowed_routes=["/v1/messages"]))
+    with (
+        patch.object(
+            JWTAuthManager,
+            "authenticate_jwt",
+            new_callable=AsyncMock,
+            return_value={"sub": "u_admin", "scope": "admin"},
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_admin", "admin@example.com", True),
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/v1/messages",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request_headers={"x-litellm-team-id": "team_alias"},
+            request=request,
+        )
+
+    assert result["is_proxy_admin"] is True
+    assert result["team_id"] == "team_alias"
+    assert request_data["model"] == "fast[1m]"
+    assert await request.json() == {"model": "fast[1m]"}
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is not True

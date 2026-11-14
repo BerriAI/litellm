@@ -16,14 +16,14 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from jwt.api_jwk import PyJWK
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -61,6 +61,10 @@ from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.auth_utils import (
+    request_dispatched_to_pass_through_endpoint,
+    request_dispatched_to_provider_pass_through,
+)
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
@@ -68,6 +72,12 @@ from litellm.proxy.auth.model_access_denied import (
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
+from litellm.proxy.common_utils.http_parsing_utils import rewrite_request_model
+from litellm.proxy.common_utils.model_listing_utils import (
+    CLAUDE_MODEL_NORMALIZED,
+    CLAUDE_MODEL_ROUTES,
+    claude_code_requested_group,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
@@ -1427,6 +1437,88 @@ class JWTHandler:
         await self.http_handler.close()
 
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
+
+def _team_alias_maps(team_object: LiteLLM_TeamTable | None) -> tuple[object, ...]:
+    """Collect alias mappings owned by ``team_object`` so picker decoding respects team overrides."""
+    maps: Final[list[object]] = []
+    model_aliases: Final = team_model_aliases(team_object)
+    if model_aliases:
+        maps.append(model_aliases)
+    router_settings: Final[object] = getattr(team_object, "router_settings", None)
+    if isinstance(router_settings, Mapping):
+        group_alias: Final[object] = router_settings.get("model_group_alias")
+        if isinstance(group_alias, Mapping) and group_alias:
+            maps.append(group_alias)
+    return tuple(maps)
+
+
+def _is_claude_picker_route(route: str, request: Request | None = None) -> bool:
+    """Only normalize compatibility picker IDs on inference routes handled by Claude normalizer."""
+    if route not in CLAUDE_MODEL_ROUTES:
+        return False
+    if request_dispatched_to_pass_through_endpoint(request):
+        return False
+    if request is not None and request_dispatched_to_provider_pass_through(request):
+        return False
+    return True
+
+
+def _resolve_claude_picker_model(
+    requested_model: str,
+    *,
+    route: str,
+    team_id: str | None,
+    team_object: LiteLLM_TeamTable | None,
+    llm_router: Router | None,
+    request: Request | None = None,
+) -> str:
+    """Resolve a Claude Code compatibility picker ID against the team namespace without mutating request state."""
+    if llm_router is None or not _is_claude_picker_route(route, request):
+        return requested_model
+    if not requested_model.startswith("claude-router-") and not requested_model.lower().endswith("[1m]"):
+        return requested_model
+    resolved: Final = claude_code_requested_group(
+        requested_model,
+        llm_router,
+        team_id,
+        _team_alias_maps(team_object),
+    )
+    return resolved if resolved is not None else requested_model
+
+
+def _apply_claude_picker_normalization(
+    request_data: dict[str, object],
+    request: Request | None,
+    *,
+    requested_model: str | None,
+    route: str,
+    team_id: str | None,
+    team_object: LiteLLM_TeamTable | None,
+) -> None:
+    """Rewrite ``request_data`` and cached request bodies only after team alias ownership is resolved."""
+    if not isinstance(requested_model, str) or not requested_model:
+        return
+    if request is not None and request.scope.get(CLAUDE_MODEL_NORMALIZED) is True:
+        return
+    from litellm.proxy.proxy_server import llm_router
+
+    resolved: Final = _resolve_claude_picker_model(
+        requested_model,
+        route=route,
+        team_id=team_id,
+        team_object=team_object,
+        llm_router=llm_router,
+        request=request,
+    )
+    if resolved != requested_model:
+        rewrite_request_model(request_data, request, resolved)
+        if request is not None:
+            request.scope[CLAUDE_MODEL_NORMALIZED] = True
+
+
 class JWTAuthManager:
     """Manages JWT authentication and authorization operations"""
 
@@ -1821,10 +1913,21 @@ class JWTAuthManager:
                         )
                     ):
                         fallback_team = (team_id, team_object)
+                    check_model = (
+                        _resolve_claude_picker_model(
+                            requested_model,
+                            route=route,
+                            team_id=team_id,
+                            team_object=team_object,
+                            llm_router=llm_router,
+                        )
+                        if requested_model
+                        else None
+                    )
                     if isinstance(team_models, list) and (
-                        not requested_model
+                        not check_model
                         or await can_team_access_model(
-                            model=requested_model,
+                            model=check_model,
                             team_object=team_object,
                             llm_router=llm_router,
                             team_model_aliases=team_model_aliases(team_object),
@@ -2434,9 +2537,16 @@ class JWTAuthManager:
             ):
                 fallback_team = (candidate_team_id, team_object)
             if requested_model:
+                check_model = _resolve_claude_picker_model(
+                    requested_model,
+                    route=route,
+                    team_id=candidate_team_id,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                )
                 try:
                     await can_team_access_model(
-                        model=requested_model,
+                        model=check_model,
                         team_object=team_object,
                         llm_router=llm_router,
                         team_model_aliases=team_model_aliases(team_object),
@@ -2563,6 +2673,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
+        request: Request | None = None,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
             api_key=api_key,
@@ -2576,6 +2687,7 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             request_headers=request_headers,
             request_method=request_method,
+            request=request,
             provisioning=_JWTProvisioning(
                 user_id_upsert=jwt_handler.litellm_jwtauth.user_id_upsert,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
@@ -2660,6 +2772,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
+        request: Request | None = None,
         provisioning: _JWTProvisioning | None = None,
     ) -> JWTAuthBuilderResult:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
@@ -2769,6 +2882,14 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
+            )
+            _apply_claude_picker_normalization(
+                request_data,
+                request,
+                requested_model=requested_model,
+                route=route,
+                team_id=admin_result["team_id"],
+                team_object=admin_result["team_object"],
             )
             if provisioning is None:
                 identity: Final = await JWTAuthManager._resolve_claim_identity(
@@ -3051,6 +3172,14 @@ class JWTAuthManager:
         authorized_team_id: Final[str | None] = selected_team_id if selected_team_id is not None else team_id
         authorized_team_object: Final[LiteLLM_TeamTable | None] = (
             selected_team_object if selected_team_id is not None else team_object
+        )
+        _apply_claude_picker_normalization(
+            request_data,
+            request,
+            requested_model=requested_model,
+            route=route,
+            team_id=authorized_team_id,
+            team_object=authorized_team_object,
         )
 
         ## MAP USER TO TEAMS
