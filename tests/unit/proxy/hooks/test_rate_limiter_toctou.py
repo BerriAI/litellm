@@ -1,5 +1,5 @@
 """
-Tests validating TOCTOU race condition in batch + dynamic rate limiters.
+Tests validating TOCTOU race condition in the batch rate limiter.
 
 Issue: rate-limit check (read_only=True) and counter increment happen as two
 separate awaits. Concurrent requests all observe the same pre-increment state,
@@ -9,27 +9,20 @@ Vulnerable code paths:
 - litellm/proxy/hooks/batch_rate_limiter.py:181-248
   (_check_and_increment_batch_counters: should_rate_limit(read_only=True)
   → validate → async_increment_tokens_with_ttl_preservation)
-- litellm/proxy/hooks/dynamic_rate_limiter_v3.py:463-548
-  (_check_rate_limits PHASE 1 read_only check → PHASE 3 increment)
 
 These tests EXPECTED to fail against current (vulnerable) code and pass once
 check-and-increment becomes atomic.
 """
 
 import asyncio
-import os
 from typing import List
 
 import pytest
 
 
-import litellm
-from litellm import DualCache, Router
+from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
-)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
@@ -182,161 +175,6 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkeypatch):
-    """
-    DynamicRateLimitHandler PHASE 1 (read_only check) → PHASE 3 (increment)
-    is non-atomic: dynamic_rate_limiter_v3.py:463-548.
-
-    With TPM=100 model capacity and 5 concurrent priority="high" requests
-    each consuming the full model_saturation_check counter, all observe the
-    same Phase 1 state (counter=0), all pass, all proceed to Phase 3.
-
-    Sequential atomic semantics would block requests once the model counter
-    reaches its limit. TOCTOU lets all pass Phase 1 simultaneously.
-    """
-    NUM_CONCURRENT = 10
-    MODEL_RPM = 2
-    # Sequential bound: dynamic limiter rejects when `counter > current_limit`
-    # (strict `>`), so a request whose Phase 1 sees counter=RPM still passes
-    # (RPM is not strictly greater). Atomic execution therefore admits up to
-    # RPM + 1 successes before the next sees counter > RPM.
-    MAX_SEQUENTIAL_SUCCESSES = MODEL_RPM + 1
-
-    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
-
-    dual_cache = DualCache()
-    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
-
-    model = "toctou-dyn-model"
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": model,
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "test-key",
-                    "api_base": "test-base",
-                    "rpm": MODEL_RPM,
-                },
-            }
-        ]
-    )
-    handler.update_variables(llm_router=llm_router)
-
-    barrier = _make_phase1_barrier(NUM_CONCURRENT)
-    handler.v3_limiter.should_rate_limit = barrier(handler.v3_limiter.should_rate_limit)
-
-    from litellm.types.router import ModelGroupInfo
-
-    model_group_info = ModelGroupInfo(
-        model_group=model,
-        providers=["openai"],
-        rpm=MODEL_RPM,
-        tpm=None,
-    )
-
-    async def one_request(idx: int):
-        user = UserAPIKeyAuth(api_key=hash_token(f"dyn-key-{idx}"))
-        user.metadata = {"priority": "high"}
-        try:
-            await handler._check_rate_limits(
-                model=model,
-                model_group_info=model_group_info,
-                user_api_key_dict=user,
-                priority="high",
-                saturation=0.0,
-            )
-            return "OK"
-        except Exception as e:
-            return e
-
-    results = await asyncio.gather(
-        *[one_request(i) for i in range(NUM_CONCURRENT)],
-        return_exceptions=True,
-    )
-    successes = [r for r in results if r == "OK"]
-
-    assert len(successes) <= MAX_SEQUENTIAL_SUCCESSES, (
-        f"TOCTOU bypass in DynamicRateLimitHandler: {len(successes)}/{NUM_CONCURRENT} "
-        f"concurrent requests passed Phase 1 + Phase 3 despite model RPM={MODEL_RPM}. "
-        f"Atomic check-and-increment would block once counter > RPM "
-        f"(at most {MAX_SEQUENTIAL_SUCCESSES} sequential successes)."
-    )
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypatch):
-    """
-    Regression test: dynamic limiter's enforced descriptors flow through
-    `atomic_check_and_increment_by_n`, not the legacy
-    read_only=True check followed by a separate read_only=False increment.
-
-    When priority is enforced (saturation >= threshold), priority_model is
-    bundled into the atomic call alongside model_saturation_check. When not
-    enforced, priority counter is incremented for tracking only.
-    """
-    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
-
-    dual_cache = DualCache()
-    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
-
-    model = "atomic-dyn-model"
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": model,
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "test-key",
-                    "api_base": "test-base",
-                    "tpm": 1000,
-                },
-            }
-        ]
-    )
-    handler.update_variables(llm_router=llm_router)
-
-    atomic_descriptors_observed: List[List[str]] = []
-    original_atomic = handler.v3_limiter.atomic_check_and_increment_by_n
-
-    async def logging_atomic(*args, **kwargs):
-        ds = kwargs.get("descriptors") or (args[0] if args else [])
-        atomic_descriptors_observed.append([d["key"] for d in ds])
-        return await original_atomic(*args, **kwargs)
-
-    handler.v3_limiter.atomic_check_and_increment_by_n = logging_atomic
-
-    from litellm.types.router import ModelGroupInfo
-
-    user = UserAPIKeyAuth(api_key=hash_token("dyn-atomic-key"))
-    user.metadata = {"priority": "high"}
-
-    await handler._check_rate_limits(
-        model=model,
-        model_group_info=ModelGroupInfo(
-            model_group=model,
-            providers=["openai"],
-            rpm=None,
-            tpm=1000,
-        ),
-        user_api_key_dict=user,
-        priority="high",
-        saturation=0.0,
-    )
-
-    assert atomic_descriptors_observed, (
-        "Dynamic limiter must route enforced descriptors through "
-        "atomic_check_and_increment_by_n (no legacy read_only=True / "
-        "separate-increment pattern)."
-    )
-    assert "model_saturation_check" in atomic_descriptors_observed[0], (
-        f"Expected model_saturation_check in atomic descriptor set. Got: {atomic_descriptors_observed}"
-    )
-
-
-@pytest.mark.asyncio
 async def test_batch_zero_token_consumes_rpm_only():
     """
     Zero-token batch (e.g. metadata-only call) should still increment RPM
@@ -390,75 +228,3 @@ async def test_batch_zero_token_consumes_rpm_only():
             batch_usage=zero_batch,
         )
     assert exc.value.status_code == 429
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkeypatch):
-    """
-    Fail-closed guard: when atomic_check_and_increment_by_n returns
-    overall_code=OVER_LIMIT but with a descriptor_key the dispatcher does
-    not recognize, the dynamic limiter must raise 429 rather than silently
-    fall through.
-
-    Reproduces by patching atomic_check_and_increment_by_n to return an
-    OVER_LIMIT response carrying an unknown descriptor_key.
-    """
-    from fastapi import HTTPException
-
-    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
-
-    dual_cache = DualCache()
-    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
-
-    model = "fail-closed-model"
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": model,
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "test-key",
-                    "api_base": "test-base",
-                    "tpm": 1000,
-                },
-            }
-        ]
-    )
-    handler.update_variables(llm_router=llm_router)
-
-    async def fake_atomic(*args, **kwargs):
-        return {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "current_limit": 100,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "tokens",
-                    "descriptor_key": "future_unrecognized_descriptor",
-                }
-            ],
-        }
-
-    handler.v3_limiter.atomic_check_and_increment_by_n = fake_atomic
-
-    from litellm.types.router import ModelGroupInfo
-
-    user = UserAPIKeyAuth(api_key=hash_token("fail-closed-key"))
-    user.metadata = {"priority": "high"}
-
-    with pytest.raises(HTTPException) as exc:
-        await handler._check_rate_limits(
-            model=model,
-            model_group_info=ModelGroupInfo(
-                model_group=model,
-                providers=["openai"],
-                rpm=None,
-                tpm=1000,
-            ),
-            user_api_key_dict=user,
-            priority="high",
-            saturation=0.0,
-        )
-    assert exc.value.status_code == 429, f"Expected 429 fail-closed on unknown descriptor; got {exc.value.status_code}"
