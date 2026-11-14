@@ -47,12 +47,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
@@ -74,7 +73,12 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-_DECODED_JSON: Final = TypeAdapter(object)
+
+# OpenRouter routing/control fields that must not be forwarded from an image-edit
+# request body into the upstream /chat/completions call. Forwarding them would let
+# a caller of an allowed image-edit model redirect the request to other models or
+# providers, escaping LiteLLM's model-authorization and budget enforcement.
+OPENROUTER_ROUTING_CONTROL_PARAMS: Final = frozenset({"models", "route", "provider", "transforms"})
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -190,8 +194,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-        return ensure_api_route(base_url, "chat/completions")
+        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        base_url = base_url.rstrip("/")
+        if not base_url.endswith("/chat/completions"):
+            return f"{base_url}/chat/completions"
+        return base_url
 
     def transform_image_edit_request(
         self,
@@ -235,10 +242,17 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             "modalities": ["image", "text"],
         }
 
-        # Add mapped optional params (image_config, n, etc.)
+        # Add mapped optional params (image_config, n, etc.). Skip OpenRouter
+        # routing/control fields: these can arrive via forwarded non-default
+        # params, and copying them into the chat body would let a caller route
+        # an allowed image-edit request to other models/providers, bypassing
+        # LiteLLM's model-authorization and budget checks.
         for key, value in image_edit_optional_request_params.items():
-            if key not in ("model", "messages", "modalities"):
-                request_body[key] = value
+            if key in ("model", "messages", "modalities"):
+                continue
+            if key in OPENROUTER_ROUTING_CONTROL_PARAMS:
+                continue
+            request_body[key] = value
 
         empty_files: Final = cast(RequestFiles, [])
         return request_body, empty_files
@@ -250,7 +264,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         try:
-            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
+            response_json: Final[object] = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",
