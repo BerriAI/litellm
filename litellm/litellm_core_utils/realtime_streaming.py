@@ -1151,7 +1151,7 @@ class RealTimeStreaming:
         client_event: Final = _decode_json_object(message)
         session: Final = client_event.get("session")
         update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
-        fields_rejection: Final = provider_config.session_fields_rejection(update)
+        fields_rejection: Final = await asyncio.to_thread(provider_config.session_fields_rejection, update)
         if fields_rejection is None and self._leaves_applied_setup_unchanged(update):
             await self._acknowledge_session_setup(self._applied_session_fields or _NO_SESSION_FIELDS)
             return True

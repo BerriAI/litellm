@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -1667,6 +1668,47 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
     assert streaming.session_configuration_request is not None
     sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
     assert "setup" in sent_payload
+
+
+@pytest.mark.asyncio
+async def test_session_update_tool_check_leaves_the_event_loop_free() -> None:
+    check_started: Final = threading.Event()
+    loop_ran_during_check: Final = threading.Event()
+    check_saw_loop: Final[list[bool]] = []
+
+    def _slow_tool_check(session: Mapping[str, object]) -> None:
+        check_started.set()
+        check_saw_loop.append(loop_ran_during_check.wait(timeout=2))
+
+    async def _run_on_loop_during_check() -> None:
+        while not check_started.is_set():
+            await asyncio.sleep(0.005)
+        loop_ran_during_check.set()
+
+    websocket = MagicMock()
+    websocket.receive_text = AsyncMock(
+        side_effect=[json.dumps({"type": "session.update", "session": {"tools": []}}), Exception("client done")]
+    )
+    websocket.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    provider_config = MagicMock()
+    provider_config.setup_session_update_rejection = MagicMock(return_value=None)
+    provider_config.session_fields_rejection = MagicMock(side_effect=_slow_tool_check)
+    provider_config.transform_realtime_request = MagicMock(return_value=[])
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=_mock_logging(),
+        provider_config=provider_config,
+        model="gemini-3.8-live",
+    )
+
+    watcher: Final = asyncio.create_task(_run_on_loop_during_check())
+    await streaming.client_ack_messages()
+    watcher.cancel()
+
+    assert check_saw_loop == [True]
 
 
 @pytest.mark.asyncio

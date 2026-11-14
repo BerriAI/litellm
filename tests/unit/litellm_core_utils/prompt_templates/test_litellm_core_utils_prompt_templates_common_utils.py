@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
@@ -1228,3 +1229,36 @@ def test_unpack_defs_resolves_refs_under_a_property_named_ref() -> None:
     }
     unpack_defs(schema, {})
     assert schema["properties"] == {"$ref": {"type": "string"}}
+
+
+@pytest.mark.parametrize(
+    ("model", "defs_key", "credentials"),
+    [
+        (
+            "bedrock/converse/us.anthropic.claude-haiku-5-5-v1:0",
+            "$defs",
+            {"aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region_name": "us-east-1"},
+        ),
+        ("anthropic/claude-haiku-5-5", "definitions", {"api_key": "test"}),
+    ],
+)
+def test_ref_to_a_definition_that_is_not_a_schema_is_a_bad_request(
+    model: str, defs_key: str, credentials: Mapping[str, str]
+) -> None:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"$ref": f"#/{defs_key}/City"}},
+                defs_key: {"City": True},
+            },
+        },
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model=model, messages=[{"role": "user", "content": "hi"}], tools=[tool], num_retries=0, **credentials
+        )
+    assert exc_info.value.status_code == 400
+    assert "points at a bool" in exc_info.value.message
