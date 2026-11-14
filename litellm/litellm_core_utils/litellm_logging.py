@@ -642,6 +642,7 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_AGENT_PRICE: Final = TypeAdapter(float)
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -933,7 +934,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
     custom_model_info: ModelInfo | None = None
-    a2a_agent_cost_params: Mapping[str, object] | None = None
+    a2a_agent_cost_per_query: object = None
     a2a_agent_id: str | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
@@ -1493,8 +1494,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
 
-    def bill_as_a2a_agent(self, agent_id: str, cost_params: Mapping[str, object]) -> None:
-        self.a2a_agent_cost_params = cost_params
+    def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
+        self.a2a_agent_cost_per_query = cost_per_query
         self.a2a_agent_id = agent_id
         self.model_call_details["agent_id"] = agent_id
 
@@ -2432,8 +2433,8 @@ class Logging(LiteLLMLoggingBaseClass):
             else response_result
         )
 
-        if self.a2a_agent_cost_params is not None:
-            return self._a2a_agent_response_cost(self.a2a_agent_cost_params, priced_result)
+        if self.a2a_agent_cost_per_query is not None:
+            return self._a2a_agent_response_cost(self.a2a_agent_cost_per_query)
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
@@ -2578,21 +2579,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
     _response_cost_calculator = response_cost_calculator
 
-    def _a2a_agent_response_cost(self, cost_params: Mapping[str, object], priced_result: object) -> float | None:
-        from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
-
+    def _a2a_agent_response_cost(self, cost_per_query: object) -> float | None:
         provider: Final[object] = self.model_call_details.get("custom_llm_provider")
         try:
-            agent_cost: Final = A2ACostCalculator.agent_cost(
-                cost_params, get_usage_object(completion_response=priced_result)
-            )
             billed_cost: Final = billed_flat_cost(
-                base_cost=agent_cost.total,
+                base_cost=_AGENT_PRICE.validate_python(cost_per_query),
                 custom_llm_provider=provider if isinstance(provider, str) else None,
                 model=self.model,
                 litellm_logging_obj=self,
-                input_cost=agent_cost.input_cost,
-                output_cost=agent_cost.output_cost,
             )
         except Exception as e:  # noqa: BLE001  # a malformed price or cost config leaves the cost unset
             self.model_call_details["response_cost_failure_debug_information"] = (

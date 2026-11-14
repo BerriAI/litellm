@@ -6,14 +6,9 @@ to define custom costs per agent query or per token.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, SupportsFloat, SupportsIndex
 
-from pydantic import TypeAdapter
 from typing_extensions import Buffer
-
-from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -21,36 +16,6 @@ if TYPE_CHECKING:
     )
 else:
     LitellmLoggingObject = Any
-
-
-A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
-_PRICE: Final = TypeAdapter(float)
-
-
-@dataclass(frozen=True, slots=True)
-class AgentCost:
-    total: float
-    input_cost: float | None = None
-    output_cost: float | None = None
-
-
-_UNPRICED: Final = AgentCost(total=0.0)
-
-
-def a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
-    """Only the agent's pricing keys reach the logging object; its credentials never do."""
-    return MappingProxyType(
-        {
-            key: litellm_params[key]
-            for key in A2A_COST_PARAM_KEYS
-            if litellm_params is not None and litellm_params.get(key) is not None
-        }
-    )
-
-
-def _price(cost_params: Mapping[str, object], key: str) -> float | None:
-    value: Final = cost_params.get(key)
-    return None if value is None or value == "" else _PRICE.validate_python(value)
 
 
 def _custom_response_cost(model_call_details: Mapping[str, object]) -> float | None:
@@ -96,21 +61,55 @@ class A2ACostCalculator:
         if custom_response_cost is not None:
             return custom_response_cost
 
-        usage: Final = model_call_details.get("usage")
-        return A2ACostCalculator.agent_cost(
-            cost_params=model_call_details.get("litellm_params", {}) or {},
-            usage=usage if isinstance(usage, Usage) else None,
-        ).total
+        # Get litellm_params for cost parameters
+        litellm_params: Final = model_call_details.get("litellm_params", {}) or {}
+
+        # Check for cost_per_query (fixed cost per query)
+        if litellm_params.get("cost_per_query") is not None:
+            return float(litellm_params["cost_per_query"])
+
+        # Check for token-based pricing
+        input_cost_per_token: Final = litellm_params.get("input_cost_per_token")
+        output_cost_per_token: Final = litellm_params.get("output_cost_per_token")
+
+        if input_cost_per_token is not None or output_cost_per_token is not None:
+            return A2ACostCalculator._calculate_token_based_cost(
+                model_call_details=model_call_details,
+                input_cost_per_token=input_cost_per_token,
+                output_cost_per_token=output_cost_per_token,
+            )
+
+        # Default to 0.0 for A2A calls
+        return 0.0
 
     @staticmethod
-    def agent_cost(cost_params: Mapping[str, object], usage: Usage | None) -> AgentCost:
-        cost_per_query: Final = _price(cost_params, "cost_per_query")
-        if cost_per_query is not None:
-            return AgentCost(total=cost_per_query)
-        input_cost_per_token: Final = _price(cost_params, "input_cost_per_token")
-        output_cost_per_token: Final = _price(cost_params, "output_cost_per_token")
-        if usage is None or (input_cost_per_token is None and output_cost_per_token is None):
-            return _UNPRICED
-        input_cost: Final = usage.prompt_tokens * (input_cost_per_token or 0.0)
-        output_cost: Final = usage.completion_tokens * (output_cost_per_token or 0.0)
-        return AgentCost(total=input_cost + output_cost, input_cost=input_cost, output_cost=output_cost)
+    def _calculate_token_based_cost(
+        model_call_details: dict,
+        input_cost_per_token: float | None,
+        output_cost_per_token: float | None,
+    ) -> float:
+        """
+        Calculate cost based on token usage and per-token pricing.
+
+        Args:
+            model_call_details: The model call details containing usage
+            input_cost_per_token: Cost per input token (can be None, defaults to 0)
+            output_cost_per_token: Cost per output token (can be None, defaults to 0)
+
+        Returns:
+            float: The calculated cost
+        """
+        # Get usage from model_call_details
+        usage: Final = model_call_details.get("usage")
+        if usage is None:
+            return 0.0
+
+        # Get token counts
+        prompt_tokens: Final = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens: Final = getattr(usage, "completion_tokens", 0) or 0
+
+        # Calculate costs
+        input_cost: Final = prompt_tokens * (float(input_cost_per_token) if input_cost_per_token else 0.0)
+        output_cost: Final = completion_tokens * (float(output_cost_per_token) if output_cost_per_token else 0.0)
+
+        return input_cost + output_cost

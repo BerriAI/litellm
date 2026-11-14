@@ -25,7 +25,7 @@ from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManag
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS, A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
+from litellm.types.utils import ModelResponse
 
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
@@ -46,10 +46,6 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
 )
 
 
-AGENT_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | {"cost_per_query"}
-_NON_COMPLETION_PARAMS: Final = frozenset({"model", "custom_llm_provider"}) | _AGENT_ONLY_PARAMS | AGENT_PRICING_PARAMS
-
-
 def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
     """The litellm model string a bridge agent completes with: ``<custom_llm_provider>/<model>``.
 
@@ -67,7 +63,13 @@ def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
 
 def agent_completion_kwargs(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     """The agent's litellm_params that are valid litellm.acompletion kwargs (api_key, api_base, ...)."""
-    return MappingProxyType({key: value for key, value in litellm_params.items() if key not in _NON_COMPLETION_PARAMS})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in litellm_params.items()
+            if key not in ("model", "custom_llm_provider") and key not in _AGENT_ONLY_PARAMS
+        }
+    )
 
 
 class A2ACompletionBridgeHandler:

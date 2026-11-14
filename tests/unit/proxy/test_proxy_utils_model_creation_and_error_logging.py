@@ -840,7 +840,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
             litellm_call_id="failed-agent-call",
             function_id="a2a-chat",
         )
-        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_params={"cost_per_query": 0.05})
+        logging_obj.bill_as_a2a_agent(agent_id="my-agent-id", cost_per_query=0.05)
         agent_down: Final = InternalServerError(
             message="agent endpoint returned 500", model="a2a/my-agent", llm_provider="databricks"
         )

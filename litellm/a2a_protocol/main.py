@@ -13,14 +13,13 @@ import asyncio
 import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.a2a_protocol.cost_calculator import a2a_cost_params
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
@@ -146,6 +145,20 @@ def _set_agent_id_on_logging_obj(
         litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
 
+_A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
+
+
+def _a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    """Only the agent's pricing keys reach the logging object; its credentials never do."""
+    return MappingProxyType(
+        {
+            key: litellm_params[key]
+            for key in _A2A_COST_PARAM_KEYS
+            if litellm_params is not None and litellm_params.get(key) is not None
+        }
+    )
+
+
 def _card_http_kwargs(extra_headers: dict[str, str] | None) -> dict[str, object] | None:
     return {"headers": extra_headers} if extra_headers else None
 
@@ -175,7 +188,7 @@ def _set_litellm_params_on_logging_obj(
     if not isinstance(logging_obj, Logging):
         return
 
-    cost_params: Final = a2a_cost_params(litellm_params)
+    cost_params: Final = _a2a_cost_params(litellm_params)
     if not cost_params:
         return
 
@@ -631,7 +644,7 @@ def _build_streaming_logging_obj(
 
     _request_context: Final = (("metadata", metadata), ("proxy_server_request", proxy_server_request))
     _litellm_params: Final = dict(
-        (*a2a_cost_params(litellm_params).items(), *((key, value) for key, value in _request_context if value))
+        (*_a2a_cost_params(litellm_params).items(), *((key, value) for key, value in _request_context if value))
     )
 
     logging_obj.litellm_params = _litellm_params
