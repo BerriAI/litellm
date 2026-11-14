@@ -218,6 +218,7 @@ vertex_request_label_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
+skip_assistant_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[str] = (
