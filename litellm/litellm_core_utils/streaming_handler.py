@@ -1832,7 +1832,7 @@ class CustomStreamWrapper:
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def _maybe_set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
-        if self.sent_last_chunk is True and self.stream_options is None:
+        if self.sent_last_chunk is True and not self.send_stream_usage:
             chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
                 dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
             )
@@ -1920,13 +1920,8 @@ class CustomStreamWrapper:
                         if is_empty:
                             continue
                     # add usage as hidden param
+                    self._maybe_set_final_chunk_usage(response)
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        response_hidden_params_for_final_chunk = cast(  # cast-ok: preserve dynamic mapping behavior
-                            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
-                        )
-                        response_hidden_params_for_final_chunk["usage"] = usage
-                        self._last_returned_hidden_params = response_hidden_params_for_final_chunk
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2001,7 +1996,7 @@ class CustomStreamWrapper:
                 # (shared by reference), so mutating it here also corrects
                 # the user's copy.
                 if (
-                    self.stream_options is None
+                    not self.send_stream_usage
                     and complete_streaming_response is not None
                     and self._last_returned_hidden_params is not None
                 ):
@@ -2021,7 +2016,7 @@ class CustomStreamWrapper:
                 # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
-                if self.stream_options is None:  # add usage as hidden param
+                if not self.send_stream_usage:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk.hidden_params["usage"] = usage
                 ## LOGGING
@@ -2249,7 +2244,7 @@ class CustomStreamWrapper:
             # Update hidden_params with final usage from
             # stream_chunk_builder (see sync __next__ for full comment).
             if (
-                self.stream_options is None
+                not self.send_stream_usage
                 and complete_streaming_response is not None
                 and self._last_returned_hidden_params is not None
             ):
@@ -2301,7 +2296,7 @@ class CustomStreamWrapper:
             # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                 self.chunks.append(processed_chunk)
-            if self.stream_options is None:
+            if not self.send_stream_usage:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
                 processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
                     dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)

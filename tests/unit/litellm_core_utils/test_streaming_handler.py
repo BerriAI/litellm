@@ -1846,10 +1846,13 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     ("iteration", "stream_options"),
     [
         ("sync", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=False)),
         ("sync", None),
         ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=False)),
         ("async", None),
         ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=False)),
         ("async_over_sync_stream", None),
     ],
 )
@@ -1896,7 +1899,9 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
     )
     post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
     assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
-    assert [chunk.usage.cost for chunk in post_finish_chunks[-1:]] == ([0.0000088] if stream_options else [])
+    assert [chunk.usage.cost for chunk in post_finish_chunks[-1:]] == (
+        [0.0000088] if stream_options and stream_options.get("include_usage") else []
+    )
     assert not any(chunk.choices for chunk in post_finish_chunks[:-1]), post_finish_chunks
     post_finish_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in post_finish_chunks))
     assert not any(choice.delta.role for choice in post_finish_choices), post_finish_choices
