@@ -622,6 +622,11 @@ class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueErro
     """The sync ``Router``'s form, still a ``ValueError`` as the sync refusal was before."""
 
 
+def logged_class_name(error: BaseException) -> str:
+    logged: Final[object] = getattr(error, "logged_error_class", None)
+    return logged if isinstance(logged, str) else type(error).__name__
+
+
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):
     def __init__(
