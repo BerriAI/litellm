@@ -597,12 +597,16 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
 
-def _is_health_check_probe(metadata: object) -> bool:
-    return (
-        isinstance(metadata, Mapping)
-        and cast(Mapping[str, object], metadata).get("user_api_key_hash")  # cast-ok: untyped logging metadata
-        == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
-    )
+def _field(value: object, key: str) -> object:
+    return cast(Mapping[str, object], value).get(key) if isinstance(value, Mapping) else None  # cast-ok: untyped log
+
+
+def _is_background_health_check_probe(request_kwargs: Mapping[str, object]) -> bool:
+    """Background probes log their deployment id only in litellm_metadata. Test Connection also carries it in
+    top-level model_info, which cooldowns read, so it keeps updating deployment gauges the way routed calls do."""
+    logged_key: Final = _field(_field(request_kwargs.get("standard_logging_object"), "metadata"), "user_api_key_hash")
+    top_level_id: Final = _field(_field(request_kwargs.get("litellm_params"), "model_info"), "id")
+    return logged_key == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME and not top_level_id
 
 
 class PrometheusLogger(CustomLogger):
@@ -3525,7 +3529,7 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
             # Only mark a deployment outage when one was actually picked.
-            if deployment_selected and not _is_health_check_probe(_metadata):
+            if deployment_selected and not _is_background_health_check_probe(request_kwargs):
                 self.set_deployment_partial_outage(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
@@ -3713,7 +3717,7 @@ class PrometheusLogger(CustomLogger):
             _model_info: Final = _metadata.get("model_info") or {}
             model_id: Final = _model_info.get("id", None)
 
-            if _model_info or _litellm_params:
+            if (_model_info or _litellm_params) and not _is_background_health_check_probe(request_kwargs):
                 self._set_deployment_tpm_rpm_limit_metrics(
                     model_info=_model_info,
                     litellm_params=_litellm_params,
@@ -3772,7 +3776,7 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
-            if not _is_health_check_probe(standard_logging_payload.get("metadata")):
+            if not _is_background_health_check_probe(request_kwargs):
                 self.set_deployment_healthy(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id or "",

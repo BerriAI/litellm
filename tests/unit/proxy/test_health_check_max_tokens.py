@@ -4,7 +4,7 @@ import io
 import itertools
 import json
 import logging
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1805,42 +1805,93 @@ async def _routed_call(router: litellm.Router) -> None:
         return
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("user_status", "probe_status", "routed_state"), [(503, 200, 1.0), (200, 503, 0.0)])
-async def test_a_probe_leaves_the_deployment_state_routed_traffic_set(
-    httpx_transport: None,
-    monkeypatch: pytest.MonkeyPatch,
-    user_status: int,
-    probe_status: int,
-    routed_state: float,
-) -> None:
+_STATE_DEPLOYMENT: Final = {
+    "model_name": "plain",
+    "litellm_params": {
+        "model": "openai/provider-b-pay",
+        "api_base": "https://probe-upstream.invalid/v1",
+        "api_key": "sk-fake",
+        "tpm": 1000,
+    },
+    "model_info": {"id": "standby-deployment", "mode": "chat"},
+}
+
+
+def _isolated_prometheus(monkeypatch: pytest.MonkeyPatch) -> PrometheusLogger:
     monkeypatch.setattr(REGISTRY, "_collector_to_names", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
     monkeypatch.setattr(REGISTRY, "_names_to_collectors", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
     logger: Final = PrometheusLogger()
     monkeypatch.setattr(litellm, "_async_success_callback", [logger])
     monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
-    deployment: Final = {
-        "model_name": "plain",
-        "litellm_params": {
-            "model": "openai/provider-b-pay",
-            "api_base": "https://probe-upstream.invalid/v1",
-            "api_key": "sk-fake",
-        },
-        "model_info": {"id": "standby-deployment", "mode": "chat"},
-    }
+    return logger
+
+
+async def _test_connection(deployment: dict[str, object]) -> dict[str, object]:
+    params: Final = {**cast(dict[str, object], deployment["litellm_params"]), "model_info": deployment["model_info"]}
+    return await litellm.ahealth_check(params, mode="chat", prompt="test", input=["test"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("check", "user_status", "check_status", "final_state"),
+    [
+        ("background", 503, 200, 1.0),
+        ("background", 200, 503, 0.0),
+        ("test_connection", 503, 200, 0.0),
+        ("test_connection", 200, 503, 1.0),
+    ],
+)
+async def test_only_a_background_probe_leaves_the_deployment_state_alone(
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    check: str,
+    user_status: int,
+    check_status: int,
+    final_state: float,
+) -> None:
+    logger: Final = _isolated_prometheus(monkeypatch)
     replies: Final = [
         httpx.Response(status, json=_PROBE_UPSTREAM_OK if status == 200 else {"error": {"message": "overloaded"}})
-        for status in (user_status, probe_status)
+        for status in (user_status, check_status)
     ]
     with respx.mock(assert_all_called=True) as upstream:
         upstream.post("https://probe-upstream.invalid/v1/chat/completions").mock(side_effect=replies)
-        router: Final = litellm.Router(model_list=[copy.deepcopy(deployment)], num_retries=0, disable_cooldowns=True)
+        router: Final = litellm.Router(
+            model_list=[copy.deepcopy(_STATE_DEPLOYMENT)], num_retries=0, disable_cooldowns=True
+        )
         await _routed_call(router)
         after_routed_call: Final = await _settled_states(logger, "standby-deployment")
-        probe: Final = await hc_module._run_model_health_check(deployment)
+        result: Final = (
+            await hc_module._run_model_health_check(copy.deepcopy(_STATE_DEPLOYMENT))
+            if check == "background"
+            else await _test_connection(copy.deepcopy(_STATE_DEPLOYMENT))
+        )
         await GLOBAL_LOGGING_WORKER.flush()
         await asyncio.sleep(0.2)
 
-    assert ("error" in probe) == (probe_status != 200), probe
-    assert after_routed_call == {"standby-deployment": routed_state}
-    assert _deployment_states(logger) == {"standby-deployment": routed_state}
+    assert ("error" in result) == (check_status != 200), result
+    assert after_routed_call == {"standby-deployment": 1.0 if user_status != 200 else 0.0}
+    assert _deployment_states(logger) == {"standby-deployment": final_state}
+
+
+@pytest.mark.asyncio
+async def test_a_background_probe_adds_no_second_limit_series_for_its_deployment(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger: Final = _isolated_prometheus(monkeypatch)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://probe-upstream.invalid/v1/chat/completions").respond(200, json=_PROBE_UPSTREAM_OK)
+        router: Final = litellm.Router(model_list=[copy.deepcopy(_STATE_DEPLOYMENT)])
+        await _routed_call(router)
+        await _settled_states(logger, "standby-deployment")
+        probe: Final = await hc_module._run_model_health_check(copy.deepcopy(_STATE_DEPLOYMENT))
+        await GLOBAL_LOGGING_WORKER.flush()
+        await asyncio.sleep(0.2)
+
+    samples: Final = itertools.chain.from_iterable(
+        metric.samples for metric in logger.litellm_deployment_tpm_limit.collect()
+    )
+    assert "error" not in probe, probe
+    assert [(sample.labels["model_id"], sample.labels["model_group"], sample.value) for sample in samples] == [
+        ("standby-deployment", "plain", 1000.0)
+    ]
