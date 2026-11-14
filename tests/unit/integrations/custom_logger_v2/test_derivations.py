@@ -1385,6 +1385,17 @@ def test_rate_limit_state_leaves_the_key_limits_absent_when_the_helper_raises() 
     assert state == RateLimitState(hidden_params_present=False, additional_headers_present=False)
 
 
+def test_rate_limit_state_reads_provider_headers_beside_a_non_str_header_key() -> None:
+    headers: Final = {1: "x", "x-ratelimit-key-limit-requests": 3, "x_ratelimit_remaining_tokens": "856.5"}
+    payload: Final = {"hidden_params": {"additional_headers": headers}}
+
+    state: Final = derivations.rate_limit_state(HookArgs(request={"standard_logging_object": payload}))
+
+    assert state is not None
+    assert state.provider_remaining_tokens == "856.5"
+    assert state.limiter_headers == {"x-ratelimit-key-limit-requests": 3}
+
+
 def _capacity_reservation_check_raises(reservation: object) -> str | None:
     try:
         _ = reservation.get("entries")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # what _reservation_covers does
