@@ -8973,6 +8973,64 @@ def test_anthropic_messages_pt_replays_text_parts_content_like_the_string_it_cam
     )
 
 
+_ONE_HOUR: Final = {"type": "ephemeral", "ttl": "1h"}
+_FIVE_MINUTES: Final = {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    ("parts", "recorded_breakpoints", "unrecorded_breakpoint"),
+    [
+        (
+            [
+                {"type": "text", "text": "Plan first. "},
+                {"type": "text", "text": "The answer is 42.", "cache_control": _ONE_HOUR},
+            ],
+            [None, _ONE_HOUR],
+            _ONE_HOUR,
+        ),
+        (
+            [
+                {"type": "text", "text": "Plan ", "cache_control": _ONE_HOUR},
+                {"type": "text", "text": "first. The answer is 42."},
+            ],
+            [_ONE_HOUR, None],
+            _ONE_HOUR,
+        ),
+        (
+            [
+                {"type": "text", "text": "Plan first. ", "cache_control": _ONE_HOUR},
+                {"type": "text", "text": "The answer is 42.", "cache_control": _FIVE_MINUTES},
+            ],
+            [_ONE_HOUR, _FIVE_MINUTES],
+            _FIVE_MINUTES,
+        ),
+        (
+            [
+                {"type": "text", "text": "Plan ", "cache_control": _ONE_HOUR},
+                {"type": "text", "text": "first. ", "cache_control": _FIVE_MINUTES},
+                {"type": "text", "text": "The answer is 42."},
+            ],
+            [_FIVE_MINUTES, None],
+            _FIVE_MINUTES,
+        ),
+    ],
+    ids=["last_part", "part_ending_inside_a_piece", "every_part", "two_parts_ending_in_one_piece"],
+)
+@pytest.mark.parametrize("recorded", [True, False], ids=["recorded_order", "no_order"])
+def test_anthropic_messages_pt_puts_a_text_part_cache_control_on_the_piece_holding_the_end_of_that_part(
+    parts, recorded_breakpoints, unrecorded_breakpoint, recorded
+):
+    turn: Final = _recorded_search_turn() if recorded else _without_block_order(_recorded_search_turn())
+    replayed: Final = _replayed_assistant_content({**turn, "content": parts})
+
+    assert [block.get("cache_control") for block in replayed if block["type"] == "text"] == (
+        recorded_breakpoints if recorded else [unrecorded_breakpoint]
+    )
+    assert [
+        {key: value for key, value in block.items() if key != "cache_control"} for block in replayed
+    ] == _replayed_assistant_content(turn)
+
+
 def test_anthropic_messages_pt_sends_no_empty_text_block_when_a_recorded_search_turn_ends_the_conversation():
     turn: Final = _with_block_order(
         [
