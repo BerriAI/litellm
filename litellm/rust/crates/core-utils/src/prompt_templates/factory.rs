@@ -7,11 +7,15 @@
 //! shape.
 //!
 //! Mirrors Python's `anthropic_messages_pt` /
-//! `_bedrock_converse_messages_pt` for the text-only surface this route
-//! accepts; anything richer is declined upstream by the capability gate.
+//! `_bedrock_converse_messages_pt` for the text surface this route accepts,
+//! plus assistant `thinking_blocks` carried raw for a provider to replay;
+//! anything richer is declined upstream by the capability gate.
 
 use litellm_llms_types::formats::chat_completions::{ChatMessage, ChatMessageContent};
+use serde_json::Value;
 use strum::IntoStaticStr;
+
+pub const THINKING_BLOCKS_FIELD: &str = "thinking_blocks";
 
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
@@ -25,9 +29,24 @@ pub enum TurnRole {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurnBlock {
+    Text(String),
+    Thinking(Value),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub role: TurnRole,
-    pub texts: Vec<String>,
+    pub blocks: Vec<TurnBlock>,
+}
+
+impl Turn {
+    pub fn texts(&self) -> impl Iterator<Item = &str> {
+        self.blocks.iter().filter_map(|block| match block {
+            TurnBlock::Text(text) => Some(text.as_str()),
+            TurnBlock::Thinking(_) => None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -69,6 +88,30 @@ fn sanitize(text: String) -> String {
     text
 }
 
+/// Python adds an assistant message's thinking blocks ahead of its text, one
+/// message at a time, so merged turns keep each message's own order.
+fn message_blocks(message: &ChatMessage, role: TurnRole) -> Vec<TurnBlock> {
+    let thinking = match role {
+        TurnRole::Assistant => message
+            .extra
+            .get(THINKING_BLOCKS_FIELD)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        TurnRole::User => Vec::new(),
+    };
+    let texts = message
+        .content
+        .as_ref()
+        .map(message_texts)
+        .unwrap_or_default();
+    thinking
+        .into_iter()
+        .map(TurnBlock::Thinking)
+        .chain(texts.into_iter().map(sanitize).map(TurnBlock::Text))
+        .collect()
+}
+
 pub fn build_conversation(messages: &[ChatMessage]) -> Conversation {
     let system = messages
         .iter()
@@ -87,19 +130,10 @@ pub fn build_conversation(messages: &[ChatMessage]) -> Conversation {
             } else {
                 TurnRole::User
             };
-            let texts = message
-                .content
-                .as_ref()
-                .map(message_texts)
-                .unwrap_or_default()
-                .into_iter()
-                .map(sanitize);
+            let blocks = message_blocks(message, role);
             match turns.last_mut() {
-                Some(last) if last.role == role => last.texts.extend(texts),
-                _ => turns.push(Turn {
-                    role,
-                    texts: texts.collect(),
-                }),
+                Some(last) if last.role == role => last.blocks.extend(blocks),
+                _ => turns.push(Turn { role, blocks }),
             }
             turns
         });
@@ -112,10 +146,13 @@ pub fn build_conversation(messages: &[ChatMessage]) -> Conversation {
             .cloned()
             .chain([Turn {
                 role: last.role,
-                texts: last
-                    .texts
+                blocks: last
+                    .blocks
                     .iter()
-                    .map(|text| text.trim_end().to_string())
+                    .map(|block| match block {
+                        TurnBlock::Text(text) => TurnBlock::Text(text.trim_end().to_string()),
+                        TurnBlock::Thinking(thinking) => TurnBlock::Thinking(thinking.clone()),
+                    })
                     .collect(),
             }])
             .collect(),
@@ -135,6 +172,20 @@ mod tests {
         serde_json::from_value(value).expect("valid messages")
     }
 
+    fn text_turn(role: TurnRole, texts: &[&str]) -> Turn {
+        Turn {
+            role,
+            blocks: texts
+                .iter()
+                .map(|text| TurnBlock::Text(text.to_string()))
+                .collect(),
+        }
+    }
+
+    fn texts(turn: &Turn) -> Vec<&str> {
+        turn.texts().collect()
+    }
+
     #[test]
     fn lifts_system_messages_out_of_the_turn_list() {
         let conversation = build_conversation(&messages(json!([
@@ -142,13 +193,7 @@ mod tests {
             {"role": "user", "content": "hi"}
         ])));
         assert_eq!(conversation.system, vec!["be terse".to_string()]);
-        assert_eq!(
-            conversation.turns,
-            vec![Turn {
-                role: TurnRole::User,
-                texts: vec!["hi".to_string()]
-            }]
-        );
+        assert_eq!(conversation.turns, vec![text_turn(TurnRole::User, &["hi"])]);
     }
 
     #[test]
@@ -162,18 +207,9 @@ mod tests {
         assert_eq!(
             conversation.turns,
             vec![
-                Turn {
-                    role: TurnRole::User,
-                    texts: vec!["one".to_string(), "two".to_string()]
-                },
-                Turn {
-                    role: TurnRole::Assistant,
-                    texts: vec!["ack".to_string()]
-                },
-                Turn {
-                    role: TurnRole::User,
-                    texts: vec!["three".to_string()]
-                },
+                text_turn(TurnRole::User, &["one", "two"]),
+                text_turn(TurnRole::Assistant, &["ack"]),
+                text_turn(TurnRole::User, &["three"]),
             ]
         );
     }
@@ -186,10 +222,7 @@ mod tests {
                 {"type": "text", "text": "second"}
             ]}
         ])));
-        assert_eq!(
-            conversation.turns[0].texts,
-            vec!["first".to_string(), "second".to_string()]
-        );
+        assert_eq!(texts(&conversation.turns[0]), vec!["first", "second"]);
     }
 
     #[test]
@@ -201,8 +234,8 @@ mod tests {
         ])));
         // Must equal `_EMPTY_TEXT_PLACEHOLDER` in litellm/litellm_core_utils/prompt_templates/factory.py
         let placeholder = "[System: Empty message content sanitised to satisfy protocol]";
-        assert_eq!(conversation.turns[0].texts, vec![placeholder]);
-        assert_eq!(conversation.turns[1].texts, vec![placeholder]);
+        assert_eq!(texts(&conversation.turns[0]), vec![placeholder]);
+        assert_eq!(texts(&conversation.turns[1]), vec![placeholder]);
     }
 
     #[test]
@@ -213,8 +246,8 @@ mod tests {
             {"role": "user", "content": "more"},
             {"role": "assistant", "content": "stripped  "}
         ])));
-        assert_eq!(conversation.turns[1].texts, vec!["kept  ".to_string()]);
-        assert_eq!(conversation.turns[3].texts, vec!["stripped".to_string()]);
+        assert_eq!(texts(&conversation.turns[1]), vec!["kept  "]);
+        assert_eq!(texts(&conversation.turns[3]), vec!["stripped"]);
     }
 
     #[test]
@@ -223,8 +256,8 @@ mod tests {
             {"role": "assistant", "content": "kept  "},
             {"role": "user", "content": "hi  "}
         ])));
-        assert_eq!(conversation.turns[0].texts, vec!["kept  ".to_string()]);
-        assert_eq!(conversation.turns[1].texts, vec!["hi  ".to_string()]);
+        assert_eq!(texts(&conversation.turns[0]), vec!["kept  "]);
+        assert_eq!(texts(&conversation.turns[1]), vec!["hi  "]);
     }
 
     #[test]
@@ -248,5 +281,26 @@ mod tests {
             {"role": "user", "content": "hi"}
         ])));
         assert_eq!(conversation.system, vec!["kept".to_string()]);
+    }
+
+    #[test]
+    fn puts_each_assistant_messages_thinking_blocks_ahead_of_its_own_text() {
+        let first = json!({"type": "thinking", "thinking": "a", "signature": "s1"});
+        let second = json!({"type": "redacted_thinking", "data": "d2"});
+        let conversation = build_conversation(&messages(json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "one", "thinking_blocks": [first]},
+            {"role": "assistant", "content": "two", "thinking_blocks": [second]},
+            {"role": "user", "content": "more"}
+        ])));
+        assert_eq!(
+            conversation.turns[1].blocks,
+            vec![
+                TurnBlock::Thinking(first),
+                TurnBlock::Text("one".to_string()),
+                TurnBlock::Thinking(second),
+                TurnBlock::Text("two".to_string()),
+            ]
+        );
     }
 }

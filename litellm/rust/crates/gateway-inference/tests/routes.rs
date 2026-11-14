@@ -104,6 +104,47 @@ async fn chat_answers_a_claude_thinking_response_with_its_reasoning() {
     );
 }
 
+#[tokio::test]
+async fn chat_replays_a_claude_thinking_reply_sent_back_on_the_next_turn() {
+    let upstream = MockServer::start().await;
+    let thinking = json!({"type": "thinking", "thinking": "t", "signature": "sig"});
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [thinking, {"type": "text", "text": "2 yes"}]},
+            {"role": "user", "content": [{"type": "text", "text": "why"}]}
+        ]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": "test-model",
+            "content": [{"type": "text", "text": "because"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .body(Body::from(
+                    json!({"model": "public/model", "max_tokens": 16, "messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "2 yes", "reasoning_content": "t",
+                         "thinking_blocks": [thinking]},
+                        {"role": "user", "content": "why"}
+                    ]})
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        support::json(response).await["choices"][0]["message"]["content"],
+        "because"
+    );
+}
+
 #[rstest]
 #[case::streaming(json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), 501)]
 #[case::missing_messages(json!({}), 400)]

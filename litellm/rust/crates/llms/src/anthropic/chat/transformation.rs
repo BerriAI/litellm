@@ -1,7 +1,10 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::decline::Decline;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
-    prompt_templates::factory::{Conversation, build_conversation},
+    prompt_templates::factory::{
+        Conversation, THINKING_BLOCKS_FIELD, TurnBlock, build_conversation,
+    },
 };
 use litellm_llms_types::{
     formats::chat_completions::{
@@ -26,7 +29,8 @@ use crate::{
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_param,
+                ValidatedEnvironment, unsupported_message, unsupported_message_accepting,
+                unsupported_param,
             },
         },
     },
@@ -48,6 +52,12 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("top_p", "top_p"),
     ("stop", "stop_sequences"),
 ];
+
+/// Python never reads `reasoning_content` back for Anthropic, so a client
+/// echoing it changes nothing. `thinking_blocks` is replayed.
+const ASSISTANT_REASONING_FIELDS: &[&str] = &[THINKING_BLOCKS_FIELD, "reasoning_content"];
+
+const ENCRYPTED_REASONING_PREFIX: &str = "litellm_encrypted_reasoning:";
 
 #[derive(Deserialize)]
 struct ResponseProjection {
@@ -255,7 +265,7 @@ impl BaseConfig for AnthropicConfig {
         optional_params: &Map<String, Value>,
     ) -> Option<Decline> {
         unsupported_param(self.supported_openai_param_mappings(), &[], optional_params)
-            .or_else(|| messages.iter().find_map(unsupported_message))
+            .or_else(|| messages.iter().find_map(unsupported_anthropic_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
             // core cannot observe, so decline instead of guessing.
@@ -266,8 +276,93 @@ impl BaseConfig for AnthropicConfig {
     }
 }
 
+fn unsupported_anthropic_message(message: &ChatMessage) -> Option<Decline> {
+    if message.role != "assistant" {
+        return unsupported_message(message);
+    }
+    unsupported_message_accepting(message, ASSISTANT_REASONING_FIELDS).or_else(|| {
+        match message.extra.get(THINKING_BLOCKS_FIELD) {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(blocks)) => blocks.iter().find_map(unsupported_thinking_block),
+            Some(_) => Some(Decline::new("malformed thinking block")),
+        }
+    })
+}
+
+/// Python drops `cache_control` and blank redacted blocks only under
+/// `drop_params`, which the core cannot observe, so those decline.
+fn unsupported_thinking_block(block: &Value) -> Option<Decline> {
+    let Some(block) = block.as_object() else {
+        return Some(Decline::new("malformed thinking block"));
+    };
+    if block.contains_key("cache_control") {
+        return Some(Decline::new("cached thinking block"));
+    }
+    match block.get("type").and_then(Value::as_str) {
+        Some("thinking") => None,
+        Some("redacted_thinking")
+            if block
+                .get("data")
+                .and_then(Value::as_str)
+                .is_some_and(|data| !data.trim().is_empty()) =>
+        {
+            None
+        }
+        Some("redacted_thinking") => Some(Decline::new("redacted thinking block without data")),
+        _ => Some(Decline::new("malformed thinking block")),
+    }
+}
+
+/// Mirrors Python's `_replayable_thinking_blocks`: Anthropic verifies every
+/// signature, so a block it could not have signed is dropped rather than sent.
+fn replayable_thinking_block(block: &Value) -> Option<Value> {
+    let block = block.as_object()?;
+    let is_redacted = match block.get("type").and_then(Value::as_str) {
+        Some("thinking") if is_signed_by_anthropic(block.get("signature")) => false,
+        Some("redacted_thinking") if is_signed_by_anthropic(block.get("data")) => true,
+        _ => return None,
+    };
+    Some(Value::Object(
+        block
+            .iter()
+            .filter(|(key, _)| key.as_str() != "index")
+            .map(|(key, value)| match (key.as_str(), value) {
+                ("data", Value::String(data)) if is_redacted => {
+                    (key.clone(), json!(native_redacted_thinking_data(data)))
+                }
+                _ => (key.clone(), value.clone()),
+            })
+            .collect(),
+    ))
+}
+
+fn is_signed_by_anthropic(field: Option<&Value>) -> bool {
+    field
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty() && !value.starts_with(ENCRYPTED_REASONING_PREFIX))
+}
+
+/// Python's `native_redacted_thinking_data`: Bedrock Converse wraps Claude's
+/// redacted data in one more layer of base64, and histories saved from it
+/// still carry that wrapper.
+fn native_redacted_thinking_data(data: &str) -> String {
+    STANDARD
+        .decode(data)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|payload| payload.is_ascii() && STANDARD.decode(payload).is_ok())
+        .unwrap_or_else(|| data.to_string())
+}
+
 fn text_block(text: &str) -> Value {
     json!({"type": "text", "text": text})
+}
+
+fn content_block(block: &TurnBlock) -> Option<Value> {
+    match block {
+        TurnBlock::Text(text) => Some(text_block(text)),
+        TurnBlock::Thinking(thinking) => replayable_thinking_block(thinking),
+    }
 }
 
 fn anthropic_body(
@@ -281,7 +376,7 @@ fn anthropic_body(
         .map(|turn| {
             json!({
                 "role": <&'static str>::from(turn.role),
-                "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
+                "content": turn.blocks.iter().filter_map(content_block).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -582,6 +677,110 @@ mod tests {
                 json!({"max_tokens": 16, "temperature": 0.5})
             ),
             None
+        );
+    }
+
+    fn replayed_assistant_content(thinking_blocks: Value) -> Value {
+        let conversation = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "2 yes", "reasoning_content": "r",
+             "thinking_blocks": thinking_blocks},
+            {"role": "user", "content": "why"}
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        transform("claude-sonnet-4-5", conversation, json!({"max_tokens": 16}))["messages"][1]
+            ["content"]
+            .clone()
+    }
+
+    #[test]
+    fn replays_a_thinking_reply_ahead_of_its_text_without_the_stream_index() {
+        assert_eq!(
+            replayed_assistant_content(json!([
+                {"type": "thinking", "thinking": "t", "signature": "sig", "index": 0},
+                {"type": "redacted_thinking", "data": "EmwKAhgB"}
+            ])),
+            json!([
+                {"type": "thinking", "thinking": "t", "signature": "sig"},
+                {"type": "redacted_thinking", "data": "EmwKAhgB"},
+                {"type": "text", "text": "2 yes"}
+            ])
+        );
+    }
+
+    #[rstest]
+    #[case::unsigned(json!({"type": "thinking", "thinking": "t"}))]
+    #[case::empty_signature(json!({"type": "thinking", "thinking": "t", "signature": ""}))]
+    #[case::null_signature(json!({"type": "thinking", "thinking": "t", "signature": null}))]
+    #[case::encrypted_signature(
+        json!({"type": "thinking", "thinking": "", "signature": "litellm_encrypted_reasoning:abc"})
+    )]
+    #[case::encrypted_redacted(
+        json!({"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:abc"})
+    )]
+    fn drops_thinking_blocks_anthropic_could_not_have_signed(#[case] block: Value) {
+        assert_eq!(
+            replayed_assistant_content(json!([block])),
+            json!([{"type": "text", "text": "2 yes"}])
+        );
+    }
+
+    #[test]
+    fn unwraps_bedrock_wrapped_redacted_data_like_python() {
+        assert_eq!(
+            replayed_assistant_content(
+                json!([{"type": "redacted_thinking", "data": "RW13S0FoZ0I="}])
+            ),
+            json!([
+                {"type": "redacted_thinking", "data": "EmwKAhgB"},
+                {"type": "text", "text": "2 yes"}
+            ])
+        );
+    }
+
+    #[test]
+    fn accepts_null_thinking_blocks() {
+        assert_eq!(
+            replayed_assistant_content(Value::Null),
+            json!([{"type": "text", "text": "2 yes"}])
+        );
+    }
+
+    #[rstest]
+    #[case::cache_control(
+        json!([{"type": "thinking", "thinking": "t", "signature": "s", "cache_control": {"type": "ephemeral"}}]),
+        "cached thinking block"
+    )]
+    #[case::blank_redacted(json!([{"type": "redacted_thinking", "data": " "}]), "redacted thinking block without data")]
+    #[case::redacted_without_data(json!([{"type": "redacted_thinking"}]), "redacted thinking block without data")]
+    #[case::not_a_thinking_block(json!([{"type": "text", "text": "t"}]), "malformed thinking block")]
+    #[case::not_an_object(json!(["t"]), "malformed thinking block")]
+    #[case::not_a_list(json!({"type": "thinking"}), "malformed thinking block")]
+    fn declines_thinking_blocks_python_would_not_replay_as_sent(
+        #[case] thinking_blocks: Value,
+        #[case] expected: &'static str,
+    ) {
+        assert_eq!(
+            reason(
+                json!([
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "ok", "thinking_blocks": thinking_blocks},
+                    {"role": "user", "content": "why"}
+                ]),
+                json!({})
+            ),
+            Some(Decline::new(expected))
+        );
+    }
+
+    #[test]
+    fn declines_reasoning_fields_outside_an_assistant_message() {
+        assert_eq!(
+            reason(
+                json!([{"role": "user", "content": "hi", "thinking_blocks": []}]),
+                json!({})
+            ),
+            Some(Decline::new("unrecognized message field"))
         );
     }
 
