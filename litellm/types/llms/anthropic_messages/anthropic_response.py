@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -98,7 +98,7 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     model: str | None  # This represents the Model type from Anthropic
     role: Literal["assistant"] | None
     stop_reason: ReadOnly[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "compaction"] | None
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "compaction", "pause_turn"] | None
     ]
     stop_details: NotRequired[ReadOnly[AnthropicStopDetails | None]]
     stop_sequence: str | None
@@ -106,3 +106,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
     safeguard_results: NotRequired[ReadOnly[Sequence[SafeguardResult]]]
+    input_transformations: NotRequired[ReadOnly[Sequence[Mapping[str, object]]]]

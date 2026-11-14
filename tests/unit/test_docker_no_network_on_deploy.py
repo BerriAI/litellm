@@ -5,7 +5,7 @@ _NETWORK_FETCH_TOKENS: Final = ("curl", "wget", "fetch", "http://", "https://")
 
 
 def test_container_build_no_network_fetch() -> None:
-    dockerfile: Final = (Path(__file__).resolve().parents[2] / "Dockerfile").read_text()
+    dockerfile: Final = (Path(__file__).resolve().parents[2] / "litellm/deploy/docker/Dockerfile").read_text()
     startup_lines: Final = tuple(
         line.strip() for line in dockerfile.splitlines() if line.strip().upper().startswith(("CMD", "ENTRYPOINT"))
     )
