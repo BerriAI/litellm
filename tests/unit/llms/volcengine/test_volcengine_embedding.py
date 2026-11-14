@@ -1,7 +1,11 @@
 """Tests for Volcengine embedding."""
 
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
+import respx
 
 # Add parent directory to path for imports
 
@@ -276,3 +280,30 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
         )
         == "https://gateway.example.com/ark/api/v3/embeddings"
     )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_volcengine_embedding_returns_the_provider_vectors_model_and_usage(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://gateway.example.com/ark/api/v3/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "emb-1",
+                "object": "list",
+                "model": "doubao-embedding-text-240715",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 4, "total_tokens": 4},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="volcengine/doubao-embedding-text-240715",
+        input=["hello"],
+        api_base="https://gateway.example.com/ark",
+        api_key="volcengine-test-key",
+    )
+
+    assert response.model == "doubao-embedding-text-240715"
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens == 4
