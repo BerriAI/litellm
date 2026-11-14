@@ -391,15 +391,24 @@ def _foundry_request_body(respx_mock: respx.MockRouter, model: str, **params: ob
 def test_azure_ai_sends_reasoning_effort_to_a_foundry_reasoning_model(
     respx_mock: respx.MockRouter, requested: object, sent: str
 ) -> None:
-    _register_foundry_model("qa-reasoner", supports_reasoning=True)
+    _register_foundry_model("qa-reasoner", supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
 
     body: Final = _foundry_request_body(respx_mock, "qa-reasoner", reasoning_effort=requested)
 
     assert body == {"model": "qa-reasoner", "messages": list(_FOUNDRY_MESSAGES), "reasoning_effort": sent}
 
 
-def test_azure_ai_sends_a_level_the_deployment_declares_over_the_catalog_levels(respx_mock: respx.MockRouter) -> None:
-    _register_foundry_model("qa-leveled", supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
+@pytest.mark.parametrize(
+    "catalog_levels",
+    [
+        pytest.param({"reasoning_effort_levels": ["none", "high", "max"]}, id="catalog-declares-other-levels"),
+        pytest.param({}, id="catalog-declares-none"),
+    ],
+)
+def test_azure_ai_sends_a_level_the_deployment_declares_whatever_the_catalog_says(
+    respx_mock: respx.MockRouter, catalog_levels: dict[str, object]
+) -> None:
+    _register_foundry_model("qa-leveled", supports_reasoning=True, **catalog_levels)
 
     body: Final = _foundry_request_body(
         respx_mock, "qa-leveled", reasoning_effort="low", model_info={"reasoning_effort_levels": ["low", "high"]}
@@ -429,7 +438,12 @@ def test_azure_ai_sends_a_level_the_foundry_model_declares(respx_mock: respx.Moc
         pytest.param(
             {"supports_reasoning": True, "reasoning_effort_levels": ["none", "high", "max"]}, "low", id="undeclared"
         ),
-        pytest.param({"supports_reasoning": True}, {"summary": "auto"}, id="no-level"),
+        pytest.param(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["none", "high", "max"]},
+            {"summary": "auto"},
+            id="no-level",
+        ),
+        pytest.param({"supports_reasoning": True}, "high", id="catalog-declares-no-levels"),
     ],
 )
 @pytest.mark.parametrize("drop_params_global", [False, True], ids=["per-request", "global"])
@@ -463,7 +477,12 @@ def test_azure_ai_drops_a_reasoning_effort_the_foundry_model_cannot_take_under_d
             "['none', 'high', 'max']",
             id="undeclared",
         ),
-        pytest.param({"supports_reasoning": True}, {"summary": "auto"}, "no level", id="no-level"),
+        pytest.param(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["none", "high", "max"]},
+            {"summary": "auto"},
+            "no level",
+            id="no-level",
+        ),
     ],
 )
 def test_azure_ai_refuses_a_reasoning_effort_the_foundry_model_cannot_take_without_drop_params(
@@ -476,6 +495,38 @@ def test_azure_ai_refuses_a_reasoning_effort_the_foundry_model_cannot_take_witho
 
     assert refused.value.status_code == 400
     assert named in str(refused.value)
+
+
+def test_azure_ai_keeps_a_dropped_reasoning_effort_out_when_the_request_allows_the_param(
+    respx_mock: respx.MockRouter,
+) -> None:
+    _register_foundry_model("qa-allowed", supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
+
+    body: Final = _foundry_request_body(
+        respx_mock,
+        "qa-allowed",
+        reasoning_effort="low",
+        drop_params=True,
+        allowed_openai_params=["reasoning_effort"],
+    )
+
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.parametrize(
+    ("registered", "requested_as"),
+    [
+        pytest.param("QA-Cased-Up", "qa-cased-up", id="catalog-mixed-case"),
+        pytest.param("qa-cased-down", "QA-Cased-Down", id="request-mixed-case"),
+    ],
+)
+def test_azure_ai_checks_declared_levels_whatever_the_model_name_casing(
+    respx_mock: respx.MockRouter, registered: str, requested_as: str
+) -> None:
+    _register_foundry_model(registered, supports_reasoning=True, reasoning_effort_levels=["none", "high", "max"])
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _foundry_request_body(respx_mock, requested_as, reasoning_effort="low")
 
 
 
