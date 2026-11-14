@@ -22,7 +22,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import anth
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
+from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 from tests.unit.proxy.conftest import httpx_transport
@@ -2403,6 +2403,11 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
     assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT
     assert _reasoning_and_message_statuses(finished.response.output) == ([expected_status], [expected_status])
     assert _last_item(finished.response.output) == ("web_search_call", "in_progress")
+    assert [
+        getattr(event.item, "status", None)
+        for event in events
+        if isinstance(event, OutputItemDoneEvent) and getattr(event.item, "type", None) == "message"
+    ] == [expected_status]
 
 
 async def _codex_follow_up_body(**kwargs: object) -> Mapping[str, object]:
