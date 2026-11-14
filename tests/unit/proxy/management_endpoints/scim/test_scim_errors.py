@@ -5,8 +5,11 @@ from typing import Final
 import pytest
 from fastapi import HTTPException
 
+from litellm.litellm_core_utils.bug_report import NOTICE_PREFIX
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.management_endpoints.scim.scim_errors import scim_error_from, scim_error_response
+from litellm.proxy.management_endpoints.scim.scim_v2 import RosterWriteFailure, SCIMRosterSyncError
+from litellm.proxy.utils import handle_exception_on_proxy
 
 _SCIM_ERROR_URN: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
 
@@ -62,10 +65,42 @@ def test_an_empty_proxy_exception_with_a_status_python_has_no_phrase_for_answers
     assert _answer(_proxy_exception("", 529)) == (529, {"schemas": [_SCIM_ERROR_URN], "status": "529", "detail": "529"})
 
 
-def test_a_proxy_exception_without_a_numeric_code_answers_500_with_the_status_phrase_not_its_message():
-    assert _answer(_proxy_exception("row decode failed for column metadata", None)) == (
+def test_a_proxy_exception_without_a_numeric_code_answers_500():
+    assert _answer(_proxy_exception("boom", None)) == (
+        500,
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "boom"},
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "row decode failed for column metadata",
+        f"row decode failed for column metadata\n{NOTICE_PREFIX} File it with one click: https://example.com/new",
+    ],
+    ids=["plain", "with-bug-report-notice"],
+)
+def test_the_text_of_an_exception_raised_without_a_status_answers_the_status_phrase(text: str):
+    origin: Final = RuntimeError(text)
+
+    assert _answer(_raised_while_handling(origin, handle_exception_on_proxy(origin))) == (
         500,
         {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+
+
+def test_a_server_error_raised_with_its_own_status_keeps_its_reason():
+    origin: Final = SCIMRosterSyncError(
+        (
+            RosterWriteFailure(description="add user1 to team-a: team not found", status_code=404),
+            RosterWriteFailure(description="add user1 to team-b: write timed out", status_code=500),
+        ),
+        attempted=2,
+    )
+
+    assert _answer(_raised_while_handling(origin, handle_exception_on_proxy(origin))) == (
+        500,
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": str(origin)},
     )
 
 

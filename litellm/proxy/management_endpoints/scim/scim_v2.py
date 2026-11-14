@@ -65,7 +65,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_error_from
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_detail_of
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
@@ -1934,16 +1934,10 @@ async def create_user(
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(user=created_user)
         return scim_user
+    except HTTPException as e:  # allow exceptions like SCIMUserAlreadyExists to be raised
+        raise e
     except Exception as e:
-        failure: Final = e if isinstance(e, HTTPException) else handle_exception_on_proxy(e)
-        answered: Final = scim_error_from(failure)
-        verbose_proxy_logger.warning(
-            "SCIM create user %s failed with %s: %s",
-            sanitize_for_log(user.userName),
-            answered.status_code,
-            sanitize_for_log(answered.error.detail),
-        )
-        raise failure
+        raise handle_exception_on_proxy(e)
 
 
 @scim_router.put(
@@ -2718,7 +2712,7 @@ async def _attempt_roster_write(label: str, write: Callable[[], Awaitable[object
         return e.failures
     except Exception as e:  # noqa: BLE001  # this boundary turns any write failure into a value so the batch continues
         verbose_proxy_logger.exception("SCIM roster write failed (%s): %s", label, e)
-        return (RosterWriteFailure(description=f"{label}: {e}", status_code=_roster_write_status(e)),)
+        return (RosterWriteFailure(description=f"{label}: {scim_detail_of(e)}", status_code=_roster_write_status(e)),)
     return ()
 
 

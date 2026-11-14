@@ -12,10 +12,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -6400,6 +6402,48 @@ async def test_roster_sync_error_status_follows_unanimous_failures(
     assert "2 of 2 team membership writes" in str(exc_info.value)
 
 
+def _raise_as_a_management_endpoint_does(internals: str) -> None:
+    try:
+        raise RuntimeError(internals)
+    except RuntimeError as e:
+        raise handle_exception_on_proxy(e)
+
+
+def _raise_unconverted(internals: str) -> None:
+    raise RuntimeError(internals)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raise_failure", [_raise_as_a_management_endpoint_does, _raise_unconverted], ids=["converted", "unconverted"]
+)
+async def test_a_roster_write_that_fails_unexpectedly_names_the_write_but_not_the_error_text(
+    mocker: MockerFixture, raise_failure: Callable[[str], None]
+):
+    internals: Final = "connection to server at 10.0.4.17 port 5432 failed for user litellm_prod"
+
+    async def add_member(**kwargs: object) -> None:
+        if kwargs["data"].team_id == "team-a":
+            raise HTTPException(status_code=404, detail={"error": "Team not found: team-a"})
+        raise_failure(internals)
+
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add", AsyncMock(side_effect=add_member))
+
+    with pytest.raises(SCIMRosterSyncError) as exc_info:
+        await patch_team_membership(
+            user_id="user1",
+            teams_ids_to_add_user_to=["team-a", "team-b"],
+            teams_ids_to_remove_user_from=[],
+            raise_on_error=True,
+        )
+
+    assert [failure.description for failure in exc_info.value.failures] == [
+        "add user1 to team-a: Team not found: team-a",
+        f"add user1 to team-b: {HTTPStatus.INTERNAL_SERVER_ERROR.phrase}",
+    ]
+    assert internals not in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failing_team", ["team-a", "team-b", "team-c"])
 async def test_patch_team_membership_attempts_every_team_before_reporting(mocker, failing_team):
@@ -7432,6 +7476,86 @@ async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
         "application/scim+json",
         {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "No database connected"},
     )
+
+
+@pytest.mark.asyncio
+async def test_an_auth_check_during_a_database_outage_answers_503_with_its_retry_hint(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    outage: Final = ConnectError("All connection attempts failed")
+    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    prisma_client.get_data = AsyncMock(side_effect=outage)
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    async with proxy_scim_client as client:
+        response = await client.post(
+            "/scim/v2/Users",
+            json=_okta_user("user-a@okta-test.com"),
+            headers={"Authorization": "Bearer sk-a-key-the-cache-has-not-seen"},
+        )
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        503,
+        "application/scim+json",
+        {
+            "schemas": [_SCIM_ERROR_URN],
+            "status": "503",
+            "detail": PrismaDBExceptionHandler.database_unavailable_message(outage),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "logged_as"),
+    [
+        (json.dumps({**_okta_user("gail@okta-test.com"), "emails": "gail@okta-test.com"}), "gail@okta-test.com"),
+        ('{"userName": "gail@okta-test.com",', "with no readable userName"),
+    ],
+    ids=["schema-mismatch", "malformed-json"],
+)
+async def test_a_create_with_a_body_the_schema_rejects_logs_the_user_name_it_was_for(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    caplog: pytest.LogCaptureFixture,
+    body: str,
+    logged_as: str,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.post(
+                "/scim/v2/Users", content=body, headers={"Content-Type": "application/scim+json"}
+            )
+
+    assert response.status_code == 422
+    assert [record.getMessage() for record in caplog.records if "SCIM create user" in record.getMessage()] == [
+        f"SCIM create user {logged_as} failed with 422: {response.json()['detail']}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_for(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    prisma_client.get_data = AsyncMock(return_value=None)
+    unknown_key: Final = {"Authorization": "Bearer sk-not-a-real-key"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            created = await client.post("/scim/v2/Users", json=_okta_user("hank@okta-test.com"), headers=unknown_key)
+            listed = await client.get("/scim/v2/Users", headers=unknown_key)
+
+    assert (created.status_code, listed.status_code) == (401, 401)
+    assert [record.getMessage() for record in caplog.records if "SCIM create user" in record.getMessage()] == [
+        "SCIM create user hank@okta-test.com failed with 401: Authentication Error, Invalid API key provided."
+    ]
 
 
 @pytest.mark.asyncio
