@@ -136,9 +136,7 @@ class Admitted:
 def _install_native_owner(store: SpendCounterStore) -> native_budgets.NativeBudgetsLogger:
     native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each case installs its own owner over its own store
     litellm.callbacks.clear()
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv(native_budgets.NATIVE_BUDGETS_ENV, "true")
-        native_budgets.install_native_budgets(store, litellm.callbacks)
+    native_budgets.install_native_budgets(store, litellm.callbacks)
     logger: Final = litellm.callbacks[0]
     assert isinstance(logger, native_budgets.NativeBudgetsLogger)
     return logger
@@ -344,32 +342,6 @@ async def test_a_stream_settles_after_its_request_state_is_gone(store: SpendCoun
     await _db_logger_success(reservation)
 
     assert _snapshot(store) == settled_python
-
-
-@pytest.mark.asyncio
-async def test_a_native_module_without_budgets_leaves_the_flag_off_proxy_reserving_in_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from litellm.rust_bridge import _native
-
-    monkeypatch.delattr(_native, "NativeBudgets")
-    monkeypatch.delattr(_native, "budget_check_decision")
-    monkeypatch.delenv(native_budgets.NATIVE_BUDGETS_ENV, raising=False)
-    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # start from a proxy with no native owner
-    callbacks: Final[list[object]] = []  # mutable-ok: install_native_budgets inserts into litellm.callbacks
-    native_budgets.install_native_budgets(store, callbacks)
-
-    reservation: Final = await reserve_budget_for_request(**_arguments(Identity()))  # pyright: ignore[reportArgumentType]  # the shared argument table is typed per key above
-
-    assert callbacks == []
-    assert native_budgets.native_budget_decision({"check": "proxy", "spend": 1.0, "max_budget": 0.5}) is None
-    assert reservation is not None and "native_call_id" not in reservation
-    held: Final = _snapshot(store)
-    entries: Final = reservation["entries"]
-    assert isinstance(entries, list) and entries
-    assert {entry["counter_key"]: held[entry["counter_key"]] for entry in entries} == {
-        entry["counter_key"]: pytest.approx(reservation["reserved_cost"]) for entry in entries
-    }
 
 
 DB_FLOOR: Final = 0.25
@@ -745,7 +717,5 @@ async def test_python_reserves_again_once_the_native_owner_leaves_the_callbacks(
 
     assert _entries(reservation) == _entries(python.reservation)
     assert _snapshot(store) == python.counters
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv(native_budgets.NATIVE_BUDGETS_ENV, "true")
-        native_budgets.install_native_budgets(store, litellm.callbacks)
+    native_budgets.install_native_budgets(store, litellm.callbacks)
     assert native_budgets.native_owner_reserves()

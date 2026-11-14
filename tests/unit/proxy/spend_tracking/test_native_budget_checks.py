@@ -135,9 +135,7 @@ async def _outcome(store: SpendCounterStore, case: Case, native: bool) -> Outcom
     native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each run picks its own side
     if native:
         callbacks: Final[list[object]] = []  # mutable-ok: install_native_budgets inserts into litellm.callbacks
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setenv(native_budgets.NATIVE_BUDGETS_ENV, "true")
-            native_budgets.install_native_budgets(store, callbacks)
+        native_budgets.install_native_budgets(store, callbacks)
     store.flush_local()
     for counter, value in case.counters.items():
         store.set_local(counter, value)

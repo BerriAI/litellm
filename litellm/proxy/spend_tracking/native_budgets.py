@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 import weakref
 from collections.abc import Mapping
@@ -36,7 +35,6 @@ from litellm.types.utils import CallTypes
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeBudgets
 
-NATIVE_BUDGETS_ENV: Final = "LITELLM_NATIVE_BUDGETS"
 NATIVE_CALL_ID_KEY: Final = "native_call_id"
 
 
@@ -201,10 +199,6 @@ _SETTLEMENT: Final = TypeAdapter(NativeSettlement)
 _CHECK: Final[TypeAdapter[BudgetCheck]] = TypeAdapter(BudgetCheck)
 
 
-def native_budgets_requested() -> bool:
-    return os.getenv(NATIVE_BUDGETS_ENV, "").strip().lower() == "true"
-
-
 def native_budget_route(route: str) -> bool:
     call_types: Final = get_call_types_for_route(route) or ()
     return any(call_type in _NATIVE_CALL_TYPES for call_type in call_types)
@@ -354,6 +348,7 @@ class BudgetsHost:
 
 @dataclass(frozen=True, slots=True)
 class _Owner:
+    store: SpendCounterStore
     budgets: NativeBudgets
     logger: NativeBudgetsLogger
 
@@ -370,12 +365,13 @@ def native_owner_reserves() -> bool:
 
 
 def install_native_budgets(store: SpendCounterStore, callbacks: list[object]) -> None:  # mutable-ok: litellm.callbacks
-    if _installed:
+    if _installed and _installed[0].store is store:
         if not any(callback is _installed[0].logger for callback in callbacks):
             callbacks.insert(0, _installed[0].logger)
         return
-    if not native_budgets_requested():
-        return
+    for stale in [callback for callback in callbacks if isinstance(callback, NativeBudgetsLogger)]:
+        callbacks.remove(stale)
+    _installed.clear()
     from litellm.rust_bridge._native import NativeBudgets, NativeSpendCounters
 
     handle: Final = store.handle
@@ -389,7 +385,7 @@ def install_native_budgets(store: SpendCounterStore, callbacks: list[object]) ->
     register_abort_error("budget_unavailable", _budget_unavailable)
     register_abort_error("budget_reservation_failed", _reservation_failed)
     callbacks.insert(0, logger)
-    _installed.append(_Owner(budgets=budgets, logger=logger))
+    _installed.append(_Owner(store=store, budgets=budgets, logger=logger))
 
 
 def _window_reset(entry: object) -> str | None:

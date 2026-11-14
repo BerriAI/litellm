@@ -24,7 +24,6 @@ from litellm.router import Router
 
 
 def native_budgets_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv(native_budgets.NATIVE_BUDGETS_ENV, "true")
     monkeypatch.setattr(litellm, "callbacks", [])
     native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each test installs its owner over its own store
     yield

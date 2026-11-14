@@ -71,9 +71,7 @@ def _use_native(proxy: Proxy, native: bool) -> None:
     litellm.callbacks.clear()
     proxy.store.flush_local()
     if native:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setenv(native_budgets.NATIVE_BUDGETS_ENV, "true")
-            native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
+        native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
 
 
 def _request(path: str = "/v1/chat/completions") -> Request:

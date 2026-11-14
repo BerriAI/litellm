@@ -23,7 +23,6 @@ def main() -> None:
         patch.setattr(proxy_server, "spend_counter_store", store)
         patch.setattr(proxy_server, "prisma_client", None)
         patch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.25)
-        patch.delenv("LITELLM_NATIVE_BUDGETS", raising=False)
         cases: Final = {
             name: outcome_record(asyncio.run(_outcome(store, case, native=False))) for name, case in CASES.items()
         }
