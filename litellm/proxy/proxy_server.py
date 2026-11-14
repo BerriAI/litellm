@@ -1025,6 +1025,9 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     spend_counter_batch_scope,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    INTERNAL_HEALTH_CHECK_API_KEYS,
+)
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -18080,6 +18083,7 @@ async def model_streaming_metrics(
                 AND "completionStartTime" IS NOT NULL
                 AND "completionStartTime" != "endTime"
                 AND DATE("startTime") = DATE($2::timestamp)
+                AND "api_key" NOT IN ($4, $5)
             GROUP BY
                 api_base,
                 model_group,
@@ -18103,6 +18107,7 @@ async def model_streaming_metrics(
                 AND "model_group" = $1 AND "cache_hit" != 'True'
                 AND "completionStartTime" IS NOT NULL
                 AND "completionStartTime" != "endTime"
+                AND "api_key" NOT IN ($4, $5)
             GROUP BY
                 api_base,
                 model_group,
@@ -18114,7 +18119,7 @@ async def model_streaming_metrics(
 
     _all_api_bases: Final = set()
     db_response: Final[Sequence[_TTFTRow] | None] = await _query_raw_rows(
-        prisma_client, sql_query, _selected_model_group, startTime, endTime
+        prisma_client, sql_query, _selected_model_group, startTime, endTime, *INTERNAL_HEALTH_CHECK_API_KEYS
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
     if db_response is not None:
@@ -18214,6 +18219,7 @@ async def model_metrics(
         WHERE
             "startTime" >= $2::timestamp AND "startTime" <= $3::timestamp
             AND "model_group" = $1 AND "cache_hit" != 'True'
+            AND "api_key" NOT IN ($6, $7)
             AND (
                 CASE
                     WHEN $4 != 'null' THEN "api_key" = $4
@@ -18238,7 +18244,14 @@ async def model_metrics(
     """
     _all_api_bases: Final = set()
     db_response: Final[Sequence[_LatencyRow] | None] = await _query_raw_rows(
-        prisma_client, sql_query, _selected_model_group, startTime, endTime, api_key, customer
+        prisma_client,
+        sql_query,
+        _selected_model_group,
+        startTime,
+        endTime,
+        api_key,
+        customer,
+        *INTERNAL_HEALTH_CHECK_API_KEYS,
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
@@ -18337,6 +18350,7 @@ WHERE
     AND "cache_hit" != 'True'
     AND "startTime" >= $3::timestamp
     AND "startTime" <= $4::timestamp
+    AND "api_key" NOT IN ($7, $8)
     AND (
         CASE
             WHEN $5 != 'null' THEN "api_key" = $5
@@ -18363,6 +18377,7 @@ ORDER BY
         endTime,
         api_key,
         customer,
+        *INTERNAL_HEALTH_CHECK_API_KEYS,
     )
 
     if db_response is not None:
