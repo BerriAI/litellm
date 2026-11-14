@@ -3,6 +3,7 @@ import copy
 import datetime
 import importlib
 import itertools
+import json
 import random
 import time
 import uuid
@@ -37,6 +38,7 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_failure_outside_selected_deployment,
     is_response_lookup_not_found,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
@@ -1941,6 +1943,48 @@ async def test_should_cooldown_deployment(testing_litellm_router):
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
+async def test_role_less_requests_do_not_count_toward_the_deployments_failure_rate():
+    """A caller's role-less message is not the deployment failing, so it must not push a healthy one into cooldown."""
+    litellm_params: Final = {"model": "house-model", "custom_llm_provider": "openai", "mock_response": "ok"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d1"}},
+            {"model_name": "house", "litellm_params": litellm_params, "model_info": {"id": "d2"}},
+        ]
+    )
+    for _ in range(6):
+        with pytest.raises(litellm.MalformedRequestFieldError):
+            await router.acompletion(model="d1", messages=json.loads('[{"content": "hi"}]'))
+    await asyncio.sleep(1)
+
+    assert _should_cooldown_deployment(router, "d1", 500, Exception("Test")) is False
+
+
+@pytest.mark.parametrize(
+    ("exception", "outside_deployment"),
+    [
+        (
+            litellm.MissingMessageRoleError(
+                message="Missing required parameter: 'messages[0].role'.", model="m", llm_provider="openai"
+            ),
+            True,
+        ),
+        (
+            litellm.MalformedRequestFieldError(
+                message="tools: Input should be a valid list", model="m", llm_provider="openai"
+            ),
+            False,
+        ),
+    ],
+)
+def test_only_a_role_less_request_is_a_failure_outside_the_deployment(
+    exception: Exception, outside_deployment: bool
+) -> None:
+    assert is_failure_outside_selected_deployment(exception) is outside_deployment
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
 async def test_should_cooldown_deployment_allowed_fails_set_on_router():
     """
     Test the _should_cooldown_deployment function when Router.allowed_fails is set
@@ -3409,6 +3453,75 @@ def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the
     with pytest.raises(RouterRateLimitError) as refusal:
         _select(_tenant_router(EVERY_TENANT, **BOTH_ON), "async", "tenants", copy.deepcopy(request_kwargs))
     assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestMessageThreadNotFoundCooldown:
+    THREAD_NOT_FOUND_BODY: Final = (
+        '{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the '
+        'requested `previous_message_id`.","details":{"error_code":"thread_not_found"}}}'
+    )
+
+    @staticmethod
+    def _not_found(message: str) -> Exception:
+        return litellm.NotFoundError(
+            message=f"AnthropicException - {message}",
+            model="claude-opus-4-8",
+            llm_provider="anthropic",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_stale_thread_404_leaves_the_deployment_out_of_cooldown(self) -> None:
+        model_id: Final = "anthropic-threads"
+        router: Final = _make_router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "synthetic-key"},
+                    "model_info": {"id": model_id},
+                }
+            ],
+        )
+
+        result: Final = router.deployment_callback_on_failure(
+            kwargs={
+                "exception": self._not_found(self.THREAD_NOT_FOUND_BODY),
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+        assert result is False
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_a_404_without_the_thread_code_still_cools_the_deployment_down(self) -> None:
+        model_id: Final = "anthropic-missing-model"
+        router: Final = _make_router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "synthetic-key"},
+                    "model_info": {"id": model_id},
+                }
+            ],
+        )
+
+        router.deployment_callback_on_failure(
+            kwargs={
+                "exception": self._not_found(
+                    '{"type":"error","error":{"type":"not_found_error","message":"model: x"}}'
+                ),
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
 
 @pytest.mark.parametrize(

@@ -6,21 +6,20 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, Final, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import prisma
 import pytest
 
-
-from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
-from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
+from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import (
     ResetBudgetJob,
     _RowReset,
@@ -28,9 +27,71 @@ from litellm.proxy.common_utils.reset_budget_job import (
     _write_team_windows,
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.utils import PrismaClient
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reset_at,now",
+    (
+        ("2027-01-01T00:00:00-05:00", "2027-01-01T04:59:59+00:00"),
+        ("2027-01-01T00:00:00+05:45", "2026-12-31T18:14:59+00:00"),
+    ),
+)
+async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, now: str) -> None:
+    store: Final = FakeSpendCounters().store()
+    counter: Final = "spend:key:offset-budget:window:12mo"
+    await store.set(counter, 10.0)
+    window: Final = {"budget_duration": "12mo", "reset_at": reset_at, "max_budget": 10.0}
+    client: Final = MagicMock(spec=PrismaClient)
+    changed: Final = await ResetBudgetJob._reset_expired_window(
+        window,
+        counter,
+        store,
+        datetime.fromisoformat(now),
+        BudgetResetSettings(timezone="America/New_York"),
+        client,
+        reset_budget_job_module.Litellm_EntityType.KEY,
+        "offset-budget",
+    )
+
+    assert changed is False
+    assert (await store.read(counter))[0] == 10.0
+    assert window["reset_at"] == reset_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("today", ["2028-03-01", "2029-03-01"])
+async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+    today: str,
+) -> None:
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    with patch("time.time", return_value=datetime.fromisoformat(today).replace(tzinfo=timezone.utc).timestamp()):
+        await ResetBudgetJob._roll_window_spend_row(
+            prisma_client=client,
+            entity_type=reset_budget_job_module.Litellm_EntityType.KEY,
+            entity_id="annual-key",
+            budget_duration="12mo",
+            next_reset_at=datetime(2029, 1, 1, tzinfo=timezone.utc),
+            reset_settings=BudgetResetSettings(),
+        )
+
+    assert client.db.execute_raw.await_count == 1
+    assert client.db.execute_raw.await_args.args[1:5] == (
+        "key",
+        "annual-key",
+        "12mo",
+        datetime(2028, 1, 1),
+    )
+    assert get_budget_window_start(
+        {"budget_duration": "12mo", "reset_at": datetime(2029, 1, 1, tzinfo=timezone.utc)}
+    ) == client.db.execute_raw.await_args.args[4].replace(tzinfo=timezone.utc)
 
 
 # Mock classes for testing
@@ -56,6 +117,7 @@ class MockTable:
         where: Dict[str, Any],
         order: Optional[Dict[str, str]] = None,
         take: Optional[int] = None,
+        include: Optional[Dict[str, bool]] = None,
     ) -> List[Any]:
         """Replays canned rows, honouring the keyset cursor + ``take`` a paged
         caller relies on: without that a paged walk never advances and the
@@ -75,6 +137,33 @@ class MockTable:
     async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
         return {"count": 1}
+
+
+def _raw_reset_write(query: str, args: Sequence[object]) -> dict[str, object] | None:
+    if "CASE WHEN ABS(spend -" not in query:
+        return None
+    table, column = {
+        "LiteLLM_VerificationToken": ("key", "token"),
+        "LiteLLM_UserTable": ("user", "user_id"),
+        "LiteLLM_TeamTable": ("team", "team_id"),
+    }[query.split('"')[1]]
+    identity, reset_at, decrement, expected_reset_at, _ = args
+    assert isinstance(identity, str) and isinstance(reset_at, str) and isinstance(decrement, str)
+    assert expected_reset_at is None or isinstance(expected_reset_at, str)
+    return {
+        "table": table,
+        "op": "update_many",
+        "where": {
+            column: identity,
+            "budget_reset_at": datetime.fromisoformat(expected_reset_at).replace(tzinfo=timezone.utc)
+            if expected_reset_at is not None
+            else None,
+        },
+        "data": {
+            "spend": {"decrement": float(decrement)},
+            "budget_reset_at": datetime.fromisoformat(reset_at).replace(tzinfo=timezone.utc),
+        },
+    }
 
 
 class MockBatcher:
@@ -113,9 +202,14 @@ class MockBatcher:
         self.litellm_modelaccessgroupbudgettable = _Table("model_access_group", self)
         self.litellm_projecttable = _Table("project", self)
         self.litellm_endusertable = _Table("enduser", self)
+        self.litellm_customerorganizationtable = _Table("customer_org", self)
+        self.litellm_customerteamtable = _Table("customer_team", self)
+        self.litellm_customermembertable = _Table("customer_member", self)
 
     def execute_raw(self, query: str, *args: object) -> None:
-        self.calls.append({"table": "raw", "op": "execute_raw", "query": query, "args": args})
+        self.calls.append(
+            _raw_reset_write(query, args) or {"table": "raw", "op": "execute_raw", "query": query, "args": args}
+        )
 
     async def commit(self):
         self.committed = True
@@ -131,6 +225,9 @@ class MockDB:
         self.litellm_tagtable = MockTable()
         self.litellm_modelaccessgroupbudgettable = MockTable()
         self.litellm_projecttable = MockTable()
+        self.litellm_customermembertable = MockTable()
+        self.litellm_customerteamtable = MockTable()
+        self.litellm_customerorganizationtable = MockTable()
         self.batch_calls: List[Dict[str, Any]] = []
         self.batchers: List[MockBatcher] = []
 
@@ -168,6 +265,7 @@ class MockPrismaClient:
         }
         self.get_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
+        self.writer_db = self.db
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -283,15 +381,15 @@ def test_write_key_reset_updates_skips_none_token_and_still_writes_the_rest(rese
 
     asyncio.run(
         reset_budget_job._write_key_reset_updates(
-            updated_keys=[_RowReset(row=k, spend_decrement=(k.spend or 0.0)) for k in keys]
+            updated_keys=[_RowReset(row=k, spend_decrement=(k.spend or 0.0), expected_reset_at=reset_at) for k in keys]
         )
     )
 
     assert _batch_writes(mock_prisma_client, "key") == [
         {
             "table": "key",
-            "op": "update",
-            "where": {"token": "tok-ok"},
+            "op": "update_many",
+            "where": {"token": "tok-ok", "budget_reset_at": reset_at},
             "data": {"spend": {"decrement": 0.0}, "budget_reset_at": reset_at},
         }
     ]
@@ -323,7 +421,7 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
     assert len(key_writes) == 1
     write = key_writes[0]
-    assert write["where"] == {"token": "tok-key-1"}
+    assert write["where"] == {"token": "tok-key-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 100.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -403,7 +501,7 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
     user_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "user"]
     assert len(user_writes) == 1
     write = user_writes[0]
-    assert write["where"] == {"user_id": "uid-1"}
+    assert write["where"] == {"user_id": "uid-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 200.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -432,7 +530,7 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     team_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "team"]
     assert len(team_writes) == 1
     write = team_writes[0]
-    assert write["where"] == {"team_id": "tid-1"}
+    assert write["where"] == {"team_id": "tid-1", "budget_reset_at": now}
     assert write["data"]["spend"] == {"decrement": 500.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
@@ -663,9 +761,13 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         ("user", {"user_id": "uid-all-1"}, 200.0),
         ("team", {"team_id": "tid-all-1"}, 500.0),
     ]:
-        writes = _batch_writes(mock_prisma_client, table_name, op="update")
+        writes = [
+            write
+            for write in _batch_writes(mock_prisma_client, table_name, op="update_many")
+            if "budget_reset_at" in write["where"]
+        ]
         assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
-        assert writes[0]["where"] == where
+        assert writes[0]["where"] == {**where, "budget_reset_at": now}
         assert writes[0]["data"]["spend"] == {"decrement": decrement}
         assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
@@ -721,6 +823,209 @@ def test_budget_table_reset_zeroes_spend_on_every_linked_table(
     assert len(writes) == 1, f"expected exactly 1 {table} write, got {writes}"
     assert writes[0]["where"] == expected_where
     assert writes[0]["data"] == {"spend": 0}
+
+
+def _quiet_customer_evictions(monkeypatch):
+    """The walk evicts cached hierarchies after each page; the stubbed proxy module has no broadcast channel."""
+    _make_counter_invalidation_job(monkeypatch)
+
+    async def _broadcast(keys):
+        return None
+
+    monkeypatch.setattr(reset_budget_job_module, "broadcast_evictions", _broadcast)
+
+
+def _customer_member(member_id, spend, template_cap=10.0, override_cap=None, override_duration=None, expires_at=None):
+    """A member row as the paged reset reads it: its budget rows included, so the cap it carries over is its own."""
+    override = (
+        None
+        if override_cap is None and override_duration is None
+        else types.SimpleNamespace(max_budget=override_cap, budget_duration=override_duration)
+    )
+    return types.SimpleNamespace(
+        customer_member_id=member_id,
+        spend=spend,
+        budget_id="tier",
+        budget=types.SimpleNamespace(max_budget=template_cap, budget_duration="7d"),
+        budget_override_id=None if override is None else f"override-{member_id}",
+        budget_override=override,
+        budget_override_expires_at=expires_at,
+    )
+
+
+def test_budget_table_reset_zeroes_customer_hierarchy_rows_on_the_budget_window(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Customer org, team and member rows carry no reset clock of their own: the
+    budget row they point at does. Orgs ride the cascade; teams and members, which
+    an aliased request can create without bound, reset one committed page at a time
+    before it, selected by their template or by an unexpired override with its own
+    window."""
+    _quiet_customer_evictions(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
+    mock_prisma_client.db.litellm_customerteamtable.set_find_many_results(
+        [
+            types.SimpleNamespace(
+                customer_team_id="team-1",
+                spend=2.0,
+                budget_id="tier",
+                budget=None,
+                budget_override_id=None,
+                budget_override=None,
+                budget_override_expires_at=None,
+            )
+        ]
+    )
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results([_customer_member("member-1", 1.0)])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert _batch_writes(mock_prisma_client, "customer_org") == [
+        {
+            "table": "customer_org",
+            "op": "update_many",
+            "where": {"budget_id": {"in": ["tier"]}, "spend": {"gt": 0}},
+            "data": {"spend": 0},
+        }
+    ]
+    assert _batch_writes(mock_prisma_client, "customer_team") == [
+        {
+            "table": "customer_team",
+            "op": "update_many",
+            "where": {"customer_team_id": {"in": ["team-1"]}, "spend": {"gt": 0}},
+            "data": {"spend": 0},
+        }
+    ]
+    assert _batch_writes(mock_prisma_client, "customer_member") == [
+        {
+            "table": "customer_member",
+            "op": "update_many",
+            "where": {"customer_member_id": {"in": ["member-1"]}, "spend": {"gt": 0}},
+            "data": {"spend": 0},
+        }
+    ]
+    tables_in_commit_order = [{call["table"] for call in batcher.calls} for batcher in mock_prisma_client.db.batchers]
+    assert tables_in_commit_order == [{"customer_team"}, {"customer_member"}, tables_in_commit_order[-1]]
+    assert {"customer_org", "budget"} <= tables_in_commit_order[-1]
+    assert not {"customer_team", "customer_member"} & tables_in_commit_order[-1]
+    (member_read,) = [
+        call for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls if "OR" in call["where"]
+    ]
+    assert member_read["where"]["OR"] == [
+        {
+            "budget_id": {"in": ["tier"]},
+            "spend": {"gt": 0},
+            "OR": [
+                {"budget_override_id": None},
+                {"budget_override_expires_at": {"lte": ANY}},
+                {"budget_override": {"is": {"budget_duration": None}}},
+            ],
+        },
+        {
+            "budget_override_id": {"in": ["tier"]},
+            "spend": {"gt": 0},
+            "OR": [{"budget_override_expires_at": None}, {"budget_override_expires_at": {"gt": ANY}}],
+        },
+    ]
+    assert member_read["take"] == RESET_BUDGET_JOB_BATCH_SIZE
+
+
+def test_customer_member_rollover_carries_spend_past_the_members_own_cap(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """With budget_rollover on, the spend carried into the next window is what exceeds
+    the member's effective limit: an unexpired override's max_budget when it sets one,
+    the template's otherwise, whichever row owns the reset clock. A $100 template
+    with an active $300 limit-only override leaves 250 of spend at zero, not at 150."""
+    _quiet_customer_evictions(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d", max_budget=100.0)]
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results(
+        [
+            _customer_member("template-only", spend=250.0, template_cap=100.0),
+            _customer_member("limit-override", spend=250.0, template_cap=100.0, override_cap=300.0),
+            _customer_member("duration-override", spend=250.0, template_cap=100.0, override_duration="1d"),
+            _customer_member(
+                "expired-override",
+                spend=250.0,
+                template_cap=100.0,
+                override_cap=300.0,
+                expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+            ),
+        ]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes = [(w["where"], w["data"]) for w in _batch_writes(mock_prisma_client, "customer_member")]
+    template_capped = {"in": ["duration-override", "expired-override", "template-only"]}
+    assert writes == [
+        ({"customer_member_id": template_capped, "spend": {"gt": 0, "lte": 100.0}}, {"spend": 0}),
+        ({"customer_member_id": template_capped, "spend": {"gt": 100.0}}, {"spend": {"decrement": 100.0}}),
+        ({"customer_member_id": {"in": ["limit-override"]}, "spend": {"gt": 0, "lte": 300.0}}, {"spend": 0}),
+        ({"customer_member_id": {"in": ["limit-override"]}, "spend": {"gt": 300.0}}, {"spend": {"decrement": 300.0}}),
+    ]
+
+
+def test_customer_member_reset_walks_pages_and_commits_each_before_the_cascade(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A template can govern more members than one statement should carry, so the
+    walk pages by member id, commits every page on its own, and only then lets the
+    cascade advance the budget window."""
+    _quiet_customer_evictions(monkeypatch)
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results(
+        [_customer_member(f"member-{index}", spend=1.0) for index in range(5)]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    pages = [w["where"]["customer_member_id"]["in"] for w in _batch_writes(mock_prisma_client, "customer_member")]
+    assert pages == [["member-0", "member-1"], ["member-2", "member-3"], ["member-4"]]
+    cursors = [
+        call["where"]["customer_member_id"]["gt"]
+        for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls
+    ]
+    assert cursors == ["", "member-1", "member-3"]
+    assert [batcher.committed for batcher in mock_prisma_client.db.batchers] == [True, True, True, True]
+    assert {call["table"] for call in mock_prisma_client.db.batchers[-1].calls} >= {"budget"}
+
+
+def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A member's cached hierarchy holds the org, team and member spend the
+    request path checks, so every member a reset touches, directly or through
+    its team or org, is evicted once the cascade lands."""
+    from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
+
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    broadcasts: list[tuple[str, ...]] = []
+
+    async def _broadcast(keys):
+        broadcasts.append(tuple(keys))
+
+    monkeypatch.setattr(reset_budget_job_module, "broadcast_evictions", _broadcast)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d")]
+    mock_prisma_client.db.litellm_customerorganizationtable.set_find_many_results(
+        [types.SimpleNamespace(customer_org_id="org-1", alias="org-alias", spend=3.0, budget_id="tier")]
+    )
+    mock_prisma_client.db.litellm_customermembertable.set_find_many_results([_customer_member("member-1", 1.0)])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert mock_prisma_client.db.batchers[-1].committed is True
+    evicted = {call.kwargs["key"] for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert customer_member_cache_key("member-1") in evicted
+    assert customer_member_cache_key("member-1") in {key for keys in broadcasts for key in keys}
+    assert customer_org_alias_cache_key("org-alias") in {key for keys in broadcasts for key in keys}
+    descendant_reads = [
+        call["where"]
+        for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls
+        if "parent_org_id" in call["where"]
+    ]
+    assert descendant_reads == [{"parent_org_id": {"in": ["org-1"]}}]
 
 
 _POSTGRES_MAX_BIND_VARIABLES: Final = 32767
@@ -1438,7 +1743,47 @@ def test_reset_budget_for_keys_invalidates_redis_counter(reset_budget_job, mock_
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
-    assert "spend:key:sk-abc" in counter_cache.deleted()
+    assert {"spend:key:sk-abc", "spend:committed:key:sk-abc"} <= counter_cache.deleted()
+
+
+def _expired_key_row() -> object:
+    return type(
+        "Key",
+        (),
+        {
+            "spend": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": datetime.now(timezone.utc),
+            "id": "key-1",
+            "token": "sk-abc",
+        },
+    )
+
+
+def test_reset_budget_for_keys_without_redis_clears_the_counter_and_its_committed_twin(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.redis = None
+    counter_cache.memory.update({"spend:key:sk-abc": 100.0, "spend:committed:key:sk-abc": 100.0})
+    mock_prisma_client.data["key"] = [_expired_key_row()]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert counter_cache.memory == {}
+
+
+def test_a_redis_failure_on_the_key_reset_still_drops_its_committed_twin_locally(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.failing = frozenset({"delete"})
+    counter_cache.memory.update({"spend:key:sk-abc": 100.0, "spend:committed:key:sk-abc": 100.0})
+    mock_prisma_client.data["key"] = [_expired_key_row()]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert counter_cache.memory == {}
 
 
 def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -1749,7 +2094,9 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     assert "spend:end_user:customer-42" in counter_cache.deleted()
-    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    deleted: Final = {
+        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
     assert "end_user_id:customer-42" in deleted
 
 
@@ -1790,17 +2137,16 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 6
 
     invalidated: Final = counter_cache.deleted()
-    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
+    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)} | {
+        f"spend:committed:end_user:cust-{i:06d}" for i in range(population)
+    }
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }
     assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
-
-def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
-    mock_prisma_client, monkeypatch
-):
+def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(mock_prisma_client, monkeypatch):
     """A page that fails to read is not the end of the customer list.
 
     The tier's window is already advanced by the time this walk runs, so no later
@@ -1828,9 +2174,7 @@ def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_fin
     assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
 
 
-def test_a_failed_counter_batch_still_evicts_the_management_cache(
-    reset_budget_job, mock_prisma_client, monkeypatch
-):
+def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_job, mock_prisma_client, monkeypatch):
     """The spend counters and the management cache are invalidated independently.
 
     Sharing one handler meant a Redis failure on the counters returned before the
@@ -1848,9 +2192,7 @@ def test_a_failed_counter_batch_still_evicts_the_management_cache(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     evicted: Final = {
-        key
-        for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list
-        for key in call.args[0]
+        key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }
     assert "end_user_id:customer-42" in evicted
 
@@ -2100,6 +2442,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
         ("tag", "update_many"),
         ("model_access_group", "update_many"),
         ("project", "update_many"),
+        ("customer_org", "update_many"),
         ("budget", "update_many"),
     }
     budget_write = next(call for call in batcher.calls if call["table"] == "budget")
@@ -2337,8 +2680,8 @@ def test_key_reset_walks_the_due_rows_one_chunk_at_a_time(monkeypatch):
     assert _fetch_limits(client, "key") == [2, 2]
     assert len(client.db.batchers) == 2
     assert all(batcher.committed for batcher in client.db.batchers)
-    assert [len(batcher.calls) for batcher in client.db.batchers] == [2, 1]
-    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2", "k3"]
+    assert [sum(call["op"] == "update_many" for call in batcher.calls) for batcher in client.db.batchers] == [2, 1]
+    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update_many")] == ["k1", "k2", "k3"]
 
 
 def test_key_reset_stops_after_a_chunk_shorter_than_the_batch_size(monkeypatch):
@@ -2411,7 +2754,7 @@ def test_user_and_team_resets_are_chunked_too(monkeypatch, phase, table_name, ro
     assert client.fetches_by_table[table_name] == 2
     assert _fetch_limits(client, table_name) == [2, 2]
     assert len(client.db.batchers) == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 3
+    assert len(_batch_writes(client, table_name, op="update_many")) == 3
 
 
 def test_budget_table_reset_walks_chunks_until_it_runs_dry(monkeypatch):
@@ -2468,7 +2811,7 @@ def test_key_reset_stops_when_the_new_reset_time_is_not_in_the_future(monkeypatc
     asyncio.run(job.reset_budget_for_litellm_keys())
 
     assert client.fetches_by_table["key"] == 1
-    assert len(_batch_writes(client, "key", op="update")) == 2
+    assert len(_batch_writes(client, "key", op="update_many")) == 2
 
 
 def test_budget_table_reset_stops_when_the_new_window_is_not_in_the_future(monkeypatch):
@@ -2535,7 +2878,7 @@ def test_key_reset_keeps_paging_when_some_rows_in_a_chunk_fail(monkeypatch):
     _run_and_drain_hooks(job.reset_budget_for_litellm_keys)
 
     assert client.fetches_by_table["key"] == 2
-    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update")] == ["k1", "k2"]
+    assert [w["where"]["token"] for w in _batch_writes(client, "key", op="update_many")] == ["k1", "k2"]
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == ["reset_budget_keys"]
     assert set(logging_obj.service_logging_obj.failure_calls[0]["event_metadata"]) == {"num_keys_found"}
     assert [call["call_type"] for call in logging_obj.service_logging_obj.success_calls] == ["reset_budget_keys"]
@@ -2560,7 +2903,7 @@ def test_user_and_team_chunks_report_progress_despite_a_failed_row(
     _run_and_drain_hooks(getattr(job, phase))
 
     assert client.fetches_by_table[table_name] == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 2
+    assert len(_batch_writes(client, table_name, op="update_many")) == 2
     assert [call["call_type"] for call in logging_obj.service_logging_obj.failure_calls] == [call_type]
 
 
@@ -2983,7 +3326,7 @@ def test_transient_transport_error_on_read_reconnects_and_still_resets(phase, ta
     asyncio.run(getattr(job, phase)())
 
     assert client.reconnect_reasons == [reason]
-    assert len(_batch_writes(client, table_name, op="update")) == 1
+    assert len(_batch_writes(client, table_name, op="update_many")) == 1
 
 
 @pytest.mark.parametrize(
@@ -3007,7 +3350,7 @@ def test_connect_error_on_write_reconnects_and_commits(phase, table_name, reason
 
     assert client.reconnect_reasons == [reason]
     assert client.commit_attempts == 2
-    assert len(_batch_writes(client, table_name, op="update")) == 1
+    assert len(_batch_writes(client, table_name, op="update_many")) == 1
 
 
 @pytest.mark.parametrize("ambiguous_error_name", ["ReadError", "ReadTimeout"])
@@ -3039,7 +3382,7 @@ def test_ambiguous_transport_error_on_read_still_retries(ambiguous_error_name):
     asyncio.run(job.reset_budget_for_litellm_keys())
 
     assert client.reconnect_reasons == ["reset_budget_read_keys_failure"]
-    assert len(_batch_writes(client, "key", op="update")) == 1
+    assert len(_batch_writes(client, "key", op="update_many")) == 1
 
 
 def test_transport_error_on_budget_cascade_read_reconnects_and_commits():
@@ -3276,7 +3619,15 @@ def rollover_enabled(monkeypatch):
     ],
 )
 def test_direct_reset_carries_overage_when_rollover_enabled(
-    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
+    rollover_enabled,
+    reset_budget_job,
+    mock_prisma_client,
+    monkeypatch,
+    run_phase,
+    table,
+    id_field,
+    id_value,
+    row_factory,
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
     rather than zero the row, and the spend counter must be seeded with 50."""
@@ -3288,7 +3639,7 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
 
     writes = _batch_writes(mock_prisma_client, table)
     assert len(writes) == 1
-    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["where"] == {id_field: id_value, "budget_reset_at": now}
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
@@ -3442,7 +3793,12 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
             "spend": 15.0,
             "user_id": "enduser-implicit",
             "budget_id": None,
-            "model_dump": lambda self=None: {"spend": 15.0, "user_id": "enduser-implicit", "budget_id": None, "blocked": False},
+            "model_dump": lambda self=None: {
+                "spend": 15.0,
+                "user_id": "enduser-implicit",
+                "budget_id": None,
+                "blocked": False,
+            },
         },
     )
     mock_prisma_client.db.litellm_endusertable.set_find_many_results([implicit_enduser])
@@ -3450,7 +3806,9 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     assert "spend:end_user:enduser-implicit" in counter_cache.deleted()
-    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    deleted: Final = {
+        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
     assert "end_user_id:enduser-implicit" in deleted
 
 
@@ -3610,7 +3968,7 @@ def test_reset_decrement_preserves_spend_landed_after_read(
 
     writes = _batch_writes(mock_prisma_client, table)
     assert len(writes) == 1
-    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["where"] == {id_field: id_value, "budget_reset_at": now}
     assert writes[0]["data"]["spend"] == {"decrement": 5.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     assert _apply_spend_payload(db_spend=5.4, spend_field=writes[0]["data"]["spend"]) == pytest.approx(0.4)
@@ -3714,6 +4072,7 @@ async def test_a_budget_window_write_renders_a_postgres_update_span_for_its_tabl
     assert update.await_count == 1
     assert await postgres_span_names() == (span_name,)
 
+
 def _attrify(d: dict):
     """
     Wrap a dict so that attribute access (`.token`, `.user_id`, `.team_id`,
@@ -3733,7 +4092,8 @@ def _attrify(d: dict):
         def __setattr__(self, k, v):
             self[k] = v
 
-    return _AttrDict(d)
+    return _AttrDict({"budget_reset_at": None, **d})
+
 
 def _wire_batcher_for_test(prisma_client, fail_commit=False):
     """
@@ -3792,11 +4152,19 @@ def _wire_batcher_for_test(prisma_client, fail_commit=False):
         batcher.litellm_organizationtable = _Table("org")
         batcher.litellm_tagtable = _Table("tag")
         batcher.litellm_endusertable = _Table("enduser")
+
+        def execute_raw(query: str, *args: object) -> None:
+            write: Final = _raw_reset_write(query, args)
+            if write is not None:
+                queued.append(write)
+
+        batcher.execute_raw = execute_raw
         batcher.commit = commit
         return batcher
 
     prisma_client.db.batch_ = MagicMock(side_effect=make_batcher)
     return batch_calls
+
 
 def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     """
@@ -3814,9 +4182,12 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
         "litellm_verificationtoken",
         "litellm_organizationtable",
         "litellm_tagtable",
+        "litellm_customerteamtable",
+        "litellm_customermembertable",
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_keys_partial_failure():
@@ -3837,9 +4208,7 @@ async def test_reset_budget_keys_partial_failure():
     key6 = {"id": "key6", "spend": 35.0, "budget_duration": 60}  # Should be updated
 
     prisma_client = MagicMock()
-    prisma_client.get_data = AsyncMock(
-        return_value=[key1, key2, key3, key4, key5, key6]
-    )
+    prisma_client.get_data = AsyncMock(return_value=[key1, key2, key3, key4, key5, key6])
     prisma_client.update_data = AsyncMock()
     # Reset job writes key resets via prisma.db.batch_().<table>.update — not
     # via update_data — so wire that path.
@@ -3859,15 +4228,9 @@ async def test_reset_budget_keys_partial_failure():
     # and _AttrDict makes getattr work alongside item access used by fake_reset_key.
     for k in [key1, key2, key3, key4, key5, key6]:
         k.setdefault("token", k["id"])
-    key1, key2, key3, key4, key5, key6 = (
-        _attrify(k) for k in [key1, key2, key3, key4, key5, key6]
-    )
-    pre_reset_spend = {
-        k["token"]: k["spend"] for k in [key2, key3, key4, key5, key6]
-    }
-    prisma_client.get_data = AsyncMock(
-        return_value=[key1, key2, key3, key4, key5, key6]
-    )
+    key1, key2, key3, key4, key5, key6 = (_attrify(k) for k in [key1, key2, key3, key4, key5, key6])
+    pre_reset_spend = {k["token"]: k["spend"] for k in [key2, key3, key4, key5, key6]}
+    prisma_client.get_data = AsyncMock(return_value=[key1, key2, key3, key4, key5, key6])
 
     async def fake_reset_key(key, current_time, reset_settings=None):
         if key["id"] == "key1":
@@ -3877,14 +4240,10 @@ async def test_reset_budget_keys_partial_failure():
             # Simulate successful reset modification
             key["spend"] = 0.0
             # Compute a new reset time based on the budget duration
-            key["budget_reset_at"] = (
-                current_time + timedelta(seconds=key["budget_duration"])
-            ).isoformat()
+            key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
             return key
 
-    with patch.object(
-        ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
-    ) as mock_reset_key:
+    with patch.object(ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key) as mock_reset_key:
         # Call the method; even though one key fails, the loop should process both
         await job.reset_budget_for_litellm_keys()
         # Allow any created tasks (logging hooks) to schedule
@@ -3906,14 +4265,10 @@ async def test_reset_budget_keys_partial_failure():
         assert c["data"]["spend"] == {"decrement": pre_reset_spend[c["where"]["token"]]}
 
     # Verify that the failure logging hook was scheduled (due to the failure for key1)
-    failure_hook_calls = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
-    )
+    failure_hook_calls = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
     # There should be one failure hook call for keys (with call_type "reset_budget_keys")
-    assert any(
-        call.kwargs.get("call_type") == "reset_budget_keys"
-        for call in failure_hook_calls
-    )
+    assert any(call.kwargs.get("call_type") == "reset_budget_keys" for call in failure_hook_calls)
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_users_partial_failure():
@@ -3933,9 +4288,7 @@ async def test_reset_budget_users_partial_failure():
     user6 = {"id": "user6", "spend": 45.0, "budget_duration": 120}  # Should be updated
 
     prisma_client = MagicMock()
-    prisma_client.get_data = AsyncMock(
-        return_value=[user1, user2, user3, user4, user5, user6]
-    )
+    prisma_client.get_data = AsyncMock(return_value=[user1, user2, user3, user4, user5, user6])
     prisma_client.update_data = AsyncMock()
     batch_calls = _wire_batcher_for_test(prisma_client)
 
@@ -3950,29 +4303,19 @@ async def test_reset_budget_users_partial_failure():
     # getattr(u, 'user_id') works alongside the dict access fake_reset_user uses.
     for u in [user1, user2, user3, user4, user5, user6]:
         u.setdefault("user_id", u["id"])
-    user1, user2, user3, user4, user5, user6 = (
-        _attrify(u) for u in [user1, user2, user3, user4, user5, user6]
-    )
-    pre_reset_spend = {
-        u["user_id"]: u["spend"] for u in [user2, user3, user4, user5, user6]
-    }
-    prisma_client.get_data = AsyncMock(
-        return_value=[user1, user2, user3, user4, user5, user6]
-    )
+    user1, user2, user3, user4, user5, user6 = (_attrify(u) for u in [user1, user2, user3, user4, user5, user6])
+    pre_reset_spend = {u["user_id"]: u["spend"] for u in [user2, user3, user4, user5, user6]}
+    prisma_client.get_data = AsyncMock(return_value=[user1, user2, user3, user4, user5, user6])
 
     async def fake_reset_user(user, current_time, reset_settings=None):
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         else:
             user["spend"] = 0.0
-            user["budget_reset_at"] = (
-                current_time + timedelta(seconds=user["budget_duration"])
-            ).isoformat()
+            user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
             return user
 
-    with patch.object(
-        ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
-    ) as mock_reset_user:
+    with patch.object(ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user) as mock_reset_user:
         await job.reset_budget_for_litellm_users()
         await asyncio.sleep(0.1)
 
@@ -3984,17 +4327,11 @@ async def test_reset_budget_users_partial_failure():
     assert written_ids == ["user2", "user3", "user4", "user5", "user6"]
     for c in user_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == {
-            "decrement": pre_reset_spend[c["where"]["user_id"]]
-        }
+        assert c["data"]["spend"] == {"decrement": pre_reset_spend[c["where"]["user_id"]]}
 
-    failure_hook_calls = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
-    )
-    assert any(
-        call.kwargs.get("call_type") == "reset_budget_users"
-        for call in failure_hook_calls
-    )
+    failure_hook_calls = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
+    assert any(call.kwargs.get("call_type") == "reset_budget_users" for call in failure_hook_calls)
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
@@ -4005,10 +4342,7 @@ async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
     afterwards, so a failure here left the tier stamped for the next window
     while every end user stayed at the cap.
     """
-    endusers = [
-        _attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"})
-        for i in range(1, 7)
-    ]
+    endusers = [_attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)]
 
     budget1 = LiteLLM_BudgetTableFull(
         **{
@@ -4044,17 +4378,12 @@ async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
     await asyncio.sleep(0.1)
 
     assert batch_calls == [], "a failed cascade must not persist any write"
-    assert (
-        prisma_client.update_data.await_count == 0
-    ), "budget_reset_at must not be advanced outside the cascade transaction"
+    assert prisma_client.update_data.await_count == 0, (
+        "budget_reset_at must not be advanced outside the cascade transaction"
+    )
 
-    failure_hook_calls = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
-    )
-    assert any(
-        call.kwargs.get("call_type") == "reset_budget_endusers"
-        for call in failure_hook_calls
-    )
+    failure_hook_calls = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
+    assert any(call.kwargs.get("call_type") == "reset_budget_endusers" for call in failure_hook_calls)
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
 
@@ -4088,7 +4417,9 @@ async def _await_tasks_spawned_by(operation: Awaitable[None]) -> None:
 
 @pytest.mark.asyncio
 async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(frozen_reset_clock):
-    endusers: Final = [_attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)]
+    endusers: Final = [
+        _attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)
+    ]
 
     budget1: Final = LiteLLM_BudgetTableFull(
         **{
@@ -4187,6 +4518,9 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
         **{t["team_id"]: t["spend"] for t in [team1, team2]},
     }
     _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
+    prisma_client.writer_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
 
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -4209,12 +4543,12 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
-    key_writes: Final = [c for c in batch_calls if c["table"] == "key" and c["op"] == "update"]
+    key_writes: Final = [c for c in batch_calls if c["table"] == "key" and "token" in c["where"]]
     user_writes: Final = [c for c in batch_calls if c["table"] == "user"]
     team_writes: Final = [c for c in batch_calls if c["table"] == "team"]
     assert len(key_writes) == 2
     assert len(user_writes) == 1
-    assert user_writes[0]["where"] == {"user_id": "user2"}
+    assert user_writes[0]["where"] == {"user_id": "user2", "budget_reset_at": None}
     assert len(team_writes) == 2
     for c in key_writes + user_writes + team_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
@@ -4258,14 +4592,10 @@ async def test_reset_budget_teams_partial_failure():
             raise Exception("Simulated failure for team1")
         else:
             team["spend"] = 0.0
-            team["budget_reset_at"] = (
-                current_time + timedelta(seconds=team["budget_duration"])
-            ).isoformat()
+            team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
             return team
 
-    with patch.object(
-        ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
-    ) as mock_reset_team:
+    with patch.object(ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team) as mock_reset_team:
         await job.reset_budget_for_litellm_teams()
         await asyncio.sleep(0.1)
 
@@ -4273,17 +4603,13 @@ async def test_reset_budget_teams_partial_failure():
     prisma_client.update_data.assert_not_awaited()
     team_writes = [c for c in batch_calls if c["table"] == "team"]
     assert len(team_writes) == 1
-    assert team_writes[0]["where"] == {"team_id": "team2"}
+    assert team_writes[0]["where"] == {"team_id": "team2", "budget_reset_at": None}
     assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
     assert team_writes[0]["data"]["spend"] == {"decrement": pre_reset_spend}
 
-    failure_hook_calls = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
-    )
-    assert any(
-        call.kwargs.get("call_type") == "reset_budget_teams"
-        for call in failure_hook_calls
-    )
+    failure_hook_calls = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
+    assert any(call.kwargs.get("call_type") == "reset_budget_teams" for call in failure_hook_calls)
+
 
 @pytest.mark.asyncio
 async def test_service_logger_keys_success():
@@ -4292,12 +4618,8 @@ async def test_service_logger_keys_success():
     logger success hook is called with the correct event metadata and no exception is logged.
     """
     keys = [
-        _attrify(
-            {"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"}
-        ),
-        _attrify(
-            {"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"}
-        ),
+        _attrify({"id": "key1", "spend": 10.0, "budget_duration": 60, "token": "key1"}),
+        _attrify({"id": "key2", "spend": 15.0, "budget_duration": 60, "token": "key2"}),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=keys)
@@ -4313,9 +4635,7 @@ async def test_service_logger_keys_success():
 
     async def fake_reset_key(key, current_time, reset_settings=None):
         key["spend"] = 0.0
-        key["budget_reset_at"] = (
-            current_time + timedelta(seconds=key["budget_duration"])
-        ).isoformat()
+        key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
         return key
 
     with patch.object(
@@ -4323,9 +4643,7 @@ async def test_service_logger_keys_success():
         "_reset_budget_for_key",
         side_effect=fake_reset_key,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_keys()
             # Allow async logging task to complete
             await asyncio.sleep(0.1)
@@ -4343,6 +4661,7 @@ async def test_service_logger_keys_success():
     assert event_metadata.get("num_keys_failed") == 0
     # Failure hook should not be executed.
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_keys_failure():
@@ -4370,9 +4689,7 @@ async def test_service_logger_keys_failure():
         if key["id"] == "key1":
             raise Exception("Simulated failure for key1")
         key["spend"] = 0.0
-        key["budget_reset_at"] = (
-            current_time + timedelta(seconds=key["budget_duration"])
-        ).isoformat()
+        key["budget_reset_at"] = current_time + timedelta(seconds=key["budget_duration"])
         return key
 
     with patch.object(
@@ -4380,18 +4697,13 @@ async def test_service_logger_keys_failure():
         "_reset_budget_for_key",
         side_effect=fake_reset_key,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_keys()
             await asyncio.sleep(0.1)
             # Expect at least one exception logged (the inner error and the outer catch)
             assert mock_verbose_exc.call_count >= 1
             # Verify exception was logged with correct message
-            assert any(
-                "Failed to reset budget for key" in str(call.args)
-                for call in mock_verbose_exc.call_args_list
-            )
+            assert any("Failed to reset budget for key" in str(call.args) for call in mock_verbose_exc.call_args_list)
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     (
@@ -4406,6 +4718,7 @@ async def test_service_logger_keys_failure():
     # Success hook should not be called.
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_service_logger_users_success():
     """
@@ -4413,12 +4726,8 @@ async def test_service_logger_users_success():
     the correct metadata and no exception is logged.
     """
     users = [
-        _attrify(
-            {"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"}
-        ),
-        _attrify(
-            {"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"}
-        ),
+        _attrify({"id": "user1", "spend": 20.0, "budget_duration": 120, "user_id": "user1"}),
+        _attrify({"id": "user2", "spend": 25.0, "budget_duration": 120, "user_id": "user2"}),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=users)
@@ -4434,9 +4743,7 @@ async def test_service_logger_users_success():
 
     async def fake_reset_user(user, current_time, reset_settings=None):
         user["spend"] = 0.0
-        user["budget_reset_at"] = (
-            current_time + timedelta(seconds=user["budget_duration"])
-        ).isoformat()
+        user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
         return user
 
     with patch.object(
@@ -4444,9 +4751,7 @@ async def test_service_logger_users_success():
         "_reset_budget_for_user",
         side_effect=fake_reset_user,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_users()
             await asyncio.sleep(0.1)
             mock_verbose_exc.assert_not_called()
@@ -4461,6 +4766,7 @@ async def test_service_logger_users_success():
     assert event_metadata.get("num_users_updated") == len(users)
     assert event_metadata.get("num_users_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_users_failure():
@@ -4487,9 +4793,7 @@ async def test_service_logger_users_failure():
         if user["id"] == "user1":
             raise Exception("Simulated failure for user1")
         user["spend"] = 0.0
-        user["budget_reset_at"] = (
-            current_time + timedelta(seconds=user["budget_duration"])
-        ).isoformat()
+        user["budget_reset_at"] = current_time + timedelta(seconds=user["budget_duration"])
         return user
 
     with patch.object(
@@ -4497,18 +4801,13 @@ async def test_service_logger_users_failure():
         "_reset_budget_for_user",
         side_effect=fake_reset_user,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_users()
             await asyncio.sleep(0.1)
             # Verify exception logging
             assert mock_verbose_exc.call_count >= 1
             # Verify exception was logged with correct message
-            assert any(
-                "Failed to reset budget for user" in str(call.args)
-                for call in mock_verbose_exc.call_args_list
-            )
+            assert any("Failed to reset budget for user" in str(call.args) for call in mock_verbose_exc.call_args_list)
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     (
@@ -4520,6 +4819,7 @@ async def test_service_logger_users_failure():
     assert "users_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_service_logger_teams_success():
     """
@@ -4527,12 +4827,8 @@ async def test_service_logger_teams_success():
     the proper metadata and nothing is logged as an exception.
     """
     teams = [
-        _attrify(
-            {"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"}
-        ),
-        _attrify(
-            {"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"}
-        ),
+        _attrify({"id": "team1", "spend": 30.0, "budget_duration": 180, "team_id": "team1"}),
+        _attrify({"id": "team2", "spend": 35.0, "budget_duration": 180, "team_id": "team2"}),
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=teams)
@@ -4548,9 +4844,7 @@ async def test_service_logger_teams_success():
 
     async def fake_reset_team(team, current_time, reset_settings=None):
         team["spend"] = 0.0
-        team["budget_reset_at"] = (
-            current_time + timedelta(seconds=team["budget_duration"])
-        ).isoformat()
+        team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
         return team
 
     with patch.object(
@@ -4558,9 +4852,7 @@ async def test_service_logger_teams_success():
         "_reset_budget_for_team",
         side_effect=fake_reset_team,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_teams()
             await asyncio.sleep(0.1)
             mock_verbose_exc.assert_not_called()
@@ -4575,6 +4867,7 @@ async def test_service_logger_teams_success():
     assert event_metadata.get("num_teams_updated") == len(teams)
     assert event_metadata.get("num_teams_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_teams_failure():
@@ -4601,9 +4894,7 @@ async def test_service_logger_teams_failure():
         if team["id"] == "team1":
             raise Exception("Simulated failure for team1")
         team["spend"] = 0.0
-        team["budget_reset_at"] = (
-            current_time + timedelta(seconds=team["budget_duration"])
-        ).isoformat()
+        team["budget_reset_at"] = current_time + timedelta(seconds=team["budget_duration"])
         return team
 
     with patch.object(
@@ -4611,18 +4902,13 @@ async def test_service_logger_teams_failure():
         "_reset_budget_for_team",
         side_effect=fake_reset_team,
     ):
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-        ) as mock_verbose_exc:
+        with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
             await job.reset_budget_for_litellm_teams()
             await asyncio.sleep(0.1)
             # Verify exception logging
             assert mock_verbose_exc.call_count >= 1
             # Verify exception was logged with correct message
-            assert any(
-                "Failed to reset budget for team" in str(call.args)
-                for call in mock_verbose_exc.call_args_list
-            )
+            assert any("Failed to reset budget for team" in str(call.args) for call in mock_verbose_exc.call_args_list)
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     (
@@ -4633,6 +4919,7 @@ async def test_service_logger_teams_failure():
     assert event_metadata.get("num_teams_found") == len(teams)
     assert "teams_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_endusers_success():
@@ -4675,9 +4962,7 @@ async def test_service_logger_endusers_success():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    with patch(
-        "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-    ) as mock_verbose_exc:
+    with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
         await job.reset_budget_for_litellm_budget_table()
         await asyncio.sleep(0.1)
         mock_verbose_exc.assert_not_called()
@@ -4697,6 +4982,7 @@ async def test_service_logger_endusers_success():
     assert event_metadata.get("num_endusers_updated") == len(endusers)
     assert event_metadata.get("num_endusers_failed") == 0
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_service_logger_endusers_failure():
@@ -4739,9 +5025,7 @@ async def test_service_logger_endusers_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    with patch(
-        "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
-    ) as mock_verbose_exc:
+    with patch("litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception") as mock_verbose_exc:
         await job.reset_budget_for_litellm_budget_table()
         await asyncio.sleep(0.1)
         # The log must name the whole cascade, not just end users: the write
@@ -4763,6 +5047,7 @@ async def test_service_logger_endusers_failure():
     assert "endusers_found" not in event_metadata
     assert "budgets_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_for_litellm_team_members_called():

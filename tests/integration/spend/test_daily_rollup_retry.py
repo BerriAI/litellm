@@ -152,6 +152,7 @@ def test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_ac
             "prompt_caching_savings_spend": pytest.approx(0.0),
             "gateway_injected_caching_savings_spend": pytest.approx(0.0),
             "autorouter_savings_spend": pytest.approx(0.0),
+            "guardrail_spend": pytest.approx(0.0),
             "total_tokens": 40,
             "successful_requests": 1,
             "failed_requests": 0,

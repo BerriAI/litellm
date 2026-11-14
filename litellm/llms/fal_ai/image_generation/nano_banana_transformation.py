@@ -5,6 +5,8 @@ from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
 from .transformation import FalAIBaseConfig
 
+_BARE_APP_MARKERS: Final = ("nano-banana", "gemini-25-flash-image")
+
 
 class FalAINanoBananaConfig(FalAIBaseConfig):
     """
@@ -16,6 +18,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
     - fal-ai/gemini-25-flash-image
     - fal-ai/nano-banana-2
     - fal-ai/nano-banana-pro
+    - google/nano-banana-2.1
 
     Provider-specific params such as ``resolution`` ("0.5K", "1K", "2K", "4K") are
     forwarded as-is and drive the per-resolution price in the cost map.
@@ -46,7 +49,9 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         stream: bool | None = None,
     ) -> str:
         base_url: Final[str] = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
-        endpoint: Final = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
+        app: Final = model.partition("/")[0].lower()
+        is_bare_app: Final = any(marker in app for marker in _BARE_APP_MARKERS)
+        endpoint: Final = f"fal-ai/{model}" if is_bare_app else model
         return f"{base_url}/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:

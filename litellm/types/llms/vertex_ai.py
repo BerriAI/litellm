@@ -312,8 +312,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
