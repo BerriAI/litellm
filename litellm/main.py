@@ -2814,13 +2814,22 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if custom_llm_provider == "bigmodel" and not api_key:
+    # Providers that must never fall back to the OpenAI credentials below: a missing key would
+    # otherwise send OPENAI_API_KEY (and the OpenAI organization) to a third-party endpoint.
+    _no_openai_fallback = {"bigmodel": "BIGMODEL_API_KEY", "openuncensored": "OPENUNCENSORED_API_KEY"}
+    if custom_llm_provider in _no_openai_fallback and not api_key:
         raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+            message=f"Set {_no_openai_fallback[custom_llm_provider]} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
         )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (
+            None
+            if custom_llm_provider in _no_openai_fallback
+            else litellm.organization or get_secret("OPENAI_ORGANIZATION")
+        )
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization

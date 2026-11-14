@@ -3484,6 +3484,34 @@
     "default_model_placeholder": "refuseless/glm-5.3-abliterated"
   },
   {
+    "provider": "OPENUNCENSORED",
+    "provider_display_name": "Open Uncensored",
+    "litellm_provider": "openuncensored",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://openuncensored.com/api/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openuncensored/deepseek-v4.1-flash-1017-uncensored"
+  },
+  {
     "provider": "REPLICATE",
     "provider_display_name": "Replicate",
     "litellm_provider": "replicate",
