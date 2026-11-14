@@ -1662,6 +1662,32 @@ def test_request_identity_from_user_api_key_auth():
     assert ident.metadata["user_api_key_end_user_id"] == "eu9"
 
 
+def test_virtual_key_metadata_reaches_baggage_only_for_allowlisted_sub_keys():
+    from litellm.integrations.otel.model.baggage import DEFAULT_BAGGAGE_METADATA_KEYS, promoted_baggage
+    from litellm.integrations.otel.model.payloads import RequestIdentity
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth: Final = UserAPIKeyAuth(
+        key_alias="cost-key",
+        metadata={"team": "a", "cost": {"center": "cc-42"}, "owner": "not-allowlisted"},
+    )
+    identity: Final = RequestIdentity.from_user_api_key_auth(auth)
+
+    allowlisted: Final = promoted_baggage(
+        identity,
+        None,
+        promoted_keys=(),
+        metadata_keys=("user_api_key_auth_metadata.team", "user_api_key_auth_metadata.cost.center"),
+    )
+    default: Final = promoted_baggage(identity, None, promoted_keys=(), metadata_keys=DEFAULT_BAGGAGE_METADATA_KEYS)
+
+    assert allowlisted == {
+        "litellm.metadata.user_api_key_auth_metadata.team": "a",
+        "litellm.metadata.user_api_key_auth_metadata.cost.center": "cc-42",
+    }
+    assert default == {"litellm.metadata.user_api_key_alias": "cost-key"}
+
+
 # --- request-metadata translation layer (RequestContext) -------------------- #
 
 
