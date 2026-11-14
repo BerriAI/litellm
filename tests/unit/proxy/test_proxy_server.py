@@ -3591,6 +3591,79 @@ def _receive_until_closed(websocket: WebSocketTestSession) -> None:
         websocket.receive_text()
 
 
+@pytest.mark.parametrize("alias", ("gpt-realtime", "voice"))
+@pytest.mark.parametrize("route", ("/v1/realtime", "/v1/realtime/translations", "/v1/live/sessions"))
+def test_realtime_websocket_team_alias_selects_restricted_deployment(
+    alias: str,
+    route: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import (
+        user_api_key_auth_live_websocket,
+        user_api_key_auth_realtime_websocket,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    provider_model: Final = "gpt-realtime"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared/realtime",
+                "litellm_params": {
+                    "model": provider_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "shared-key",
+                    "order": 0,
+                },
+                "model_info": {"id": "shared-deployment"},
+            },
+            {
+                "model_name": "restricted/realtime",
+                "litellm_params": {
+                    "model": provider_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "restricted-key",
+                    "order": 1,
+                },
+                "model_info": {"id": "restricted-deployment", "access_groups": ["Restricted"]},
+            },
+        ],
+        num_retries=0,
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-fixture-key",
+        team_id="alias-team",
+        models=["all-team-models"],
+        team_models=["Restricted"],
+        team_model_aliases={alias: "restricted/realtime"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_realtime_websocket, lambda: auth)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_live_websocket, lambda: auth)
+
+    async def authorize_session_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+        return auth
+
+    _override_live_session_authorizer(monkeypatch, authorize_session_model)
+    connect: Final = MagicMock(side_effect=RuntimeError("upstream selected"))
+    monkeypatch.setattr("websockets.connect", connect)
+
+    is_live_session: Final = route == "/v1/live/sessions"
+    with TestClient(app).websocket_connect(route if is_live_session else f"{route}?model={alias}") as websocket:
+        if is_live_session:
+            websocket.send_json({"type": "session.start", "session": {"model": alias}})
+        with pytest.raises(WebSocketDisconnect):
+            _receive_until_closed(websocket)
+
+    connect.assert_called_once()
+    assert connect.call_args.kwargs["additional_headers"]["Authorization"] == "Bearer restricted-key"
+
+
 @pytest.mark.parametrize(
     ("litellm_params", "expected_upstream_url"),
     (
