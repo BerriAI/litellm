@@ -391,3 +391,42 @@ def test_deepseek_anthropic_messages_forwards_thinking_for_model_missing_from_co
 
     assert request["thinking"] == {"type": "adaptive"}
     assert request["output_config"] == {"effort": "none"}
+
+
+def _register_deepseek_deployment(model: str, model_info: Mapping[str, object]) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "deepseek-unlisted",
+                "litellm_params": {"model": f"deepseek/{model}", "api_key": "sk-test"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deepseek_anthropic_messages_forwards_thinking_for_unlisted_model_served_by_a_router_deployment() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    _register_deepseek_deployment(model, {})
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}, "temperature": 0}, model=model
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "max"}
+    assert request["temperature"] == 0
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deepseek_anthropic_messages_keeps_base_handling_for_deployment_declared_without_reasoning() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    _register_deepseek_deployment(model, {"supports_reasoning": False})
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}, model=model
+    )
+
+    assert "thinking" not in request
+    assert "output_config" not in request
