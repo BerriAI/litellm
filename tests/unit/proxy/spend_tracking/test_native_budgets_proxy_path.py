@@ -30,6 +30,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router import Router
 from litellm.types.utils import CallTypesLiteral
+from tests.unit.proxy.spend_tracking.native_budgets_golden.golden import NATIVE_BUDGETS_PROXY_PATH, Golden
 
 API_KEY: Final = "sk-native-path"
 TOKEN: Final = hash_token(API_KEY)
@@ -65,6 +66,11 @@ def proxy(monkeypatch: pytest.MonkeyPatch) -> Iterator[Proxy]:
     monkeypatch.setattr(litellm, "callbacks", [])
     yield Proxy(store=store, cache=cache, logging=logging)
     native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # later tests run without a native owner
+
+
+@pytest.fixture
+def golden(request: pytest.FixtureRequest) -> Golden:
+    return Golden(NATIVE_BUDGETS_PROXY_PATH, request.node.name)
 
 
 def _use_native(proxy: Proxy, native: bool) -> None:
@@ -173,7 +179,9 @@ EXITS: Final[Mapping[str, Exit]] = {"success": _success, "failure": _failure}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
-async def test_a_request_through_auth_and_pre_call_settles_like_python(proxy: Proxy, exit_path: Exit) -> None:
+async def test_a_request_through_auth_and_pre_call_settles_like_python(
+    proxy: Proxy, exit_path: Exit, golden: Golden
+) -> None:
     python: Final = await _run(proxy, native=False, exit_path=exit_path)
     native: Final = await _run(proxy, native=True, exit_path=exit_path)
 
@@ -181,10 +189,11 @@ async def test_a_request_through_auth_and_pre_call_settles_like_python(proxy: Pr
         "the flag-off run must hold a reservation for this comparison to mean anything"
     )
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 @pytest.mark.asyncio
-async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy) -> None:
+async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy, golden: Golden) -> None:
     refusals: Final[list[tuple[object, ...]]] = []  # mutable-ok: one refusal per side
     for native in (False, True):
         _use_native(proxy, native)
@@ -195,6 +204,7 @@ async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy) -
 
     assert refusals[0][0] == "budget_exceeded"
     assert refusals[1] == refusals[0]
+    assert golden.canonical(refusals[0]) == golden.recorded("python", refusals[0])
 
 
 async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, Mapping[str, float]]:
@@ -233,12 +243,15 @@ async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, M
 
 
 @pytest.mark.asyncio
-async def test_a_responses_websocket_session_holds_its_admission_at_connect_like_python(proxy: Proxy) -> None:
+async def test_a_responses_websocket_session_holds_its_admission_at_connect_like_python(
+    proxy: Proxy, golden: Golden
+) -> None:
     python: Final = await _websocket_session_held(proxy, native=False)
     native: Final = await _websocket_session_held(proxy, native=True)
 
     assert python[1][KEY_COUNTER] > 0.0, "the flag-off run must hold the admission at connect"
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 RACERS: Final = 24
@@ -290,7 +303,7 @@ async def _admit_with(
 
 
 @pytest.mark.asyncio
-async def test_racing_requests_for_the_last_of_a_budget_admit_like_python(proxy: Proxy) -> None:
+async def test_racing_requests_for_the_last_of_a_budget_admit_like_python(proxy: Proxy, golden: Golden) -> None:
     estimate: Final = 0.00102
     budget: Final = estimate * 5.5
 
@@ -299,11 +312,12 @@ async def test_racing_requests_for_the_last_of_a_budget_admit_like_python(proxy:
 
     assert python[0] < RACERS, "the budget must run out during the race"
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 @pytest.mark.asyncio
 async def test_the_reservation_lease_stops_when_the_reservation_is_finalized(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     monkeypatch.setattr(SpendCounterStore, "redis_ttl", property(lambda _store: 0.01))
     stopped: Final[list[bool]] = []  # mutable-ok: one result per side
@@ -320,6 +334,7 @@ async def test_the_reservation_lease_stops_when_the_reservation_is_finalized(
         stopped.append(all(lease.done() for lease in leases))
 
     assert stopped == [True, True]
+    assert golden.canonical(stopped[0]) == golden.recorded("python", stopped[0])
 
 
 PASS_THROUGH: Final = "/anthropic/v1/messages"
@@ -356,7 +371,7 @@ FORGERIES: Final = {
 @pytest.mark.parametrize("max_budget", [None, 1.0], ids=["unbudgeted_key", "budgeted_key"])
 @pytest.mark.parametrize("forgery", FORGERIES.values(), ids=FORGERIES.keys())
 async def test_a_forged_plan_in_a_pass_through_body_changes_no_counter(
-    proxy: Proxy, forgery: tuple[str, float], max_budget: float | None
+    proxy: Proxy, forgery: tuple[str, float], max_budget: float | None, golden: Golden
 ) -> None:
     counter_key, reservation_cost = forgery
     held: Final[list[Mapping[str, float]]] = []  # mutable-ok: one snapshot per side
@@ -379,11 +394,14 @@ async def test_a_forged_plan_in_a_pass_through_body_changes_no_counter(
 
     assert held[0][VICTIM] == 1.0
     assert held[1] == held[0]
+    assert golden.canonical(held[0]) == golden.recorded("python", held[0])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
-async def test_a_pass_through_llm_route_reserves_and_settles_like_python(proxy: Proxy, exit_path: Exit) -> None:
+async def test_a_pass_through_llm_route_reserves_and_settles_like_python(
+    proxy: Proxy, exit_path: Exit, golden: Golden
+) -> None:
     runs: Final[list[Run]] = []  # mutable-ok: one run per side
     for native in (False, True):
         _use_native(proxy, native)
@@ -404,6 +422,7 @@ async def test_a_pass_through_llm_route_reserves_and_settles_like_python(proxy: 
         "the flag-off run must hold a reservation for this comparison to mean anything"
     )
     assert runs[1] == runs[0]
+    assert golden.canonical(runs[0]) == golden.recorded("python", runs[0])
 
 
 MESSAGES_BODY: Final = {
@@ -478,7 +497,7 @@ FORGED_BODIES: Final[Mapping[str, Mapping[str, object]]] = {
 
 @pytest.mark.parametrize("body", FORGED_BODIES.values(), ids=FORGED_BODIES.keys())
 def test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over_http(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], golden: Golden
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     python: Final = _over_http(proxy, False, monkeypatch, body)
@@ -488,6 +507,7 @@ def test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over
     assert python.held_upstream[0][KEY_COUNTER] > 0.5, "the flag-off run must hold a reservation upstream"
     assert python.held_upstream[0][VICTIM] == 1.0
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 TEAM: Final = "team-at-max"
@@ -610,7 +630,7 @@ REFUSED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
 
 @pytest.mark.parametrize("route", REFUSED_ROUTES.values(), ids=REFUSED_ROUTES.keys())
 def test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]]
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]], golden: Golden
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     path, body = route
@@ -619,6 +639,7 @@ def test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal(
 
     assert python.status == 422
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,13 +686,14 @@ async def _cancel_during_pre_call(proxy: Proxy, native: bool, monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_a_client_that_disconnects_during_pre_call_leaves_no_hold_like_python(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     python: Final = await _cancel_during_pre_call(proxy, False, monkeypatch)
     native: Final = await _cancel_during_pre_call(proxy, True, monkeypatch)
 
     assert python[KEY_COUNTER] > 0.0, "the flag-off run must charge the input cost on cancel"
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 async def _admit_twice(proxy: Proxy, native: bool) -> Run:
@@ -692,7 +714,7 @@ async def _admit_twice(proxy: Proxy, native: bool) -> Run:
 
 
 @pytest.mark.asyncio
-async def test_a_second_pre_call_for_the_same_auth_reserves_once_like_python(proxy: Proxy) -> None:
+async def test_a_second_pre_call_for_the_same_auth_reserves_once_like_python(proxy: Proxy, golden: Golden) -> None:
     python: Final = await _admit_twice(proxy, native=False)
     native: Final = await _admit_twice(proxy, native=True)
 
@@ -700,6 +722,7 @@ async def test_a_second_pre_call_for_the_same_auth_reserves_once_like_python(pro
         "the flag-off run must hold a reservation for this comparison to mean anything"
     )
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
     assert native.held_after_pre_call[KEY_COUNTER] == pytest.approx(
         sum(float(entry["reserved_cost"]) for entry in native.entries_after_pre_call)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownArgumentType, reportUnknownVariableType]  # entries are the dicts built above
     )
@@ -734,17 +757,20 @@ async def _seen_by_the_next_subscriber(proxy: Proxy, native: bool) -> tuple[obje
 
 
 @pytest.mark.asyncio
-async def test_the_next_pre_call_subscriber_sees_the_reservation_written_into_the_auth_dict(proxy: Proxy) -> None:
+async def test_the_next_pre_call_subscriber_sees_the_reservation_written_into_the_auth_dict(
+    proxy: Proxy, golden: Golden
+) -> None:
     python: Final = await _seen_by_the_next_subscriber(proxy, native=False)
     native: Final = await _seen_by_the_next_subscriber(proxy, native=True)
 
     assert python[0], "the flag-off run must hold a reservation before the next subscriber runs"
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 @pytest.mark.parametrize("route", REFUSED_ROUTES.values(), ids=REFUSED_ROUTES.keys())
 def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]]
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]], golden: Golden
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     path, body = route
@@ -757,9 +783,9 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
         )
 
     assert {code: python.status for code, (python, _) in refusals.items()} == {402: 402, 429: 429}
-    assert {code: native for code, (_, native) in refusals.items()} == {
-        code: python for code, (python, _) in refusals.items()
-    }
+    python_refusals: Final = {code: python for code, (python, _) in refusals.items()}
+    assert {code: native for code, (_, native) in refusals.items()} == python_refusals
+    assert golden.canonical(python_refusals) == golden.recorded("python", python_refusals)
 
 
 ROUTED_MODELS: Final = (
@@ -867,7 +893,7 @@ async def _family_run(proxy: Proxy, native: bool, family: Family, exit_path: Exi
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
 @pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
 async def test_a_widened_route_family_reserves_and_settles_like_python(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, exit_path: Exit
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, exit_path: Exit, golden: Golden
 ) -> None:
     _route_the_family_models(monkeypatch)
     python: Final = await _family_run(proxy, False, family, exit_path)
@@ -876,11 +902,12 @@ async def test_a_widened_route_family_reserves_and_settles_like_python(
     assert python.entries_after_pre_call, "the Python engine must hold a reservation on this route"
     assert native_budgets.native_budget_route(family.path.partition("?")[0])
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
 
 
 @pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
 def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal(
-    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, golden: Golden
 ) -> None:
     _route_the_family_models(monkeypatch)
     python: Final = _refused_over_http(
@@ -892,3 +919,4 @@ def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_re
 
     assert python.status == 422
     assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)

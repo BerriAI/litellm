@@ -1,0 +1,1878 @@
+{
+  "python": {
+    "test_a_client_that_disconnects_during_pre_call_leaves_no_hold_like_python": {
+      "python": {
+        "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 2.0000000000000052e-05
+      }
+    },
+    "test_a_forged_plan_in_a_pass_through_body_changes_no_counter[charge_a_victim_team-budgeted_key]": {
+      "python": {
+        "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.50102,
+        "spend:team:victim-team": 1.0
+      }
+    },
+    "test_a_forged_plan_in_a_pass_through_body_changes_no_counter[charge_a_victim_team-unbudgeted_key]": {
+      "python": {
+        "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.5,
+        "spend:team:victim-team": 1.0
+      }
+    },
+    "test_a_forged_plan_in_a_pass_through_body_changes_no_counter[refund_its_own_key-budgeted_key]": {
+      "python": {
+        "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.50102,
+        "spend:team:victim-team": 1.0
+      }
+    },
+    "test_a_forged_plan_in_a_pass_through_body_changes_no_counter[refund_its_own_key-unbudgeted_key]": {
+      "python": {
+        "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.5,
+        "spend:team:victim-team": 1.0
+      }
+    },
+    "test_a_pass_through_llm_route_reserves_and_settles_like_python[failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_pass_through_llm_route_reserves_and_settles_like_python[success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[azure_pass_through]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/azure/openai/deployments/gpt-4o/chat/completions"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "endpoint",
+              "max_tokens",
+              "messages",
+              "metadata",
+              "model"
+            ],
+            "route": "/azure/openai/deployments/gpt-4o/chat/completions"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[batches]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/batches"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "completion_window",
+              "endpoint",
+              "input_file_id",
+              "litellm_metadata",
+              "model"
+            ],
+            "route": "/v1/batches"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[gemini_pass_through]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0000000000000002
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/gemini/v1beta/models/gemini-2.5-pro:generateContent"
+            ],
+            "llm_provider": "litellm_proxy",
+            "request_keys": [
+              "contents",
+              "endpoint",
+              "key",
+              "metadata"
+            ],
+            "route": "/gemini/v1beta/models/gemini-2.5-pro:generateContent"
+          }
+        ],
+        "headers": {
+          "content-length": "167",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[google]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0000000000000002
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1beta/models/gemini-2.5-pro:generateContent"
+            ],
+            "llm_provider": "litellm_proxy",
+            "request_keys": [
+              "contents",
+              "metadata",
+              "model_name"
+            ],
+            "route": "/v1beta/models/gemini-2.5-pro:generateContent"
+          }
+        ],
+        "headers": {
+          "content-length": "167",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[google_stream]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0000000000000002
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+            ],
+            "llm_provider": "litellm_proxy",
+            "request_keys": [
+              "contents",
+              "metadata",
+              "model_name"
+            ],
+            "route": "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+          }
+        ],
+        "headers": {
+          "content-length": "167",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[image_edit]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00001, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.00001, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/images/edits"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "image",
+              "metadata",
+              "model",
+              "prompt"
+            ],
+            "route": "/v1/images/edits"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[images]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00001, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.00001, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/images/generations"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "metadata",
+              "model",
+              "prompt"
+            ],
+            "route": "/v1/images/generations"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[realtime_client_secrets]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.193536, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.193536, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/realtime/client_secrets"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "metadata",
+              "model"
+            ],
+            "route": "/v1/realtime/client_secrets"
+          }
+        ],
+        "headers": {
+          "content-length": "157",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[realtime_translation_client_secrets]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.193536, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.193536, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/realtime/translations/client_secrets"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "metadata",
+              "model"
+            ],
+            "route": "/v1/realtime/translations/client_secrets"
+          }
+        ],
+        "headers": {
+          "content-length": "157",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[rerank]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.0000003, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/rerank"
+            ],
+            "llm_provider": "together_ai",
+            "request_keys": [
+              "documents",
+              "metadata",
+              "model",
+              "query"
+            ],
+            "route": "/v1/rerank"
+          }
+        ],
+        "headers": {
+          "content-length": "158",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[speech]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.1638406, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 0.9999999999999999
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.1638406, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/audio/speech"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "input",
+              "metadata",
+              "model",
+              "voice"
+            ],
+            "route": "/v1/audio/speech"
+          }
+        ],
+        "headers": {
+          "content-length": "158",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[transcriptions]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.06, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.06, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/audio/transcriptions"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "file",
+              "metadata",
+              "model"
+            ],
+            "route": "/v1/audio/transcriptions"
+          }
+        ],
+        "headers": {
+          "content-length": "153",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[vertex_pass_through]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0000000000000002
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+            ],
+            "llm_provider": "litellm_proxy",
+            "request_keys": [
+              "contents",
+              "endpoint",
+              "metadata"
+            ],
+            "route": "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+          }
+        ],
+        "headers": {
+          "content-length": "167",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_request_through_auth_and_pre_call_settles_like_python[failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_request_through_auth_and_pre_call_settles_like_python[success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[anthropic_pass_through]": {
+      "python": {
+        "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/anthropic/v1/messages"
+            ],
+            "llm_provider": "anthropic",
+            "request_keys": [
+              "endpoint",
+              "litellm_metadata",
+              "max_tokens",
+              "messages",
+              "model"
+            ],
+            "route": "/anthropic/v1/messages"
+          }
+        ],
+        "headers": {
+          "content-length": "191",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[batches]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/batches"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "completion_window",
+              "endpoint",
+              "input_file_id",
+              "litellm_metadata",
+              "model"
+            ],
+            "route": "/v1/batches"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[chat_completions]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/chat/completions"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "max_tokens",
+              "messages",
+              "metadata",
+              "model"
+            ],
+            "route": "/v1/chat/completions"
+          }
+        ],
+        "headers": {
+          "content-length": "156",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[messages]": {
+      "python": {
+        "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/messages"
+            ],
+            "llm_provider": "anthropic",
+            "request_keys": [
+              "litellm_metadata",
+              "max_tokens",
+              "messages",
+              "model"
+            ],
+            "route": "/v1/messages"
+          }
+        ],
+        "headers": {
+          "content-length": "191",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[responses]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 1.0
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/responses"
+            ],
+            "llm_provider": "openai",
+            "request_keys": [
+              "input",
+              "litellm_metadata",
+              "max_output_tokens",
+              "model"
+            ],
+            "route": "/v1/responses"
+          }
+        ],
+        "headers": {
+          "content-length": "158",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal[text_completions]": {
+      "python": {
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "counters": {
+          "spend:team:team-at-max": 0.9999999999999999
+        },
+        "failure_hooks": [
+          {
+            "budget_reservation": null,
+            "dispatched_call_type": null,
+            "error_type": "auth_error",
+            "exception": [
+              "BudgetExceededError",
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
+            ],
+            "identity": [
+              "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+              "team-at-max",
+              "/v1/completions"
+            ],
+            "llm_provider": "text-completion-openai",
+            "request_keys": [
+              "max_tokens",
+              "metadata",
+              "model",
+              "prompt"
+            ],
+            "route": "/v1/completions"
+          }
+        ],
+        "headers": {
+          "content-length": "158",
+          "content-security-policy": "frame-ancestors 'none'",
+          "content-type": "application/json",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY"
+        },
+        "status": 422
+      }
+    },
+    "test_a_responses_websocket_session_holds_its_admission_at_connect_like_python": {
+      "python": [
+        [
+          {
+            "applied_adjustment": 0.0,
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.48384000000000005
+          }
+        ],
+        {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.48384000000000005
+        }
+      ]
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[anthropic_pass_through]": {
+      "python": {
+        "402": {
+          "body": "{\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/anthropic/v1/messages"
+              ],
+              "llm_provider": "anthropic",
+              "request_keys": [
+                "endpoint",
+                "litellm_metadata",
+                "max_tokens",
+                "messages",
+                "model"
+              ],
+              "route": "/anthropic/v1/messages"
+            }
+          ],
+          "headers": {
+            "content-length": "183",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/anthropic/v1/messages"
+              ],
+              "llm_provider": "anthropic",
+              "request_keys": [
+                "endpoint",
+                "litellm_metadata",
+                "max_tokens",
+                "messages",
+                "model"
+              ],
+              "route": "/anthropic/v1/messages"
+            }
+          ],
+          "headers": {
+            "content-length": "186",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[batches]": {
+      "python": {
+        "402": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/batches"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "completion_window",
+                "endpoint",
+                "input_file_id",
+                "litellm_metadata",
+                "model"
+              ],
+              "route": "/v1/batches"
+            }
+          ],
+          "headers": {
+            "content-length": "156",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.48384, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/batches"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "completion_window",
+                "endpoint",
+                "input_file_id",
+                "litellm_metadata",
+                "model"
+              ],
+              "route": "/v1/batches"
+            }
+          ],
+          "headers": {
+            "content-length": "156",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[chat_completions]": {
+      "python": {
+        "402": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/chat/completions"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "max_tokens",
+                "messages",
+                "metadata",
+                "model"
+              ],
+              "route": "/v1/chat/completions"
+            }
+          ],
+          "headers": {
+            "content-length": "156",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.00102, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/chat/completions"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "max_tokens",
+                "messages",
+                "metadata",
+                "model"
+              ],
+              "route": "/v1/chat/completions"
+            }
+          ],
+          "headers": {
+            "content-length": "156",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[messages]": {
+      "python": {
+        "402": {
+          "body": "{\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/messages"
+              ],
+              "llm_provider": "anthropic",
+              "request_keys": [
+                "litellm_metadata",
+                "max_tokens",
+                "messages",
+                "model"
+              ],
+              "route": "/v1/messages"
+            }
+          ],
+          "headers": {
+            "content-length": "183",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0\",\"litellm_error_type\":\"budget_exceeded\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.001524, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/messages"
+              ],
+              "llm_provider": "anthropic",
+              "request_keys": [
+                "litellm_metadata",
+                "max_tokens",
+                "messages",
+                "model"
+              ],
+              "route": "/v1/messages"
+            }
+          ],
+          "headers": {
+            "content-length": "186",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[responses]": {
+      "python": {
+        "402": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/responses"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "input",
+                "litellm_metadata",
+                "max_output_tokens",
+                "model"
+              ],
+              "route": "/v1/responses"
+            }
+          ],
+          "headers": {
+            "content-length": "158",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
+          "counters": {
+            "spend:team:team-at-max": 1.0
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0010025, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/responses"
+              ],
+              "llm_provider": "openai",
+              "request_keys": [
+                "input",
+                "litellm_metadata",
+                "max_output_tokens",
+                "model"
+              ],
+              "route": "/v1/responses"
+            }
+          ],
+          "headers": {
+            "content-length": "158",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python[text_completions]": {
+      "python": {
+        "402": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"402\"}}",
+          "counters": {
+            "spend:team:team-at-max": 0.9999999999999999
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/completions"
+              ],
+              "llm_provider": "text-completion-openai",
+              "request_keys": [
+                "max_tokens",
+                "metadata",
+                "model",
+                "prompt"
+              ],
+              "route": "/v1/completions"
+            }
+          ],
+          "headers": {
+            "content-length": "158",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 402
+        },
+        "429": {
+          "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"429\"}}",
+          "counters": {
+            "spend:team:team-at-max": 0.9999999999999999
+          },
+          "failure_hooks": [
+            {
+              "budget_reservation": null,
+              "dispatched_call_type": null,
+              "error_type": "auth_error",
+              "exception": [
+                "BudgetExceededError",
+                "Budget has been exceeded! Team=team-at-max Current cost: 1.0000215, Max budget: 1.0"
+              ],
+              "identity": [
+                "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+                "team-at-max",
+                "/v1/completions"
+              ],
+              "llm_provider": "text-completion-openai",
+              "request_keys": [
+                "max_tokens",
+                "metadata",
+                "model",
+                "prompt"
+              ],
+              "route": "/v1/completions"
+            }
+          ],
+          "headers": {
+            "content-length": "158",
+            "content-security-policy": "frame-ancestors 'none'",
+            "content-type": "application/json",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY"
+          },
+          "status": 429
+        }
+      }
+    },
+    "test_a_second_pre_call_for_the_same_auth_reserves_once_like_python": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {}
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[azure_pass_through-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[azure_pass_through-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.00102
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[batches-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.48384000000000005
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.48384000000000005
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[batches-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.48384000000000005
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.48384000000000005
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999784
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[gemini_pass_through-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[gemini_pass_through-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[google-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[google-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[google_stream-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[google_stream-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[image_edit-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1e-05
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1e-05
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[image_edit-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1e-05
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1e-05
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[images-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1e-05
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1e-05
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[images-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1e-05
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1e-05
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[realtime_client_secrets-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.19353599999999999
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.19353599999999999
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[realtime_client_secrets-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.19353599999999999
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.19353599999999999
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[realtime_translation_client_secrets-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.19353599999999999
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.19353599999999999
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[realtime_translation_client_secrets-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.19353599999999999
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.19353599999999999
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[rerank-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 3e-07
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 3e-07
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[rerank-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 3e-07
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 3e-07
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[speech-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.1638406
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.1638406
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[speech-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.1638406
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.1638406
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[transcriptions-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.06
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.06
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[transcriptions-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.06
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.06
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999992
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[vertex_pass_through-failure]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
+        }
+      }
+    },
+    "test_a_widened_route_family_reserves_and_settles_like_python[vertex_pass_through-success]": {
+      "python": {
+        "entries_after_pre_call": [
+          {
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 1.47456
+          }
+        ],
+        "held_after_pre_call": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+        },
+        "settled": {
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+        }
+      }
+    },
+    "test_an_over_budget_key_is_refused_by_auth_like_python": {
+      "python": [
+        "budget_exceeded",
+        "422",
+        "Budget has been exceeded! Key=key Current cost: 2.0, Max budget: 1.0",
+        null
+      ]
+    },
+    "test_racing_requests_for_the_last_of_a_budget_admit_like_python": {
+      "python": [
+        6,
+        0.00561
+      ]
+    },
+    "test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over_http[charge_a_victim_team]": {
+      "python": {
+        "held_upstream": [
+          {
+            "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.501524,
+            "spend:team:victim-team": 1.0
+          }
+        ],
+        "status": 200
+      }
+    },
+    "test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over_http[plain]": {
+      "python": {
+        "held_upstream": [
+          {
+            "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.501524,
+            "spend:team:victim-team": 1.0
+          }
+        ],
+        "status": 200
+      }
+    },
+    "test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over_http[refund_its_own_key]": {
+      "python": {
+        "held_upstream": [
+          {
+            "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.501524,
+            "spend:team:victim-team": 1.0
+          }
+        ],
+        "status": 200
+      }
+    },
+    "test_the_next_pre_call_subscriber_sees_the_reservation_written_into_the_auth_dict": {
+      "python": [
+        [
+          {
+            "applied_adjustment": 0.0,
+            "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_id": "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
+            "entity_type": "Key",
+            "reserved_cost": 0.00102
+          }
+        ],
+        0.00102
+      ]
+    },
+    "test_the_reservation_lease_stops_when_the_reservation_is_finalized": {
+      "python": true
+    }
+  },
+  "recorded_from": "719072af4b3cdda1dc12f7be3d4a917485a5a7de"
+}

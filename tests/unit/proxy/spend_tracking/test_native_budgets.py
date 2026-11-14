@@ -4,6 +4,7 @@ import gc
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import pytest
@@ -47,6 +48,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth, CustomerScopeKey
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from tests.unit.proxy.spend_tracking.native_budgets_golden.golden import NATIVE_BUDGETS, Golden
 
 ROUTE: Final = "/chat/completions"
 BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 1000}
@@ -229,11 +231,13 @@ CASES: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity", CASES.values(), ids=CASES.keys())
-async def test_native_admission_matches_python(store: SpendCounterStore, identity: Identity) -> None:
+async def test_native_admission_matches_python(store: SpendCounterStore, identity: Identity, golden: Golden) -> None:
     python: Final = await _python_admit(store, identity)
     store.flush_local()
     native: Final = await _native_admit(store, identity, "call-admit")
 
+    recorded: Final = (_refusal_fields(python.refusal), python.counters, _entries(python.reservation))
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
     assert _refusal_fields(native.refusal) == _refusal_fields(python.refusal)
     assert native.counters == python.counters
     assert _entries(native.reservation) == _entries(python.reservation)
@@ -241,7 +245,7 @@ async def test_native_admission_matches_python(store: SpendCounterStore, identit
 
 @pytest.mark.asyncio
 async def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     identity: Final = CASES["team_at_max_refuses"]
     seen: Final[dict[int, tuple[object, object, int | None]]] = {}  # mutable-ok: one entry per status code
@@ -257,6 +261,8 @@ async def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_n
         code: (native, code) for code, (_, native, _) in seen.items()
     }
     assert seen[402][0] != seen[429][0]
+    python_refusals: Final = {code: python for code, (python, _, _) in seen.items()}
+    assert golden.canonical(python_refusals) == golden.recorded("python", python_refusals)
 
 
 Settle: TypeAlias = Callable[[dict[str, object]], Awaitable[object]]
@@ -273,6 +279,7 @@ SETTLEMENTS: Final = {
 async def test_native_settlement_matches_python(
     store: SpendCounterStore,
     settle: Settle,
+    golden: Golden,
 ) -> None:
     identity: Final = Identity(team_budget=100.0, spend={KEY: 1.0, TEAM: 2.0})
     python: Final = await _python_admit(store, identity)
@@ -289,6 +296,7 @@ async def test_native_settlement_matches_python(
 
     assert _snapshot(store) == settled_python
     assert settled_python != python.counters
+    assert golden.canonical(settled_python) == golden.recorded("python", settled_python)
 
 
 async def _db_logger_success(reservation: dict[str, object]) -> None:  # mutable-ok: the shared reservation
@@ -310,7 +318,9 @@ EXITS: Final[Mapping[str, Settle]] = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
-async def test_every_exit_settles_the_native_hold_like_python(store: SpendCounterStore, exit_path: Settle) -> None:
+async def test_every_exit_settles_the_native_hold_like_python(
+    store: SpendCounterStore, exit_path: Settle, golden: Golden
+) -> None:
     identity: Final = Identity(team_budget=100.0, user_budget=100.0, spend={KEY: 1.0, TEAM: 2.0, USER: 0.5})
     python: Final = await _python_admit(store, identity)
     assert python.reservation is not None
@@ -324,10 +334,12 @@ async def test_every_exit_settles_the_native_hold_like_python(store: SpendCounte
 
     assert _snapshot(store) == settled_python
     assert native.reservation.get("finalized") == python.reservation.get("finalized")
+    recorded: Final = (settled_python, python.reservation.get("finalized"))
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 @pytest.mark.asyncio
-async def test_a_stream_settles_after_its_request_state_is_gone(store: SpendCounterStore) -> None:
+async def test_a_stream_settles_after_its_request_state_is_gone(store: SpendCounterStore, golden: Golden) -> None:
     identity: Final = Identity(team_budget=100.0, spend={KEY: 1.0, TEAM: 2.0})
     python: Final = await _python_admit(store, identity)
     assert python.reservation is not None
@@ -343,6 +355,7 @@ async def test_a_stream_settles_after_its_request_state_is_gone(store: SpendCoun
     await _db_logger_success(reservation)
 
     assert _snapshot(store) == settled_python
+    assert golden.canonical(settled_python) == golden.recorded("python", settled_python)
 
 
 DB_FLOOR: Final = 0.25
@@ -353,7 +366,11 @@ DISTURBANCES: Final[Mapping[str, float | None]] = {"counter_expired": None, "cou
 @pytest.mark.parametrize("disturbance", DISTURBANCES.values(), ids=DISTURBANCES.keys())
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
 async def test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, disturbance: float | None, exit_path: Settle
+    store: SpendCounterStore,
+    monkeypatch: pytest.MonkeyPatch,
+    disturbance: float | None,
+    exit_path: Settle,
+    golden: Golden,
 ) -> None:
     async def reseed_from_db(counter_key: str) -> bool:
         store.set_local(counter_key, DB_FLOOR)
@@ -375,10 +392,13 @@ async def test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python(
         settled.append(_snapshot(store))
 
     assert settled[1] == settled[0]
+    assert golden.canonical(settled[0]) == golden.recorded("python", settled[0])
 
 
 @pytest.mark.asyncio
-async def test_a_throttled_key_holds_only_its_other_counters_on_both_sides(store: SpendCounterStore) -> None:
+async def test_a_throttled_key_holds_only_its_other_counters_on_both_sides(
+    store: SpendCounterStore, golden: Golden
+) -> None:
     identity: Final = CASES["throttled_key_releases_its_hold"]
     python: Final = await _python_admit(store, identity)
     store.flush_local()
@@ -390,6 +410,8 @@ async def test_a_throttled_key_holds_only_its_other_counters_on_both_sides(store
     ]
     assert held == [[TEAM], [TEAM]]
     assert native.counters == python.counters
+    recorded: Final = (held[0], python.counters)
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 class _AnyDatabase:
@@ -482,6 +504,24 @@ KINDS: Final[Mapping[str, Kind]] = {
     "customer_team": _customer_kind("customer_team", "customer-team-1"),
     "customer_member": _customer_kind("customer_member", "member:1"),
 }
+CUSTOMER_WINDOW_RESET: Final = customer_window_counters("customer_member", "member:1", CUSTOMER_LIMITS)[0].reset_at
+assert CUSTOMER_WINDOW_RESET is not None
+WINDOW_COUNTERS: Final = MappingProxyType(
+    {
+        CUSTOMER_WINDOW_RESET.isoformat(): "<customer window reset>",
+        **{
+            KINDS[name].counter: f"<{name} window counter>"
+            for name in ("customer_org", "customer_team", "customer_member")
+        },
+    }
+)
+
+
+@pytest.fixture
+def golden(request: pytest.FixtureRequest) -> Golden:
+    return Golden(NATIVE_BUDGETS, request.node.name, WINDOW_COUNTERS)
+
+
 KIND_SPEND: Final[Mapping[str, float]] = {
     "fits": 1.0,
     "shrinks_to_what_is_left": KIND_BUDGET - ESTIMATE / 3,
@@ -535,7 +575,9 @@ async def _kind_admit(store: SpendCounterStore, kind: Kind, spend: float, native
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spend", KIND_SPEND.values(), ids=KIND_SPEND.keys())
 @pytest.mark.parametrize("kind", KINDS.values(), ids=KINDS.keys())
-async def test_every_counter_kind_admits_like_python(store: SpendCounterStore, kind: Kind, spend: float) -> None:
+async def test_every_counter_kind_admits_like_python(
+    store: SpendCounterStore, kind: Kind, spend: float, golden: Golden
+) -> None:
     python: Final = await _kind_admit(store, kind, spend, native=False)
     native: Final = await _kind_admit(store, kind, spend, native=True)
 
@@ -546,6 +588,8 @@ async def test_every_counter_kind_admits_like_python(store: SpendCounterStore, k
     assert _refusal_fields(native.refusal) == _refusal_fields(python.refusal)
     assert native.counters == python.counters
     assert _entries(native.reservation) == _entries(python.reservation)
+    recorded: Final = (_refusal_fields(python.refusal), python.counters, _entries(python.reservation))
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 WINDOW_RESETS: Final[Mapping[str, timedelta]] = {
@@ -577,19 +621,21 @@ async def _settled_after_reset(
 @pytest.mark.parametrize("reset", WINDOW_RESETS.values(), ids=WINDOW_RESETS.keys())
 @pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
 async def test_a_customer_window_that_reset_before_settlement_settles_like_python(
-    store: SpendCounterStore, reset: timedelta, exit_path: Settle
+    store: SpendCounterStore, reset: timedelta, exit_path: Settle, golden: Golden
 ) -> None:
     reset_at: Final = (datetime.now(timezone.utc) + reset).isoformat()
     python: Final = await _settled_after_reset(store, False, reset_at, exit_path, expire=False)
     native: Final = await _settled_after_reset(store, True, reset_at, exit_path, expire=False)
 
     assert native == python
+    at_reset: Final = golden.replacing({reset_at: "<reset_at>"})
+    assert at_reset.canonical(python) == at_reset.recorded("python", python)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reset", WINDOW_RESETS.values(), ids=WINDOW_RESETS.keys())
 async def test_an_expired_customer_window_is_reseeded_with_the_cost_its_window_settles_like_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, reset: timedelta
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, reset: timedelta, golden: Golden
 ) -> None:
     reseeded: Final[list[str]] = []  # mutable-ok: the counters each side reseeds
 
@@ -609,6 +655,9 @@ async def test_an_expired_customer_window_is_reseeded_with_the_cost_its_window_s
     assert python_reseeded == (CUSTOMER_KIND.counter,)
     assert tuple(reseeded) == python_reseeded
     assert native == python
+    recorded: Final = (python_reseeded, python)
+    at_reset: Final = golden.replacing({reset_at: "<reset_at>"})
+    assert at_reset.canonical(recorded) == at_reset.recorded("python", recorded)
 
 
 @dataclass(slots=True)
@@ -648,7 +697,7 @@ def _reset_reads(reads: _SpendReads) -> None:
 
 @pytest.mark.asyncio
 async def test_a_warm_counter_is_read_by_the_native_without_asking_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     reads: Final = _count_spend_reads(monkeypatch, 0.0)
     identity: Final = Identity(team_budget=100.0, spend={KEY: 1.0, TEAM: 2.0})
@@ -661,6 +710,8 @@ async def test_a_warm_counter_is_read_by_the_native_without_asking_python(
     assert (reads.current_spend_calls, reads.db_reads) == (0, 0)
     assert native.counters == python.counters
     assert _entries(native.reservation) == _entries(python.reservation)
+    recorded: Final = (python.counters, _entries(python.reservation))
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 COLD_SPEND: Final[Mapping[str, float]] = {"room_left": 1.0, "reseeded_spend_refuses": 100.0}
@@ -669,7 +720,7 @@ COLD_SPEND: Final[Mapping[str, float]] = {"room_left": 1.0, "reseeded_spend_refu
 @pytest.mark.asyncio
 @pytest.mark.parametrize("db_spend", COLD_SPEND.values(), ids=COLD_SPEND.keys())
 async def test_a_cold_counter_is_reseeded_through_python_like_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, db_spend: float
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, db_spend: float, golden: Golden
 ) -> None:
     reads: Final = _count_spend_reads(monkeypatch, db_spend)
     identity: Final = Identity(team_budget=100.0, spend={TEAM: 2.0})
@@ -684,11 +735,13 @@ async def test_a_cold_counter_is_reseeded_through_python_like_python(
     assert _refusal_fields(native.refusal) == _refusal_fields(python.refusal)
     assert native.counters == python.counters
     assert _entries(native.reservation) == _entries(python.reservation)
+    recorded: Final = (_refusal_fields(python.refusal), python.counters, _entries(python.reservation))
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 @pytest.mark.asyncio
 async def test_a_reseed_that_raises_fails_the_admission_like_python(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     _ = _count_spend_reads(monkeypatch, ConnectionError("database unreachable"))
     identity: Final = Identity(team_budget=100.0, spend={TEAM: 2.0})
@@ -701,11 +754,13 @@ async def test_a_reseed_that_raises_fails_the_admission_like_python(
 
     assert str(native.value) == str(python.value)
     assert _snapshot(store) == python_counters
+    recorded: Final = (str(python.value), python_counters)
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
 
 @pytest.mark.asyncio
 async def test_python_reserves_again_once_the_native_owner_leaves_the_callbacks(
-    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
+    store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     identity: Final = Identity(team_budget=100.0, spend={KEY: 1.0, TEAM: 2.0})
     python: Final = await _python_admit(store, identity)
@@ -718,6 +773,8 @@ async def test_python_reserves_again_once_the_native_owner_leaves_the_callbacks(
 
     assert _entries(reservation) == _entries(python.reservation)
     assert _snapshot(store) == python.counters
+    recorded: Final = (_entries(python.reservation), python.counters)
+    assert golden.canonical(recorded) == golden.recorded("python", recorded)
     native_budgets.install_native_budgets(store, litellm.callbacks)
     assert native_budgets.native_owner_reserves()
 
