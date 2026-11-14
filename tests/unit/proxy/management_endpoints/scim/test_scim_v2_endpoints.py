@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, assert_never
@@ -7329,6 +7330,65 @@ async def test_creating_a_resource_that_already_exists_answers_409_with_scim_typ
         "application/scim+json",
         {"schemas": [_SCIM_ERROR_URN], "status": "409", "detail": reason, "scimType": "uniqueness"},
     )
+
+
+@pytest.mark.asyncio
+async def test_a_user_whose_email_matches_another_only_ignoring_case_answers_409_with_scim_type_uniqueness(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    existing: Final = LiteLLM_UserTable(user_id="erin-from-okta", user_email="erin@example.com")
+
+    async def find_first(where: dict[str, object]) -> LiteLLM_UserTable | None:
+        match where:
+            case {"user_email": {"equals": str() as email, "mode": "insensitive"}} if email.casefold() == "erin@example.com":
+                return existing
+            case _:
+                return None
+
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(side_effect=find_first)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.post("/scim/v2/Users", json=_okta_user("Erin@Example.com"))
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        409,
+        "application/scim+json",
+        {
+            "schemas": [_SCIM_ERROR_URN],
+            "status": "409",
+            "detail": "User with email erin@example.com already exists",
+            "scimType": "uniqueness",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_before_the_handler_answers_a_scim_error_and_logs_what_broke(
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    from litellm.proxy import proxy_server
+
+    internals: Final = "row decode failed for column metadata"
+
+    def fail_while_authenticating() -> UserAPIKeyAuth:
+        raise RuntimeError(internals)
+
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, fail_while_authenticating)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with proxy_scim_client as client:
+            response = await client.post("/scim/v2/Users", json=_okta_user("user-d@okta-test.com"))
+
+    assert (response.status_code, response.headers["content-type"], response.json()) == (
+        500,
+        "application/scim+json",
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+    assert internals not in response.text
+    assert any(internals in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

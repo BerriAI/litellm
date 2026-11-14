@@ -1888,11 +1888,10 @@ async def create_user(
         if user.userName:
             existing_user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": user.userName})
             if existing_user:
-                duplicate: Final[ScimErrorDetail] = {
-                    "error": f"User already exists with username: {user.userName}",
-                    "scimType": "uniqueness",
-                }
-                raise HTTPException(status_code=409, detail=duplicate)
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": f"User already exists with username: {user.userName}"},
+                )
 
         # Create user in database
         user_id: Final = user.userName or str(uuid.uuid4())
@@ -3037,11 +3036,10 @@ async def create_group(
         existing_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
         if existing_team:
-            duplicate: Final[ScimErrorDetail] = {
-                "error": f"Group already exists with ID: {team_id}",
-                "scimType": "uniqueness",
-            }
-            raise HTTPException(status_code=409, detail=duplicate)
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"Group already exists with ID: {team_id}"},
+            )
 
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)

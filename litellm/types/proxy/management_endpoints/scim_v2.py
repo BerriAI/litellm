@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.user_requests import NewUserRequest
@@ -172,7 +172,6 @@ ScimType: TypeAlias = Literal["uniqueness"]
 
 class ScimErrorDetail(TypedDict):
     error: ReadOnly[str]
-    scimType: ReadOnly[NotRequired[ScimType]]
 
 
 class SCIMError(LiteLLMBaseModel):

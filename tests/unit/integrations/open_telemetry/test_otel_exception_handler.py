@@ -13,11 +13,13 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.proxy._types import ProxyException
+from litellm.proxy.management_endpoints.scim.scim_errors import scim_error_from
 from litellm.proxy.proxy_server import (
     _close_dangling_otel_server_span,
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
+    scim_error_exception_handler,
 )
 
 from litellm.integrations._types.open_inference import ErrorAttributes
@@ -160,6 +162,48 @@ def test_validation_handler_puts_the_error_message_on_the_span_status(
     description: Final = server_span.status.description or ""
     assert "Input should be a valid number" in description
     assert description == server_span.attributes.get(ErrorAttributes.ERROR_MESSAGE)
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (
+            ProxyException(
+                message="Authentication Error, Invalid API key provided.", type="auth_error", param="key", code=401
+            ),
+            "ProxyException",
+        ),
+        (
+            RequestValidationError(
+                errors=[
+                    {
+                        "type": "bool_parsing",
+                        "loc": ("body", "active"),
+                        "msg": "Input should be a valid boolean",
+                        "input": "s3cret-input",
+                    }
+                ]
+            ),
+            "RequestValidationError",
+        ),
+    ],
+    ids=["auth", "validation"],
+)
+def test_a_scim_error_keeps_the_error_type_the_route_raised_on_the_span(
+    wired_otel: InMemorySpanExporter,
+    server_span_factory: Callable[[str], object],
+    failure: ProxyException | RequestValidationError,
+    error_type: str,
+) -> None:
+    path: Final = "/scim/v2/Users"
+    request: Final = _fake_request(parent_otel_span=server_span_factory(path), path=path)
+    answered: Final = scim_error_from(failure)
+
+    response: Final = asyncio.run(scim_error_exception_handler(request, answered))
+
+    attributes: Final = get_server_span(wired_otel).attributes
+    assert (response.status_code, attributes.get(ErrorAttributes.ERROR_TYPE)) == (answered.status_code, error_type)
+    assert "s3cret-input" not in str(attributes.get(ErrorAttributes.ERROR_MESSAGE))
 
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):

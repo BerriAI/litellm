@@ -2503,7 +2503,7 @@ async def management_problem_exception_handler(request: Request, exc: Management
 
 @app.exception_handler(ScimError)
 async def scim_error_exception_handler(request: Request, exc: ScimError) -> JSONResponse:
-    _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
+    _close_dangling_otel_server_span(request, exc.status_code, exc=exc.traced_as or exc)
     return scim_error_response(exc)
 
 

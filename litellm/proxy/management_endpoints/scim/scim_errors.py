@@ -1,7 +1,7 @@
 from collections.abc import Callable, Coroutine, Mapping
 from http import HTTPStatus
 from types import MappingProxyType
-from typing import Final, NamedTuple, TypeAlias
+from typing import Final, TypeAlias
 
 from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -12,7 +12,8 @@ from starlette.exceptions import HTTPException
 from typing_extensions import assert_never
 
 from litellm.proxy._types import ProxyException
-from litellm.proxy.common_utils.validation_error_body import public_validation_errors
+from litellm.proxy.common_utils.validation_error_body import ValidationErrorDetail, public_validation_errors
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import SCIMError, ScimErrorDetail, ScimType
 
 SCIM_CONTENT_TYPE: Final = "application/scim+json"
@@ -23,33 +24,31 @@ _STATUS_PHRASES: Final = MappingProxyType({status.value: status.phrase for statu
 _ScimRouteFailure: TypeAlias = HTTPException | ProxyException | RequestValidationError
 
 
+def _scim_type(status_code: int) -> ScimType | None:
+    return "uniqueness" if status_code == HTTPStatus.CONFLICT else None
+
+
 class ScimError(Exception):
     def __init__(
         self,
         status_code: int,
         detail: str,
-        scim_type: ScimType | None = None,
         headers: Mapping[str, str] | None = None,
+        traced_as: Exception | None = None,
     ) -> None:
         self.status_code: Final = status_code
         self.headers: Final = MappingProxyType(dict(headers or {}))
-        self.error: Final = SCIMError(status=str(status_code), detail=detail, scimType=scim_type)
+        self.traced_as: Final = traced_as
+        self.error: Final = SCIMError(status=str(status_code), detail=detail, scimType=_scim_type(status_code))
         super().__init__(detail)
 
 
-class _Reason(NamedTuple):
-    detail: str
-    scim_type: ScimType | None
-
-
-def _reason(detail: object) -> _Reason:
+def _readable_detail(detail: object) -> str:
     try:
         parsed: Final = _DETAIL_ADAPTER.validate_python(detail)
     except ValidationError:
-        return _Reason(str(detail), None)
-    if isinstance(parsed, str):
-        return _Reason(parsed, None)
-    return _Reason(parsed["error"], parsed.get("scimType"))
+        return str(detail)
+    return parsed if isinstance(parsed, str) else parsed["error"]
 
 
 def _detail_before_proxy_exception_stringified_it(exc: ProxyException) -> object:
@@ -63,35 +62,47 @@ def _proxy_exception_status_code(exc: ProxyException) -> int:
     return int(exc.code) if exc.code.isdecimal() else HTTPStatus.INTERNAL_SERVER_ERROR.value
 
 
-def _validation_detail(exc: RequestValidationError) -> str:
-    return "; ".join(
-        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-        for error in public_validation_errors(exc.errors())
+def _validation_detail(errors: tuple[ValidationErrorDetail, ...]) -> str:
+    return "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors)
+
+
+def _scim_error(
+    status_code: int, detail: object, headers: Mapping[str, str] | None, traced_as: Exception | None
+) -> ScimError:
+    return ScimError(
+        status_code,
+        _readable_detail(detail) or _STATUS_PHRASES.get(status_code, str(status_code)),
+        headers,
+        traced_as,
     )
 
 
-def _scim_error(status_code: int, detail: object, headers: Mapping[str, str] | None) -> ScimError:
-    reason: Final = _reason(detail)
+def _scim_validation_error(exc: RequestValidationError) -> ScimError:
+    public_errors: Final = public_validation_errors(exc.errors())
     return ScimError(
-        status_code,
-        reason.detail or _STATUS_PHRASES.get(status_code, str(status_code)),
-        reason.scim_type,
-        headers,
+        HTTPStatus.UNPROCESSABLE_ENTITY.value,
+        _validation_detail(public_errors),
+        traced_as=RequestValidationError(public_errors),
     )
 
 
 def scim_error_from(exc: _ScimRouteFailure) -> ScimError:
     match exc:
         case HTTPException():
-            return _scim_error(exc.status_code, exc.detail, exc.headers)
+            return _scim_error(exc.status_code, exc.detail, exc.headers, None)
         case ProxyException():
             return _scim_error(
-                _proxy_exception_status_code(exc), _detail_before_proxy_exception_stringified_it(exc), exc.headers
+                _proxy_exception_status_code(exc), _detail_before_proxy_exception_stringified_it(exc), exc.headers, exc
             )
         case RequestValidationError():
-            return ScimError(HTTPStatus.UNPROCESSABLE_ENTITY.value, _validation_detail(exc))
+            return _scim_validation_error(exc)
         case _:
             assert_never(exc)
+
+
+def _unexpected_scim_error(exc: Exception) -> ScimError:
+    status_code: Final = _proxy_exception_status_code(handle_exception_on_proxy(exc))
+    return ScimError(status_code, _STATUS_PHRASES.get(status_code, str(status_code)), traced_as=exc)
 
 
 def scim_error_response(exc: ScimError) -> JSONResponse:
@@ -112,5 +123,7 @@ class ScimRoute(APIRoute):
                 return await handler(request)
             except (HTTPException, ProxyException, RequestValidationError) as exc:
                 raise scim_error_from(exc) from exc
+            except Exception as exc:
+                raise _unexpected_scim_error(exc) from exc
 
         return answer_errors_as_scim
