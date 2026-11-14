@@ -3472,37 +3472,32 @@ class RustCore(
         if admitting is not None:
             return [found for record in admitting if (found := picked_id(record)) is not None]
         pool: Final = self._records_of(step.get("pool"))
-        routable_cooling: Final = self._routable_cooling_ids(step, pool, request, has_input=True, tags=tags)
+        pool_ids: Final = [found for record in pool if (found := picked_id(record)) is not None]
+        cooling: Final = [id for id, _ in self._cooldowns.get_active_cooldowns(pool_ids, None)]  # pyright: ignore[reportArgumentType]  # a list of ids
+        routable: Final = _region_routable(pool, request, True, self._resolved.enable_pre_call_checks)
+        routable_cooling: Final = (
+            self._tag_routable_ids(str(step.get("model")), pool, routable, frozenset(cooling), request)
+            if tags
+            else frozenset(id for record in routable if (id := picked_id(record)) in cooling)
+        )
         kept: Final = deployments_when_none_admits_embedding_batch(
             candidates, pool, routable_cooling, sent, dict(request)
         )
         return [found for record in kept if (found := picked_id(record)) is not None]
 
-    def _routable_cooling_ids(
-        self,
-        step: Mapping[str, object],
-        pool: Sequence[Mapping[str, object]],
-        request: Mapping[str, object],
-        *,
-        has_input: bool,
-        tags: bool,
-    ) -> frozenset[str]:
-        """The cooling deployments of ``pool`` that region and, when ``tags``, tag routing would
-        still send the request to once their cooldown ends."""
-        pool_ids: Final = [found for record in pool if (found := picked_id(record)) is not None]
-        cooling: Final = frozenset(id for id, _ in self._cooldowns.get_active_cooldowns(pool_ids, None))  # pyright: ignore[reportArgumentType]  # a list of ids
-        routable: Final = _region_routable(pool, request, has_input, self._resolved.enable_pre_call_checks)
-        if tags:
-            return self._tag_routable_ids(str(step.get("model")), pool, routable, cooling, request)
-        return frozenset(id for record in routable if (id := picked_id(record)) in cooling)
-
-    def _routable_cooling(
+    def _routable_group(
         self, step: Mapping[str, object], request: Mapping[str, object], *, has_input: bool, tags: bool
     ) -> Sequence[Mapping[str, object]]:
-        """The step's caller pool, as the strategy stage lists it, cut to its routable cooling deployments."""
+        """The step's caller pool, as the strategy stage lists it, cut to what region and, when ``tags``,
+        tag routing would send the request to, including deployments that cooldowns, budgets, health
+        checks, ``order``, or pins leave out of this pick."""
         pool: Final = self._records_of(step.get("pool"))
-        cooling: Final = self._routable_cooling_ids(step, pool, request, has_input=has_input, tags=tags)
-        return tuple(record for record in pool if picked_id(record) in cooling)
+        routable: Final = _region_routable(pool, request, has_input, self._resolved.enable_pre_call_checks)
+        if not tags:
+            return routable
+        pool_ids: Final = frozenset(found for record in pool if (found := picked_id(record)) is not None)
+        tag_routable: Final = self._tag_routable_ids(str(step.get("model")), pool, routable, pool_ids, request)
+        return tuple(record for record in routable if picked_id(record) in tag_routable)
 
     async def _answer_select(
         self,
@@ -3564,8 +3559,8 @@ class RustCore(
                 # `_async_get_available_deployment` reserves a request's pick unless told not to;
                 # the pass-through pick only when told to.
                 reserve=pick_reserves(default=not pass_through) and bool(request),
-                routable_cooling=partial(
-                    self._routable_cooling,
+                routable_group=partial(
+                    self._routable_group,
                     step,
                     request,
                     has_input=messages is not None or input is not None,
@@ -3621,8 +3616,8 @@ class RustCore(
             dict(request),
             # The sync picks reserve only when a routed call site says so (`picks_reserve(True)`).
             reserve=pick_reserves(default=False) and bool(request),
-            routable_cooling=partial(
-                self._routable_cooling,
+            routable_group=partial(
+                self._routable_group,
                 step,
                 request,
                 has_input=messages is not None or input is not None,
@@ -3740,10 +3735,10 @@ class RustCore(
         group: str,
         pool: Sequence[Mapping[str, object]],
         routable: Sequence[Mapping[str, object]],
-        cooled: frozenset[str],
+        among: frozenset[str],
         request: Mapping[str, object],
     ) -> frozenset[str]:
-        """The cooling deployments in ``routable`` that tag routing would send the request to, each
+        """The deployments of ``among`` in ``routable`` that tag routing would send the request to, each
         pick counted along with the picks it falls back to once that one is unavailable, judged
         without recording a tag match on the request."""
         from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
@@ -3756,7 +3751,7 @@ class RustCore(
         tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
         found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
         remaining = [  # rebind-ok: each pass drops what tag routing just picked
-            record for record in routable if picked_id(record) in cooled
+            record for record in routable if picked_id(record) in among
         ]
         while remaining:
             try:

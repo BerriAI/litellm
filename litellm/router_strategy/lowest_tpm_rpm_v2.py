@@ -16,7 +16,12 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
-from litellm.exceptions import RateLimitErrorCategory, RateLimitType, RequestOverDeploymentTpmError
+from litellm.exceptions import (
+    RateLimitErrorCategory,
+    RateLimitType,
+    RequestOverDeploymentTpmError,
+    SyncRequestOverDeploymentTpmError,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -57,10 +62,10 @@ _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
 
 
-RoutableCooling: TypeAlias = Callable[[], Sequence[Mapping[str, object]]]
+RoutableGroup: TypeAlias = Callable[[], Sequence[Mapping[str, object]]]
 
 
-def no_routable_cooling() -> Sequence[Mapping[str, object]]:
+def no_routable_group() -> Sequence[Mapping[str, object]]:
     return ()
 
 
@@ -435,7 +440,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_values: Sequence[float | None] | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        routable_cooling: RoutableCooling = no_routable_cooling,
+        routable_group: RoutableGroup = no_routable_group,
+        refusal: type[RequestOverDeploymentTpmError] = RequestOverDeploymentTpmError,
     ) -> dict | None:
         """
         Common checks for get available deployment, across sync + async implementations
@@ -489,10 +495,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         largest_healthy_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
         if input_tokens <= largest_healthy_tpm_limit:
             return None
-        largest_tpm_limit: Final = max((largest_healthy_tpm_limit, *map(_deployment_tpm_limit, routable_cooling())))
+        largest_tpm_limit: Final = max((largest_healthy_tpm_limit, *map(_deployment_tpm_limit, routable_group())))
         if input_tokens <= largest_tpm_limit:
             return None
-        raise RequestOverDeploymentTpmError(
+        raise refusal(
             message=(
                 f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
                 f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
@@ -533,7 +539,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        routable_cooling: RoutableCooling = no_routable_cooling,
+        routable_group: RoutableGroup = no_routable_group,
     ):
         """
         Async implementation of get deployments.
@@ -574,7 +580,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
-            routable_cooling=routable_cooling,
+            routable_group=routable_group,
         )
 
         try:
@@ -643,7 +649,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         parent_otel_span: Span | None = None,
-        routable_cooling: RoutableCooling = no_routable_cooling,
+        routable_group: RoutableGroup = no_routable_group,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -668,7 +674,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
-            routable_cooling=routable_cooling,
+            routable_group=routable_group,
+            refusal=SyncRequestOverDeploymentTpmError,
         )
 
         try:
