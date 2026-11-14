@@ -67,6 +67,7 @@ class _PendingRequest:
 
 _pending: Final[dict[str, _PendingRequest]] = {}  # mutable-ok: by reservation id until pre_call claims the plan
 _refusals: Final[weakref.WeakKeyDictionary[Exception, _PendingRequest]] = weakref.WeakKeyDictionary()
+_answered_refusals: Final[weakref.WeakSet[BaseException]] = weakref.WeakSet()
 
 
 def new_reservation_id() -> str:
@@ -146,15 +147,23 @@ async def raise_native_admission_refusal(error: Exception) -> None:
         return
     from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
-    _ = await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
-        e=error,
-        request=pending.request,
-        request_data=pending.request_data,
-        route=pending.route,
-        parent_otel_span=pending.identity.parent_otel_span,
-        api_key="",
-        resolved_identity=pending.identity,
-    )
+    try:
+        _ = await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            e=error,
+            request=pending.request,
+            request_data=pending.request_data,
+            route=pending.route,
+            parent_otel_span=pending.identity.parent_otel_span,
+            api_key="",
+            resolved_identity=pending.identity,
+        )
+    except Exception as answered:
+        _answered_refusals.add(answered)
+        raise
+
+
+def is_native_admission_refusal(error: BaseException) -> bool:
+    return error in _answered_refusals
 
 
 _NATIVE_CALL_TYPES: Final = frozenset(
