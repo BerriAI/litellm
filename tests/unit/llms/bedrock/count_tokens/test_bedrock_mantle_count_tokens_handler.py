@@ -8,6 +8,10 @@ import pytest
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+)
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 MANTLE_COUNT_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages/count_tokens"
@@ -136,6 +140,35 @@ async def test_non_200_answers_raise_bedrock_error_with_mantle_status() -> None:
 
     assert raised.value.status_code == 404
     assert "does not exist" in raised.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("thinking", "expected_beta"),
+    [
+        ({"type": "adaptive", "display": "updates"}, ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER),
+        (
+            {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+            ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
+        ),
+    ],
+    ids=["display_updates", "block_binding"],
+)
+async def test_a_beta_thinking_field_counts_with_the_beta_mantle_inference_sends(
+    thinking: dict[str, object], expected_beta: str
+) -> None:
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 2177})
+
+    await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+        request_data={**REQUEST, "thinking": thinking},
+        litellm_params=dict(LITELLM_PARAMS),
+        resolved_model="anthropic.claude-opus-4-8",
+        client=_client(mantle),
+    )
+
+    posted: Final = mantle.only_request()
+    assert json.loads(posted.content)["thinking"] == thinking
+    assert expected_beta in posted.headers["anthropic-beta"].split(",")
 
 
 @pytest.mark.asyncio
