@@ -5699,6 +5699,32 @@ class TestMCPServerManager:
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
+    async def test_health_check_server_by_alias(self):
+        """Test health check using server alias resolves to the server"""
+        manager = MCPServerManager()
+        server = LiteLLM_MCPServerTable(
+            server_id="uuid-1234",
+            server_name="microsoft_learn",
+            alias="ms",
+            url="https://learn.microsoft.com/api/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        await manager.add_server(server)
+
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
+
+        result = await manager.health_check_server("ms")
+
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "uuid-1234"
+        assert result.alias == "ms"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("oauth2_flow", [None, "authorization_code", "client_credentials"])
     async def test_health_check_server_oauth2_reports_reachability(
         self,

@@ -1994,13 +1994,13 @@ if MCP_AVAILABLE:
 
         # Perform health check on the server using server manager
         try:
-            health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
+            health_result: Final = await global_mcp_server_manager.health_check_server(mcp_server.server_id)
             # Update the server object with health check results
             mcp_server.status = _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
-            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
+            verbose_proxy_logger.debug("Error performing health check on server %s: %s", mcp_server.server_id, e)
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)

@@ -7798,7 +7798,7 @@ class MCPServerManager:
         """
         from datetime import datetime
 
-        server: Final = self.get_mcp_server_by_id(server_id)
+        server: Final = self.get_mcp_server_by_id(server_id) or self.get_mcp_server_by_identifier(server_id)
         if not server:
             verbose_logger.warning("MCP Server %s not found", server_id)
             return LiteLLM_MCPServerTable(
