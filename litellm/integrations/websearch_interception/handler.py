@@ -12,7 +12,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import Never, ReadOnly
@@ -297,6 +297,8 @@ class WebSearchInterceptionLogger(CustomLogger):
     3. Makes follow-up request with search results
     4. Returns final response
     """
+
+    wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = True
 
     def __init__(
         self,

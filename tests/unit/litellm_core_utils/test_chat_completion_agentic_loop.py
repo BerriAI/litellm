@@ -1069,6 +1069,7 @@ class TestAgenticFollowUpKeepsTheProviderPrefix:
         model: str, custom_llm_provider: str, patched_model: str | None = None
     ) -> ModelResponse:
         response: Final = await _execute_chat_completion_agentic_plan(
+            response=_tool_call_model_response(),
             plan=AgenticLoopPlan(
                 run_agentic_loop=True,
                 request_patch=AgenticLoopRequestPatch(
