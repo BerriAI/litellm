@@ -4,6 +4,7 @@ from litellm.llms.voyage.common_utils import (
     MONGODB_API_BASE,
     VOYAGE_API_BASE,
     get_default_base_url,
+    get_voyage_api_base,
     get_voyage_api_key,
 )
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
@@ -20,7 +21,7 @@ VOYAGE_KEY_ENV_VARS = ("VOYAGE_API_KEY", "VOYAGE_AI_API_KEY", "VOYAGE_AI_TOKEN")
 
 @pytest.fixture(autouse=True)
 def clear_voyage_env(monkeypatch):
-    for env_var in VOYAGE_KEY_ENV_VARS:
+    for env_var in (*VOYAGE_KEY_ENV_VARS, "VOYAGE_API_BASE"):
         monkeypatch.delenv(env_var, raising=False)
 
 
@@ -70,6 +71,50 @@ def test_embedding_configs_route_by_key_prefix(config, endpoint, api_key, expect
 def test_explicit_api_base_overrides_key_routing(config, endpoint):
     url = config.get_complete_url("https://gateway.internal/v1", "al-key", "voyage-3", {}, {})
     assert url == f"https://gateway.internal/v1/{endpoint}"
+
+
+@pytest.mark.parametrize(
+    "config, endpoint",
+    [
+        (VoyageEmbeddingConfig(), "embeddings"),
+        (VoyageContextualEmbeddingConfig(), "contextualizedembeddings"),
+        (VoyageMultimodalEmbeddingConfig(), "multimodalembeddings"),
+    ],
+)
+@pytest.mark.parametrize("env_value", ["https://gateway.internal/v1", "https://gateway.internal/v1/"])
+def test_env_api_base_overrides_key_routing(monkeypatch, config, endpoint, env_value):
+    """A caller who only gets to pass a model and a key reaches a custom host through the env var"""
+    monkeypatch.setenv("VOYAGE_API_BASE", env_value)
+
+    url = config.get_complete_url(None, "al-key", "voyage-3", {}, {})
+
+    assert url == f"https://gateway.internal/v1/{endpoint}"
+
+
+@pytest.mark.parametrize(
+    "config, endpoint",
+    [
+        (VoyageEmbeddingConfig(), "embeddings"),
+        (VoyageContextualEmbeddingConfig(), "contextualizedembeddings"),
+        (VoyageMultimodalEmbeddingConfig(), "multimodalembeddings"),
+    ],
+)
+def test_explicit_api_base_beats_env_api_base(monkeypatch, config, endpoint):
+    monkeypatch.setenv("VOYAGE_API_BASE", "https://from-env.internal/v1")
+
+    url = config.get_complete_url("https://on-request.internal/v1", "pa-key", "voyage-3", {}, {})
+
+    assert url == f"https://on-request.internal/v1/{endpoint}"
+
+
+def test_get_voyage_api_base_prefers_request_then_env_then_key_issuer(monkeypatch):
+    assert get_voyage_api_base("https://on-request.internal/v1", "al-key") == "https://on-request.internal/v1"
+    assert get_voyage_api_base(None, "al-key") == MONGODB_API_BASE
+
+    monkeypatch.setenv("VOYAGE_API_BASE", "https://from-env.internal/v1")
+
+    assert get_voyage_api_base(None, "al-key") == "https://from-env.internal/v1"
+    assert get_voyage_api_base("https://on-request.internal/v1", "al-key") == "https://on-request.internal/v1"
 
 
 @pytest.mark.parametrize("api_key, expected_host", [("al-key", MONGODB_API_BASE), ("pa-key", VOYAGE_API_BASE)])
