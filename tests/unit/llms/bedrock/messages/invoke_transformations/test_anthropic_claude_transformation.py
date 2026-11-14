@@ -4914,3 +4914,30 @@ async def test_promote_message_stop_usage_closes_its_source_on_aclose() -> None:
     await anext(promoted)
     await aclose_if_supported(promoted)
     assert source_closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["bedrock/invoke/us.anthropic.claude-sonnet-5-5", "bedrock/us.anthropic.claude-sonnet-5-5"])
+@pytest.mark.parametrize("user_profile_id,expected_fields", [("uprof_01", {"user_profile_id": "uprof_01"}), (None, {})])
+async def test_bedrock_invoke_messages_send_a_proxy_user_profile_id_in_the_body(
+    model: str, user_profile_id: str | None, expected_fields: dict[str, str]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id=user_profile_id)
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE),))
+
+    await litellm.anthropic_messages(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+        **proxy_request_data,
+    )
+
+    (sent,) = bedrock.bodies
+    assert {key: sent[key] for key in ("user_profile_id",) if key in sent} == expected_fields

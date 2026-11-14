@@ -30,6 +30,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
+    REQUEST_HEADERS,
     BedrockModelInfo,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
@@ -37,6 +38,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_cleaned_output_schema,
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
+    bedrock_user_profile_fields,
     deployment_model_info,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -273,15 +275,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
 
-        return dict(
-            strip_beta_gated_request_body(
+        return {
+            **strip_beta_gated_request_body(
                 _anthropic_request,  # pyright: ignore[reportUnknownArgumentType]  # built by the base signature's bare dict transform
                 {},
                 drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the base signature's bare dict
                 model=model,
                 provider="bedrock_invoke",
-            )
-        )
+            ),
+            **bedrock_user_profile_fields(REQUEST_HEADERS.validate_python(headers)),
+        }
 
     @property
     def uses_async_transform_request(self) -> bool:

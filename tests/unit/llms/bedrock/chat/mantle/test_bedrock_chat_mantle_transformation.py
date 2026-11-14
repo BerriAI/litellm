@@ -296,3 +296,44 @@ def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_
     )
 
     assert body["max_tokens"] == mapped_cap, f"Mantle should send its mapped cap, got {body['max_tokens']}"
+
+
+def _text_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-scripted-9",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+@pytest.mark.parametrize("user_profile_id,expected_fields", [("uprof_01", {"user_profile_id": "uprof_01"}), (None, {})])
+def test_mantle_claude_completion_sends_a_proxy_user_profile_id_in_the_body(
+    model: str, user_profile_id: str | None, expected_fields: dict[str, str]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id=user_profile_id)
+    respond: Final = MagicMock(wraps=_text_message)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_request_data,
+    )
+
+    body: Final = json.loads(respond.call_args.args[0].content)
+    assert {key: body[key] for key in ("user_profile_id",) if key in body} == expected_fields

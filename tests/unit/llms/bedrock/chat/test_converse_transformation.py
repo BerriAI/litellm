@@ -12296,3 +12296,50 @@ def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_c
 
     assert len(list(_cache_points(request["messages"]))) == 3
     assert messages == messages_before
+
+
+def _converse_ok(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+        request=request,
+    )
+
+
+@pytest.mark.parametrize(
+    "model,user_profile_id,expected_fields",
+    [
+        ("bedrock/us.anthropic.claude-sonnet-5-5", "uprof_01", {"user_profile_id": "uprof_01"}),
+        ("bedrock/converse/global.anthropic.claude-sonnet-5-5", "uprof_01", {"user_profile_id": "uprof_01"}),
+        ("bedrock/us.anthropic.claude-sonnet-5-5", None, {}),
+        ("bedrock/us.amazon.nova-pro-v1:0", "uprof_01", {}),
+    ],
+    ids=["claude", "claude-explicit-converse", "claude-without-profile", "non-claude-model"],
+)
+def test_converse_sends_a_proxy_user_profile_id_only_to_claude(
+    model: str, user_profile_id: str | None, expected_fields: dict[str, str]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id=user_profile_id)
+    respond: Final = MagicMock(wraps=_converse_ok)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **proxy_request_data,
+    )
+
+    request: Final = respond.call_args.args[0]
+    model_fields: Final = json.loads(request.content).get("additionalModelRequestFields", {})
+    assert request.url.path.endswith("/converse")
+    assert {key: model_fields[key] for key in ("user_profile_id",) if key in model_fields} == expected_fields

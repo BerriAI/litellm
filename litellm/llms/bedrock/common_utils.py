@@ -50,7 +50,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
@@ -1544,6 +1544,16 @@ def build_mantle_messages_url(
     if override:
         return ensure_api_route(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
+
+
+REQUEST_HEADERS: Final = TypeAdapter(dict[str, object])
+
+
+def bedrock_user_profile_fields(headers: Mapping[str, object]) -> Mapping[str, str]:
+    profile_id: Final = next(
+        (value for name, value in headers.items() if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER), None
+    )
+    return MappingProxyType({"user_profile_id": profile_id} if isinstance(profile_id, str) and profile_id else {})
 
 
 def get_bedrock_base_model(model: str) -> str:
