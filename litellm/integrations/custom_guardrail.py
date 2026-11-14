@@ -296,15 +296,16 @@ def _record_guardrail_marker(
         return
     for meta_key in ("metadata", "litellm_metadata"):
         meta = data.get(meta_key)
-        if isinstance(meta, dict):
-            executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
-            if isinstance(executed, list):
-                if marker not in executed:
-                    executed.append(marker)
-            else:
-                meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
-            return
-    data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
+        if not isinstance(meta, dict):
+            continue
+        executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+        if isinstance(executed, list):
+            if marker not in executed:
+                executed.append(marker)
+        else:
+            meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
+    if not isinstance(data.get("metadata"), dict) and not isinstance(data.get("litellm_metadata"), dict):
+        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
 
 _RESPONSE_METADATA_KEYS: Final = frozenset(
