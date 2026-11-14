@@ -401,6 +401,8 @@ def _authorize_through_gateway(
     client_id: str,
     pkce: _Pkce,
     scope: str = "tools.call",
+    *,
+    cookies: Mapping[str, str] | None = None,
 ) -> tuple[str, str]:
     started: Final = gateway.client.get(
         f"/{alias}/authorize",
@@ -414,6 +416,7 @@ def _authorize_through_gateway(
             "scope": scope,
         },
         headers={"x-litellm-api-key": key},
+        cookies=cookies,
     )
     assert started.status_code in (302, 307), started.text
     upstream: Final = started.headers["location"]
@@ -436,7 +439,9 @@ def _authorize_through_gateway(
     return final["code"][0], upstream_code
 
 
-def _redeem(gateway: Gateway, alias: str, key: str, client_id: str, code: str, pkce: _Pkce) -> httpx.Response:
+def _redeem(
+    gateway: Gateway, alias: str, key: str, client_id: str, code: str, pkce: _Pkce, *, scope: str | None = None
+) -> httpx.Response:
     return gateway.client.post(
         f"/{alias}/token",
         headers={"x-litellm-api-key": key},
@@ -446,6 +451,7 @@ def _redeem(gateway: Gateway, alias: str, key: str, client_id: str, code: str, p
             "code_verifier": pkce.verifier,
             "client_id": client_id,
             "redirect_uri": CLIENT_REDIRECT,
+            **({"scope": scope} if scope is not None else {}),
         },
     )
 
@@ -519,6 +525,7 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         def expected_code_form(code: str, verifier: str) -> dict[str, str]:
             return {
                 "grant_type": "authorization_code",
+                "scope": "tools.call",
                 "code": code,
                 "redirect_uri": f"{_base(gateway)}/callback",
                 "code_verifier": verifier,
@@ -2327,3 +2334,143 @@ def test_managed_step_up_advertises_sdk_compatible_metadata_and_bound_permission
             if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 1, "denied operation was retried"
+
+
+@pytest.mark.parametrize("include_scope", [True, False], ids=["returned-scope", "omitted-scope"])
+@pytest.mark.parametrize(
+    "configured,requested,expected",
+    [
+        (("tools.read", "tools.call"), "tools.read", "tools.read"),
+        (("tools.read", "tools.call"), None, "tools.read tools.call"),
+        ((), None, None),
+    ],
+)
+def test_authorization_code_exchange_forwards_requested_or_configured_scope(
+    gateway: Gateway, configured: tuple[str, ...], requested: str | None, expected: str | None, include_scope: bool
+) -> None:
+    with mcp_peer() as peer, oauth_server(include_scope=include_scope) as auth, gateway.scenario() as scenario:
+        alias: Final = "scope" + uuid.uuid4().hex[:10]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": list(configured)},
+        )
+        user_id: Final = scenario.user()
+        owner: Final = scenario.key(user_id=user_id, object_permission={"mcp_servers": [identity]})
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        authorized: Final = httpx.get(
+            auth.issuer + "/authorize",
+            params={
+                "client_id": "scope-client",
+                "redirect_uri": f"{_base(gateway)}/callback",
+                "response_type": "code",
+                "state": "scope-state",
+                "code_challenge": pkce.challenge,
+                "code_challenge_method": "S256",
+                **({"scope": requested} if requested is not None else {}),
+            },
+            follow_redirects=False,
+        )
+        assert authorized.status_code == 302, authorized.text
+        code: Final = parse_qs(urlsplit(authorized.headers["location"]).query)["code"][0]
+        exchanged: Final = gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": "scope-client",
+                "code_verifier": pkce.verifier,
+                "redirect_uri": CLIENT_REDIRECT,
+                **({"scope": requested} if requested is not None else {}),
+            },
+        )
+        assert exchanged.status_code == 200, exchanged.text
+        sent: Final = auth.token_requests()
+        assert len(sent) == 1, sent
+        assert sent[0].get("scope") == expected, sent
+        issued: Final = _response_object(exchanged)
+        assert auth.is_live(_issued_token(issued))
+        if not include_scope:
+            assert issued.get("scope") == expected, issued
+            if expected:
+                step_up: Final = gateway.client.get(
+                    f"/{alias}/authorize",
+                    headers={"x-litellm-api-key": owner},
+                    params={
+                        "client_id": "scope-client",
+                        "redirect_uri": CLIENT_REDIRECT,
+                        "response_type": "code",
+                        "scope": "tools.call",
+                        "code_challenge": pkce.challenge,
+                        "code_challenge_method": "S256",
+                    },
+                )
+                assert step_up.status_code in (302, 307), step_up.text
+                next_scope: Final = parse_qs(urlsplit(step_up.headers["location"]).query)["scope"][0]
+                assert set(next_scope.split()) == set(expected.split()) | {"tools.call"}, next_scope
+        listing: Final = McpCaller(gateway, owner, "rest").list_tools(identity)
+        assert listing.ok, listing
+        assert "add" in listing.tools, listing
+        call: Final = call_tool(gateway, owner, identity, f"{alias}-add", ADD)
+        assert call.status_code == 200, call.text
+        assert _authorizations(peer)[-1] == f"Bearer {_issued_token(issued)}".encode()
+
+
+@pytest.mark.parametrize("include_scope", [True, False], ids=["returned-scope", "omitted-scope"])
+@pytest.mark.parametrize("token_scope", [None, "tools.read tools.call"], ids=["no-override", "broader-override"])
+def test_delegate_bridge_code_exchange_keeps_the_authorized_scope_subset(
+    gateway: Gateway, include_scope: bool, token_scope: str | None
+) -> None:
+    with mcp_peer() as peer, oauth_server(include_scope=include_scope) as auth, gateway.scenario() as scenario:
+        alias: Final = "subset" + uuid.uuid4().hex[:10]
+        requested: Final = "tools.read"
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth_delegate",
+            dcr_bridge=True,
+            credentials={
+                "client_id": "bridge-client",
+                "client_secret": "bridge-secret",
+                "scopes": [requested, "tools.call"],
+            },
+        )
+        team: Final = scenario.team(object_permission={"mcp_servers": [identity]})
+        user_id: Final = scenario.member(team)
+        owner: Final = scenario.key(user_id=user_id, team_id=team, object_permission={"mcp_servers": [identity]})
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(
+            gateway, auth, alias, owner, "bridge-client", pkce, requested, cookies=_ui_session_cookie(scenario, user_id)
+        )
+        exchanged: Final = _redeem(gateway, alias, owner, "bridge-client", code, pkce, scope=token_scope)
+        assert exchanged.status_code == 200, exchanged.text
+        sent: Final = auth.token_requests()
+        assert len(sent) == 1, sent
+        assert sent[0].get("scope") == requested, sent
+        issued: Final = _response_object(exchanged)
+        peer.drain()
+        caller: Final = McpCaller(
+            gateway, None, "server_mcp", alias, headers={"Authorization": f"Bearer {_issued_token(issued)}"}
+        )
+        called: Final = caller.call(f"{alias}-add", ADD)
+        assert called.ok, called
+        forwarded: Final = _authorizations(peer)
+        assert len(forwarded) == 1 and forwarded[0] is not None, forwarded
+        upstream_token: Final = forwarded[0].decode().removeprefix("Bearer ")
+        assert auth.is_live(upstream_token)
+        assert auth.access_tokens[upstream_token]["scope"] == requested
+        refreshed: Final = gateway.client.post(
+            f"/{alias}/token",
+            data={"grant_type": "refresh_token", "refresh_token": issued["refresh_token"], "client_id": "bridge-client"},
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        renewed: Final = auth.token_requests()
+        assert len(renewed) == 1, renewed
+        assert renewed[0].get("scope") == requested, renewed

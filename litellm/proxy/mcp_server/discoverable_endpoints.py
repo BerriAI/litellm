@@ -1198,7 +1198,7 @@ async def authorize_with_server(
         mcp_server_id=resolved_server.server_id
         if (litellm_user_id or ephemeral_dcr_client or managed_per_user)
         else None,
-        managed_scope=selected_scope if managed_per_user else None,
+        managed_scope=selected_scope if managed_per_user or litellm_user_id else None,
         scope_user_id=scope_user_id,
         dcr_client_id=ephemeral_dcr_client.client_id if ephemeral_dcr_client else None,
         dcr_client_secret=ephemeral_dcr_client.client_secret if ephemeral_dcr_client else None,
@@ -1404,7 +1404,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
@@ -1459,12 +1459,26 @@ async def exchange_token_with_server(
                 ),
             )
         proxy_base_url: Final = get_request_base_url(request)
-        resolved_redirect_uri: Final = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
+        resolved_redirect_uri: Final = (
+            redirect_uri if bridge_token_relay and redirect_uri is not None else f"{proxy_base_url}/callback"
+        )
+        granted_scope: Final = (
+            managed_code.requested_scope
+            if managed_code is not None
+            else (bridge_identity.requested_scope if bridge_identity is not None else None)
+        )
+        exchange_scope: Final = granted_scope if granted_scope is not None else scope
+        authorization_scope: Final = (
+            exchange_scope
+            if exchange_scope is not None or managed_code is not None or bridge_identity is not None
+            else " ".join(resolved_server.scopes or ()) or None
+        )
         token_data = {
             "grant_type": "authorization_code",
             "code": bridge_identity.upstream_code if bridge_identity else authorization_code,
             "redirect_uri": resolved_redirect_uri,
             **token_request.body,
+            **({"scope": authorization_scope} if authorization_scope else {}),
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
@@ -1543,10 +1557,8 @@ async def exchange_token_with_server(
     )
 
     requested_scope: Final = (
-        managed_code.requested_scope
-        if managed_code is not None
-        else bridge_identity.requested_scope
-        if bridge_identity is not None
+        token_data.get("scope")
+        if grant_type == "authorization_code"
         else scope or " ".join(refresh_credential.get("scopes") or ())
         if refresh_credential
         else None
@@ -1609,8 +1621,9 @@ async def exchange_token_with_server(
     # upstream token) instead of the raw upstream token, so the one bearer both admits the caller and
     # forwards the upstream credential. Only this mode mints; every other server returns the raw token.
     if bridge_mint_ready is not None:
-        if refresh_request_scope and isinstance(token_response, dict) and not token_response.get("scope"):
-            token_response = {**token_response, "scope": refresh_request_scope}
+        mint_scope: Final = requested_scope if grant_type == "authorization_code" else refresh_request_scope
+        if mint_scope and isinstance(token_response, dict) and not token_response.get("scope"):
+            token_response = {**token_response, "scope": mint_scope}
         # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
         # OAuth-shaped response as the phase-1 preconditions.
         minted: Final = finish_bridge_mint(
