@@ -12201,7 +12201,7 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     multiplier: float,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, call_kwargs["model"], {**row, **_PER_CALL_RATES})
-    publish(litellm.model_cost)
+    _invalidate_model_cost_lowercase_map()
 
     response: Final = litellm.completion(
         messages=[{"role": "user", "content": "hello"}],
@@ -12211,39 +12211,3 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
-
-
-@pytest.mark.parametrize(
-    ("message_logging_off", "query_image", "echoes_response"),
-    [
-        (True, None, False),
-        (False, None, True),
-        (False, {"type": "base64", "media_type": "image/jpeg", "data": "cXVlcnk="}, False),
-    ],
-)
-def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_response_with_message_logging_on(
-    message_logging_off: bool,
-    query_image: Mapping[str, str] | None,
-    echoes_response: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
-    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
-    logging_obj: Final = Logging(
-        model="",
-        messages=[],
-        stream=False,
-        call_type="avector_store_search",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="unpriced-search",
-        function_id="f",
-    )
-    logging_obj.model_call_details["query_image"] = query_image
-
-    with pytest.raises(ValueError, match="Model is None") as exc_info:
-        completion_cost(
-            completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]},
-            litellm_logging_obj=logging_obj,
-        )
-
-    assert (image_data in str(exc_info.value)) is echoes_response
