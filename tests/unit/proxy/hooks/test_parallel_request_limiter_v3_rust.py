@@ -2300,11 +2300,14 @@ async def test_enforce_project_io_token_quota_for_frame_noop_without_project_lim
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
 
-    await handler.enforce_project_io_token_quota_for_frame(
-        user_api_key_dict=user_api_key_dict,
-        requested_model="gpt-4o",
-        estimated_input_tokens=10_000_000,
-        estimated_output_tokens=10_000_000,
+    assert (
+        await handler.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model="gpt-4o",
+            estimated_input_tokens=10_000_000,
+            estimated_output_tokens=10_000_000,
+        )
+        is None
     )
 
 
@@ -3959,12 +3962,9 @@ async def _build_seeded_limiter():
 @contextmanager
 def _override_litellm_callbacks(new_callbacks):
     """Swap litellm.callbacks so _callback_capabilities recomputes deterministically."""
-    saved = litellm.callbacks
-    litellm.callbacks = new_callbacks
-    try:
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(litellm, "callbacks", new_callbacks)
         yield
-    finally:
-        litellm.callbacks = saved
 
 
 async def _drain_release_task():

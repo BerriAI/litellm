@@ -206,7 +206,7 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity(monkey
     MAX_SEQUENTIAL_SUCCESSES = MODEL_RPM + 1
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -280,7 +280,7 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment(monkeypat
     enforced, priority counter is incremented for tracking only.
     """
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
@@ -409,7 +409,7 @@ async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor(monkey
     from fastapi import HTTPException
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
-    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
 
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
