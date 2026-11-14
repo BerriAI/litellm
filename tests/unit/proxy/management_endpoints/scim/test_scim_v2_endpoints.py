@@ -6413,9 +6413,20 @@ def _raise_unconverted(internals: str) -> None:
     raise RuntimeError(internals)
 
 
+def _raise_as_team_member_add_does(internals: str) -> None:
+    try:
+        raise RuntimeError(internals)
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=500, detail={"error": f"Unable to add user - user1, to team - team-b, for reason - {e}"}
+        )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "raise_failure", [_raise_as_a_management_endpoint_does, _raise_unconverted], ids=["converted", "unconverted"]
+    "raise_failure",
+    [_raise_as_a_management_endpoint_does, _raise_unconverted, _raise_as_team_member_add_does],
+    ids=["converted", "unconverted", "wrapped-in-its-own-500"],
 )
 async def test_a_roster_write_that_fails_unexpectedly_names_the_write_but_not_the_error_text(
     mocker: MockerFixture, raise_failure: Callable[[str], None]

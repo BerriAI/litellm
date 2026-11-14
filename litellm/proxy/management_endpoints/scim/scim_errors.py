@@ -59,21 +59,26 @@ def _status_phrase(status_code: int) -> str:
     return _STATUS_PHRASES.get(status_code, str(status_code))
 
 
-def _is_text_of_an_exception_raised_without_a_status(origin: BaseException | None, message: str) -> bool:
+def _carries_text_of_an_exception_raised_without_a_status(origin: BaseException | None, detail: str) -> bool:
     if origin is None or error_status_code(origin, 0) != 0:
         return False
-    return message == strip_bug_report_notice(str(origin))
+    origin_text: Final = strip_bug_report_notice(str(origin))
+    return origin_text != "" and origin_text in detail
 
 
-def _proxy_exception_detail(exc: ProxyException, status_code: int) -> object:
-    origin: Final = exc.__context__
-    if isinstance(origin, HTTPException) and str(origin.detail) == exc.message:
-        return origin.detail
-    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR and _is_text_of_an_exception_raised_without_a_status(
-        origin, exc.message
+def _public_detail(status_code: int, detail: str, origin: BaseException | None) -> str:
+    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR and _carries_text_of_an_exception_raised_without_a_status(
+        origin, detail
     ):
         return _status_phrase(status_code)
-    return exc.message
+    return detail or _status_phrase(status_code)
+
+
+def _proxy_exception_detail(exc: ProxyException) -> tuple[object, BaseException | None]:
+    origin: Final = exc.__context__
+    if isinstance(origin, HTTPException) and str(origin.detail) == exc.message:
+        return origin.detail, origin.__context__
+    return exc.message, origin
 
 
 def _proxy_exception_status_code(exc: ProxyException) -> int:
@@ -84,13 +89,19 @@ def _validation_detail(errors: tuple[ValidationErrorDetail, ...]) -> str:
     return "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors)
 
 
-def _scim_error(status_code: int, detail: object, headers: Mapping[str, str] | None, traced_as: Exception) -> ScimError:
-    return ScimError(status_code, _readable_detail(detail) or _status_phrase(status_code), headers, traced_as)
+def _scim_error(
+    status_code: int,
+    detail: object,
+    headers: Mapping[str, str] | None,
+    traced_as: Exception,
+    origin: BaseException | None,
+) -> ScimError:
+    return ScimError(status_code, _public_detail(status_code, _readable_detail(detail), origin), headers, traced_as)
 
 
 def _scim_error_from_proxy_exception(exc: ProxyException) -> ScimError:
-    status_code: Final = _proxy_exception_status_code(exc)
-    return _scim_error(status_code, _proxy_exception_detail(exc, status_code), exc.headers, exc)
+    detail, origin = _proxy_exception_detail(exc)
+    return _scim_error(_proxy_exception_status_code(exc), detail, exc.headers, exc, origin)
 
 
 def _scim_validation_error(exc: RequestValidationError) -> ScimError:
@@ -105,7 +116,7 @@ def _scim_validation_error(exc: RequestValidationError) -> ScimError:
 def scim_error_from(exc: _ScimRouteFailure) -> ScimError:
     match exc:
         case HTTPException():
-            return _scim_error(exc.status_code, exc.detail, exc.headers, exc)
+            return _scim_error(exc.status_code, exc.detail, exc.headers, exc, exc.__context__)
         case ProxyException():
             return _scim_error_from_proxy_exception(exc)
         case RequestValidationError():

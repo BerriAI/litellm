@@ -104,6 +104,60 @@ def test_a_server_error_raised_with_its_own_status_keeps_its_reason():
     )
 
 
+def _http_exception_raised_while_handling(origin: Exception, raised: HTTPException) -> HTTPException:
+    try:
+        try:
+            raise origin
+        except Exception:
+            raise raised
+    except HTTPException as exc:
+        return exc
+
+
+def _team_write_failure_wrapping(origin: Exception) -> HTTPException:
+    return _http_exception_raised_while_handling(
+        origin,
+        HTTPException(
+            status_code=500,
+            detail={"error": f"Unable to add user - user1, to team - team-b, for reason - {origin}"},
+        ),
+    )
+
+
+@pytest.mark.parametrize("converted", [False, True], ids=["as-raised", "converted-by-the-handler"])
+def test_a_server_error_that_embeds_the_text_of_an_exception_raised_without_a_status_answers_the_status_phrase(
+    converted: bool,
+):
+    wrapped: Final = _team_write_failure_wrapping(RuntimeError("The table `public.LiteLLM_TeamMembership` is missing"))
+    raised: Final = _raised_while_handling(wrapped, handle_exception_on_proxy(wrapped)) if converted else wrapped
+
+    assert _answer(raised) == (
+        500,
+        {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": HTTPStatus.INTERNAL_SERVER_ERROR.phrase},
+    )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [RuntimeError("row decode failed for column metadata"), RuntimeError()],
+    ids=["unrelated-error", "error-with-no-text"],
+)
+def test_a_server_error_raised_while_handling_an_exception_it_does_not_quote_keeps_its_reason(origin: Exception):
+    raised: Final = _http_exception_raised_while_handling(
+        origin, HTTPException(status_code=500, detail={"error": "No database connected"})
+    )
+
+    assert _answer(raised) == (500, {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": "No database connected"})
+
+
+def test_a_client_error_that_embeds_the_text_of_the_exception_it_was_raised_from_keeps_it():
+    origin: Final = ValueError("team_id must not be empty")
+
+    assert _answer(
+        _http_exception_raised_while_handling(origin, HTTPException(status_code=400, detail=f"Invalid team, {origin}"))
+    ) == (400, {"schemas": [_SCIM_ERROR_URN], "status": "400", "detail": "Invalid team, team_id must not be empty"})
+
+
 def test_a_proxy_exception_raised_while_handling_an_unrelated_http_exception_keeps_its_own_message():
     raised: Final = _raised_while_handling(
         HTTPException(status_code=404, detail={"error": "Group not found with ID: g"}),
