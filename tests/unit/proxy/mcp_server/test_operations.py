@@ -1,12 +1,24 @@
 import asyncio
 from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
+import httpx2
 import pytest
 from mcp.server.context import ServerRequestContext
-from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
+from mcp.types import (
+    GetPromptRequest,
+    GetPromptRequestParams,
+    GetPromptResult,
+    JSONRPCMessage,
+    JSONRPCRequest,
+    ListToolsResult,
+    ReadResourceResult,
+    TextResourceContents,
+)
 from mcp.types import Tool as MCPTool
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -23,6 +35,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 )
 from litellm.proxy.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
+    MCPServerManager,
 )
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
@@ -43,6 +56,195 @@ class _CatalogHookCapture(CustomLogger):
 
 async def _served_catalog_tool() -> str:
     return "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unique",
+        "ambiguous",
+        "missing",
+        "failure",
+        "slow_failure",
+        "blocked_stdio",
+        "scoped_bearer",
+        "legacy_delegates",
+        "rate_limited",
+    ],
+)
+async def test_resource_read_requires_unique_owner_from_complete_listings(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    uri: Final = "ui://widget/view.html"
+    caller_bearer: Final = "Bearer caller-upstream-token"
+    reads: Final[asyncio.Queue[tuple[str, str | None]]] = asyncio.Queue()
+    listing_authorizations: Final[asyncio.Queue[str | None]] = asyncio.Queue()
+    slow_listing_cancelled: Final = asyncio.Event()
+    message: Final = TypeAdapter(JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "upstream", "version": "1"},
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/read":
+            reads.put_nowait((request.url.host, request.headers.get("authorization")))
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "contents": [{"uri": uri, "text": request.url.host}],
+                    },
+                },
+            )
+        assert payload.method == "resources/list"
+        listing_authorizations.put_nowait(request.headers.get("authorization"))
+        if case == "failure" and request.url.host == "other.example":
+            return httpx2.Response(503, text="private upstream diagnostic")
+        if case == "slow_failure" and request.url.host == "owner.example":
+            return httpx2.Response(503, text="private upstream diagnostic")
+        if case == "slow_failure":
+            try:
+                await asyncio.Event().wait()
+            finally:
+                slow_listing_cancelled.set()
+        if not (payload.params or {}).get("cursor"):
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "resources": [],
+                        "nextCursor": "second-page",
+                    },
+                },
+            )
+        owns: Final = case not in ("missing", "rate_limited") and (
+            request.url.host == "owner.example" or case == "ambiguous"
+        )
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "resources": [{"name": "widget", "uri": uri}] if owns else [],
+                },
+            },
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    forwarding: Final = {
+        "owner": case in ("scoped_bearer", "blocked_stdio"),
+        "other": case == "scoped_bearer",
+    }
+    http_servers: Final = tuple(
+        MCPServer(
+            server_id=name,
+            name=name,
+            url=f"https://{name}.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2
+            if case == "legacy_delegates"
+            else (MCPAuth.true_passthrough if forwarding[name] else None),
+            delegate_auth_to_upstream=case == "legacy_delegates",
+            allow_all_keys=True,
+            rpm=1,
+        )
+        for name in ("owner", "other")
+    )
+    stdio_server: Final = MCPServer(
+        server_id="local",
+        name="local",
+        transport=MCPTransport.stdio,
+        command="unused",
+        auth_type=MCPAuth.true_passthrough,
+        allow_all_keys=True,
+        rpm=1,
+    )
+    servers: Final = (*http_servers, stdio_server) if case == "blocked_stdio" else http_servers
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-resource-read"))
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    for server in servers:
+        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    if case == "blocked_stdio":
+        await proxy_logging.enforce_mcp_server_rate_limits(caller, stdio_server)
+
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST, ReadResourceRequest, ReadResourceRequestParams
+
+    async def read() -> object:
+        return await GatewayOperations().execute(
+            ReadResourceRequest(params=ReadResourceRequestParams(uri=uri)),
+            prepare_context(
+                caller,
+                oauth2_headers={"Authorization": caller_bearer},
+                raw_headers={"authorization": caller_bearer, "x-litellm-api-key": "sk-resource-read"},
+            ),
+        )
+
+    if case in ("unique", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
+        result: Final = await read()
+        assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
+        assert reads.qsize() == 1
+        host, authorization = reads.get_nowait()
+        assert host == "owner.example"
+        assert (authorization == caller_bearer) == (case == "blocked_stdio"), (
+            "the caller bearer reaches the owner only when no other listable server also consumes it"
+        )
+        listed_with: Final = tuple(listing_authorizations.get_nowait() for _ in range(listing_authorizations.qsize()))
+        assert listed_with
+        assert (caller_bearer in listed_with) == (case == "blocked_stdio"), (
+            "owner lookups must not replay the caller bearer to servers that also consume it"
+        )
+        return
+    if case == "rate_limited":
+        with pytest.raises(MCPError) as first:
+            await read()
+        assert first.value.error.code == INVALID_REQUEST
+        assert "not found" in first.value.error.message.lower()
+        with pytest.raises(MCPError) as limited:
+            await read()
+        assert limited.value.error.code == INVALID_REQUEST
+        assert "rate limit" in limited.value.error.message.lower()
+        assert reads.empty()
+        return
+    with pytest.raises(MCPError) as rejected:
+        await asyncio.wait_for(read(), timeout=30)
+    assert rejected.value.error.code == INVALID_REQUEST, "owner failures must reach MCP clients as MCPError, not 500"
+    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources", "slow_failure": "owner"}[
+        case
+    ] in rejected.value.error.message.lower()
+    assert reads.empty()
+    assert "private upstream diagnostic" not in rejected.value.error.message
+    if case == "slow_failure":
+        await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
+
+
+def _listing_client() -> SimpleNamespace:
+    return SimpleNamespace(discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"))
 
 
 @pytest.mark.parametrize(
@@ -140,7 +342,7 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
         mcp_auth_header=None,
         mcp_server_auth_headers=None,
     )
-    assert "authorization" not in raw
+    assert oauth is None
     provider_requests: Final[asyncio.Queue[str]] = asyncio.Queue()
 
     def provider(exchange: httpx.Request) -> httpx.Response:
@@ -927,7 +1129,10 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
         patch.object(operations.global_mcp_server_manager, manager_method, upstream),
     ):
         if collection is None and state != "success":
-            expected_error = RuntimeError if state == "upstream_failure" else HTTPException
+            from mcp.shared.exceptions import MCPError
+
+            access_error = MCPError if method == "resources/read" else HTTPException
+            expected_error = RuntimeError if state == "upstream_failure" else access_error
             with pytest.raises(expected_error):
                 await getattr(server, handler_name)(ctx, operation.params)
         else:
@@ -1602,8 +1807,8 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
-        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=_listing_client())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=ListToolsResult(tools=upstream))),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
     ):
         try:
@@ -1917,7 +2122,7 @@ async def test_initial_tool_listing_preserves_legacy_error_fallback(
 
 
 @pytest.mark.parametrize("header_name", ("x-litellm-api-key", "X-LiteLLM-API-Key"))
-def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str) -> None:
+def test_discovery_extra_headers_forward_listed_admission_key(header_name: str) -> None:
     caller_key: Final = "Bearer sk-admission-only"
     raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
     server: Final = MCPServer(
@@ -1937,8 +2142,7 @@ def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str)
         UserAPIKeyAuth(api_key="sk-admission-only"),
     )
     assert auth_header is None
-    assert extra_headers == {"X-Tenant": "tenant-control"}
-    assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+    assert extra_headers == {header_name: caller_key, "X-Tenant": "tenant-control"}
 
 
 @pytest.mark.asyncio

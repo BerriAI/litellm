@@ -22,7 +22,7 @@ import litellm
 import litellm.constants as _c
 from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
-from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
+from litellm.router_api import mark_advisor_orchestration_failure
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,

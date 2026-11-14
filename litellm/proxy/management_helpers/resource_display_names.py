@@ -1,4 +1,5 @@
-"""Display names for ids stored on management objects. DB rows win; config-declared servers and agents fill the gaps."""
+"""Display names for ids stored on management objects. DB rows win; config-declared servers and agents fill the gaps.
+A vector store declared in the config file keeps its config name, as it does in the vector store list."""
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -6,9 +7,15 @@ from typing import Final
 
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import AgentsRepository, MCPServerRepository
+from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.table_repositories import (
+    AgentsRepository,
+    ManagedVectorStoresRepository,
+    MCPServerRepository,
+)
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
 
 async def mcp_server_display_names(
@@ -50,6 +57,23 @@ async def agent_display_names(
     }
     from_db: Final = {row.agent_id: row.agent_name for row in rows}
     return MappingProxyType({**from_registry, **from_db})
+
+
+async def vector_store_display_names(
+    prisma_client: PrismaClient,
+    vector_store_ids: Sequence[str],
+    registered_stores: Sequence[LiteLLM_ManagedVectorStore],
+) -> Mapping[str, str]:
+    """vector_store_id -> vector_store_name for the stores that have one."""
+    wanted: Final = frozenset(vector_store_ids)
+    rows: Final = await find_many_in(ManagedVectorStoresRepository(prisma_client).table, "vector_store_id", wanted)
+    from_db: Final = {row.vector_store_id: row.vector_store_name for row in rows}
+    from_config: Final = {
+        store_id: store.get("vector_store_name")
+        for store in registered_stores
+        if store.get("is_config") and (store_id := store.get("vector_store_id")) is not None and store_id in wanted
+    }
+    return MappingProxyType({store_id: name for store_id, name in {**from_db, **from_config}.items() if name})
 
 
 async def key_display_names(prisma_client: PrismaClient, tokens: Sequence[str]) -> Mapping[str, str]:

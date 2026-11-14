@@ -5,7 +5,8 @@ embedding deployment, and turns on `litellm_settings.mcp_semantic_tool_filter` t
 /config/update. A chat completion that attaches the server and asks to search logs must report,
 in the x-litellm-semantic-filter headers, that the catalog was cut to at most top_k tools, all
 of them tools the key lists. Requires DD_API_KEY + DD_APP_KEY and the proxy's
-OPENAI_API_KEY for the embedding deployment.
+OPENAI_API_KEY for the embedding deployment. The filter is proxy-wide, so the test is
+marked `proxy_wide_config` and runs on a stack the main suite is not driving.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from mcp_client import McpClient
 from models import ChatBody, ChatMessage, LiteLLMParamsBody, McpChatTool
 from pydantic import BaseModel
 
-pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
+pytestmark = [pytest.mark.e2e, pytest.mark.proxy_wide_config]
 
 TOP_K: Final = 3
 
