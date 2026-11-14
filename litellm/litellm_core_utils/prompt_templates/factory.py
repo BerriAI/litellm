@@ -20,6 +20,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -1199,23 +1200,26 @@ def infer_protocol_value(
     return "unknown"
 
 
+def _gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
+    already_parsed: Final = as_str_mapping(arguments)
+    if already_parsed is not None:
+        return VertexFunctionCall(name=name, args=dict(already_parsed))
+    if arguments == "":  # pass empty dict, if arguments is empty string - prevents call from failing
+        return VertexFunctionCall(name=name, args={"type": "object"})
+    if arguments is not None and not isinstance(arguments, str):
+        raise ValueError(f"Tool call arguments for tool '{name}' must be a JSON string, got {type(arguments).__name__}")
+    return VertexFunctionCall(
+        name=name,
+        args=parse_tool_call_arguments(arguments, tool_name=name, context="Gemini tool invoke"),
+    )
+
+
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
     tool_call_id: str | None = None,
 ) -> VertexFunctionCall | None:
-    name: Final = function_call_params.get("name", "") or ""
-    arguments: Final = function_call_params.get("arguments", "")
-    if (
-        isinstance(arguments, str) and len(arguments) == 0
-    ):  # pass empty dict, if arguments is empty string - prevents call from failing
-        arguments_dict = {
-            "type": "object",
-        }
-    else:
-        arguments_dict = parse_tool_call_arguments(arguments, tool_name=name, context="Gemini tool invoke")
-    function_call: Final = VertexFunctionCall(
-        name=name,
-        args=arguments_dict,
+    function_call: Final = _gemini_function_call(
+        function_call_params.get("name", "") or "", function_call_params.get("arguments", "")
     )
     if tool_call_id:
         clean_id: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
