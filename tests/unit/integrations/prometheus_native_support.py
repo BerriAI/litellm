@@ -152,3 +152,46 @@ def value_of(name: str, labels: Mapping[str, object]) -> float | None:
 
 def labelsets(name: str) -> list[dict[str, str]]:
     return [labels for labels, _ in series(name)]
+
+
+def standard_payload(metadata: Mapping[str, object] | None = None, **fields: object) -> dict[str, object]:
+    payload: Final[dict[str, object]] = {
+        "id": "native-payload",
+        "call_type": "completion",
+        "status": "success",
+        "response_cost": 0.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 10,
+        "total_tokens": 20,
+        "startTime": 1.0,
+        "endTime": 2.0,
+        "completionStartTime": 1.5,
+        "model": "gpt-4",
+        "model_id": "model_1",
+        "model_group": "gpt-4",
+        "api_base": "http://api.base",
+        "custom_llm_provider": "openai",
+        "request_tags": [],
+        "end_user": None,
+        "cache_hit": False,
+        "stream": False,
+        "response": {"id": "chatcmpl-1"},
+        "model_parameters": {},
+        "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
+        "metadata": {
+            "user_api_key_hash": None,
+            "user_api_key_alias": None,
+            "user_api_key_team_id": None,
+            "user_api_key_team_alias": None,
+            "user_api_key_user_id": None,
+            "user_api_key_user_email": None,
+            "user_api_key_org_id": None,
+            "user_api_key_org_alias": None,
+            "user_api_key_end_user_id": None,
+            "requester_metadata": None,
+            "usage_object": None,
+        }
+        | dict(metadata or {}),
+    }
+    payload.update(fields)
+    return payload
