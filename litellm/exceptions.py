@@ -610,10 +610,11 @@ class CallerCredentialRateLimitError(RateLimitError):
 
 
 class RequestOverDeploymentTpmError(RateLimitError):
-    """429 raised when one request alone is estimated over the tpm limit of every
-    deployment in its model group, cooling ones included, so a retry can never clear it.
-    Prometheus keeps labeling it ``RateLimitError``, as it labeled this refusal before."""
+    """429 raised when one request alone is estimated over the tpm limit of every deployment
+    it could route to, cooling ones included, so a retry can never clear it. Loggers and
+    Prometheus keep naming it ``RateLimitError``, as they named this refusal before."""
 
+    logged_error_class: Final = "RateLimitError"
     prometheus_exception_class_name: Final = "RateLimitError"
 
 

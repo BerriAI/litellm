@@ -8075,7 +8075,11 @@ class StandardLoggingPayloadSetup:
                 response_attr: Final[object] = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
-        error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
+        error_class: Final[str] = (
+            str(getattr(original_exception, "logged_error_class", None) or original_exception.__class__.__name__)
+            if original_exception
+            else ""
+        )
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
         traceback_info = traceback_str or ""

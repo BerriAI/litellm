@@ -1509,10 +1509,10 @@ class RustCore(
         # document router-core last received for them.
         self._index_written: frozenset[str] = frozenset()
         self._index_sent: Mapping[str, object] | None = None
-        self._port: Final = _EndpointPort(self)
-        self._selectors: Final = StrategySelectors(host, self._cache, self._usage, self._port.group_deployments)
+        self._selectors: Final = StrategySelectors(host, self._cache, self._usage)
         self._selectors.init_default(resolved.routing_strategy, resolved.routing_strategy_args)
         self._selectors.init_groups(_group_selectors(resolved.routing_groups))
+        self._port: Final = _EndpointPort(self)
         self._endpoints: Final = RustEndpoints(self._port, config)
         # The resolver every picked deployment with `kubernetes_pod_discovery` goes through.
         self._pod_discovery: KubernetesPodDiscovery = KubernetesPodDiscovery()
@@ -3472,18 +3472,37 @@ class RustCore(
         if admitting is not None:
             return [found for record in admitting if (found := picked_id(record)) is not None]
         pool: Final = self._records_of(step.get("pool"))
-        pool_ids: Final = [found for record in pool if (found := picked_id(record)) is not None]
-        cooling: Final = [id for id, _ in self._cooldowns.get_active_cooldowns(pool_ids, None)]  # pyright: ignore[reportArgumentType]  # a list of ids
-        routable: Final = _region_routable(pool, request, True, self._resolved.enable_pre_call_checks)
-        routable_cooling: Final = (
-            self._tag_routable_ids(str(step.get("model")), pool, routable, frozenset(cooling), request)
-            if tags
-            else frozenset(id for record in routable if (id := picked_id(record)) in cooling)
-        )
+        routable_cooling: Final = self._routable_cooling_ids(step, pool, request, has_input=True, tags=tags)
         kept: Final = deployments_when_none_admits_embedding_batch(
             candidates, pool, routable_cooling, sent, dict(request)
         )
         return [found for record in kept if (found := picked_id(record)) is not None]
+
+    def _routable_cooling_ids(
+        self,
+        step: Mapping[str, object],
+        pool: Sequence[Mapping[str, object]],
+        request: Mapping[str, object],
+        *,
+        has_input: bool,
+        tags: bool,
+    ) -> frozenset[str]:
+        """The cooling deployments of ``pool`` that region and, when ``tags``, tag routing would
+        still send the request to once their cooldown ends."""
+        pool_ids: Final = [found for record in pool if (found := picked_id(record)) is not None]
+        cooling: Final = frozenset(id for id, _ in self._cooldowns.get_active_cooldowns(pool_ids, None))  # pyright: ignore[reportArgumentType]  # a list of ids
+        routable: Final = _region_routable(pool, request, has_input, self._resolved.enable_pre_call_checks)
+        if tags:
+            return self._tag_routable_ids(str(step.get("model")), pool, routable, cooling, request)
+        return frozenset(id for record in routable if (id := picked_id(record)) in cooling)
+
+    def _routable_cooling(
+        self, step: Mapping[str, object], request: Mapping[str, object], *, has_input: bool, tags: bool
+    ) -> Sequence[Mapping[str, object]]:
+        """The step's caller pool, as the strategy stage lists it, cut to its routable cooling deployments."""
+        pool: Final = self._records_of(step.get("pool"))
+        cooling: Final = self._routable_cooling_ids(step, pool, request, has_input=has_input, tags=tags)
+        return tuple(record for record in pool if picked_id(record) in cooling)
 
     async def _answer_select(
         self,
@@ -3545,6 +3564,13 @@ class RustCore(
                 # `_async_get_available_deployment` reserves a request's pick unless told not to;
                 # the pass-through pick only when told to.
                 reserve=pick_reserves(default=not pass_through) and bool(request),
+                routable_cooling=partial(
+                    self._routable_cooling,
+                    step,
+                    request,
+                    has_input=messages is not None or input is not None,
+                    tags=True,
+                ),
             )
         )
         if picked is not None and selector is not None and self._selectors.is_override(strategy, selector):
@@ -3595,6 +3621,13 @@ class RustCore(
             dict(request),
             # The sync picks reserve only when a routed call site says so (`picks_reserve(True)`).
             reserve=pick_reserves(default=False) and bool(request),
+            routable_cooling=partial(
+                self._routable_cooling,
+                step,
+                request,
+                has_input=messages is not None or input is not None,
+                tags=False,
+            ),
         )
         if picked is not None and self._selectors.is_override(strategy, selector):
             selector.pre_call_check(dict(as_str_mapping(picked) or {}))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # see above

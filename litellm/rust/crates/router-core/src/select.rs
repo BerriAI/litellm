@@ -828,7 +828,7 @@ impl Core {
             )?
             .ok_or_else(no_deployment);
         }
-        let ctx = self.context(
+        let mut ctx = self.context(
             snapshot,
             op,
             request,
@@ -836,6 +836,7 @@ impl Core {
             &candidates.name,
             scope,
         );
+        ctx.pool = &candidates.all;
         self.host
             .select(
                 &SelectStage::Strategy(strategy),

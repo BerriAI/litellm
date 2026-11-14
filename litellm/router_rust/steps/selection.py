@@ -29,7 +29,11 @@ from litellm.router_strategy.least_busy import (
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import GroupDeployments, LowestTPMLoggingHandler_v2
+from litellm.router_strategy.lowest_tpm_rpm_v2 import (
+    LowestTPMLoggingHandler_v2,
+    RoutableCooling,
+    no_routable_cooling,
+)
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 if TYPE_CHECKING:
@@ -71,8 +75,6 @@ def build_selector(
     cache: "DualCache",
     usage: "RouterUsage",
     reservations: "InMemoryCache | None" = None,
-    *,
-    group_deployments: GroupDeployments,
 ) -> Selector | None:
     """``_build_strategy_selector`` without registering: ``None`` for simple-shuffle and every
     strategy without a selector. Every least-busy selector of a router keeps its pick
@@ -84,9 +86,7 @@ def build_selector(
         case "usage-based-routing":
             return LowestTPMLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "usage-based-routing-v2":
-            return LowestTPMLoggingHandler_v2(
-                usage=usage, routing_args=routing_args, group_deployments=group_deployments
-            )
+            return LowestTPMLoggingHandler_v2(usage=usage, routing_args=routing_args)
         case "latency-based-routing":
             return LowestLatencyLoggingHandler(router_cache=cache, routing_args=routing_args)
         case "cost-based-routing":
@@ -104,15 +104,12 @@ class StrategySelectors:
     """The selectors of one router: the default group's, each routing group's, and the lazily
     built per-request override ones."""
 
-    def __init__(
-        self, host: "PythonHost", cache: "DualCache", usage: "RouterUsage", group_deployments: GroupDeployments
-    ) -> None:
+    def __init__(self, host: "PythonHost", cache: "DualCache", usage: "RouterUsage") -> None:
         from litellm.caching.in_memory_cache import InMemoryCache
 
         self._host: Final = host
         self._cache: Final = cache
         self._usage: Final = usage
-        self._group_deployments: Final = group_deployments
         # `_core_least_busy_reservations`: the picks least-busy reserved, shared by its selectors.
         self.reservations: Final = InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS)
         self._strategy: str | None = None
@@ -154,9 +151,7 @@ class StrategySelectors:
         self._strategy = normalize_strategy(strategy)
         if configured:
             self._configured = self._strategy
-        self._default = build_selector(
-            self._strategy, args, self._cache, self._usage, self.reservations, group_deployments=self._group_deployments
-        )
+        self._default = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
         if self._default is not None:
             self._register(self._default)
 
@@ -170,14 +165,7 @@ class StrategySelectors:
         if self._default is None or self._strategy != self._configured:
             return
         try:
-            rebuilt: Final = build_selector(
-                self._strategy,
-                args,
-                self._cache,
-                self._usage,
-                self.reservations,
-                group_deployments=self._group_deployments,
-            )
+            rebuilt: Final = build_selector(self._strategy, args, self._cache, self._usage, self.reservations)
         except (TypeError, ValidationError):
             verbose_router_logger.exception(
                 "Invalid routing_strategy_args %s for '%s'; keeping the previous ones", dict(args), self._strategy
@@ -196,12 +184,7 @@ class StrategySelectors:
             for name, strategy, args in groups
             if (
                 selector := build_selector(
-                    None if strategy == "priority" else strategy,
-                    args,
-                    self._cache,
-                    self._usage,
-                    self.reservations,
-                    group_deployments=self._group_deployments,
+                    None if strategy == "priority" else strategy, args, self._cache, self._usage, self.reservations
                 )
             )
             is not None
@@ -263,9 +246,7 @@ class StrategySelectors:
             return self.default
         with self._lock:
             if strategy not in self._overrides:
-                self._overrides[strategy] = build_selector(
-                    strategy, {}, self._cache, self._usage, self.reservations, group_deployments=self._group_deployments
-                )
+                self._overrides[strategy] = build_selector(strategy, {}, self._cache, self._usage, self.reservations)
             selector: Final = self._overrides[strategy]
         if selector is not None and request is not None and strategy not in self._registered_strategies():
             from litellm.litellm_core_utils.litellm_logging import Logging
@@ -293,6 +274,7 @@ async def pick_async(
     input: object,
     request_kwargs: dict[str, object] | None,  # mutable-ok: the latency selector reads it as given
     reserve: bool = False,
+    routable_cooling: RoutableCooling = no_routable_cooling,
 ) -> object:
     """``_select_deployment_async``; ``reserve``: least-busy holds the pick for the request's call."""
     match selector:
@@ -310,10 +292,15 @@ async def pick_async(
                 messages=messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
                 input=input,  # pyright: ignore[reportArgumentType]  # same
             )
-        case LowestTPMLoggingHandler_v2() | LowestCostLoggingHandler() if strategy in (
-            "usage-based-routing-v2",
-            "cost-based-routing",
-        ):
+        case LowestTPMLoggingHandler_v2() if strategy == "usage-based-routing-v2":
+            return await selector.async_get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
+                model_group=model,
+                healthy_deployments=deployments,
+                messages=messages,  # pyright: ignore[reportArgumentType]  # same
+                input=input,  # pyright: ignore[reportArgumentType]  # same
+                routable_cooling=routable_cooling,
+            )
+        case LowestCostLoggingHandler() if strategy == "cost-based-routing":
             return await selector.async_get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
                 model_group=model,
                 healthy_deployments=deployments,
@@ -341,6 +328,7 @@ def pick_sync(
     input: object,
     request_kwargs: dict[str, object] | None,  # mutable-ok: see pick_async
     reserve: bool = False,
+    routable_cooling: RoutableCooling = no_routable_cooling,
 ) -> object:
     """``_select_deployment_sync``: cost-based routing has no sync pick."""
     match selector:
@@ -351,15 +339,20 @@ def pick_sync(
                 reserve=reserve,
                 call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
             )  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
-        case LowestTPMLoggingHandler() | LowestTPMLoggingHandler_v2() if strategy in (
-            "usage-based-routing",
-            "usage-based-routing-v2",
-        ):
+        case LowestTPMLoggingHandler() if strategy == "usage-based-routing":
             return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
                 model_group=model,
                 healthy_deployments=deployments,
                 messages=messages,  # pyright: ignore[reportArgumentType]  # same
                 input=input,  # pyright: ignore[reportArgumentType]  # same
+            )
+        case LowestTPMLoggingHandler_v2() if strategy == "usage-based-routing-v2":
+            return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
+                model_group=model,
+                healthy_deployments=deployments,
+                messages=messages,  # pyright: ignore[reportArgumentType]  # same
+                input=input,  # pyright: ignore[reportArgumentType]  # same
+                routable_cooling=routable_cooling,
             )
         case LowestLatencyLoggingHandler() if strategy == "latency-based-routing":
             return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
