@@ -12,8 +12,9 @@ import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, vertex_top_level_request_fields
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.vertex_ai import (
@@ -168,6 +169,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> tuple[dict[str, object], RequestFiles | None]:
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
@@ -190,7 +193,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
         }
 
-        request_body: Final[dict[str, object]] = {"contents": contents, "generationConfig": generation_config}
+        label_fields: Final = (
+            vertex_top_level_request_fields({"labels": litellm_params.get("labels")}, litellm_params)
+            if vertex_request_label_fields()
+            else None
+        )
+        request_body: Final[dict[str, object]] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+            **(label_fields or {}),
+        }
 
         payload: Final = json.dumps(request_body)
         empty_files: Final = cast(RequestFiles, [])
