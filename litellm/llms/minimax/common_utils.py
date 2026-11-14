@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from typing import Final
 
@@ -5,10 +6,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import ContentPolicyViolationError, UnsupportedParamsError
 from litellm.types.utils import ImageObject, ImageResponse
 
 _STREAM_FLAG: Final = TypeAdapter(bool)
+_SAFETY_CHECK_CODE: Final = re.compile(r"\((?:1026|1027)\)")
 
 
 class _MinimaxImage(BaseModel):
@@ -65,4 +67,16 @@ def with_minimax_images(image_response: ImageResponse, raw_response: httpx.Respo
             "size": next((image.size for image in images if image.size is not None), None),
             "quality": None,
         }
+    )
+
+
+def minimax_safety_error(model: object, message: str, original_exception: object) -> ContentPolicyViolationError | None:
+    if _SAFETY_CHECK_CODE.search(message) is None:
+        return None
+    response: Final = getattr(original_exception, "response", None)
+    return ContentPolicyViolationError(
+        message=message,
+        model=str(model),
+        llm_provider="minimax",
+        response=response if isinstance(response, httpx.Response) else None,
     )

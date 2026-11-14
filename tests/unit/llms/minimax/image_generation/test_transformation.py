@@ -130,6 +130,29 @@ def test_minimax_image_generation_reports_each_failed_image_and_the_size_minimax
     assert response.quality is None
 
 
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "is_content_policy_error"),
+    [
+        (422, "no image generated: all 2 images failed content safety check (1027)", True),
+        (422, "input content failed safety check: prompt (1026)", True),
+        (402, "insufficient balance (1008)", False),
+        (400, "invalid params, size 4096x1024: aspect ratio must be within 1:3 and 3:1 (2013)", False),
+    ],
+)
+def test_minimax_image_generation_raises_content_policy_error_only_for_safety_check_codes(
+    status_code: int, message: str, is_content_policy_error: bool
+):
+    with respx.mock(assert_all_called=True) as router:
+        router.post(GENERATIONS_URL).respond(
+            status_code, json={"type": "error", "error": {"type": "error", "message": message}}
+        )
+        with pytest.raises((litellm.APIError, litellm.BadRequestError)) as error:
+            litellm.image_generation(model="minimax/MiniMax-H3-Image", prompt="a red cube", api_key="sk-fake", n=2)
+
+    assert isinstance(error.value, litellm.ContentPolicyViolationError) is is_content_policy_error
+    assert message in str(error.value)
+
 def test_minimax_image_generation_refuses_stream_before_calling_minimax():
     with respx.mock(assert_all_called=False) as router:
         route: Final = router.post(GENERATIONS_URL).respond(200, json=_generation_response("MiniMax-H3-Image"))

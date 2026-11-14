@@ -1,4 +1,7 @@
 import base64
+import io
+from collections.abc import Callable
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -73,6 +76,33 @@ def test_minimax_image_edit_uploads_every_image_as_a_multipart_file():
         "aspect_ratio": "1:1",
         "area": "1K",
     }
+
+
+@pytest.mark.parametrize(
+    ("build_image", "expected_uploads"),
+    [
+        (lambda path: ("dog.png", PNG_BYTES), (PNG_BYTES,)),
+        (lambda path: ("dog.png", PNG_BYTES, "image/png"), (PNG_BYTES,)),
+        (lambda path: path, (SECOND_PNG_BYTES,)),
+        (lambda path: [("dog.png", io.BytesIO(PNG_BYTES)), path], (PNG_BYTES, SECOND_PNG_BYTES)),
+    ],
+    ids=["filename_tuple", "filename_tuple_with_content_type", "path", "list_of_tuple_and_path"],
+)
+def test_minimax_image_edit_uploads_the_file_inside_tuples_and_paths(
+    tmp_path: Path, build_image: Callable[[Path], object], expected_uploads: tuple[bytes, ...]
+):
+    image_path: Final = tmp_path / "cat.png"
+    image_path.write_bytes(SECOND_PNG_BYTES)
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post(EDITS_URL).respond(200, json=_edit_response("MiniMax-H3-Image"))
+        litellm.image_edit(
+            model="minimax/MiniMax-H3-Image",
+            image=build_image(image_path),
+            prompt="put the cat into the picture",
+            api_key="sk-fake",
+        )
+
+    assert _uploaded_images(route.calls.last.request) == expected_uploads
 
 
 @pytest.mark.parametrize("model", ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"])
