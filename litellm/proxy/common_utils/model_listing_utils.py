@@ -160,8 +160,8 @@ class ClaudeCodeRoutingNames:
 
 @dataclass(frozen=True, slots=True)
 class CallerAliases:
-    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it, and `router`,
-    its key's or team's `router_settings.model_group_alias`.
+    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it, `router`,
+    its key's or team's `router_settings.model_group_alias`, and `team_id`, the key's team.
     `rewrite` are the maps `/chat/completions` rewrites its model through after auth's `router`
     rewrite, in the order it applies them: the team's, the key's in `add_litellm_data_to_request`,
     then the global `model_alias_map` and the key's again in `common_processing_pre_call_logic`,
@@ -170,6 +170,7 @@ class CallerAliases:
     team: object
     key: object
     router: object = None
+    team_id: str | None = None
 
     @property
     def own(self) -> tuple[object, ...]:
@@ -214,7 +215,7 @@ def caller_alias_maps(
     """Team aliases count only when listing the team the key authenticated as."""
     if listed_team_id is not None and listed_team_id != key_team_id:
         return CallerAliases(None, key_aliases, router_aliases)
-    return CallerAliases(team_aliases, key_aliases, router_aliases)
+    return CallerAliases(team_aliases, key_aliases, router_aliases, key_team_id)
 
 
 def alias_map(aliases: object) -> Mapping[str, str]:

@@ -10,15 +10,29 @@ production. Every test asserts the exact resulting dict, never "ran without erro
 """
 
 from unittest.mock import MagicMock
+from typing import Final
+
+import pytest
 
 
 
 import litellm
+from litellm.exceptions import UnsupportedParamsError
+from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
+from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.videos.utils import VideoGenerationRequestUtils
 
 get_requested = (
     VideoGenerationRequestUtils.get_requested_video_generation_optional_param
 )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_extra_body_video_fields_remain_raw(drop_params: bool) -> None:
+    extra: Final = {"seed": 0, "duration": 6, "aspect_ratio": "1:1", "generate_audio": False,
+                   "frame_images": [], "input_references": []}
+    params: Final = get_requested({"extra_body": extra})
+    assert get_optional("veo-3.1-generate-001", VertexAIVideoConfig(), params, drop_params=drop_params) == extra
 get_optional = VideoGenerationRequestUtils.get_optional_params_video_generation
 
 
@@ -179,3 +193,23 @@ def test_optional__non_dict_extra_body_ignored():
     )
 
     assert result == {"seconds": "8"}
+
+
+@pytest.mark.parametrize("extra_body", [
+    {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}]},
+    {"input_reference": "https://example.com/ref.png"},
+])
+def test_extra_body_overrides_mapped_images_after_dropping_conflicts(extra_body: dict[str, object]) -> None:
+    params: Final = get_requested({
+        "kwargs": {
+            "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+            "extra_body": extra_body,
+        },
+    })
+    config: Final = VolcEngineVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match="cannot be combined"):
+        get_optional("model", config, params)
+    assert get_optional("model", config, params, drop_params=True) == {
+        "content": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}],
+        **extra_body,
+    }

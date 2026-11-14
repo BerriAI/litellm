@@ -248,13 +248,14 @@ async def test_the_request_fallbacks_kwarg_is_not_forwarded_to_the_provider(
 
 
 @pytest.mark.asyncio
-async def test_disable_fallbacks_given_as_a_string_does_not_disable_them(
-    make_core: MakeCore, host: ScriptedHost
+@pytest.mark.parametrize("value", ["true", 1, False], ids=["string", "integer", "false"])
+async def test_disable_fallbacks_requires_literal_true(
+    make_core: MakeCore, host: ScriptedHost, value: object
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}])
     host.answer("openai/a", rate_limit())
 
-    await complete(core, disable_fallbacks="true")
+    await complete(core, disable_fallbacks=value)
 
     assert host.deployments_called("acompletion") == ["a", "b"]
 

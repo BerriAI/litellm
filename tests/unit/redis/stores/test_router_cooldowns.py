@@ -22,7 +22,7 @@ from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSetting
 from litellm.rust_bridge._native import NativeRedisClient, NativeRouterCooldowns
 from litellm.rust_bridge.host import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.unit.caching.test_redis_batch import (
+from tests.unit.caching.redis_batch_double import (
     FakeNativePending,
     FakeNatives,
     ReadyPending,
@@ -34,7 +34,7 @@ from tests.unit.caching.test_redis_batch import (
 @dataclass(frozen=True, slots=True)
 class _WireCooldown:
     """One cooldown as main's ``RedisCache`` writes it (``str(value)``) and reads it (``json.loads`` then
-    ``ast.literal_eval``). The same literals sit in ``litellm-rust/crates/redis-store/tests/support/mod.rs``,
+    ``ast.literal_eval``). The same literals sit in ``litellm/rust/crates/redis-store/tests/support/mod.rs``,
     where real Redis is checked to hold them after the Rust store writes."""
 
     cooldown: CooldownCacheValue
@@ -238,8 +238,8 @@ def test_the_native_breaker_counts_in_the_redis_breaker_state_gauge() -> None:
     store: Final = NativeRouterCooldowns(
         NativeRedisClient.connect(
             RedisStoreSettings(
-                redis_kwargs={"host": "127.0.0.1", "port": 1},
-                namespace=f"breaker-gauge-test-{uuid.uuid4()}",
+                redis_kwargs={"host": f"breaker-gauge-{uuid.uuid4()}.invalid", "port": 1},
+                namespace=None,
                 default_ttl=60,
                 breaker=RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0),
             )

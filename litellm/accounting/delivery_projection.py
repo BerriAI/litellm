@@ -56,6 +56,9 @@ def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpda
         "model_access_group_list_transactions": dict(
             _entity_totals(contributions, "LiteLLM_ModelAccessGroupBudgetTable")
         ),
+        "customer_org_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerOrganizationTable")),
+        "customer_team_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerTeamTable")),
+        "customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerMemberTable")),
     }
 
 

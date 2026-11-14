@@ -823,18 +823,21 @@ class AnthropicMessagesHandler(BaseTranslation):
         data: dict,  # mutable-ok: the request body the adapter reads
         *,
         keep_cache_control: bool = False,
+        keep_tool_errors: bool = False,
     ) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(
+            keep_cache_control=keep_cache_control, keep_tool_errors=keep_tool_errors
+        ).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -843,7 +846,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         messages: Final = data.get("messages")
         if messages is None:
             return None
-        chat_completion_compatible_request: Final = self._translate_to_openai(data)
+        chat_completion_compatible_request: Final = self._translate_to_openai(data, keep_tool_errors=keep_tool_errors)
         result: Final = cast(
             list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),

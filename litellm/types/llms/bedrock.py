@@ -505,6 +505,8 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
     output_dimension: int
+    max_tokens: ReadOnly[int]
+    priority: ReadOnly[int]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -1256,6 +1258,13 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # supported subset and strips the field entirely when nothing remains, so
     # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
     context_management: dict
+
+    # `compaction` ({"type": "summarize", "instructions"?: str}) is the
+    # `compact-2026-09-04` beta: one summarization call that returns a single
+    # signed compaction block. Bedrock rejects it together with
+    # `context_management`. Ref:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    compaction: ReadOnly[Mapping[str, object]]
 
 
 class BedrockBatchRecordKind(Enum):

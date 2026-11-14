@@ -75,10 +75,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self,
         aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
+        encrypted_agent_messages: bool = False,
     ):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
         self.use_openai_path = use_openai_path
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -86,6 +88,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         return "auto" if self.use_openai_path else super().auto_reasoning_summary()
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.use_openai_path and self.encrypted_agent_messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
@@ -215,7 +220,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         hoisted: Final = hoist_additional_tools(
             input, params.get("tools"), drop_params=drops_unsupported_params(litellm_params.drop_params)
         )
-        normalized_input, rewritten_types = normalize_codex_input_items(hoisted.input)
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            hoisted.input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",

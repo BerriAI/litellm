@@ -1,0 +1,37 @@
+name: "Restore the Rust bridge"
+description: >-
+  Restore the prebuilt Rust bridge that the unit workflow's rust-bridge job saves
+  on main, keyed on every input of the Rust build.
+
+  The bridge is abi3, so one build serves every supported Python version. A job
+  whose Rust inputs match main installs the restored wheel and native library
+  instead of compiling them inside `uv sync`. On a miss the caller builds from
+  source as before.
+
+  The restored `rust-bridge-dist` directory holds the editable litellm wheel, the
+  litellm-proxy gateway wheel, and `litellm/rust_bridge/_native.abi3.so`.
+
+outputs:
+  key:
+    description: "Cache key for the bridge built from this checkout"
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: "'true' when the bridge for this exact key was restored"
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Define the Rust bridge cache key
+      id: key
+      shell: bash
+      env:
+        RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
+      run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the Rust bridge
+      id: restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: rust-bridge-dist
+        key: ${{ steps.key.outputs.key }}
