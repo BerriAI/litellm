@@ -1,0 +1,113 @@
+name: litellm-pricing-currency-demo
+
+x-demo-image: &demo-image
+  image: litellm-pricing-currency-demo:local
+  build:
+    context: ../../../..
+    dockerfile: litellm/deploy/docker/Dockerfile
+    target: runtime
+  pull_policy: build
+
+services:
+  gateway:
+    <<: *demo-image
+    command: ["--config", "/demo/config.yaml", "--num_workers", "2"]
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-4000}:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run ./generate-env.sh first}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?run ./generate-env.sh first}
+      DATABASE_URL: postgresql://llmproxy:${POSTGRES_PASSWORD:?run ./generate-env.sh first}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      UI_USERNAME: admin
+      UI_PASSWORD: ${UI_PASSWORD:?run ./generate-env.sh first}
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+    volumes:
+      - ./proxy_config.yaml:/demo/config.yaml:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+      - /app/.cache:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-upstream:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  mock-upstream:
+    <<: *demo-image
+    entrypoint: ["/app/.venv/bin/python", "/demo/mock_upstream.py", "8090"]
+    command: []
+    volumes:
+      - ./mock_upstream.py:/demo/mock_upstream.py:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /app/.venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  seed:
+    <<: *demo-image
+    profiles:
+      - seed
+    entrypoint: ["/app/.venv/bin/python", "/demo/seed.py"]
+    command: []
+    environment:
+      DEMO_PROXY_URL: http://gateway:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run ./generate-env.sh first}
+      DEMO_VIRTUAL_KEY: ${DEMO_VIRTUAL_KEY:?run ./generate-env.sh first}
+    volumes:
+      - ./seed.py:/demo/seed.py:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./generate-env.sh first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres_data:

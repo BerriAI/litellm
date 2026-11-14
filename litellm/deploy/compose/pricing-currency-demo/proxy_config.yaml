@@ -1,0 +1,51 @@
+# Synthetic deployments for the pricing currency demo. Every one points at the local mock upstream, which reports
+# 1000 prompt and 500 completion tokens per call. No provider is called and the api_key is a placeholder it ignores.
+#
+# demo-currency-cheapest holds three deployments priced the same way in three currencies:
+#   demo-usd-200  USD 2.00 / 4.00 per 1M tokens                  -> $0.00400 per call
+#   demo-huf-720  HUF 720 / 1440 per 1M tokens at 0.003 USD/HUF  -> $0.00432 per call
+#   demo-eur-180  EUR 1.80 / 3.60 per 1M tokens at 1.20 USD/EUR  -> $0.00432 per call (created by seed.py)
+# Raw numbers would make EUR look cheapest. Cost-based routing compares USD, so demo-usd-200 serves the group.
+model_list:
+  - model_name: demo-currency-cheapest
+    litellm_params:
+      model: openai/demo-usd-200
+      api_base: http://mock-upstream:8090/v1
+      api_key: mock-upstream-ignores-this
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.000004
+    model_info:
+      id: demo-usd-200
+  - model_name: demo-currency-cheapest
+    litellm_params:
+      model: openai/demo-huf-720
+      api_base: http://mock-upstream:8090/v1
+      api_key: mock-upstream-ignores-this
+      pricing_currency: HUF
+      usd_per_currency_unit: "0.003"
+      input_cost_per_token: 0.00072
+      output_cost_per_token: 0.00144
+    model_info:
+      id: demo-huf-720
+  # Prices and currency set in model_info, the other place custom prices are configured: $0.00432 per call.
+  - model_name: demo-currency-huf-model-info
+    litellm_params:
+      model: openai/demo-huf-model-info
+      api_base: http://mock-upstream:8090/v1
+      api_key: mock-upstream-ignores-this
+    model_info:
+      id: demo-huf-model-info
+      pricing_currency: HUF
+      usd_per_currency_unit: "0.003"
+      input_cost_per_token: 0.00072
+      output_cost_per_token: 0.00144
+
+router_settings:
+  routing_strategy: cost-based-routing
+  redis_host: redis
+  redis_port: 6379
+
+general_settings:
+  coordination_redis:
+    host: redis
+    port: 6379
