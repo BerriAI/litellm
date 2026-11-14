@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache, reduce
+from functools import lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
@@ -948,21 +948,24 @@ def _root_ref_def_name(schema: Mapping[str, JsonValue], def_names: Mapping[str, 
             return None
 
 
-def _resolve_root_ref(schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+def _root_ref_chain(
+    schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]
+) -> tuple[Mapping[str, JsonValue], ...]:
     object_defs: Final = MappingProxyType({name: value for name, value in defs.items() if isinstance(value, dict)})
     def_names: Final = MappingProxyType({name: name for name in object_defs})
     next_names: Final = ((name, _root_ref_def_name(value, def_names)) for name, value in object_defs.items())
     next_def: Final = MappingProxyType({name: target for name, target in next_names if target is not None})
     first: Final = _root_ref_def_name(schema, def_names)
     if first is None:
-        return schema
-    last: Final = reduce(lambda name, _: next_def.get(name, name), range(len(next_def)), first)
-    return schema if last in next_def else object_defs[last]
+        return (schema,)
+    names: Final = tuple(accumulate(range(len(next_def)), lambda name, _: next_def.get(name, name), initial=first))
+    return (schema,) if names[-1] in next_def else (schema, *(object_defs[name] for name in frozenset(names)))
 
 
 def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
     defs: Final = parameters.get("$defs")
-    return _root_cannot_be_vertex_parameters(_resolve_root_ref(parameters, defs if isinstance(defs, dict) else {}))
+    chain: Final = _root_ref_chain(parameters, defs if isinstance(defs, dict) else {})
+    return any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
 
 
 def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
