@@ -3618,3 +3618,122 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+@pytest.fixture
+def comma_separated_models_router(monkeypatch: pytest.MonkeyPatch) -> litellm.Router:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": _PROXY_DEPLOYMENT_BASE,
+                },
+            }
+            for group in ("g1", "g2")
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.parametrize("stream_val", [True, "true", "True"])
+@pytest.mark.parametrize("extra_body", [{}, {"fastest_response": False}], ids=["omitted", "false"])
+@pytest.mark.asyncio
+async def test_route_request_comma_separated_models_with_stream_raises_400(
+    comma_separated_models_router: litellm.Router, stream_val: bool | str, extra_body: dict[str, bool]
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-5.5")
+        )
+        with pytest.raises(ProxyException) as exc_info:
+            await (
+                await route_request(
+                    data={
+                        "model": "g1,g2",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": stream_val,
+                        **extra_body,
+                    },
+                    llm_router=comma_separated_models_router,
+                    user_model=None,
+                    route_type="acompletion",
+                )
+            )
+        assert len(upstream.calls) == 0
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "model"
+    assert "fastest_response=true" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    "model, extra_body",
+    [("g1,g2", {"fastest_response": True}), ("g1", {})],
+    ids=["fastest-response", "single-model"],
+)
+@pytest.mark.asyncio
+async def test_route_request_comma_separated_models_allowed_streams_are_consumable(
+    comma_separated_models_router: litellm.Router, model: str, extra_body: dict[str, bool]
+) -> None:
+    events: Final = (
+        {
+            "id": "chatcmpl-batch",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-5.5",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": reason}],
+        }
+        for delta, reason in (({"role": "assistant", "content": "hi"}, None), ({}, "stop"))
+    )
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+        )
+        stream: Final = await (
+            await route_request(
+                data={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                    **extra_body,
+                },
+                llm_router=comma_separated_models_router,
+                user_model=None,
+                route_type="acompletion",
+            )
+        )
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "hi"
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize("extra_body", [{}, {"stream": False}], ids=["omitted", "false"])
+@pytest.mark.asyncio
+async def test_route_request_comma_separated_models_without_stream_returns_all_responses(
+    comma_separated_models_router: litellm.Router, extra_body: dict[str, bool]
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-5.5")
+        )
+        responses: Final = await (
+            await route_request(
+                data={"model": " g1 , g2 ", "messages": [{"role": "user", "content": "hi"}], **extra_body},
+                llm_router=comma_separated_models_router,
+                user_model=None,
+                route_type="acompletion",
+            )
+        )
+        assert len(upstream.calls) == 2
+
+    assert isinstance(responses, list)
+    assert [response.choices[0].message.content for response in responses] == ["hi", "hi"]
