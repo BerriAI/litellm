@@ -1090,7 +1090,7 @@ async def _verify_against_idp(
     respx_mock.get(f"{_IDP}/.well-known/openid-configuration").respond(json={"jwks_uri": f"{_IDP}/jwks"})
     respx_mock.get(f"{_IDP}/jwks").respond(json={"keys": [jwk]})
     signer: Final = _make_signer(access_token_discovery_uri=f"{_IDP}/.well-known/openid-configuration")
-    token: Final = jwt.encode(
+    token: Final = jwt.PyJWT().encode(
         {"sub": "idp-user", "exp": _FAR_FUTURE_EXP}, key, algorithm=algorithm, headers={"kid": jwk["kid"]}
     )
     return await signer._verify_incoming_jwt(token)
