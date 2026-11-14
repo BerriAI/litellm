@@ -60,6 +60,7 @@ from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.types.utils import CallTypes, ModelResponse, Usage
+from tests._support.parallel_request_limiter_golden import Golden, Ttl
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
 _READS: Final = frozenset({Field.deprecated_kwargs})
 _ADMIT_ERROR: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("admit_error")
 _DESCRIPTORS: Final = TypeAdapter(list[RateLimitDescriptor])
+_GOLDEN: Final = Golden()
 _FIXED_START: Final = datetime(2026, 11, 13, 12, 0, 0, 250000, tzinfo=timezone.utc)
 
 
@@ -85,9 +87,25 @@ class Clock:
 
 def _clock(port: int | None) -> Clock:
     if port is None:
-        return Clock()
-    seconds, _ = redis.Redis(port=port).time()
-    return Clock(datetime.fromtimestamp(seconds, timezone.utc).replace(microsecond=_FIXED_START.microsecond))
+        clock = Clock()
+    else:
+        seconds, _ = redis.Redis(port=port).time()
+        clock = Clock(datetime.fromtimestamp(seconds, timezone.utc).replace(microsecond=_FIXED_START.microsecond))
+    _GOLDEN.anchor(clock.current)
+    return clock
+
+
+@pytest.fixture(scope="module", autouse=True)
+def golden_file() -> Iterator[None]:
+    yield
+    _GOLDEN.write()
+
+
+@pytest.fixture(autouse=True)
+def golden_case(request: pytest.FixtureRequest) -> Iterator[None]:
+    _GOLDEN.start(request.node.nodeid)
+    yield
+    _GOLDEN.finish_case()
 
 
 @dataclass(frozen=True)
@@ -439,17 +457,9 @@ def _run(
     return asyncio.get_running_loop().create_task(step(side, index, request), context=context)
 
 
-@dataclass(frozen=True, eq=False)
-class _Ttl:
-    milliseconds: int
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, _Ttl) and abs(self.milliseconds - other.milliseconds) < 10_000
-
-
-def _ttl_bucket(pttl: object) -> int | _Ttl:
+def _ttl_bucket(pttl: object) -> int | Ttl:
     assert isinstance(pttl, int)
-    return pttl if pttl < 0 else _Ttl(pttl)
+    return pttl if pttl < 0 else Ttl(pttl)
 
 
 def _snapshot(side: Side, scopes: Sequence[tuple[str, str]]) -> object:
@@ -508,27 +518,27 @@ async def _differential(
     held: Final[list[tuple[int, Request]]] = []
     for index, request in enumerate(requests):
         admitted = [await _run(side, index, _admit, request) for side in (python, native)]
-        assert admitted[0] == admitted[1], (index, admitted)
-        assert python.datas[index] == native.datas[index], index
+        _GOLDEN.agree(admitted[0], admitted[1], (index, admitted))
+        _GOLDEN.agree(python.datas[index], native.datas[index], index)
         observed.append(admitted[0])
         if admitted[0] is None or admitted[0][0] == "fallback":
             if request.held:
                 held.append((index, request))
             else:
                 ended = [await _run(side, index, _end, request) for side in (python, native)]
-                assert ended[0] == ended[1], (index, ended)
-        assert _snapshot(python, scopes) == _snapshot(native, scopes), index
+                _GOLDEN.agree(ended[0], ended[1], (index, ended))
+        _GOLDEN.agree(_snapshot(python, scopes), _snapshot(native, scopes), index)
         if probe is not None:
-            assert await probe(python) == await probe(native), index
+            _GOLDEN.agree(await probe(python), await probe(native), index)
         if between is not None:
             between(clock)
     for index, request in held:
         ended = [await _run(side, index, _end, request) for side in (python, native)]
-        assert ended[0] == ended[1], (index, ended)
-        assert _snapshot(python, scopes) == _snapshot(native, scopes), index
+        _GOLDEN.agree(ended[0], ended[1], (index, ended))
+        _GOLDEN.agree(_snapshot(python, scopes), _snapshot(native, scopes), index)
         if probe is not None:
-            assert await probe(python) == await probe(native), index
-    assert native.logged_payloads == python.logged_payloads
+            _GOLDEN.agree(await probe(python), await probe(native), index)
+    _GOLDEN.agree(python.logged_payloads, native.logged_payloads)
     return observed
 
 
@@ -693,8 +703,8 @@ async def test_the_fallback_walk_releases_a_refused_attempts_holds_like_python(
         context = contextvars.copy_context()
         side.contexts.update({0: context, 1: context, 2: context})
         observed.append(await asyncio.get_running_loop().create_task(walk(side), context=context))
-    assert observed[0] == observed[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(observed[0], observed[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
 
 
 @pytest.mark.asyncio
@@ -968,10 +978,10 @@ async def test_body_free_checks_and_request_capacity_run_through_the_engine_like
     observed: Final[list[object]] = []
     for _ in range(4):
         checked = [await _guarded(side.limiter.raise_if_over_limit_before_body(auth)) for side in sides]
-        assert checked[0] == checked[1]
+        _GOLDEN.agree(checked[0], checked[1])
         held = [await _guarded(capacity(side)) for side in sides]
-        assert held[0] == held[1]
-        assert _snapshot(sides[0], [("api_key", _KEY)]) == _snapshot(sides[1], [("api_key", _KEY)])
+        _GOLDEN.agree(held[0], held[1])
+        _GOLDEN.agree(_snapshot(sides[0], [("api_key", _KEY)]), _snapshot(sides[1], [("api_key", _KEY)]))
         observed.append((checked[0], held[0]))
     assert observed[-1][0] is not None
 
@@ -999,8 +1009,8 @@ async def test_atomic_checks_run_through_the_engine_like_python(
             )
             for side in sides
         ]
-        assert responses[0] == responses[1]
-        assert _snapshot(sides[0], [("api_key", _KEY)]) == _snapshot(sides[1], [("api_key", _KEY)])
+        _GOLDEN.agree(responses[0], responses[1])
+        _GOLDEN.agree(_snapshot(sides[0], [("api_key", _KEY)]), _snapshot(sides[1], [("api_key", _KEY)]))
 
 
 @pytest.mark.asyncio
@@ -1079,13 +1089,13 @@ async def test_a_nested_mcp_tool_call_reuses_the_requests_slot_like_python(
         side.contexts[0] = context
         side.contexts[1] = context
     admitted: Final = [(await _run(side, 0, _admit, outer), await _run(side, 1, _admit, tool)) for side in sides]
-    assert admitted[0] == admitted[1]
+    _GOLDEN.agree(admitted[0], admitted[1])
     assert (admitted[0][1] is None) == (tool_limit > 1)
     scopes: Final = _DYNAMIC_SCOPES
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
     ended: Final = [(await _run(side, 1, _end, tool), await _run(side, 0, _end, outer)) for side in sides]
-    assert ended[0] == ended[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(ended[0], ended[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
 
 
 @pytest.mark.asyncio
@@ -1107,11 +1117,11 @@ async def test_a_nested_pass_through_or_realtime_call_on_a_native_request_is_lim
         (await _run(side, 0, _admit, outer), await _run(side, 1, _admit, nested), await _run(side, 2, _admit, nested))
         for side in sides
     ]
-    assert admitted[0] == admitted[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(admitted[0], admitted[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
     ended: Final = [(await _run(side, 1, _end, nested), await _run(side, 0, _end, outer)) for side in sides]
-    assert ended[0] == ended[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(ended[0], ended[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
 
 
 @pytest.mark.asyncio
@@ -1437,20 +1447,21 @@ async def test_responses_websocket_turns_are_settled_natively_like_python(
     connection: Final = Request(auth, {"model": "gpt-4o"}, call_type=CallTypes.aresponses_websocket.value, end=end)
     scopes: Final = [("api_key", _KEY), ("model_per_team_ptu", "t1:gpt-4o"), *_PROJECT_SCOPES]
     admitted: Final = [await _run(side, 0, _admit, connection) for side in sides]
-    assert admitted[0] == admitted[1] == None
-    assert sides[0].datas[0] == sides[1].datas[0]
+    _GOLDEN.agree(admitted[0], admitted[1])
+    assert admitted[0] is None
+    _GOLDEN.agree(sides[0].datas[0], sides[1].datas[0])
     frames: Final[list[object]] = []
     for turn in range(6):
         outcomes = [
             await asyncio.get_running_loop().create_task(_socket_turn(side, turn, auth), context=side.contexts[0])
             for side in sides
         ]
-        assert outcomes[0] == outcomes[1], (turn, outcomes)
-        assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes), turn
+        _GOLDEN.agree(outcomes[0], outcomes[1], (turn, outcomes))
+        _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes), turn)
         frames.append(outcomes[0])
     ended: Final = [await _run(side, 0, _end, connection) for side in sides]
-    assert ended[0] == ended[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(ended[0], ended[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
     assert frames[0] is None
 
 
@@ -1530,7 +1541,7 @@ async def test_auth_descriptors_are_built_in_rust_like_python(
     python: Final = await side.limiter._build_request_rate_limit_descriptors(  # pyright: ignore[reportPrivateUsage]  # the Python reference
         auth, _data(0, request), request.call_type
     )
-    assert native == list(python)
+    _GOLDEN.agree(list(python), native)
 
 
 _CAP_BODIES: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
@@ -1570,7 +1581,7 @@ async def test_the_implicit_output_cap_is_decided_in_rust_like_python(
     _write_output_cap(
         native, call_type, side.native.bridge.implicit_output_cap(handle, min_limit, configured_output_tokens)
     )
-    assert native == python
+    _GOLDEN.agree(python, native)
 
 
 @pytest.mark.asyncio
@@ -1642,7 +1653,7 @@ async def test_the_real_dispatcher_registers_one_native_and_limits_like_python(
 ) -> None:
     python: Final = await _through_proxy_logging(monkeypatch, native=False)
     native: Final = await _through_proxy_logging(monkeypatch, native=True)
-    assert native == python
+    _GOLDEN.agree(python, native)
     assert python[:3] == [None, None, None]
     assert python[3] == (
         "ProxyRateLimitError",
@@ -1669,7 +1680,7 @@ async def test_the_output_cap_written_on_the_real_pre_call_line_matches_python(
 ) -> None:
     python: Final = await _capped_through_proxy_logging(monkeypatch, native=False)
     native: Final = await _capped_through_proxy_logging(monkeypatch, native=True)
-    assert native == python
+    _GOLDEN.agree(python, native)
     assert isinstance(native, tuple) and native[0]["max_tokens"] == 25
 
 
@@ -1706,7 +1717,7 @@ async def test_a_key_member_python_raises_on_is_left_to_python_and_raises_the_sa
 ) -> None:
     python: Final = await _refused_through_proxy_logging(monkeypatch, native=False, member=member)
     native: Final = await _refused_through_proxy_logging(monkeypatch, native=True, member=member)
-    assert native == python
+    _GOLDEN.agree(python, native)
     assert isinstance(python, tuple) and python[2] is False
 
 
@@ -1751,7 +1762,7 @@ async def test_native_redis_calls_report_the_rate_limit_target_and_call_types_li
     with _redis_server() as python_port, _redis_server() as native_port:
         python: Final = await _redis_events(monkeypatch, python_port, native=False, requests=requests)
         native: Final = await _redis_events(monkeypatch, native_port, native=True, requests=requests)
-    assert native == python
+    _GOLDEN.agree(python, native)
     assert python
     assert {target for _, target in python} == {"rate_limits"}
 
@@ -1831,7 +1842,7 @@ async def test_a_handed_over_batch_keeps_its_daily_token_refunds_like_python(
             assert stash.batch_tpd_refund_ops == ()
             assert side.limiter._adopt_native_state(stash, stash.native_state, "nested-call")  # pyright: ignore[reportPrivateUsage]  # the hand over under test
         refunds.append(stash.batch_tpd_refund_ops)
-    assert refunds[0] == refunds[1]
+    _GOLDEN.agree(refunds[0], refunds[1])
     assert refunds[0] != ()
 
 
@@ -1850,7 +1861,7 @@ async def test_fail_closed_refuses_with_503_when_redis_is_down_like_python(
         await _run(side, 0, _admit, request)
         for side in (_side(clock, native=False, port=dead), _side(clock, native=True, port=dead))
     ]
-    assert outcomes[0] == outcomes[1]
+    _GOLDEN.agree(outcomes[0], outcomes[1])
     assert (outcomes[0] is not None and outcomes[0][:2] == ("RateLimitUnverifiableError", 503)) == refused, outcomes
 
 
@@ -1920,16 +1931,17 @@ async def test_a_round_ended_before_the_slot_was_reused_keeps_the_slot_like_pyth
         side.contexts[0] = context
         side.contexts[1] = context
     admitted: Final = [await _run(side, 0, _admit, outer) for side in sides]
-    assert admitted == [None, None]
+    _GOLDEN.agree(admitted[0], admitted[1])
+    assert admitted[0] is None
     clock.advance(2)
     reused: Final = [await _run(side, 1, _admit, tool) for side in sides]
-    assert reused[0] == reused[1]
+    _GOLDEN.agree(reused[0], reused[1])
     ended: Final = [await _run(side, 0, _end, outer) for side in sides]
-    assert ended[0] == ended[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(ended[0], ended[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
     probed: Final = [await _run(side, 2, _admit, later) for side in sides]
-    assert probed[0] == probed[1]
-    assert _snapshot(sides[0], scopes) == _snapshot(sides[1], scopes)
+    _GOLDEN.agree(probed[0], probed[1])
+    _GOLDEN.agree(_snapshot(sides[0], scopes), _snapshot(sides[1], scopes))
 
 
 @pytest.mark.asyncio
@@ -1973,8 +1985,8 @@ async def test_a_limit_map_that_is_not_a_dict_raises_like_python(
         side.contexts[0] = context
         outcome = await _run(side, 0, _admit, request)
         refusals.append(None if outcome is None else (str(outcome[0]), str(context.get(_ADMIT_ERROR, ""))))
-    assert refusals[0] == refusals[1]
-    assert _snapshot(sides[0], [("api_key", _KEY)]) == _snapshot(sides[1], [("api_key", _KEY)])
+    _GOLDEN.agree(refusals[0], refusals[1])
+    _GOLDEN.agree(_snapshot(sides[0], [("api_key", _KEY)]), _snapshot(sides[1], [("api_key", _KEY)]))
 
 
 class _Opaque:
@@ -2017,8 +2029,8 @@ async def test_a_limit_that_is_not_a_builtin_number_is_converted_like_python(
             outcome = await _run(side, index, _admit, request)
             outcomes.append(None if outcome is None else (str(outcome[:3]), str(context.get(_ADMIT_ERROR, ""))))
         refusals.append(outcomes)
-    assert refusals[0] == refusals[1]
-    assert _snapshot(sides[0], [("api_key", _KEY)]) == _snapshot(sides[1], [("api_key", _KEY)])
+    _GOLDEN.agree(refusals[0], refusals[1])
+    _GOLDEN.agree(_snapshot(sides[0], [("api_key", _KEY)]), _snapshot(sides[1], [("api_key", _KEY)]))
 
 
 @pytest.mark.asyncio
@@ -2220,7 +2232,7 @@ def test_the_token_estimate_is_computed_in_rust_like_python(
         )
         if native is None:
             continue
-        assert native == python, (call_type, body)
+        _GOLDEN.agree(python, native, (call_type, body))
         answered.append(call_type)
         if include_media:
             total = _python_estimate(
