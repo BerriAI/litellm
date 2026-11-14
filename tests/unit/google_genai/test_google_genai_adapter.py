@@ -1259,9 +1259,13 @@ async def test_google_generate_content_with_openai():
         # remove any GenericLiteLLMParams fields
         passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
         # extra_headers is now explicitly passed through for providers that need custom headers
-        assert passed_fields == set(
-            ["model", "messages", "extra_headers"]
-        ), f"Expected model, messages, and extra_headers to be passed through, got {passed_fields}"
+        assert passed_fields == {
+            "model",
+            "messages",
+            "extra_headers",
+            "litellm_logging_obj",
+            "litellm_call_id",
+        }, f"Expected model, messages, extra_headers, and the request's logging ids, got {passed_fields}"
 
 
 def test_validate_environment_sets_x_goog_api_key():

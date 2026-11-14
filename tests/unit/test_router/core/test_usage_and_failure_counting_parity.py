@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_core import RouterCore
 from litellm.router_utils import cooldown_handlers
 from litellm.router_utils.cooldown_handlers import mark_deployment_selection_failure
-from tests.unit.test_router.core.endpoints_helpers import EndpointHost
+from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
 from tests.unit.test_router.core.retries_health_helpers import (
     MESSAGES,
     ErrorBuilder,
@@ -93,8 +93,10 @@ class SharedLoggingHost(EndpointHost):
 
 
 @pytest.fixture
-def host() -> SharedLoggingHost:
-    return SharedLoggingHost()
+def host(monkeypatch: pytest.MonkeyPatch) -> SharedLoggingHost:
+    host: Final = SharedLoggingHost()
+    patch_direct_endpoints(monkeypatch, host)
+    return host
 
 
 def minute() -> str:
@@ -353,6 +355,7 @@ async def test_a_failed_hops_404_is_the_callers_only_on_a_generic_call(
     else:
         _ = await attempt(core, "a", litellm_logging_obj=logging_obj)
 
+    assert host.deployments_called() == ["a", "b"]
     assert core.health().failures_this_minute("b") == counted
 
 

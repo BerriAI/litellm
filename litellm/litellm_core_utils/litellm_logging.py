@@ -3237,6 +3237,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    def claim_sync_success_log(self) -> bool:
+        if self._sync_success_scheduled:
+            return False
+        self._sync_success_scheduled = True
+        return True
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -5611,10 +5617,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        if not self.stream and self._sync_success_scheduled:
+        if not self.stream and not self.claim_sync_success_log():
             return
-        if not self.stream:
-            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
@@ -5631,7 +5635,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
-        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+        if self.claim_sync_success_log():
+            executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`
@@ -6113,6 +6118,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        if isinstance(result, ModelResponse):
+            return result
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
