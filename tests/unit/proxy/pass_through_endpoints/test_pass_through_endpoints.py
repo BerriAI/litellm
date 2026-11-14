@@ -8051,13 +8051,15 @@ async def test_vertex_live_setup_frame_is_checked_against_the_team_for_an_all_te
 
 
 @pytest.mark.asyncio
-async def test_vertex_live_setup_frame_is_gated_when_it_arrives_as_binary() -> None:
-    """A client that sends its setup frame as bytes must not skip the check the text path applies"""
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-16-le", "utf-32-be"])
+async def test_vertex_live_setup_frame_is_gated_when_it_arrives_as_binary(encoding: str) -> None:
+    """A client that sends its setup frame as bytes, in any encoding ``json.loads`` decodes, must not skip the check
+    the text path applies"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [
             {
                 "type": "websocket.receive",
-                "bytes": json.dumps({"setup": {"model": "totally-unlisted-model-abc"}}).encode(),
+                "bytes": json.dumps({"setup": {"model": "totally-unlisted-model-abc"}}).encode(encoding),
             }
         ],
         UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),

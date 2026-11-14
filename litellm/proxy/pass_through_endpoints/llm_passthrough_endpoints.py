@@ -4490,10 +4490,11 @@ def _may_carry_vertex_live_setup(frame_data: str | bytes) -> bool:
     """
     Whether a frame is worth parsing: audio and video frames stream continuously and are large, and one that
     cannot spell ``setup`` cannot carry one. Vertex also reads single-quoted and bare keys, so the bare word is
-    the test, and a backslash means the key may be escaped, which only a parse settles
+    the test, and a backslash means the key may be escaped, which only a parse settles. UTF-8 JSON never holds a
+    NUL byte, so one means a UTF-16 or UTF-32 frame that ``json.loads`` still decodes
     """
     if isinstance(frame_data, bytes):
-        return b"setup" in frame_data or b"\\" in frame_data
+        return b"setup" in frame_data or b"\\" in frame_data or b"\x00" in frame_data
     return "setup" in frame_data or "\\" in frame_data
 
 
