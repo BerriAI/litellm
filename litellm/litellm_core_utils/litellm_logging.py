@@ -3320,6 +3320,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if call_type == CallTypes.anthropic_messages.value:
             return self._anthropic_messages_logged_response(result=result)
         if call_type in (CallTypes.generate_content.value, CallTypes.agenerate_content.value):
+            if isinstance(result, ModelResponse):
+                return result
             return self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
         if call_type in (CallTypes.asend_message.value, CallTypes.send_message.value):
             return self._handle_a2a_response_logging(result=result)
