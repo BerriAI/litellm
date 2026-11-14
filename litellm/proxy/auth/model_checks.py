@@ -411,12 +411,11 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
 
 
 def _provider_base_url_is_set_in_env(provider: str) -> bool:
-    env_prefix: Final = provider.upper()
+    env_name: Final = provider.upper().replace("-", "_")
+    env_prefixes: Final = frozenset((env_name, *env_name.split("_")))
     return any(
         os.environ.get(f"{prefix}{suffix}")
-        for prefix, suffix in itertools.product(
-            (env_prefix, env_prefix.removesuffix("_AI")), _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES
-        )
+        for prefix, suffix in itertools.product(env_prefixes, _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES)
     )
 
 

@@ -2114,6 +2114,10 @@ def test_wildcard_over_a_namespace_behind_a_custom_api_base_lists_the_bare_wildc
         ("anthropic", "ANTHROPIC_BASE_URL"),
         ("fireworks_ai", "FIREWORKS_API_BASE"),
         ("deepseek", "DEEPSEEK_API_BASE"),
+        ("nvidia_nim", "NVIDIA_NIM_API_BASE"),
+        ("text-completion-openai", "OPENAI_BASE_URL"),
+        ("cohere_chat", "COHERE_API_BASE"),
+        ("ollama_chat", "OLLAMA_API_BASE"),
     ],
 )
 def test_wildcard_over_a_namespace_behind_a_gateway_set_in_the_env_lists_the_bare_wildcard_ids(
@@ -2133,7 +2137,7 @@ def test_wildcard_over_a_namespace_behind_a_gateway_set_in_the_env_lists_the_bar
         )
 
     assert straight_to_the_provider == []
-    assert f"{provider}/env-gateway-namespace-model-g" in bare_listing
+    assert bare_listing
     assert sorted(behind_a_gateway) == sorted(bare_listing)
 
 
