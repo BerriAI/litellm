@@ -61,86 +61,64 @@ class TestFeatherlessAIConfig:
         assert isinstance(config, OpenAIGPTConfig)
         assert hasattr(config, "get_supported_openai_params")
 
-    def test_map_openai_params_with_tool_choice(self):
-        """Test map_openai_params handles tool_choice parameter correctly"""
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            "auto",
+            "none",
+            "required",
+            {"type": "function", "function": {"name": "get_weather"}},
+        ],
+    )
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_map_openai_params_passes_tool_choice(self, tool_choice, drop_params):
+        """Featherless supports every OpenAI tool_choice value, so it is passed through"""
         config = FeatherlessAIConfig()
 
-        # Test with auto value (supported)
-        non_default_params = {"tool_choice": "auto"}
-        optional_params = {}
         result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="featherless-ai/Qwerky-72B",
-            drop_params=False,
+            non_default_params={"tool_choice": tool_choice},
+            optional_params={},
+            model="Qwen/Qwen3.8-27B",
+            drop_params=drop_params,
         )
-        assert "tool_choice" in result
-        assert result["tool_choice"] == "auto"
 
-        # Test with none value (supported)
-        non_default_params = {"tool_choice": "none"}
-        optional_params = {}
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="featherless-ai/Qwerky-72B",
-            drop_params=False,
-        )
-        assert "tool_choice" in result
-        assert result["tool_choice"] == "none"
+        assert result["tool_choice"] == tool_choice
 
-        # Test with unsupported value and drop_params=True
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
-        optional_params = {}
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="featherless-ai/Qwerky-72B",
-            drop_params=True,
-        )
-        assert "tool_choice" not in result
-
-        # Test with unsupported value and drop_params=False
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
-        optional_params = {}
-        with pytest.raises(Exception, match="litellm\\.UnsupportedParamsError: Featherless AI doesn't") as excinfo:
-            config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model="featherless-ai/Qwerky-72B",
-                drop_params=False,
-            )
-        assert "Featherless AI doesn't support tool_choice=" in str(excinfo.value)
-
-    def test_map_openai_params_with_tools(self):
-        """Test map_openai_params handles tools parameter correctly"""
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_map_openai_params_passes_tools(self, drop_params):
+        """Featherless supports OpenAI tool calling, so tools are passed through"""
         config = FeatherlessAIConfig()
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
 
-        # Test with tools and drop_params=True
-        tools = [{"type": "function", "function": {"name": "get_weather"}}]
-        non_default_params = {"tools": tools}
-        optional_params = {}
         result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="featherless-ai/Qwerky-72B",
-            drop_params=True,
+            non_default_params={"tools": tools},
+            optional_params={},
+            model="Qwen/Qwen3.8-27B",
+            drop_params=drop_params,
         )
-        assert "tools" not in result
 
-        # Test with tools and drop_params=False
-        with pytest.raises(Exception, match="litellm\\.UnsupportedParamsError: Featherless AI doesn't") as excinfo:
-            config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model="featherless-ai/Qwerky-72B",
-                drop_params=False,
-            )
-        assert "Featherless AI doesn't support tools=" in str(excinfo.value)
+        assert result["tools"] == tools
+
+    def test_tools_and_tool_choice_are_supported_params(self):
+        """tools and tool_choice are listed as supported OpenAI params"""
+        supported = FeatherlessAIConfig().get_supported_openai_params(
+            model="Qwen/Qwen3.8-27B"
+        )
+
+        assert "tools" in supported
+        assert "tool_choice" in supported
 
     def test_get_provider_info_with_featherless_ai_api_key(self, monkeypatch):
         """Test that FEATHERLESS_AI_API_KEY env var is picked up correctly"""
@@ -277,3 +255,73 @@ class TestFeatherlessAIConfig:
         # Check for specific content in the response
         assert "```python" in response.choices[0].message.content
         assert "Hi from LiteLLM" in response.choices[0].message.content
+
+    def test_featherless_ai_completion_with_tools_mock(self, respx_mock):
+        """tools and tool_choice reach the Featherless request and the tool call comes back"""
+        import json
+
+        import litellm
+        from litellm import completion
+
+        litellm.disable_aiohttp_transport = True
+        api_base = "https://api.featherless.ai/v1"
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
+
+        route = respx_mock.post(f"{api_base}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "Qwen/Qwen3.8-27B",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city": "Paris"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+            },
+            status_code=200,
+        )
+
+        response = completion(
+            model="featherless_ai/Qwen/Qwen3.8-27B",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=tools,
+            tool_choice="required",
+            api_key="fake-featherless-key",
+            api_base=api_base,
+        )
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["tools"] == tools
+        assert sent["tool_choice"] == "required"
+        tool_call = response.choices[0].message.tool_calls[0]
+        assert tool_call.function.name == "get_weather"
+        assert json.loads(tool_call.function.arguments) == {"city": "Paris"}
