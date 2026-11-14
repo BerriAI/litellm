@@ -3840,7 +3840,7 @@ def test_live_session_ignores_query_model_and_authorizes_frame_model(
     upgrade_auth: Final = UserAPIKeyAuth(token="upgrade", models=["gpt-live-1"])
 
     async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
-        if await request.body() != b'{"model": ""}':
+        if await request.body() != b'{"model": "", "disable_fallbacks": true}':
             raise HTTPException(status_code=403, detail="Model is not allowed")
         return upgrade_auth
 
@@ -3861,7 +3861,7 @@ def test_live_session_ignores_query_model_and_authorizes_frame_model(
         assert websocket.receive_text() == "routed"
 
     request_arg: Final = auth_call.await_args.kwargs["request"]
-    assert json.loads(asyncio.run(request_arg.body())) == {"model": ""}
+    assert json.loads(asyncio.run(request_arg.body())) == {"model": "", "disable_fallbacks": True}
     assert authorize.await_args.args[1] == "gpt-live-1"
 
 

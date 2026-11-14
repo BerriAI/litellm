@@ -1483,6 +1483,23 @@ class JWTAuthManager:
         return True
 
     @staticmethod
+    def claims_limit_models(
+        jwt_handler: JWTHandler, jwt_claims: Mapping[str, object], general_settings: Mapping[str, object]
+    ) -> bool:
+        settings: Final = jwt_handler.litellm_jwtauth
+        if settings.enforce_scope_based_access and settings.scope_mappings:
+            return True
+        rbac_role: Final = (
+            jwt_handler.get_rbac_role(token=dict(jwt_claims))  # pyright: ignore[reportUnknownMemberType]  # get_rbac_role types its token as a bare dict
+            if settings.enforce_rbac
+            else None
+        )
+        return (
+            rbac_role is not None
+            and get_role_based_models(rbac_role=rbac_role, general_settings=general_settings) is not None
+        )
+
+    @staticmethod
     def check_scope_based_access(
         scope_mappings: list[ScopeMapping],
         scopes: list[str],

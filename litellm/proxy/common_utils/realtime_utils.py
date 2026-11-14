@@ -15,3 +15,8 @@ def realtime_request_body(model: str | None) -> bytes:
 
 
 _realtime_request_body: Final = realtime_request_body
+
+
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+def websocket_auth_request_body(model: str | None) -> bytes:
+    return json.dumps({"model": model, "disable_fallbacks": True}).encode()

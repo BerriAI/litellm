@@ -47,11 +47,12 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.llms.custom_llm import CustomLLM
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException, ScopeMapping, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
@@ -7906,6 +7907,13 @@ def _reauthorized_as(valid_token: UserAPIKeyAuth) -> Callable[[str], Awaitable[U
     return authorize_model
 
 
+def _customer_hierarchy_allowing(allowed_models: tuple[str, ...] | None) -> CustomerHierarchyAuth:
+    return CustomerHierarchyAuth(
+        customer_org_id="customer-org-1",
+        scopes=(CustomerScopeAuth(key="customer_org", entity_id="customer-org-1", allowed_models=allowed_models),),
+    )
+
+
 async def _run_vertex_live_gated_passthrough(
     client_frames: Sequence[Mapping[str, str | bytes]],
     valid_token: UserAPIKeyAuth,
@@ -8126,13 +8134,21 @@ async def test_vertex_live_setup_frame_nested_too_deep_to_parse_is_refused() -> 
         '{setup: {model: "gemini-3-pro-live"}}',
     ],
 )
+@pytest.mark.parametrize(
+    "unrestricted_token",
+    [
+        UserAPIKeyAuth(token="hashed", models=[]),
+        UserAPIKeyAuth(token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(None)),
+    ],
+    ids=["key", "customer-without-model-list"],
+)
 async def test_vertex_live_setup_frame_only_vertex_can_parse_still_reaches_vertex_for_an_unrestricted_key(
-    lenient_setup: str,
+    lenient_setup: str, unrestricted_token: UserAPIKeyAuth
 ) -> None:
     """A key that may call any model loses nothing the proxy cannot read, so its lenient frames still go through"""
     websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
         [{"type": "websocket.receive", "text": lenient_setup}],
-        UserAPIKeyAuth(token="hashed", models=[]),
+        unrestricted_token,
     )
 
     upstream_ws.send.assert_awaited_once()
@@ -8170,8 +8186,11 @@ async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeat
         UserAPIKeyAuth(token="hashed", models=[], team_id="team-1", team_models=["gemini-live-2.5-flash"]),
         UserAPIKeyAuth(token="hashed", models=[], agent_id="agent-1"),
         UserAPIKeyAuth(token="hashed", models=[], end_user_id="end-user-1"),
+        UserAPIKeyAuth(
+            token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("gemini-live-2.5-flash",))
+        ),
     ],
-    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user"],
+    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user", "customer"],
 )
 async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token: UserAPIKeyAuth) -> None:
     """A wildcard can match any name the proxy might test the caller with, so only a caller with no model limit
@@ -8190,6 +8209,56 @@ async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_
 
     upstream_ws.send.assert_not_awaited()
     assert _policy_close_reason(websocket) is not None
+
+
+_LENIENT_FULL_PATH_SETUP: Final = (
+    "{'setup': {'model': '" + VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live") + "',},}"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("jwt_auth", "general_settings", "reaches_vertex"),
+    [
+        (
+            LiteLLM_JWTAuth(
+                enforce_scope_based_access=True,
+                scope_mappings=[ScopeMapping(scope="live", models=["gemini-live-2.5-flash"])],
+            ),
+            {},
+            False,
+        ),
+        (
+            LiteLLM_JWTAuth(enforce_rbac=True, user_id_jwt_field="sub"),
+            {"role_permissions": [{"role": "internal_user", "models": ["gemini-live-2.5-flash"]}]},
+            False,
+        ),
+        (LiteLLM_JWTAuth(enforce_rbac=True, user_id_jwt_field="sub"), {}, True),
+    ],
+    ids=["scope-models", "role-models", "no-model-rules"],
+)
+async def test_vertex_live_setup_frame_only_vertex_can_parse_follows_the_jwt_model_rules(
+    monkeypatch: pytest.MonkeyPatch,
+    jwt_auth: LiteLLM_JWTAuth,
+    general_settings: dict[str, object],
+    reaches_vertex: bool,
+) -> None:
+    """JWT scope and role model rules are checked at auth time against a named model, never stored on the key"""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.update_environment(prisma_client=None, user_api_key_cache=MagicMock(), litellm_jwtauth=jwt_auth)
+    monkeypatch.setattr(proxy_server, "jwt_handler", jwt_handler)
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": _LENIENT_FULL_PATH_SETUP}],
+        UserAPIKeyAuth(models=[], user_id="jwt-user", jwt_claims={"sub": "jwt-user", "scope": "live"}),
+    )
+
+    assert upstream_ws.send.await_count == (1 if reaches_vertex else 0)
+    assert (_policy_close_reason(websocket) is None) is reaches_vertex
 
 
 @pytest.mark.asyncio
@@ -8872,7 +8941,7 @@ async def test_vertex_live_route_authorizes_the_setup_model_the_way_connect_time
     upstream_ws.send.assert_not_awaited()
     assert _policy_close_reason(websocket) == budget_denial.message
     reauthenticated_request: Final = reauthentication.call_args.kwargs["request"]
-    assert json.loads(await reauthenticated_request.body()) == {"model": "gemini-live-2.5-flash"}
+    assert json.loads(await reauthenticated_request.body()) == {"model": "gemini-live-2.5-flash", "disable_fallbacks": True}
     assert reauthentication.call_args.kwargs["api_key"] == "Bearer sk-live-client"
     environment.proxy_logging.post_call_failure_hook.assert_awaited_once()
     reported: Final = environment.proxy_logging.post_call_failure_hook.await_args.kwargs

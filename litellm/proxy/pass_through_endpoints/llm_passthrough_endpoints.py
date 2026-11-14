@@ -107,7 +107,7 @@ from litellm.proxy.auth.auth_checks import (
     team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params, log_model_access_denial
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
@@ -206,6 +206,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
@@ -4747,8 +4748,18 @@ def _has_model_restrictions(model_allowlists: tuple[Sequence[str], ...]) -> bool
     return any(not _ALL_MODEL_ACCESS.issuperset(map(str, allowlist)) for allowlist in model_allowlists)
 
 
+def _customer_model_allowlists(hierarchy: CustomerHierarchyAuth | None) -> tuple[Sequence[str], ...]:
+    return () if hierarchy is None else tuple(scope.allowed_models or () for scope in hierarchy.scopes)
+
+
 async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        general_settings_view,
+        jwt_handler,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     return (
         valid_token.agent_id is not None
@@ -4756,6 +4767,11 @@ async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
         or valid_token.agent_caller is not None
         or valid_token.end_user_id is not None
         or personal_key_team_model_access_applies(valid_token)
+        or _has_model_restrictions(_customer_model_allowlists(valid_token.customer_hierarchy))
+        or (
+            valid_token.jwt_claims is not None
+            and JWTAuthManager.claims_limit_models(jwt_handler, valid_token.jwt_claims, general_settings_view())
+        )
         or _has_model_restrictions(
             await enforced_model_allowlists(
                 valid_token=valid_token,
