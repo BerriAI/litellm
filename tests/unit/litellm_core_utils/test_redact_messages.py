@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.responses.main import mock_responses_api_response
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.router import BaselineRouteStamp
@@ -2469,3 +2470,28 @@ def test_redaction_keeps_the_guardrail_verdict_and_drops_the_prompt_it_quotes(
         for record in records
     ] == [("bedrock-guard", "guardrail_intervened", 0.00075, 0.4)]
     assert "4111" in str(payload["guardrail_information"]), "the caller's payload is not redacted in place"
+
+
+def test_redaction_keeps_the_compression_savings_a_guardrail_reports() -> None:
+    payload: Final = {
+        "messages": [{"role": "user", "content": "x"}],
+        "guardrail_information": [
+            {
+                "guardrail_name": "headroom",
+                "guardrail_provider": "headroom",
+                "guardrail_status": "success",
+                "guardrail_response": {
+                    "tokens_before": 1000,
+                    "tokens_after": 400,
+                    "tokens_saved": 600,
+                    "compression_ratio": 0.4,
+                    "compressed_text": "my card is 4111 1111 1111 1111",
+                },
+            }
+        ],
+    }
+
+    redacted: Final = redacted_standard_logging_payload(payload)
+
+    assert "4111" not in str(redacted["guardrail_information"])
+    assert extract_compression_saved_tokens(redacted) == extract_compression_saved_tokens(payload) == 600

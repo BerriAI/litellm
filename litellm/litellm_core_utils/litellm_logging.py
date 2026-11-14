@@ -5558,7 +5558,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 return
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.async_log_failure_event(
-                    kwargs=self.model_call_details,
+                    kwargs=redacted_model_call_details_for_custom_logger(
+                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
+                        custom_logger=callback,
+                    ),
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,

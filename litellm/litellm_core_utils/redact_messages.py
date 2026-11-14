@@ -250,14 +250,33 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
 
 
+_NUMERIC_COMPRESSION_STAT_KEYS: Final = frozenset(
+    {"tokens_before", "tokens_after", "tokens_saved", "compression_ratio"}
+)
+
+
+def numeric_compression_stats(guardrail_entry: Mapping[str, object]) -> dict[str, int | float] | None:
+    fields: Final = _as_mapping(guardrail_entry.get("guardrail_response"))
+    if fields is None:
+        return None
+    stats: Final = {
+        key: value
+        for key, value in fields.items()
+        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    return stats or None
+
+
 def _guardrail_entry_without_prompt_text(entry: object) -> object:
     fields: Final = _as_mapping(entry)
     if fields is None:
         return entry
-    return {
+    redacted: Final = {
         field: REDACTED_BY_LITELLM if field in PROMPT_CARRYING_GUARDRAIL_FIELDS and value is not None else value
         for field, value in fields.items()
     }
+    stats: Final = numeric_compression_stats(fields)
+    return redacted if stats is None else {**redacted, "guardrail_response": stats}
 
 
 def _guardrail_information_without_prompt_text(guardrail_information: object) -> object:

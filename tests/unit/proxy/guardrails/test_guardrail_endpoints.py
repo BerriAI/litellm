@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import partial
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Dict, Final, List, Literal, NamedTuple, Optional
@@ -4244,7 +4245,7 @@ class _CapturingLogger(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.logged.append(self.redact_standard_logging_payload_from_model_call_details(kwargs)["standard_logging_object"])
+        self.logged.append(kwargs["standard_logging_object"])
 
     async def async_post_call_failure_hook(
         self,
@@ -4275,7 +4276,7 @@ async def _apply_bedrock_guardrail_over_http(
     bedrock_answers: Sequence[Mapping[str, object]],
     body: Mapping[str, object],
     guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
-    message_logging: bool = True,
+    capture_logger: Callable[[], _CapturingLogger] = _CapturingLogger,
     headers: Mapping[str, str] = MappingProxyType({}),
     other_loggers: Sequence[CustomLogger] = (),
 ) -> _BedrockGuardrailCall:
@@ -4290,7 +4291,7 @@ async def _apply_bedrock_guardrail_over_http(
         sent.append(request)
         return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
 
-    capture: Final = _CapturingLogger(message_logging)
+    capture: Final = capture_logger()
     spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     mocker.patch.object(
         litellm,
@@ -4375,14 +4376,23 @@ async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bedrock_action", ["ANONYMIZED", "BLOCKED"])
 @pytest.mark.parametrize(
-    ("message_logging", "headers"),
+    ("capture_logger", "headers"),
     [
-        pytest.param(False, MappingProxyType({}), id="callback-turns-off-message-logging"),
-        pytest.param(True, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"),
+        pytest.param(
+            partial(_CapturingLogger, message_logging=False),
+            MappingProxyType({}),
+            id="callback-turns-off-message-logging",
+        ),
+        pytest.param(
+            partial(_CapturingLogger, legacy_message_logging=False),
+            MappingProxyType({}),
+            id="callback-sets-message-logging-false",
+        ),
+        pytest.param(_CapturingLogger, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"),
     ],
 )
 async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_callback_receives(
-    mocker: MockerFixture, bedrock_action: str, message_logging: bool, headers: Mapping[str, str]
+    mocker: MockerFixture, bedrock_action: str, capture_logger: Callable[[], _CapturingLogger], headers: Mapping[str, str]
 ) -> None:
     answer: Final = {
         "action": "GUARDRAIL_INTERVENED",
@@ -4402,13 +4412,14 @@ async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_c
         mocker,
         (answer,),
         {"text": "please bill my card 4111111111111111"},
-        message_logging=message_logging,
+        capture_logger=capture_logger,
         headers=headers,
     )
 
     assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
-    assert "please bill my card" not in str(call.logged["guardrail_information"])
-    assert "4111111111111111" not in str(call.logged["guardrail_information"])
+    redacted_fields: Final = str({field: call.logged[field] for field in ("messages", "response", "guardrail_information")})
+    assert "please bill my card" not in redacted_fields
+    assert "4111111111111111" not in redacted_fields
 
 
 @pytest.mark.asyncio
