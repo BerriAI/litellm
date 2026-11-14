@@ -1430,6 +1430,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         values: Final = tuple(map(_scalar, self.rate_limits.local(keys)))
         return list(zip(values[::2], values[1::2]))
 
+    def _unexpired_counter_states(self, counters: Sequence[RateLimitCounter], now_int: int) -> list[CounterState]:
+        """
+        ``_local_counter_states`` with counters from an already-expired window reported as absent.
+
+        A local mirror entry is written with a TTL anchored at the write, not at the window start, so
+        it outlives its own window by up to ``window_size`` seconds. Read as-is, that stale count
+        keeps reporting OVER_LIMIT after the window rolled; the roll belongs to the Lua script or to
+        ``_in_memory_cache_sliding_window``, which both reset the window's counters.
+        """
+        states: Final[list[CounterState]] = []
+        for window_start, counter_value in self._local_counter_states(counters):
+            expired = window_start is not None and (now_int - int(window_start)) >= self.window_size
+            states.append((window_start, None) if expired else (window_start, counter_value))
+        return states
+
     async def _read_counter_values_from_redis(self, counters: Sequence[RateLimitCounter]) -> list[CounterState]:
         groups: Final = self._slot_groups(counters)
         group_values: Final = [
@@ -1445,10 +1460,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return [by_index[index] for index in range(len(counters))]
 
     async def _read_counter_values_without_incrementing(
-        self, counters: Sequence[RateLimitCounter]
+        self, counters: Sequence[RateLimitCounter], now_int: int
     ) -> list[CounterState]:
         if not self.rate_limits.has_redis:
-            return self._local_counter_states(counters)
+            return self._unexpired_counter_states(counters, now_int)
         try:
             return await self._read_counter_values_from_redis(counters)
         except Exception as e:  # noqa: BLE001  # any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
@@ -1456,7 +1471,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             log_redis_failure(
                 verbose_proxy_logger, logging.WARNING, "batch_counter_read_script failed, using local mirror", e
             )
-            return self._local_counter_states(counters)
+            return self._unexpired_counter_states(counters, now_int)
 
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
         if not self._fail_closed_resolver():
@@ -1594,13 +1609,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         windowed_response = RateLimitResponse(overall_code="OK", statuses=[])
         if counters:
             local_response: Final = self.is_cache_list_over_limit(
-                counters, self._local_counter_states(counters), key_metadata, read_only=read_only
+                counters, self._unexpired_counter_states(counters, now_int), key_metadata, read_only=read_only
             )
             if local_response["overall_code"] == "OVER_LIMIT":
                 return local_response
 
             if read_only:
-                cache_values = await self._read_counter_values_without_incrementing(counters)
+                cache_values = await self._read_counter_values_without_incrementing(counters, now_int=now_int)
             elif self.rate_limits.has_redis:
                 cache_values = await self._execute_redis_batch_rate_limiter_script(counters=counters, now_int=now_int)
                 for counter, (window_value, counter_value) in zip(counters, cache_values):
