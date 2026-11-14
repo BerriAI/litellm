@@ -1980,8 +1980,10 @@ def _complete_text_completion_openai(
         litellm_params=litellm_params,
         logger_fn=logger_fn,
         timeout=timeout,
-        organization=openai_client_organization(
-            _REQUEST_KWARGS_ADAPTER.validate_python(headers or {}), ctx.organization
+        organization=(
+            openai_client_organization(_REQUEST_KWARGS_ADAPTER.validate_python(headers or {}), ctx.organization)
+            if custom_llm_provider in _PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION
+            else None
         ),
     )
 
@@ -2925,7 +2927,9 @@ def _complete_custom_openai(
                 timeout=timeout,
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
-                organization=organization,
+                organization=openai_client_organization(
+                    _REQUEST_KWARGS_ADAPTER.validate_python(outbound_headers or {}), organization
+                ),
                 custom_llm_provider=custom_llm_provider,
                 shared_session=shared_session,
             )
@@ -4387,6 +4391,7 @@ _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION: Final = frozenset({"openai", "text-completion-openai"})
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -7253,7 +7258,11 @@ def embedding(
                 max_retries=max_retries,
                 shared_session=shared_session,
                 litellm_params=litellm_params_dict,
-                organization=openai_client_organization(headers, organization) if client is None else None,
+                organization=(
+                    openai_client_organization(headers, organization)
+                    if client is None and custom_llm_provider in _PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION
+                    else None
+                ),
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -8890,7 +8899,7 @@ def transcription(
                 caller_or_deployment_openai_organization(
                     as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
                 )
-                if client is None
+                if client is None and custom_llm_provider in _PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION
                 else None
             ),
         )
@@ -9201,7 +9210,7 @@ def speech(
                 caller_or_deployment_openai_organization(
                     as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")), organization
                 )
-                if client is None
+                if client is None and custom_llm_provider in _PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION
                 else None
             ),
             project=project,

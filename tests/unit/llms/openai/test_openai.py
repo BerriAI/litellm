@@ -2723,6 +2723,14 @@ _ORGANIZATION_WIRE_BODIES: Final[Mapping[str, Mapping[str, object]]] = {
         "results": [{"flagged": False, "categories": {}, "category_scores": {}}],
     },
     "/v1/audio/transcriptions": {"text": "hi"},
+    "/v1/chat/completions": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    },
 }
 
 
@@ -2756,6 +2764,10 @@ _TEXT_COMPLETION_CALL: Final[Mapping[str, object]] = {
 _MODERATION_CALL: Final[Mapping[str, object]] = {"model": "omni-moderation-latest", "input": "hi"}
 _SPEECH_CALL: Final[Mapping[str, object]] = {"model": "openai/tts-1", "input": "hi", "voice": "alloy"}
 _TRANSCRIPTION_CALL: Final[Mapping[str, object]] = {"model": "openai/whisper-1", "file": ("hello.wav", b"audio")}
+_CHAT_CALL: Final[Mapping[str, object]] = {
+    "model": "openai/gpt-5.4-mini",
+    "messages": [{"role": "user", "content": "hi"}],
+}
 
 
 @pytest.mark.parametrize(
@@ -2818,6 +2830,7 @@ _LOWERCASE_ORGANIZATION_HEADER: Final[Mapping[str, str]] = {"openai-organization
 @pytest.mark.parametrize(
     ("route", "route_kwargs"),
     [
+        (litellm.completion, _CHAT_CALL),
         (litellm.embedding, _EMBEDDING_CALL),
         (litellm.text_completion, _TEXT_COMPLETION_CALL),
         (litellm.speech, _SPEECH_CALL),
@@ -2844,6 +2857,7 @@ def test_sync_route_sends_one_organization_when_a_header_names_it(
 @pytest.mark.parametrize(
     ("route", "route_kwargs"),
     [
+        (litellm.acompletion, _CHAT_CALL),
         (litellm.aembedding, _EMBEDDING_CALL),
         (litellm.atext_completion, _TEXT_COMPLETION_CALL),
         (litellm.amoderation, _MODERATION_CALL),
@@ -2881,6 +2895,26 @@ def test_sync_moderation_sends_one_organization_when_a_header_names_it() -> None
     )
 
     assert moderations.calls.last.request.headers.get_list("OpenAI-Organization") == ["org-header"]
+
+
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.embedding, {**_EMBEDDING_CALL, "model": "together_ai/togethercomputer/m2-bert-80M-8k-retrieval"}),
+        (litellm.text_completion, {**_TEXT_COMPLETION_CALL, "model": "together_ai/meta-llama/Llama-3-8b-hf"}),
+        (litellm.speech, {**_SPEECH_CALL, "model": "together_ai/cartesia/sonic-2"}),
+        (litellm.transcription, {**_TRANSCRIPTION_CALL, "model": "together_ai/openai/whisper-large-v3"}),
+    ],
+)
+def test_route_keeps_the_openai_organization_off_another_provider(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    route(api_key=f"sk-{uuid4()}", organization=_DEPLOYMENT_ORGANIZATION, **route_kwargs)
+
+    assert recording_openai.headers is not None
+    assert "OpenAI-Organization" not in recording_openai.headers
 
 
 @pytest.mark.parametrize(
