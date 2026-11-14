@@ -88,6 +88,14 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
+_guardrail_success_record_skipped: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_guardrail_success_record_skipped", default=False
+)
+
+
+def skip_guardrail_success_record() -> None:
+    """Only the success branch reads this flag, so a later raise still records its error entry"""
+    _guardrail_success_record_skipped.set(True)
 
 
 def is_guardrail_intervention(e: Exception) -> bool:
@@ -1508,7 +1516,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict[str, Any]:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -1997,9 +2005,14 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        success_record_skipped_token: Final = _guardrail_success_record_skipped.set(False)
         try:
             response: Final = await func(*args, **kwargs)
-            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
+            if (
+                self.records_own_guardrail_information
+                or _guardrail_self_recorded.get()
+                or _guardrail_success_record_skipped.get()
+            ):
                 return response
             return self._process_response(
                 response=response,
@@ -2023,6 +2036,7 @@ def log_guardrail_information(func):
             )
         finally:
             _guardrail_self_recorded.reset(self_recorded_token)
+            _guardrail_success_record_skipped.reset(success_record_skipped_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
@@ -2037,9 +2051,14 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        success_record_skipped_token: Final = _guardrail_success_record_skipped.set(False)
         try:
             response: Final = func(*args, **kwargs)
-            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
+            if (
+                self.records_own_guardrail_information
+                or _guardrail_self_recorded.get()
+                or _guardrail_success_record_skipped.get()
+            ):
                 return response
             return self._process_response(
                 response=response,
@@ -2059,6 +2078,7 @@ def log_guardrail_information(func):
             )
         finally:
             _guardrail_self_recorded.reset(self_recorded_token)
+            _guardrail_success_record_skipped.reset(success_record_skipped_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
