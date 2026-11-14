@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
-        common_utils::{filter_billing_headers_from_system, has_anthropic_credential},
+        common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{transform_messages_request, update_headers_with_anthropic_beta},
@@ -93,7 +93,7 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
                     system: request
                         .params
                         .system
-                        .and_then(filter_billing_headers_from_system),
+                        .and_then(strip_billing_metadata_from_system),
                     ..request.params
                 },
                 ..request
@@ -437,6 +437,7 @@ mod tests {
     )]
     #[case::billing_string(json!("x-anthropic-billing-header: cc_version=1"), None)]
     #[case::ordinary_string(json!("be terse"), Some(json!("be terse")))]
+    #[case::empty_string(json!(""), None)]
     #[case::billing_text_in_a_non_text_block_is_kept(
         json!([{"type": "other", "text": "x-anthropic-billing-header: cc_version=1"}]),
         Some(json!([{"type": "other", "text": "x-anthropic-billing-header: cc_version=1"}]))

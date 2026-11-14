@@ -105,9 +105,10 @@ def _route_target(
     api_base: str | None,
     compacting: bool,
 ) -> Target:
-    native_config: Final = main._native_messages_config(model, provider, model_info, api_base)  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
-    if native_config is not None:
+    if main._provider_messages_config(model, provider, api_base) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
         return Target.MESSAGES
+    if main._deployment_passes_through_anthropic_messages(model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough opt-in
+        return Target.MESSAGES_PASSTHROUGH
     if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
         return Target.RESPONSES
     return Target.CHAT_COMPLETIONS

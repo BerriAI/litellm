@@ -5,6 +5,7 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaSet},
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 
 use super::*;
@@ -36,6 +37,13 @@ use super::*;
     &[("Authorization", "Bearer entra-token")],
     ("authorization", "Bearer entra-token"),
     &["x-api-key"]
+)]
+#[case::caller_x_api_key_without_key(
+    "azure_ai",
+    None,
+    &[("X-Api-Key", "caller")],
+    ("x-api-key", "caller"),
+    &["authorization"]
 )]
 #[case::empty_bearer_falls_back_to_key(
     "azure_ai",
@@ -88,8 +96,306 @@ async fn credentials_become_exactly_one_auth_header(
 }
 
 #[rstest]
+#[case::a06_caller_x_api_key_beside_the_operator_api_key(
+    Some("sk-operator"),
+    &[("x-api-key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller"), ("api-key", "sk-operator")],
+)]
+#[case::a07_other_casing_x_api_key_joined_with_the_operator_key(
+    Some("sk-operator"),
+    &[("X-Api-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller, sk-operator")],
+)]
+#[case::a08_caller_bearer_beside_the_operator_key(
+    Some("sk-operator"),
+    &[("Authorization", "Bearer caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "sk-operator"), ("authorization", "Bearer caller")],
+)]
+#[case::a09_exact_caller_api_key_replaces_the_operator_key(
+    Some("sk-operator"),
+    &[("api-key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "caller")],
+)]
+#[case::a09b_title_case_api_key_beside_the_operator_key(
+    Some("sk-operator"),
+    &[("Api-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "sk-operator"), ("api-key", "caller")],
+)]
+#[case::module_key_after_an_empty_call_key(Some(""), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-module")])]
+#[case::call_key_over_the_module_key(Some("sk-call"), &[], json!({}), Some("sk-module"), &[], &[("x-api-key", "sk-call")])]
+#[case::azure_openai_key_before_azure_key(
+    None,
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_OPENAI_API_KEY", "sk-openai"), ("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "sk-openai")],
+)]
+#[case::blank_call_key_is_sent_instead_of_the_environment_key(
+    Some(" "),
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "")],
+)]
+#[case::entra_token_without_a_key(
+    None,
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::entra_token_from_the_secret_source(
+    None,
+    &[],
+    json!({}),
+    None,
+    &[("AZURE_AD_TOKEN", "secret-token")],
+    &[("authorization", "Bearer secret-token")],
+)]
+#[case::client_secret_settings_only_in_the_secret_source_are_not_used(
+    None,
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[("AZURE_TENANT_ID", "t"), ("AZURE_CLIENT_ID", "c"), ("AZURE_CLIENT_SECRET", "s")],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::username_and_password_only_in_the_secret_source_are_not_used(
+    None,
+    &[],
+    json!({"client_id": "c"}),
+    None,
+    &[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")],
+    &[],
+)]
+#[case::a10_entra_token_overwrites_the_caller_bearer(
+    None,
+    &[("Authorization", "Bearer caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::a10b_lowercase_caller_authorization_joined_with_entra(
+    None,
+    &[("authorization", "Bearer caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("authorization", "Bearer caller, Bearer entra-token")],
+)]
+#[case::a10c_caller_x_api_key_beside_entra(
+    None,
+    &[("x-api-key", "caller")],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("x-api-key", "caller"), ("authorization", "Bearer entra-token")],
+)]
+#[case::a09b_upper_case_api_key_beside_the_operator_key(
+    Some("sk-operator"),
+    &[("API-Key", "caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "sk-operator"), ("api-key", "caller")],
+)]
+#[case::caller_basic_authorization_beside_the_operator_key(
+    Some("sk-operator"),
+    &[("Authorization", "Basic caller")],
+    json!({}),
+    None,
+    &[],
+    &[("x-api-key", "sk-operator"), ("authorization", "Basic caller")],
+)]
+#[case::a_key_outranks_an_entra_token(
+    Some("sk-call"),
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[],
+    &[("x-api-key", "sk-call")],
+)]
+#[case::no_credential_is_sent_unauthenticated(None, &[], json!({}), None, &[], &[])]
+#[tokio::test]
+async fn azure_credentials_resolve_in_pythons_order(
+    call: MessagesCall,
+    #[case] api_key: Option<&str>,
+    #[case] extra_headers: &[(&str, &str)],
+    #[case] params: Value,
+    #[case] module_api_key: Option<&str>,
+    #[case] secrets: &[(&str, &str)],
+    #[case] expected: &[(&str, &str)],
+) {
+    let _serialized = PROCESS_ENVIRONMENT.lock().await;
+    let upstream = upstream([message_response()]).await;
+    let Value::Object(params) = params else {
+        panic!("case params are an object")
+    };
+
+    run_hosted_with(
+        Arc::new(RecordingSecrets::new(secrets.iter().copied())),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [("model".to_string(), json!(MODEL))]
+                    .into_iter()
+                    .chain(params)
+                    .collect(),
+            )
+            .expect("valid params"),
+            api_key: api_key.map(Into::into),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers(extra_headers.iter().copied()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    module_api_key: module_api_key.map(SecretValue::new),
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    let sent: Vec<(String, String)> = ["x-api-key", "api-key", "authorization"]
+        .into_iter()
+        .flat_map(|name| {
+            request
+                .header_values(name)
+                .into_iter()
+                .map(move |value| (name.to_string(), value.to_string()))
+        })
+        .collect();
+    let expected: Vec<(String, String)> = expected
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    assert_eq!(sent, expected);
+}
+
+/// Without a Python host, as in the Rust gateway, a deployment without a key fails before sending
+/// as on main, whatever Entra ID settings it holds.
+#[rstest]
+#[case::nothing(json!({}), &[])]
+#[case::a_static_token(json!({"azure_ad_token": "entra-token"}), &[])]
+#[case::a_token_in_the_secret_source(json!({}), &[("AZURE_AD_TOKEN", "secret-token")])]
+#[case::a_provider_named_callable(json!({"azure_ad_token_provider": "callable"}), &[])]
+#[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}), &[])]
+#[case::username_and_password(
+    json!({"azure_username": "u", "azure_password": "p", "client_id": "c"}),
+    &[]
+)]
+#[case::token_refresh(json!({"enable_azure_ad_token_refresh": true}), &[])]
+#[tokio::test]
+async fn an_azure_deployment_without_a_key_or_a_python_host_is_a_missing_key(
+    call: MessagesCall,
+    #[case] params: Value,
+    #[case] secrets: &[(&str, &str)],
+) {
+    let upstream = upstream([message_response()]).await;
+    let Value::Object(params) = params else {
+        panic!("case params are an object")
+    };
+
+    let error = run_with(
+        Arc::new(RecordingSecrets::new(secrets.iter().copied())),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [("model".to_string(), json!(MODEL))]
+                    .into_iter()
+                    .chain(params)
+                    .collect(),
+            )
+            .expect("valid params"),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect_err("no key and no Python host");
+
+    assert_eq!(
+        error,
+        Error::from(litellm_llms::Error::from(
+            litellm_auth::Error::MissingApiKey {
+                provider: "Azure",
+                environment_variable: "AZURE_API_KEY",
+            }
+        ))
+    );
+    assert!(received(&upstream).await.is_empty());
+}
+
+/// Python reads `AZURE_USERNAME` and `AZURE_PASSWORD` with `os.getenv`, so only the process
+/// environment sends the call to the host's `get_azure_ad_token`, which fails in these tests.
+static PROCESS_ENVIRONMENT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[rstest]
+#[case::from_the_process_environment(&[("AZURE_USERNAME", "u"), ("AZURE_PASSWORD", "p")], true)]
+#[case::without_them(&[], false)]
+#[tokio::test]
+async fn azure_username_and_password_come_from_the_process_environment(
+    call: MessagesCall,
+    #[case] process_env: &[(&'static str, &'static str)],
+    #[case] asks_the_host: bool,
+) {
+    let _serialized = PROCESS_ENVIRONMENT.lock().await;
+    for (name, value) in process_env {
+        unsafe { std::env::set_var(name, value) };
+    }
+    let upstream = upstream([message_response()]).await;
+
+    let outcome = run_hosted_with(
+        Arc::new(RecordingSecrets::empty()),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [
+                    ("model".to_string(), json!(MODEL)),
+                    ("client_id".to_string(), json!("c")),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .expect("valid params"),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await;
+    for (name, _) in process_env {
+        unsafe { std::env::remove_var(name) };
+    }
+
+    assert_eq!(outcome.is_err(), asks_the_host, "{outcome:?}");
+    assert_eq!(received(&upstream).await.is_empty(), asks_the_host);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
-#[case::azure_ai("azure_ai")]
 #[case::deepseek("deepseek")]
 #[case::minimax("minimax")]
 #[tokio::test]
@@ -390,7 +696,7 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
             custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
-            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            extra_headers: headers([("Anthropic-Beta", "context-1m-2025-08-07")]),
             ..call
         },
         json!({"safeguards": null}),
@@ -400,7 +706,7 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
     let request = only_request(&upstream).await;
     assert_eq!(
         sent_betas(&request),
-        BetaSet::from_iter([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+        BetaSet::from_iter([AnthropicBeta::Context1m20250807])
     );
     assert!(
         !request
@@ -408,6 +714,76 @@ async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
             .unwrap()
             .contains_key("safeguards")
     );
+}
+
+#[rstest]
+#[case::unknown_and_unsupported_caller_betas(
+    json!({}),
+    "mcp-servers-2025-12-04, caller-beta-2025-01-01 ,effort-2025-11-24",
+    Some("effort-2025-11-24")
+)]
+#[case::nothing_left(json!({}), "mcp-servers-2025-12-04,caller-beta-2025-01-01", None)]
+#[case::an_unsupported_feature_beta(
+    json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": MODEL}]}),
+    "caller-beta-2025-01-01",
+    None
+)]
+#[case::a_supported_feature_beta(
+    json!({"output_format": {"type": "json_schema"}}),
+    "caller-beta-2025-01-01",
+    Some("structured-outputs-2025-11-13")
+)]
+#[tokio::test]
+async fn azure_ai_sends_only_the_betas_its_row_accepts(
+    call: MessagesCall,
+    #[case] fields: Value,
+    #[case] caller: &str,
+    #[case] sent: Option<&str>,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", caller)]),
+            ..call
+        },
+        fields,
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.header("anthropic-beta"), sent);
+}
+
+#[rstest]
+#[tokio::test]
+async fn azure_ai_picks_the_betas_before_it_converts_a_system_turn(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "system", "content": "be brief", "output_config": {"effort": "low"}},
+            {"role": "user", "content": "go on"}
+        ]}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.header("anthropic-beta"),
+        Some("per-turn-control-2026-07-01")
+    );
+    assert_eq!(request.json()["messages"][2]["role"], "user");
 }
 
 #[rstest]
@@ -528,6 +904,63 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
         assert_eq!(sent.get(*name), None, "{name} must be dropped");
     }
     assert_eq!(sent["max_tokens"], 16);
+}
+
+#[derive(Clone, Default)]
+struct Warnings(Arc<Mutex<Vec<String>>>);
+
+impl litellm_tracing::Sink for Warnings {
+    fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+        *metadata.level() == litellm_tracing::Level::WARN
+    }
+
+    fn emit(&self, record: &litellm_tracing::Record) {
+        self.0.lock().unwrap().push(record.message.clone());
+    }
+}
+
+#[rstest]
+#[case::anthropic_logs_as_main("anthropic", false)]
+#[case::azure_ai_logs_python_s_warning("azure_ai", true)]
+#[tokio::test]
+async fn a_speed_dropped_under_drop_params_is_logged_only_on_azure_ai(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] logged: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let warnings = Warnings::default();
+
+    litellm_tracing::Logger::new(warnings.clone())
+        .instrument(run_message(MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params: true,
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, json!({"speed": "fast"}))
+        }))
+        .await;
+
+    assert_eq!(only_request(&upstream).await.json().get("speed"), None);
+    let speed_warnings: Vec<String> = warnings
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|message| message.starts_with("Dropping unsupported `speed`"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        speed_warnings.len(),
+        usize::from(logged),
+        "{speed_warnings:?}"
+    );
 }
 
 #[rstest]

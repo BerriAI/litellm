@@ -226,7 +226,9 @@ def test_native_timeout_resolves_like_python(kwargs: Mapping[str, object], expec
         ("vertex_ai/claude-sonnet-4-5@20250929", {}, True),
         ("claude-sonnet-4-5@20250929", {"custom_llm_provider": "vertex_ai"}, True),
         ("deepseek/deepseek-v4-flash", {}, True),
-        ("openai/gpt-5", {"model_info": {"supported_endpoints": ["/v1/messages"]}}, True),
+        ("azure_ai/claude-sonnet-4-5", {"model_info": {"supported_endpoints": ["/v1/messages"]}}, True),
+        ("openai/gpt-5", {"model_info": {"supported_endpoints": ["/v1/messages"]}}, False),
+        ("azure_ai/Phi-4", {"model_info": {"supported_endpoints": ["/v1/messages"]}}, False),
         ("vertex_ai/gemini-2.5-pro", {}, False),
         ("gemini-2.5-pro", {"custom_llm_provider": "vertex_ai"}, False),
         ("openai/gpt-5", {}, False),
@@ -234,7 +236,7 @@ def test_native_timeout_resolves_like_python(kwargs: Mapping[str, object], expec
         ("unknown-provider/unknown-model", {}, False),
     ),
 )
-def test_only_requests_that_pass_through_to_a_messages_api_reach_a_messages_target_rule(
+def test_only_requests_a_provider_messages_config_serves_reach_a_messages_target_rule(
     model: str, kwargs: Mapping[str, object], passes_through: bool
 ) -> None:
     python_result: Final = response(model)
@@ -922,15 +924,73 @@ async def test_other_providers_keep_python_for_the_same_features(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 @pytest.mark.parametrize(
-    ("model", "refused"),
+    ("model", "model_info", "native"),
     (
-        pytest.param("anthropic/claude-sonnet-4-5", True, id="anthropic"),
-        pytest.param("deepseek/deepseek-v4-flash", False, id="deepseek"),
+        pytest.param("azure_ai/Phi-4", {"supported_endpoints": ["/v1/messages"]}, False, id="non-claude-passthrough"),
+        pytest.param("azure_ai/Phi-4", None, False, id="non-claude-chat-bridge"),
+        pytest.param("azure_ai/sonnet-prod", None, False, id="alias-without-claude"),
+        pytest.param(
+            "azure_ai/claude-sonnet-4-5",
+            {"supported_endpoints": ["/v1/messages"]},
+            True,
+            id="claude-passthrough-opt-in",
+        ),
+        pytest.param("azure_ai/Claude-Sonnet-4-5", None, True, id="claude-mixed-case"),
+    ),
+)
+async def test_azure_ai_runs_on_rust_only_where_its_claude_config_serves_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+    shipped_native: list[str],
+    asynchronous: bool,
+    model: str,
+    model_info: Mapping[str, object] | None,
+    native: bool,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(litellm, "callbacks", [])
+    python_result: Final = response(model)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", apython):
+        result: Final = await _public(
+            asynchronous,
+            model,
+            {"api_base": "https://fuzz.services.ai.azure.com/models", "model_info": model_info},
+        )
+
+    assert (shipped_native, result is python_result) == (
+        (["async" if asynchronous else "sync"], False) if native else ([], True)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "kwargs", "refused"),
+    (
+        pytest.param("anthropic/claude-sonnet-4-5", {}, True, id="anthropic"),
+        pytest.param("azure_ai/claude-sonnet-4-5", {}, True, id="azure-ai-claude"),
+        pytest.param(
+            "azure_ai/Phi-4",
+            {"model_info": {"supported_endpoints": ["/v1/messages"]}},
+            False,
+            id="azure-ai-non-claude-passthrough",
+        ),
+        pytest.param("deepseek/deepseek-v4-flash", {}, False, id="deepseek"),
     ),
 )
 async def test_a_failing_detector_refuses_only_the_rust_only_provider(
-    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], model: str, refused: bool
+    monkeypatch: pytest.MonkeyPatch,
+    shipped_native: list[str],
+    model: str,
+    kwargs: Mapping[str, object],
+    refused: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     python_result: Final = response(model)
@@ -946,10 +1006,10 @@ async def test_a_failing_detector_refuses_only_the_rust_only_provider(
         rebound(dispatch, "_PYTHON_AMESSAGES", apython),
     ):
         if not refused:
-            assert await _public(True, model, {}) is python_result
+            assert await _public(True, model, kwargs) is python_result
             return
         with pytest.raises(UnsupportedParamsError, match="does not support this call"):
-            await _public(True, model, {})
+            await _public(True, model, kwargs)
     assert shipped_native == []
 
 

@@ -53,6 +53,11 @@ pub trait BaseMessagesConfig: Sync {
         ToolCustomField::Keep
     }
 
+    /// Whether a param `drop_params` drops because the model lacks it logs Python's warning.
+    fn logs_dropped_params(&self) -> bool {
+        false
+    }
+
     fn transform_anthropic_messages_response(
         &self,
         _model: &str,
@@ -66,6 +71,21 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn secret_names(&self) -> &'static [&'static str];
+
+    /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
+    /// just before `validate_environment`, and only when this call names them. `python_host` is
+    /// whether the route has a Python host for flows only Python runs.
+    fn deferred_secret_names(
+        &self,
+        _python_host: bool,
+        _headers: &Headers,
+        _api_key: Option<&str>,
+        _api_base: Option<&str>,
+        _litellm_params: &LitellmParams,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Shapes the forwarded headers and names the credential, the way Python's
     /// `validate_environment` does, without applying it: `resolve_auth` does that once
@@ -126,6 +146,17 @@ pub trait BaseMessagesConfig: Sync {
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
+    }
+
+    /// The request steps Python runs once the final `anthropic-beta` header is known, which
+    /// read that header or must not change which betas the request asks for.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+        _context: &MessagesTransformContext,
+    ) -> MessagesRequest {
+        request
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -217,7 +248,8 @@ mod tests {
                 request.clone(),
                 MessagesShapeOptions {
                     reasoning_auto_summary,
-                    presanitized
+                    presanitized,
+                    ..MessagesShapeOptions::default()
                 }
             ),
             Ok(request)

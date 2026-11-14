@@ -3,6 +3,7 @@ mod answer;
 mod host;
 mod modify_params;
 mod pre_request;
+mod requests_reason;
 mod safeguards;
 mod transport;
 pub(crate) mod workload_identity;
@@ -15,8 +16,10 @@ use pyo3::prelude::*;
 use super::NativeCall;
 
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) =
+    let (arguments, logging) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    let host_client = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hooks = logging.with_host_client(std::sync::Arc::clone(&host_client));
     let hooked_request = agentic::HookedRequest::default();
     let hooks = litellm_host_python::HookChain::new()
         .with(agentic::AgenticLoop::new(
@@ -32,25 +35,45 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         arguments,
         move |py, arguments, request| {
             let hooked = pre_request::runs_pre_request_hooks(py)?;
+            let context = litellm_host_python::PythonContext::capture(py)?;
+            let secrets = std::sync::Arc::new(crate::secrets::seeded::SeededSecrets::new(
+                crate::secrets::source(py)?,
+            ));
             let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::messages_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
-                crate::secrets::source(py)?,
+                std::sync::Arc::clone(&secrets) as _,
             )
             .with_workload_identity(std::sync::Arc::new(
-                workload_identity::PythonWorkloadIdentity::new(
-                    litellm_host_python::PythonContext::capture(py)?,
-                ),
+                workload_identity::PythonWorkloadIdentity::new(context.clone()),
             ));
+            let route =
+                route.with_azure_ad_token_hosts(litellm_llms::base_llm::auth::AzureAdTokenHosts {
+                    caller: crate::credentials::azure_ad_token_provider(arguments)?.map(
+                        |provider| {
+                            workload_identity::azure_ad_token_provider(context.clone(), provider)
+                        },
+                    ),
+                    host: Some(workload_identity::host_azure_ad_token(
+                        context,
+                        arguments.clone().unbind(),
+                    )),
+                });
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
-                move |(call, selection, hosted): (_, crate::cache::Selection, bool),
+                move |(call, selection, transport): (
+                    _,
+                    crate::cache::Selection,
+                    transport::Selected,
+                ),
                       services,
                       interceptors,
                       observers| async move {
-                    let route = if hosted {
+                    secrets.seed(transport.read);
+                    host_client.store(transport.hosted, std::sync::atomic::Ordering::Release);
+                    let route = if transport.hosted {
                         route.with_transport(std::sync::Arc::new(transport::PythonTransport::new(
                             services.clone(),
                         )))

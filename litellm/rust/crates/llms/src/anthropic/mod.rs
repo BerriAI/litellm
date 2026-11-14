@@ -1,3 +1,4 @@
+pub mod beta_gated_fields;
 pub mod beta_headers;
 pub mod common_utils;
 

@@ -1,16 +1,19 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_host::call::CallOutput;
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_llms::{
     ErrorDetail,
     base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesRequest, MessagesResponse},
+    formats::messages::{MessagesRequest, MessagesResponse, SystemPrompt},
     headers::ProviderSpecificHeaders,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -28,8 +31,30 @@ pub struct MessagesCall {
     pub shaping: MessagesShaping,
 }
 
-pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
+/// The request body. `custom_llm_provider` is the call's, as the provider is resolved from it
+/// and the model.
+pub fn messages_body(
+    body: Map<String, Value>,
+    custom_llm_provider: Option<&str>,
+) -> Result<MessagesRequest, Error> {
+    if !reads_unparsed_system(&body, custom_llm_provider)
+        && let Some(system) = body.get(SYSTEM).filter(|system| !system.is_null())
+        && let Err(err) = SystemPrompt::deserialize(system)
+    {
+        return Err(invalid_request(err));
+    }
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
+}
+
+const SYSTEM: &str = "system";
+
+/// Only `azure_ai` keeps a system prompt Rust could not type as sent, as Python does. By the
+/// owner's ruling every other provider, `anthropic` included, keeps main's request error for it.
+fn reads_unparsed_system(body: &Map<String, Value>, custom_llm_provider: Option<&str>) -> bool {
+    body.get("model")
+        .and_then(Value::as_str)
+        .and_then(|model| resolve_llm_provider(model, custom_llm_provider, "messages").ok())
+        .is_some_and(|resolved| resolved.provider == LlmProviders::AzureAi)
 }
 
 /// The caller's litellm params, projected by a host from the keys [`LitellmParams::fields`]
@@ -96,6 +121,11 @@ pub struct MessagesSettings {
     /// encode fails the call before the send.
     #[serde(default)]
     pub ascii_request_headers: bool,
+    /// The module-level key Python's config for this provider reads after the call's own, such
+    /// as `litellm.api_key or litellm.azure_key` for `azure_ai`. A host projects it, never Python's
+    /// settings dict.
+    #[serde(skip)]
+    pub module_api_key: Option<SecretValue>,
 }
 
 impl MessagesSettings {
@@ -103,6 +133,7 @@ impl MessagesSettings {
         MessagesShapeOptions {
             reasoning_auto_summary: self.reasoning_auto_summary,
             presanitized: self.presanitized,
+            ..MessagesShapeOptions::default()
         }
     }
 

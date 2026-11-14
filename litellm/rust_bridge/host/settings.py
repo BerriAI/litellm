@@ -29,6 +29,8 @@ class ProviderDefaults:
     vertex_project: object
     vertex_location: object
     enable_azure_ad_token_refresh: object
+    api_key: object
+    azure_key: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +143,8 @@ def provider_defaults() -> ProviderDefaults:
         vertex_project=litellm.vertex_project,
         vertex_location=litellm.vertex_location,
         enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+        api_key=litellm.api_key,
+        azure_key=litellm.azure_key,
     )
 
 

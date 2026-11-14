@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import gc
 import gzip
 import json
 import logging
@@ -52,7 +53,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.caching import Cache, CacheMode
 from litellm.caching.caching_handler import (
@@ -65,6 +66,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
@@ -482,6 +484,7 @@ class Case:
             *(("hook_inputs",) if self.loggers else ()),
             *(("classified",) if self.classifier is not None else ()),
             *(("tool_runs",) if self.gateway else ()),
+            *(("stream_type",) if self.kwargs.get("stream") is True else ()),
         )
 
     def params(self) -> Iterator[object]:
@@ -508,6 +511,10 @@ def _tls(**settings: object) -> Mapping[str, object]:
     return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
 
 
+CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
+    "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
+    "which Python's stream mapping attaches from the deployment's litellm_params"
+)
 E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 C_UNSENT_CALL_FLAG: Final = (
@@ -2016,6 +2023,7 @@ TRANSPORT_CASES: Final = (
         "caller_client_stream_read_stalls_past_timeout",
         _caller(stream=True, timeout=0.5),
         upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+        gaps=_gaps(outcome=CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO),
     ),
     Case(
         "caller_client_thinking_signature_rejected_then_retried",
@@ -2116,6 +2124,13 @@ class _ModelHook(CustomLogger):
         self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
     ) -> dict[str, object] | None:
         return {**kwargs, "model": OPUS_ADAPTIVE}
+
+
+class _NonClaudeModelHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "model": "azure_ai/Phi-4"}
 
 
 class _CredentialHook(CustomLogger):
@@ -3318,6 +3333,905 @@ HOOKED_STREAM_AND_CACHE_CASES: Final = (
     ),
 )
 
+
+def _entra_token() -> str:
+    return "entra-from-provider"
+
+
+def _failing_entra_provider() -> str:
+    raise ValueError("token service unavailable")
+
+
+def _rejected_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret for app "
+        "'00000000-0000-0000-0000-0000000000b1' is the value. Trace ID: 0b1f0000-0000-0000-0000-000000000001"
+    )
+
+
+def _unknown_application_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS700016: Application with identifier "
+        "'11111111-2222-3333-4444-555555555555' was not found in the directory 'tenant'. Trace ID: x"
+    )
+
+
+def _unlisted_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(message="Authentication failed: AADSTS50058: A silent sign-in request was sent.")
+
+
+AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
+AZURE_AUTH_CASES: Final = (
+    Case("azure_ai_api_key", model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_module_api_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module"}),
+    ),
+    Case(
+        "azure_ai_module_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_api_key_before_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module", "azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_key_before_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env"}),
+    ),
+    Case(
+        "azure_ai_openai_key_env_before_azure_key_env",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env", "AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_empty_api_key_falls_to_environment",
+        _kw(api_key=""),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_blank_api_key",
+        _kw(api_key="  "),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case("azure_ai_entra_token", _kw(api_key=None, azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_from_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
+    ),
+    Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case("azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_provider_outranks_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider=_entra_token),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_entra_token_provider_raises",
+        _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_is_an_authentication_error",
+        _kw(api_key=None, azure_ad_token_provider=_rejected_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_redacts_guids",
+        _kw(api_key=None, azure_ad_token_provider=_unknown_application_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
+        _kw(api_key=None, azure_ad_token_provider=_unlisted_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_uncallable_token_provider_keeps_the_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider="not-callable"),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_oidc_reference_is_minted_by_python",
+        _kw(api_key=None, azure_ad_token="oidc/env/AZURE_PARITY_MISSING_ASSERTION", tenant_id="t", client_id="c"),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_token_refresh_outranks_a_static_token",
+        _kw(api_key=None, azure_ad_token="entra-token"),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"enable_azure_ad_token_refresh": True}),
+        env=MappingProxyType({"AZURE_CREDENTIAL": "ClientSecretCredential"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_username_and_password_are_minted_by_python",
+        _kw(api_key=None, azure_username="u", azure_password="p", client_id="c"),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_caller_bearer_on_entra_deployment",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_lowercase_authorization_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_x_api_key_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_upper_case_api_key",
+        _kw(extra_headers={"API-KEY": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_basic_authorization",
+        _kw(extra_headers={"Authorization": "Basic Y2FsbGVyOnNlY3JldA=="}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_no_credential",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(401, "authentication_error", "missing credentials"),),
+    ),
+    Case("azure_ai_caller_api_key", _kw(extra_headers={"api-key": "sk-caller"}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_caller_mixed_case_api_key",
+        _kw(extra_headers={"Api-Key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_x_api_key",
+        _kw(extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_bearer",
+        _kw(extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+)
+
+AZURE_URL_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE)
+    for case in (
+        Case(
+            "azure_ai_base_userinfo_starting_with_anthropic",
+            _kw(api_base_userinfo="anthropic", api_base_suffix="/d/dep-u01/anthropic"),
+        ),
+        Case("azure_ai_base_slash_before_query", _kw(api_base_suffix="/d/dep-u02/?q=1")),
+        Case("azure_ai_base_trailing_spaces_without_anthropic", _kw(api_base_suffix="/d/dep-u04  ")),
+        Case("azure_ai_base_trailing_newline_without_anthropic", _kw(api_base_suffix="/d/dep-u04\n"), upstream=()),
+        Case("azure_ai_base_trailing_spaces_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic  ")),
+        Case("azure_ai_base_trailing_crlf_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic\r\n")),
+        Case("azure_ai_blank_base", _kw(api_base="   "), upstream=()),
+        Case(
+            "azure_ai_blank_base_with_environment_base",
+            _kw(api_base="   "),
+            env=MappingProxyType({"AZURE_API_BASE": "http://127.0.0.1:9/d/dep-env/anthropic"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_padded_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": " http://127.0.0.1:9/d/dep-env/anthropic "}),
+            upstream=(),
+        ),
+        Case("azure_ai_missing_base", _kw(api_base=None), upstream=()),
+        Case("azure_ai_missing_base_stream", _kw(api_base=None, stream=True), upstream=()),
+        Case("azure_ai_empty_base", _kw(api_base=""), upstream=()),
+        Case("azure_ai_base_without_scheme", _kw(api_base="fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_scheme_relative_base", _kw(api_base="//fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_ftp_base", _kw(api_base="ftp://fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_base_not_a_url", _kw(api_base="not a url"), upstream=()),
+    )
+)
+
+# An api_base the native URL parser reads otherwise than httpx and aiohttp goes through Python's client, which
+# refuses it before sending anything. Natively the three leaking shapes sent the operator key to a host the
+# configuration did not name or mean: `d` read from the path of an empty-host base, or the host after
+# credentials in the URL, including userinfo that reads like a trusted host. The port shapes fail locally on
+# both sides.
+_MALFORMED_BASES: Final = (
+    ("base_empty_host", _kw(api_base="http:///d/anthropic")),
+    ("base_credentials_in_url", _kw(api_base_userinfo="user:pass", api_base_suffix="/anthropic")),
+    ("base_userinfo_like_a_host", _kw(api_base_userinfo="api.anthropic.com", api_base_suffix="/anthropic")),
+    ("base_non_numeric_port", _kw(api_base="http://fuzz.invalid:abc/anthropic")),
+    ("base_out_of_range_port", _kw(api_base="http://fuzz.invalid:99999/anthropic")),
+)
+MALFORMED_BASE_CASES: Final = tuple(
+    Case(f"{provider}_{shape}", kwargs, model=model, upstream=())
+    for provider, model in (("anthropic", SONNET), ("azure_ai", AZURE_CLAUDE))
+    for shape, kwargs in _MALFORMED_BASES
+)
+
+AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+    }
+)
+
+
+def _mid_conversation_system(**fields: object) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": "assistant", "content": "Paris."},
+        {"role": "system", **fields},
+        {"role": "user", "content": "And of Spain?"},
+    ]
+
+
+# A block Python keeps as sent but Rust cannot type, so the message carrying it stays unparsed.
+UNPARSED_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": "Note.", "id": 5})
+UNCACHEABLE_SYSTEM_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "text", "text": "Be terse.", "cache_control": "ephemeral"}
+)
+TOOL_USE_TURN: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}}],
+    }
+)
+
+
+def _unparsed_turn(role: str, *blocks: Mapping[str, JsonValue]) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": role, "content": [dict(UNPARSED_BLOCK), *blocks]},
+        {"role": "user", "content": "Go on."},
+    ]
+
+
+def _beta(value: str) -> Mapping[str, object]:
+    return {"anthropic-beta": value}
+
+
+AZURE_SHAPING_CASES: Final = (
+    Case(
+        "azure_ai_beta_mixed_padded_list",
+        _kw(
+            extra_headers=_beta(
+                " web-search-2025-03-05 , bash_20250124,parity-unlisted-2030-01-01,context-1m-2025-08-07,,"
+                "web-search-2025-03-05"
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_all_dropped",
+        _kw(extra_headers=_beta("mcp-servers-2025-12-04,advisor-tool-2026-03-01,parity-unlisted-2030-01-01")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_title_case_header",
+        _kw(extra_headers={"Anthropic-Beta": "mcp-servers-2025-12-04,effort-2025-11-24"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_upper_case_header_null_beta",
+        _kw(extra_headers={"ANTHROPIC-BETA": "bash_20241022"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_two_casings",
+        _kw(
+            extra_headers={
+                "Anthropic-Beta": "interleaved-thinking-2025-05-14,text_editor_20250124",
+                "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+            }
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_stream",
+        _kw(stream=True, extra_headers=_beta("mcp-servers-2025-12-04,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_beta_context_management",
+        _kw(context_management={"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_beta_native_compaction", _kw(compaction={}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_beta_tool_search",
+        _kw(
+            tools=[
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {**WEATHER_TOOL, "defer_loading": True},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_output_config_with_a_null_caller_beta",
+        _kw(output_config={"format": dict(JSON_SCHEMA_FORMAT)}, extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_thinking_display_and_binding",
+        _kw(
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_per_turn_output_config",
+        _kw(messages=[{**USER, "output_config": {"effort": "low"}}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_with_an_unknown_caller_beta",
+        _kw(
+            max_tokens=2048,
+            output_format=dict(JSON_SCHEMA_FORMAT),
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates"},
+            tools=[{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}],
+            extra_headers=_beta("parity-unlisted-2030-02-02"),
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_stream",
+        _kw(stream=True, output_format=dict(JSON_SCHEMA_FORMAT), extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("azure_ai_advisor_tool", _kw(tools=[dict(ADVISOR_TOOL)]), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_advisor_tool_with_a_caller_beta",
+        _kw(tools=[dict(ADVISOR_TOOL)], extra_headers=_beta("context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped",
+        _kw(extra_headers=_beta("ZWJ\u200djoined,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_under_drop_params",
+        _kw(drop_params=True, extra_headers={"Anthropic-Beta": "ZWJ\u200djoined"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_stream",
+        _kw(stream=True, extra_headers=_beta("ZWJ\u200djoined")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_advisor_tool_stream",
+        _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_speed_refused", _kw(speed="fast"), model=AZURE_CLAUDE, upstream=()),
+    Case("azure_ai_speed_dropped", _kw(speed="fast", drop_params=True), model=AZURE_CLAUDE, warned=True),
+    Case(
+        "azure_ai_clear_at_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_with_its_beta",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_without_drop_params",
+        _kw(messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_clear_at_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                ]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
+            ),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_only_turn_dropped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content=[{"type": "tool_addition", "tool": dict(WEATHER_TOOL)}]),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_system_output_config_converted",
+        _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_contentless_system_converted", _kw(messages=_mid_conversation_system()), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_null_content_system_with_clear_at_converted",
+        _kw(messages=_mid_conversation_system(content=None, clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_under_drop_params",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_contentless_system_output_config_adds_per_turn_control",
+        _kw(messages=_mid_conversation_system(output_config={"effort": "high"})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_where_the_role_is_accepted",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns"})),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_unparsed_system_tool_reference_addition_adds_its_beta",
+        _kw(
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "Note.", "id": 5},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_unparsed_message_cache_control_scope_dropped",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "text", "text": "Hi.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                    ],
+                }
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_signed_compaction_in_an_unparsed_message",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "compaction", "content": "Summary.", "signature": "sig"},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_non_string_text_block_dropped",
+        _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_emptied_by_the_sanitizer_dropped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": 5}, {"type": "thinking", "thinking": ""}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_tool_use_ids_sanitized",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        dict(UNPARSED_BLOCK),
+                        {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_web_search_result_flattened",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Parity",
+                    "name": "web_search",
+                    "input": {"query": "paris"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "Paris",
+                            "snippet": "Capital.",
+                        }
+                    ],
+                },
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_provider_specific_fields_dropped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant", {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}}
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_advisor_blocks_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": {"type": "advisor_result", "text": "Use channels."},
+                },
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_encrypted_reasoning_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:def"},
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "UVVKRA=="},
+                        {"type": "text", "text": "Paris."},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(messages=_unparsed_turn("assistant", {"type": "redacted_thinking", "data": "UVVKRA=="})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_unparsed_block_hoisted",
+        _kw(messages=[{"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_non_list_content_hoisted",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": 5}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_list_with_an_unparsed_block_loses_its_billing_block",
+        _kw(
+            system=[
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0"},
+                {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                dict(UNPARSED_BLOCK),
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_unparsed_block_converted",
+        _kw(messages=_mid_conversation_system(content=[dict(UNCACHEABLE_SYSTEM_BLOCK)])),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_moved_after_an_unparsed_tool_result",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                dict(TOOL_USE_TURN),
+                {"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_leading_system_hoisted",
+        _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_tool_addition_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Be terse."},
+                        {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                    ],
+                },
+                dict(USER),
+            ],
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_thinking_gated_fields_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_non_object_output_format_under_drop_params",
+        _kw(drop_params=True, output_format="json"),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case("azure_ai_system_string", _kw(system="Answer in one word."), model=AZURE_CLAUDE),
+    Case("azure_ai_system_empty_string", _kw(system=""), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_system_string_stream",
+        _kw(stream=True, system="Answer in one word."),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_system_string_with_a_leading_system_turn",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": "Be terse."}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_blocks_with_cache_control",
+        _kw(
+            system=[
+                {
+                    "type": "text",
+                    "text": "Answer in one word.",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
+    Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
+    Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
+    Case(
+        "azure_ai_pre_request_hook_names_a_non_claude_model",
+        callbacks=(_NonClaudeModelHook,),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+)
+
+UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
+
+AZURE_ERROR_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE)
+    for case in (
+        Case("azure_ai_upstream_404", upstream=(_failure(404, "not_found_error", "Resource not found"),)),
+        Case(
+            "azure_ai_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "7"}),)
+        ),
+        Case("azure_ai_unreachable_base", _kw(api_base=UNREACHABLE_AZURE_BASE), upstream=()),
+        Case(
+            "azure_ai_unreachable_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_unreachable_environment_base_stream",
+            _kw(api_base=None, stream=True),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_stream_deflate_body_that_is_not_deflate",
+            _kw(stream=True),
+            upstream=(_encoded(b"not deflate at all", "deflate"),),
+        ),
+        Case("azure_ai_deployment_key_with_trailing_newline", _kw(api_key="sk-azure-key\n"), upstream=()),
+        Case(
+            "azure_ai_environment_key_with_trailing_newline",
+            _kw(api_key=None),
+            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-key\n"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_caller_mixed_case_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"API-Key": "sk-caller-key"}),
+        ),
+        Case(
+            "azure_ai_caller_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"api-key": "sk-caller-key"}),
+        ),
+    )
+)
+
+ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404",
+        _kw(custom_llm_provider="anthropic"),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404_stream",
+        _kw(custom_llm_provider="anthropic", stream=True),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+)
+
+AZURE_STREAM_CACHE_CASES: Final = tuple(
+    replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE)
+    for case in CACHE_CASES
+    if case.name in ("cache_hit_stream", "cache_stream_without_output")
+)
+
+AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
+MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
+
+# H01: Python forwards a non-Claude deployment that opted into /v1/messages untranslated through its
+# OpenAI-compatible config, which Rust does not have, so the call stays on Python.
+AZURE_PASSTHROUGH_CASES: Final = tuple(
+    replace(case, model=AZURE_NON_CLAUDE)
+    for case in (
+        Case("azure_ai_non_claude_messages_passthrough", _kw(model_info=dict(MESSAGES_PASSTHROUGH))),
+        Case(
+            "azure_ai_non_claude_messages_passthrough_stream",
+            _kw(model_info=dict(MESSAGES_PASSTHROUGH), stream=True),
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+    )
+)
+
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -3343,6 +4257,13 @@ CASES: Final = (
     *MCP_CASES,
     *DEPLOYMENT_HOOK_CASES,
     *HOOKED_STREAM_AND_CACHE_CASES,
+    *AZURE_AUTH_CASES,
+    *AZURE_URL_CASES,
+    *MALFORMED_BASE_CASES,
+    *AZURE_SHAPING_CASES,
+    *AZURE_ERROR_CASES,
+    *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
+    *AZURE_STREAM_CACHE_CASES,
 )
 
 
@@ -3359,6 +4280,7 @@ class Leg:
     hook_inputs: tuple[object, ...] = ()
     classified: tuple[Mapping[str, object], ...] = ()
     tool_runs: tuple[Mapping[str, object], ...] = ()
+    stream_type: object = None
 
 
 @dataclass(slots=True)
@@ -3406,6 +4328,19 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
         "LITELLM_REASONING_AUTO_SUMMARY",
         "LITELLM_RUST",
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_API_BASE",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_SCOPE",
+        "AZURE_CREDENTIAL",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        "AZURE_AUTHORITY_HOST",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
@@ -3474,12 +4409,14 @@ def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
     # other leg.
     supplied: Final = copy.deepcopy(dict(case.kwargs))
     suffix: Final = supplied.pop("api_base_suffix", "")
+    userinfo: Final = supplied.pop("api_base_userinfo", "")
+    base: Final = server.base_url.replace("://", f"://{userinfo}@", 1) if userinfo else server.base_url
     kwargs: Final[dict[str, object]] = {
         "model": case.model,
         "max_tokens": 64,
         "messages": [dict(USER)],
         "api_key": API_KEY,
-        "api_base": f"{server.base_url}{suffix}",
+        "api_base": f"{base}{suffix}",
         **supplied,
     }
     return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards", *case.nones)}
@@ -3507,6 +4444,7 @@ def _error(error: BaseException, phase: str, chunks: Iterable[object] = ()) -> M
         "llm_provider": getattr(error, "llm_provider", None),
         "model": getattr(error, "model", None),
         "message": _normalized(str(error)),
+        "debug_info": _normalized(str(getattr(error, "litellm_debug_info", None))),
         "details": AnthropicExceptionMapping.embedded_error_details(str(error)),
         "keeps_the_deployment_warm": is_message_thread_not_found(error),
         "headers": {name: header_items.get(name) for name in ("retry-after", "request-id") if name in header_items},
@@ -3620,13 +4558,17 @@ async def _invoke(
         if isinstance(result, dict):
             body = cast(Mapping[str, object], result)
             return _response(body, case.private_keys), _hidden_params(body)
-        time.sleep(case.busy_before_reading)  # noqa: ASYNC251  # holds the event loop, as a caller's own work between the call and its first read does
+        time.sleep(
+            case.busy_before_reading
+        )  # holds the event loop, as a caller's own work between the call and its first read does
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
     partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}
+    stream_type: Final = {"stream_type": type(result).__name__}
     if failure is not None:
-        return {**_error(failure, "stream", chunks), **partition}, hidden
+        return {**_error(failure, "stream", chunks), **partition, **stream_type}, hidden
     return {
+        **stream_type,
         "kind": "stream",
         "chunk_types": sorted({type(chunk).__name__ for chunk in chunks}),
         "text": _SERVER_TOOL_ID.sub("srvtoolu_<id>", _stream_text(chunks)),
@@ -3702,6 +4644,7 @@ def _logged_error(details: Mapping[str, object], standard: Mapping[str, object])
         "error_message": _normalized(str(information.get("error_message"))),
         "error_code": information.get("error_code"),
         "llm_provider": information.get("llm_provider"),
+        "traced": bool(information.get("traceback")),
         "exception": None if exception is None else _normalized(str(exception)),
         "exception_model": getattr(exception, "model", None),
         "exception_provider": getattr(exception, "llm_provider", None),
@@ -3810,7 +4753,8 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
                 }
                 for sent in server.requests[request_count:]
             ),
-            outcome=outcome,
+            outcome={name: value for name, value in outcome.items() if name != "stream_type"},
+            stream_type=outcome.get("stream_type"),
             hidden_params=hidden,
             logged=logged,
             callback_kwargs=callback_kwargs,
@@ -3832,14 +4776,16 @@ class _WarningLines(logging.Handler):
 
 
 @contextmanager
-def _warnings() -> Generator[list[str]]:  # mutable-ok: filled while the call runs
+def _warnings(
+    logger: logging.Logger = verbose_logger,
+) -> Generator[list[str]]:  # mutable-ok: filled while the call runs
     lines: Final[list[str]] = []
     handler: Final = _WarningLines(lines)
-    verbose_logger.addHandler(handler)
+    logger.addHandler(handler)
     try:
         yield lines
     finally:
-        verbose_logger.removeHandler(handler)
+        logger.removeHandler(handler)
 
 
 def _cache_entries(cache: Cache) -> tuple[str, ...]:
@@ -3886,7 +4832,7 @@ async def test_native_messages_match_python(
         case "request":
             assert _comparable(native.requests) == _comparable(python.requests)
         case "outcome":
-            assert native.outcome == python.outcome
+            assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
@@ -3901,8 +4847,61 @@ async def test_native_messages_match_python(
             assert native.classified == python.classified
         case "tool_runs":
             assert native.tool_runs == python.tool_runs
+        case "stream_type":
+            assert native.stream_type == _stream_type_reference(case, python.stream_type)
+        case "logged_error":
+            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(
+                _logged_error_reference(case, python.callback_kwargs.get(aspect))
+            )
         case _:
             assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
+
+
+# Anthropic has no Python path, and by the owner's ruling keeps main's native route where Python differs: a
+# failure Python raises before the send is handed back unraised, so its failure log has no traceback, and a
+# stream's decoding failure is raised bare, without the deployment's debug info Python's stream iterator adds.
+ANTHROPIC_UNTRACED_FAILURES: Final = frozenset({"missing_api_key", "reasoning_effort_with_numeric_string_max_tokens"})
+ANTHROPIC_BARE_STREAM_FAILURES: Final = frozenset({"stream_deflate_body_that_is_not_deflate"})
+
+
+def _logged_error_reference(case: Case, logged: object) -> object:
+    if case.name not in ANTHROPIC_UNTRACED_FAILURES or not isinstance(logged, Mapping):
+        return logged
+    return {**cast(Mapping[str, object], logged), "traced": False}
+
+
+def _anthropic_reference(
+    case: Case, outcome: Mapping[str, object], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Anthropic has no Python path, and its native route names the caller's api_base in a failure's
+    debug info, which the legacy Python entry leaves out."""
+    if case.name in ANTHROPIC_BARE_STREAM_FAILURES:
+        return {**outcome, "debug_info": "None"}
+    model: Final = str(kwargs["model"])
+    if outcome.get("llm_provider") != "anthropic" or outcome.get("debug_info") != f"\nModel: {model}":
+        return outcome
+    named: Final = with_deployment_debug_info(Exception(), model, "anthropic", kwargs)
+    return {**outcome, "debug_info": _normalized(str(getattr(named, "litellm_debug_info", None)))}
+
+
+_PYTHON_HANDLER_STREAMS: Final = frozenset(
+    {
+        "AnthropicMessagesStreamingResponse",
+        "CachedAnthropicMessagesStreamIterator",
+        "AnthropicMessagesStreamCacheWriter",
+    }
+)
+
+
+def _stream_type_reference(case: Case, python: object) -> object:
+    """Anthropic has no Python path, and by the owner's ruling its native stream stays main's execution AsyncStream,
+    for a cache hit or miss too, where Python's handler returns its streaming response, cached replay or cache
+    writer. Main's agentic and short-circuit paths already hand back the stream Python returns."""
+    provider: Final = str(case.kwargs.get("custom_llm_provider") or case.model.partition("/")[0])
+    wrapped: Final = frozenset(wrapping.name for wrapping in (*AGENTIC_CASES, *SHORT_CIRCUIT_CASES))
+    if provider == "azure_ai" or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
+        return python
+    return "AsyncStream"
 
 
 def _comparable(value: object) -> object:
@@ -3921,7 +4920,16 @@ def _comparable(value: object) -> object:
     "case",
     [
         pytest.param(case, id=case.name)
-        for case in (*SERVED_NATIVELY_CASES, *AGENTIC_CASES, *SAFEGUARDS_CASES, *SHORT_CIRCUIT_CASES)
+        for case in (
+            *SERVED_NATIVELY_CASES,
+            *AGENTIC_CASES,
+            *SAFEGUARDS_CASES,
+            *SHORT_CIRCUIT_CASES,
+            *AZURE_AUTH_CASES,
+            *AZURE_URL_CASES,
+            *AZURE_SHAPING_CASES,
+            *AZURE_ERROR_CASES,
+        )
     ],
 )
 def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
@@ -4220,6 +5228,45 @@ async def test_both_lanes_time_the_provider_exchange_as_one_llm_service_event(
     assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
 
 
+_THROUGH_PYTHON_S_CLIENT: Final = frozenset(
+    {
+        "azure_ai_base_trailing_spaces_after_anthropic",
+        "azure_ai_padded_environment_base",
+        "azure_ai_base_empty_host",
+        "azure_ai_base_non_numeric_port",
+    }
+)
+
+
+async def _service_events(
+    case: Case, server: RecordingServer, probe: FallbackProbe | None
+) -> tuple[Mapping[str, object], ...]:
+    recorder: Final = _ServiceRecorder()
+    with rebound(logging_utils, "_service_logger", recorder):
+        await _leg(case, server, probe)
+        await asyncio.sleep(0)
+    return tuple(recorder.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, id=case.name)
+        for case in (*AZURE_URL_CASES, *MALFORMED_BASE_CASES)
+        if case.name in _THROUGH_PYTHON_S_CLIENT
+    ],
+)
+async def test_both_lanes_time_an_azure_ai_exchange_through_python_s_client_once(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _service_events(case, parity_server, None)
+    native: Final = await _service_events(case, parity_server, native_messages)
+
+    assert native == python
+    assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
+
+
 class _AttemptRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
@@ -4361,6 +5408,79 @@ async def test_both_lanes_stream_a_router_burst_in_the_same_chunks(
     assert native == python
 
 
+DEPLOYMENT_BETA: Final[Mapping[str, str]] = MappingProxyType(
+    {"anthropic-beta": "mcp-servers-2025-12-04,effort-2025-11-24"}
+)
+NO_CALLER_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+async def _deployment_beta_sent(
+    server: RecordingServer, native: bool, caller: Mapping[str, str]
+) -> tuple[str | None, ...]:
+    server.enqueue(ResponseSpec(body=dict(TEXT_RESPONSE)))
+    sent_before: Final = len(server.requests)
+    deployment: Final[Mapping[str, object]] = {
+        "model": AZURE_CLAUDE,
+        "api_base": f"{server.base_url}/d/dep-hdr-beta/anthropic",
+        "api_key": API_KEY,
+        "extra_headers": dict(DEPLOYMENT_BETA),
+    }
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "hdr-beta", "litellm_params": dict(deployment), "model_info": {"id": "dep-hdr-beta"}}
+            ],
+            num_retries=0,
+        )
+        await router.aanthropic_messages(
+            model="hdr-beta",
+            max_tokens=32,
+            messages=[dict(USER)],
+            **({"extra_headers": dict(caller)} if caller else {}),
+        )
+        await drain_logging()
+    server.responses.clear()
+    return tuple(sent.headers.get("anthropic-beta") for sent in server.requests[sent_before:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "sent"),
+    [
+        pytest.param(NO_CALLER_HEADERS, "effort-2025-11-24", id="deployment_beta_filtered"),
+        pytest.param(
+            MappingProxyType({"anthropic-beta": "context-1m-2025-08-07,advisor-tool-2026-03-01"}),
+            "context-1m-2025-08-07",
+            id="caller_beta_replaces_the_deployment_beta",
+        ),
+    ],
+)
+async def test_both_lanes_send_the_azure_ai_deployment_or_caller_beta_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe, caller: Mapping[str, str], sent: str
+) -> None:
+    python: Final = await _deployment_beta_sent(parity_server, native=False, caller=caller)
+    native: Final = await _deployment_beta_sent(parity_server, native=True, caller=caller)
+
+    assert native_messages.calls == 0
+    assert native == python == (sent,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in AZURE_PASSTHROUGH_CASES])
+async def test_both_lanes_send_a_non_claude_azure_ai_passthrough_through_python(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _leg(case, parity_server, probe=None)
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert native.fell_back
+    assert (_comparable(native.requests), native.outcome) == (_comparable(python.requests), python.outcome)
+
+
 async def _abandoned_stream(
     server: RecordingServer, native: bool, upstream: ResponseSpec
 ) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
@@ -4402,3 +5522,282 @@ async def test_both_lanes_bill_a_stream_abandoned_after_its_first_chunk_alike(
 
     assert native_messages.calls == 0
     assert native == python
+
+
+async def _leave_unread(server: RecordingServer, native: bool, closed: bool, model: str) -> None:
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    stream: Final = cast(
+        AsyncGenerator[object],
+        await acall(
+            model=model,
+            max_tokens=64,
+            messages=[dict(USER)],
+            api_key=API_KEY,
+            api_base=server.base_url,
+            stream=True,
+        ),
+    )
+    if closed:
+        await stream.aclose()
+
+
+async def _unread_stream(
+    server: RecordingServer, native: bool, closed: bool, model: str
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    server.enqueue(_burst(TEXT_STREAM))
+    recorder: Final = _AttemptRecorder()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        errors: Final = stack.enter_context(_warnings(verbose_proxy_logger))
+        litellm.callbacks.append(recorder)
+        await _leave_unread(server, native, closed, model)
+        gc.collect()
+        for _ in range(5):
+            await drain_logging()
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(errors), tuple(recorder.seen)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_both_lanes_log_nothing_for_an_azure_ai_stream_never_read(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    python: Final = await _unread_stream(parity_server, native=False, closed=closed, model=AZURE_CLAUDE)
+    native: Final = await _unread_stream(parity_server, native=True, closed=closed, model=AZURE_CLAUDE)
+
+    assert native_messages.calls == 0
+    assert native == python == ((), ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_an_anthropic_stream_never_read_is_billed_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    """Anthropic has no Python path, and by the owner's ruling keeps main's native route, which bills a stream
+    the caller never read when it is closed or dropped: billing it logs that it has no complete response to build,
+    and no success reaches the callbacks."""
+    errors, seen = await _unread_stream(parity_server, native=True, closed=closed, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert any("Unable to build complete streaming response" in error for error in errors), errors
+    assert seen == ()
+
+
+async def _entered_stream(server: RecordingServer, native: bool, model: str) -> str:
+    server.enqueue(_burst(TEXT_STREAM))
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        stream: Final = cast(
+            AsyncGenerator[object],
+            await acall(
+                model=model,
+                max_tokens=64,
+                messages=[dict(USER)],
+                api_key=API_KEY,
+                api_base=server.base_url,
+                stream=True,
+            ),
+        )
+        try:
+            entered: Final = await _enter(stream)
+        finally:
+            await stream.aclose()
+            await drain_logging()
+    server.responses.clear()
+    return entered
+
+
+async def _enter(stream: object) -> str:
+    try:
+        async with cast(contextlib.AbstractAsyncContextManager[object], stream):
+            return "entered"
+    except (TypeError, AttributeError) as refused:
+        return f"{type(refused).__name__}: {refused}"
+
+
+@pytest.mark.asyncio
+async def test_an_azure_ai_stream_treats_async_with_as_python_s_does(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _entered_stream(parity_server, native=False, model=AZURE_CLAUDE)
+    native: Final = await _entered_stream(parity_server, native=True, model=AZURE_CLAUDE)
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_stream_stays_main_s_execution_stream(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _entered_stream(parity_server, native=True, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert native == "TypeError: 'AsyncStream' object does not support the asynchronous context manager protocol"
+
+
+# By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
+# matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
+# the same behaviour compare with Python in `CASES`.
+_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
+_SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "compaction", "content": "Summary.", "signature": "sig"}
+)
+_TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}
+)
+
+ANTHROPIC_SENT_AS_IS_CASES: Final = (
+    Case(
+        "anthropic_unparsed_message_non_string_text_block_sent",
+        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
+    ),
+    Case(
+        "anthropic_unparsed_message_tool_use_id_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_unparsed_assistant_encrypted_reasoning_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "UVVKRA=="},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_redacted_thinking_converse_wrapper_sent",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "redacted_thinking", "data": "UVVKRA=="}, {"type": "text", "text": "Paris."}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in ANTHROPIC_SENT_AS_IS_CASES])
+async def test_an_anthropic_message_python_would_rewrite_is_sent_as_on_main(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert not native.fell_back
+    assert [_mapping(sent["body"]).get("messages") for sent in native.requests] == [case.kwargs["messages"]]
+
+
+ANTHROPIC_UNREAD_BETA_CASES: Final = (
+    (
+        Case(
+            "anthropic_unparsed_message_output_config",
+            _kw(messages=[{"role": "user", "content": [dict(UNPARSED_BLOCK)], "output_config": {"effort": "low"}}]),
+        ),
+        "per-turn-control-2026-07-01",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_message_signed_compaction",
+            _kw(messages=_unparsed_turn("assistant", dict(_SIGNED_COMPACTION))),
+        ),
+        "compact-2026-09-04",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_system_tool_reference_addition",
+            _kw(
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(content=[dict(UNPARSED_BLOCK), dict(_TOOL_REFERENCE_ADDITION)]),
+            ),
+        ),
+        "mid-conversation-tool-changes-2026-07-01",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "beta"), [pytest.param(case, beta, id=case.name) for case, beta in ANTHROPIC_UNREAD_BETA_CASES]
+)
+async def test_an_anthropic_beta_trigger_in_an_unparsed_message_adds_no_beta_as_on_main(
+    case: Case, beta: str, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert len(native.requests) == 1
+    assert beta not in str(_mapping(native.requests[0]["headers"]).get("anthropic-beta"))
+
+
+_SYSTEM_PROMPT_REJECTED: Final = (
+    "invalid Anthropic messages request: data did not match any variant of untagged enum SystemPrompt"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    (
+        pytest.param([{"type": "text", "text": "Be terse."}, dict(UNPARSED_BLOCK)], id="list_with_an_unparsed_block"),
+        pytest.param({"type": "text", "text": "Be terse."}, id="object"),
+        pytest.param(5, id="number"),
+    ),
+)
+async def test_an_anthropic_system_prompt_that_does_not_parse_is_main_s_request_error(
+    system: object, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(
+        Case("anthropic_system_prompt_not_parsed", _kw(system=system), upstream=()), parity_server, native_messages
+    )
+
+    assert native.requests == ()
+    assert _SYSTEM_PROMPT_REJECTED in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_beta_python_cannot_encode_is_held_back_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    """Main holds back an anthropic-beta the ascii codec cannot encode before the beta merge, so it is the header
+    the error names, ahead of any later header that cannot be encoded either."""
+    native: Final = await _leg(
+        Case(
+            "anthropic_beta_not_ascii_held_back",
+            _kw(extra_headers={"anthropic-beta": "ZWJ‍joined", "x-note": "café"}),
+            upstream=(),
+        ),
+        parity_server,
+        native_messages,
+    )
+
+    assert native.requests == ()
+    assert "can't encode character '\\u200d' in position 3" in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in MALFORMED_BASE_CASES])
+async def test_a_malformed_api_base_sends_nothing_and_raises_python_s_exception(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+
+    assert native.requests == python.requests == ()
+    assert python.outcome.get("kind") == "error"
+    assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))

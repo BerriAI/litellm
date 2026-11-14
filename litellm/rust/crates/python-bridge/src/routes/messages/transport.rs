@@ -124,21 +124,44 @@ enum Pending {
     Read(Reply<Result<Option<Bytes>, Error>>),
 }
 
+pub(super) struct Selected {
+    pub(super) hosted: bool,
+    pub(super) read: Vec<(String, Option<String>)>,
+}
+
 #[derive(Default)]
 pub(super) struct HostedTransport {
     handler: Option<Py<PyAny>>,
+    read: Vec<(String, Option<String>)>,
     chunks: Option<Py<PyAny>>,
     pending: Option<Pending>,
 }
 
 impl HostedTransport {
-    pub(super) fn select(&mut self, py: Python<'_>, request: &Bound<'_, PyDict>) -> PyResult<bool> {
-        let handler = py
+    /// Whether the call sends through Python's client, and the secrets the host read to decide it,
+    /// which the native route reuses rather than reading again.
+    pub(super) fn select(
+        &mut self,
+        py: Python<'_>,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<Selected> {
+        let (handler, read): (Bound<'_, PyAny>, Vec<(String, Option<String>)>) = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("transport_handler")?
-            .call1((request,))?;
+            .call1((request,))?
+            .extract()?;
         self.handler = (!handler.is_none()).then(|| handler.unbind());
-        Ok(self.handler.is_some())
+        self.read.clone_from(&read);
+        Ok(Selected {
+            hosted: self.handler.is_some(),
+            read,
+        })
+    }
+
+    /// The secrets the host read to choose the transport, such as the `AZURE_API_BASE` the call
+    /// was sent to, which Python's failure mapping reads instead of looking them up again.
+    pub(super) fn read(&self) -> &[(String, Option<String>)] {
+        &self.read
     }
 
     pub(super) fn pending(&self) -> bool {

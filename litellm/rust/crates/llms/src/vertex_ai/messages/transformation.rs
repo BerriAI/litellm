@@ -102,6 +102,8 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
+            context.drops_unsupported_params,
+            BetaProvider::VertexAi,
         ));
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
         Ok(MessagesRequest {
@@ -719,11 +721,66 @@ mod tests {
                 },
                 drop_params: false,
                 drops_unsupported_params: false,
+                ..MessagesTransformContext::default()
             },
         );
-        assert_eq!(body["system"], json!("be terse"));
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": "be terse"}])
+        );
         assert_eq!(body["messages"][2]["role"], json!(role));
         assert_eq!(body["messages"].as_array().unwrap().len(), 4);
+    }
+
+    fn dropping_context(drops_unsupported_params: bool) -> MessagesTransformContext {
+        MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::default()
+        }
+    }
+
+    #[rstest]
+    #[case::string("be terse", Some(json!([{"type": "text", "text": "be terse"}])))]
+    #[case::empty_string("", None)]
+    fn the_system_string_is_sent_as_blocks_as_python_does(
+        #[case] system: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let body = transformed(
+            json!({"model": "claude-sonnet-4-5", "max_tokens": 16, "system": system, "messages": [{"role": "user", "content": "a"}]}),
+            &MessagesTransformContext::default(),
+        );
+        assert_eq!(body.get("system").cloned(), expected);
+    }
+
+    #[rstest]
+    #[case::dropped_under_drop_params(true, 2)]
+    #[case::kept_without_drop_params(false, 3)]
+    fn a_converted_system_turn_loses_its_tool_changes_under_drop_params(
+        #[case] drops_unsupported_params: bool,
+        #[case] converted_blocks: usize,
+    ) {
+        let body = transformed(
+            json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 16,
+                "messages": [
+                    {"role": "user", "content": "a"},
+                    {"role": "assistant", "content": "b"},
+                    {"role": "system", "content": [
+                        {"type": "text", "text": "reminder"},
+                        {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "t"}}
+                    ]},
+                    {"role": "user", "content": "c"}
+                ]
+            }),
+            &dropping_context(drops_unsupported_params),
+        );
+        assert_eq!(body["messages"][2]["role"], json!("user"));
+        assert_eq!(
+            body["messages"][2]["content"].as_array().unwrap().len(),
+            converted_blocks
+        );
     }
 
     fn with_output_config() -> MessagesTransformContext {
@@ -737,6 +794,7 @@ mod tests {
             },
             drop_params: false,
             drops_unsupported_params: false,
+            ..MessagesTransformContext::default()
         }
     }
 

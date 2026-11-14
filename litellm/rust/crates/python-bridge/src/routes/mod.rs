@@ -138,7 +138,7 @@ fn call_hooks(
     operation: LoggingOperation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+) -> PyResult<(Py<PyDict>, LegacyLogging)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((

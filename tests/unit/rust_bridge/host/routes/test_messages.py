@@ -1,12 +1,22 @@
+import contextlib
 import datetime
+import errno
 import functools
-from collections.abc import Iterator, Mapping, Sequence
+import json
+import logging
+import os
+import socket
+import ssl
+import struct
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -16,6 +26,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.llms.anthropic.messages.native import interceptors, mcp_handler
 from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
+from litellm.llms.azure.common_utils import AzureOpenAIError, EntraRejectionError
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -212,6 +223,46 @@ _ADAPTIVE_OPUS: Final = "anthropic/claude-opus-4-7"
 
 
 @pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "", id="no_token_is_empty"),
+        pytest.param(
+            {"model": "azure_ai/claude-sonnet-4-5", "azure_ad_token": "entra-token"}, "entra-token", id="static_token"
+        ),
+        pytest.param(
+            {
+                "model": "azure_ai/claude-sonnet-4-5",
+                "azure_ad_token": "entra-token",
+                "azure_ad_token_provider": lambda: "minted",
+            },
+            "minted",
+            id="provider_wins",
+        ),
+    ],
+)
+def test_azure_ad_token_is_the_one_python_mints(
+    arguments: dict[str, object], expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+    assert messages_host.azure_ad_token(arguments) == expected
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        pytest.param({"model": "azure_ai/claude-sonnet-4-5"}, "azure_ai", id="model_prefix"),
+        pytest.param(
+            {"model": "claude-sonnet-4-5", "custom_llm_provider": "azure_ai"}, "azure_ai", id="explicit_provider"
+        ),
+        pytest.param({"model": "not-a-known-model"}, "anthropic", id="unresolved"),
+    ],
+)
+def test_failure_provider_is_the_provider_python_maps_errors_for(call: dict[str, object], expected: str) -> None:
+    assert messages_host.failure_provider(call) == expected
+
+
+@pytest.mark.parametrize(
     ("model", "expected"),
     [("claude-sonnet-4-5", "anthropic"), ("gpt-4o", "openai"), ("not-a-known-model", None)],
 )
@@ -356,6 +407,47 @@ def test_an_unencodable_header_is_the_error_pythons_ascii_codec_raises(value: by
 
     assert isinstance(error, UnicodeEncodeError)
     assert text in str(error)
+
+
+def _flagged(marker: str) -> ValueError:
+    error: Final = ValueError("Missing Azure API Base")
+    setattr(error, marker, True)
+    return error
+
+
+@pytest.mark.parametrize(
+    "mapped",
+    (
+        pytest.param(
+            lambda: messages_host.map_failure(
+                _flagged("messages_python_raised"), {"model": _ADAPTIVE_OPUS}, "azure_ai"
+            ),
+            id="python-raised",
+        ),
+        pytest.param(
+            lambda: messages_host.map_failure(
+                _flagged("messages_missing_credential"), {"model": _ADAPTIVE_OPUS}, "azure_ai"
+            ),
+            id="missing-credential",
+        ),
+        pytest.param(lambda: messages_host.azure_ad_token_failure(RuntimeError("provider")), id="token-provider"),
+        pytest.param(lambda: messages_host.non_string_azure_ad_token(7), id="non-string-token"),
+    ),
+)
+def test_a_failure_python_raises_before_the_send_is_logged_with_its_traceback(mapped: Callable[[], Exception]) -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert StandardLoggingPayloadSetup.get_error_information(mapped()).get("traceback")
+
+
+@pytest.mark.parametrize("marker", ("messages_python_raised", "messages_missing_credential"))
+def test_an_anthropic_failure_before_the_send_stays_unraised_as_on_main(marker: str) -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    mapped: Final = messages_host.map_failure(_flagged(marker), {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert mapped.__traceback__ is None
+    assert not StandardLoggingPayloadSetup.get_error_information(mapped).get("traceback")
 
 
 def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> None:
@@ -577,6 +669,24 @@ def test_a_stream_transport_error_names_the_deployment_like_the_python_stream_it
     assert "deployment: `anthropic/claude-opus-4-6`" in debug_info
 
 
+@pytest.mark.parametrize(
+    ("provider", "named"),
+    (
+        pytest.param("azure_ai", True, id="azure_ai-like-the-python-stream-iterator"),
+        pytest.param("anthropic", False, id="anthropic-bare-as-on-main"),
+    ),
+)
+def test_a_stream_decoding_failure_names_the_deployment_only_for_a_provider_with_a_python_path(
+    provider: str, named: bool
+) -> None:
+    request: Final = {"model": _ADAPTIVE_OPUS, "stream": True, "litellm_logging_obj": _deployment_logger()}
+
+    failure: Final = messages_host.decoding_failure("Error -3 while decompressing data", request, provider)
+
+    assert type(failure) is httpx.DecodingError
+    assert ("deployment: `anthropic/claude-opus-4-6`" in str(getattr(failure, "litellm_debug_info", ""))) is named
+
+
 _TRANSPORT: Final = "error sending request: client error"
 
 
@@ -651,6 +761,135 @@ def test_a_failure_before_any_response_maps_like_the_python_transport_error(
         f"litellm.InternalServerError: AnthropicException - {text}. Handle with `litellm.InternalServerError`."
     )
     assert "This looks like a bug in LiteLLM" not in str(mapped)
+
+
+_AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
+
+
+def _provider_and_model(error: Exception) -> tuple[object, object]:
+    return getattr(error, "llm_provider", None), getattr(error, "model", None)
+
+
+def _ssl_configuration(_ssl_verify: object) -> str:
+    return "<ssl>"
+
+
+_REFUSED: Final = (
+    f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)"
+)
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "text"),
+    (
+        pytest.param(
+            True, "Cannot connect to host 127.0.0.1:47 ssl:<ssl> [Connect call failed ('127.0.0.1', 47)]", id="aiohttp"
+        ),
+        pytest.param(False, "All connection attempts failed", id="httpx"),
+    ),
+)
+def test_an_azure_ai_connect_failure_names_the_environment_base_the_host_sent_to(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", _ssl_configuration)
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(_REFUSED),
+        {"model": _AZURE_CLAUDE},
+        "azure_ai",
+        secrets_read=[("AZURE_API_BASE", "http://127.0.0.1:47/anthropic")],
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
+    assert mapped.message.endswith(f"Azure_aiException - {text}")
+
+
+_UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "text"),
+    (
+        pytest.param(
+            True, "Forbidden control character detected in headers. Potential header injection attack.", id="aiohttp"
+        ),
+        pytest.param(False, _UNSENDABLE_HEADER, id="httpx"),
+    ),
+)
+def test_an_unsendable_azure_ai_header_value_fails_as_the_python_transport_refuses_it(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        ValueError(_UNSENDABLE_HEADER), {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic"}, "azure_ai"
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "azure_ai", _AZURE_CLAUDE)
+    assert mapped.message.endswith(f"Azure_aiException - {text}")
+
+
+@pytest.mark.parametrize("aiohttp", (True, False), ids=("aiohttp", "httpx"))
+def test_an_unsendable_anthropic_header_value_stays_main_s_connection_error(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool
+) -> None:
+    from litellm.litellm_core_utils.error_normalization import PROVIDER_CONNECTION_ERROR, normalize_error
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+
+    mapped: Final = messages_host.map_failure(
+        ValueError(_UNSENDABLE_HEADER),
+        {"model": "claude-sonnet-4-5", "api_base": "http://127.0.0.1:9/anthropic"},
+        "anthropic",
+    )
+
+    assert type(mapped) is litellm.APIConnectionError
+    assert (mapped.status_code, *_provider_and_model(mapped)) == (500, "anthropic", "claude-sonnet-4-5")
+    assert str(mapped).startswith(f"litellm.APIConnectionError: {_UNSENDABLE_HEADER}\n")
+    assert "https://github.com/BerriAI/litellm/issues/new?template=bug_report.yml" in str(mapped)
+    assert normalize_error(mapped, "500", str(mapped)) == PROVIDER_CONNECTION_ERROR
+
+
+def _upstream_status(status: int, body: str) -> Exception:
+    upstream: Final = ValueError(status, body)
+    upstream.headers = []  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+    return upstream
+
+
+@pytest.mark.parametrize(
+    "native",
+    (
+        pytest.param(_upstream_status(404, "not found"), id="upstream-status"),
+        pytest.param(RuntimeError(_REFUSED), id="transport"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("provider", "debug_info"),
+    (
+        pytest.param("azure_ai", f"\nModel: {_AZURE_CLAUDE}", id="azure_ai-like-the-python-entry"),
+        pytest.param(
+            "anthropic",
+            f"\nModel: {_AZURE_CLAUDE}\nAPI Base: `http://127.0.0.1:9/anthropic`",
+            id="anthropic-without-a-python-path",
+        ),
+    ),
+)
+def test_a_mapped_failure_names_the_call_s_api_base_only_for_a_provider_without_a_python_path(
+    native: Exception, provider: str, debug_info: str
+) -> None:
+    mapped: Final = messages_host.map_failure(
+        native, {"model": _AZURE_CLAUDE, "api_base": "http://127.0.0.1:9/anthropic", "api_key": "k"}, provider
+    )
+
+    assert getattr(mapped, "litellm_debug_info", None) == debug_info
 
 
 _CALL: Final = MappingProxyType({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})
@@ -933,14 +1172,14 @@ def no_tls_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     "client", (None, object(), httpx.AsyncClient(), HTTPHandler()), ids=("none", "object", "httpx", "sync-handler")
 )
 def test_the_native_client_stands_in_for_any_client_python_ignores(client: object) -> None:
-    assert messages_host.transport_handler({"client": client}) is None
+    assert messages_host.transport_handler({"client": client}) == (None, [])
 
 
 @pytest.mark.usefixtures("no_tls_settings")
 def test_a_caller_async_handler_is_the_handler_python_posts_through() -> None:
     client: Final = AsyncHTTPHandler()
 
-    assert messages_host.transport_handler({"client": client}) is client
+    assert messages_host.transport_handler({"client": client}) == (client, [])
 
 
 @pytest.mark.usefixtures("no_tls_settings")
@@ -954,7 +1193,7 @@ def test_tls_the_native_client_cannot_apply_posts_through_pythons_anthropic_hand
         monkeypatch.setattr(litellm, name, value)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": object()})
+    handler, _ = messages_host.transport_handler({"client": object()})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(object(), None) is False
@@ -971,7 +1210,7 @@ def fips_cipher_exclusion() -> Iterator[None]:
 def test_fips_cipher_exclusion_posts_through_pythons_anthropic_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": None})
+    handler, _ = messages_host.transport_handler({"client": None})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(None, None) is False
@@ -995,7 +1234,7 @@ def test_a_non_positive_timeout_posts_through_pythons_anthropic_handler(
 ) -> None:
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
-    handler: Final = messages_host.transport_handler({"client": None, "timeout": timeout})
+    handler, _ = messages_host.transport_handler({"client": None, "timeout": timeout})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
     assert callbacks_legacy_python.times_provider_exchange(None, timeout) is False
@@ -1004,7 +1243,97 @@ def test_a_non_positive_timeout_posts_through_pythons_anthropic_handler(
 @pytest.mark.usefixtures("no_tls_settings")
 @pytest.mark.parametrize("timeout", (None, 0.5, httpx.Timeout(10.0)), ids=("unset", "positive", "httpx"))
 def test_a_positive_timeout_keeps_the_native_client(timeout: object) -> None:
-    assert messages_host.transport_handler({"client": None, "timeout": timeout}) is None
+    assert messages_host.transport_handler({"client": None, "timeout": timeout}) == (None, [])
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "api_base",
+    (
+        "http://user:secret@host.example/d",
+        "http://user@host.example/d",
+        "http:///d",
+        "http://:443/d",
+        "http://host.example:99999/d",
+        "http://host.example:port/d",
+    ),
+    ids=("credentials", "user", "no-host", "port-only", "port-out-of-range", "port-not-a-number"),
+)
+@pytest.mark.parametrize("model", ("anthropic/claude-x", "azure_ai/claude-x"))
+def test_a_base_the_native_parser_reads_otherwise_posts_through_pythons_handler(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler, read = messages_host.transport_handler({"client": None, "model": model, "api_base": api_base})
+
+    assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+    assert read == []
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "api_base",
+    ("https://host.example/d", "http://host.example:8080/d?x=1", "https://[::1]:443/d"),
+    ids=("plain", "port-and-query", "ipv6"),
+)
+@pytest.mark.parametrize("model", ("anthropic/claude-x", "azure_ai/claude-x"))
+def test_a_plain_base_keeps_the_native_client(api_base: str, model: str) -> None:
+    assert messages_host.transport_handler({"client": None, "model": model, "api_base": api_base}) == (None, [])
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    ("environment", "hosted"),
+    ((" https://env.example/d ", True), ("https://env.example/d", False), (None, False)),
+    ids=("padded", "plain", "unset"),
+)
+@pytest.mark.parametrize("api_base", (None, ""), ids=("absent", "empty"))
+def test_azure_ai_reads_azure_api_base_once_and_hands_it_to_the_native_route(
+    monkeypatch: pytest.MonkeyPatch, environment: str | None, hosted: bool, api_base: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    reads: Final[list[str]] = []
+
+    def get_secret_str(name: str) -> str | None:
+        reads.append(name)
+        return environment
+
+    monkeypatch.setattr(messages_host, "get_secret_str", get_secret_str)
+
+    handler, read = messages_host.transport_handler(
+        {"client": None, "model": "azure_ai/claude-x", "api_base": api_base}
+    )
+
+    assert (handler is not None) is hosted
+    assert read == [("AZURE_API_BASE", environment)]
+    assert reads == ["AZURE_API_BASE"]
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "request_",
+    (
+        {"client": None, "model": "anthropic/claude-x"},
+        {"client": None, "model": "azure_ai/claude-x", "api_base": "https://call.example/d"},
+        {"client": AsyncHTTPHandler(), "model": "azure_ai/claude-x"},
+        {"client": None, "model": "azure_ai/claude-x", "timeout": 0},
+    ),
+    ids=("anthropic", "azure-call-base", "azure-caller-handler", "azure-python-timeout"),
+)
+def test_azure_api_base_is_left_to_the_native_route_when_the_choice_does_not_need_it(
+    monkeypatch: pytest.MonkeyPatch, request_: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    def get_secret_str(name: str) -> str | None:
+        raise AssertionError(name)
+
+    monkeypatch.setattr(messages_host, "get_secret_str", get_secret_str)
+
+    _, read = messages_host.transport_handler(request_)
+
+    assert read == []
 
 
 @pytest.mark.asyncio
@@ -1802,3 +2131,554 @@ def test_short_circuits_needs_a_replaced_web_search_short_circuit(monkeypatch: p
     assert not messages_host.short_circuits()
     monkeypatch.setattr(litellm, "callbacks", [_ShortCircuit()])
     assert messages_host.short_circuits()
+
+
+_INVALID_CLIENT: Final = json.dumps(
+    {
+        "error": "invalid_client",
+        "error_description": "AADSTS7000215: Invalid client secret provided. Ensure the secret for app "
+        "'00000000-0000-0000-0000-0000000000b1' is the value. Trace ID: 0b1f0000-0000-0000-0000-000000000001",
+    }
+).encode()
+_UNKNOWN_APPLICATION: Final = json.dumps(
+    {
+        "error": "unauthorized_client",
+        "error_description": "AADSTS700016: Application with identifier '11111111-2222-3333-4444-555555555555' "
+        "was not found in the directory 'tenant'. Trace ID: x",
+    }
+).encode()
+_TRANSIENT: Final = json.dumps({"error": "temporarily_unavailable", "error_description": "AADSTS90033: Try again."})
+_JSON: Final = (("content-type", "application/json"),)
+
+
+# The "Authentication failed: ..." texts are azure-identity 1.25.2 and MSAL 1.37.0 wording, checked 2026-11-13:
+# MSAL raises "HTTP Error: <status>" for a 5xx (throttled_http_client.py), azure-core 1.41.0 raises "Invalid HTTP
+# date" for an unparseable Retry-After (pipeline/policies/_utils.py), CPython 3.12.3's time.sleep refuses a wait
+# past its time_t range and json raises its own decode error.
+@pytest.mark.parametrize(
+    ("status", "headers", "body", "raised", "status_code", "message"),
+    [
+        pytest.param(
+            401,
+            _JSON,
+            _INVALID_CLIENT,
+            EntraRejectionError,
+            401,
+            "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+            id="listed_rejection_is_a_401",
+        ),
+        pytest.param(
+            400,
+            _JSON,
+            _UNKNOWN_APPLICATION,
+            EntraRejectionError,
+            401,
+            "Failed to get Azure AD token: AADSTS700016: Application with identifier '<redacted>' was not found "
+            "in the directory 'tenant'.",
+            id="rejection_redacts_guids",
+        ),
+        pytest.param(
+            500,
+            _JSON,
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: HTTP Error: 500",
+            id="exhausted_server_error",
+        ),
+        pytest.param(
+            500,
+            (*_JSON, ("retry-after", "soon")),
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: Invalid HTTP date",
+            id="malformed_retry_after",
+        ),
+        pytest.param(
+            503,
+            (*_JSON, ("retry-after", "inf")),
+            _TRANSIENT.encode(),
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: timestamp out of range for platform time_t",
+            id="retry_after_too_long_to_sleep",
+        ),
+        pytest.param(
+            400,
+            (("content-type", "text/html"),),
+            b"<html>nope</html>",
+            RuntimeError,
+            None,
+            "Failed to get Azure AD token: Authentication failed: Expecting value: line 1 column 1 (char 0)",
+            id="answer_that_is_not_json",
+        ),
+    ],
+)
+def test_a_native_token_endpoint_answer_raises_what_get_azure_ad_token_raises(
+    status: int,
+    headers: tuple[tuple[str, str], ...],
+    body: bytes,
+    raised: type[Exception],
+    status_code: int | None,
+    message: str,
+) -> None:
+    failure: Final = messages_host.entra_token_response_failure(status, headers, body)
+
+    assert type(failure) is raised
+    assert str(failure) == message
+    assert getattr(failure, "status_code", None) == status_code
+    assert failure.__cause__ is not None
+
+
+def test_a_failing_token_provider_logs_and_raises_what_get_azure_ad_token_does(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error: Final = ValueError("token service unavailable")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        failure: Final = messages_host.azure_ad_token_failure(error)
+
+    assert type(failure) is RuntimeError
+    assert str(failure) == "Failed to get Azure AD token: token service unavailable"
+    assert failure.__cause__ is error
+    assert caplog.messages == ["Error calling Azure AD token provider: token service unavailable"]
+
+
+def test_a_non_string_token_logs_and_raises_what_get_azure_ad_token_does(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        failure: Final = messages_host.non_string_azure_ad_token(1)
+
+    assert type(failure) is TypeError
+    assert str(failure) == "Azure AD token must be a string, got <class 'int'>"
+    assert caplog.messages == ["Azure AD token provider returned non-string value: <class 'int'>"]
+
+
+_AZURE_CLAUDE_REQUEST: Final = MappingProxyType({"model": "azure_ai/claude-sonnet-4-5"})
+
+
+@pytest.mark.parametrize(
+    ("error", "raised", "status_code"),
+    [
+        pytest.param(
+            EntraRejectionError(status_code=401, message="Failed to get Azure AD token: AADSTS50126: Bad password."),
+            litellm.AuthenticationError,
+            401,
+            id="entra_rejection_is_an_authentication_error",
+        ),
+        pytest.param(
+            AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned"),
+            litellm.BadRequestError,
+            422,
+            id="oidc_reply_without_fields_is_a_bad_request",
+        ),
+    ],
+)
+def test_a_litellm_token_failure_is_mapped_as_the_handler_maps_it(
+    error: Exception, raised: type[Exception], status_code: int
+) -> None:
+    failure: Final = messages_host.map_token_failure(error, _AZURE_CLAUDE_REQUEST, "azure_ai")
+
+    assert type(failure) is raised
+    assert getattr(failure, "status_code", None) == status_code
+    assert getattr(failure, "llm_provider", None) == "azure_ai"
+    assert str(error) in str(failure)
+    assert failure.__context__ is error
+
+
+def test_any_other_token_failure_reaches_the_caller_as_raised() -> None:
+    error: Final = RuntimeError("Failed to get Azure AD token: Authentication failed: HTTP Error: 500")
+
+    assert messages_host.map_token_failure(error, _AZURE_CLAUDE_REQUEST, "azure_ai") is error
+
+
+_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.mark.parametrize(
+    ("provider", "asynchronous", "flagged"),
+    [
+        pytest.param("azure_ai", True, True, id="azure_ai_async"),
+        pytest.param("azure_ai", False, False, id="azure_ai_sync"),
+        pytest.param("anthropic", True, None, id="anthropic_keeps_main"),
+    ],
+)
+def test_a_token_failure_logs_the_call_flag_python_s_handler_set_first(
+    provider: str, asynchronous: bool, flagged: bool | None
+) -> None:
+    logger: Final = Logging(
+        model=f"{provider}/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="token",
+        function_id="token",
+    )
+
+    messages_host.map_token_failure(
+        RuntimeError("Failed to get Azure AD token"),
+        {"model": f"{provider}/claude-sonnet-4-5", "litellm_logging_obj": logger},
+        provider,
+        asynchronous,
+    )
+
+    details: Final[Mapping[str, object]] = logger.model_call_details
+    params: Final = _PARAMS.validate_python(details.get("litellm_params", {}))
+    assert params.get("aanthropic_messages") is flagged
+
+
+@pytest.mark.parametrize(
+    ("provider", "asynchronous", "flagged"),
+    [
+        pytest.param("azure_ai", True, True, id="azure_ai_async"),
+        pytest.param("azure_ai", False, False, id="azure_ai_sync"),
+        pytest.param("anthropic", True, None, id="anthropic_keeps_main"),
+    ],
+)
+def test_an_unsupported_param_logs_the_call_flag_python_s_handler_set_first(
+    provider: str, asynchronous: bool, flagged: bool | None
+) -> None:
+    logger: Final = Logging(
+        model=f"{provider}/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="unsupported",
+        function_id="unsupported",
+    )
+    rejected: Final = ValueError("temperature is not supported")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_unsupported_param = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": f"{provider}/claude-sonnet-4-5", "messages": [], "litellm_logging_obj": logger},
+        provider,
+        asynchronous,
+    )
+
+    assert isinstance(mapped, litellm.UnsupportedParamsError)
+    details: Final[Mapping[str, object]] = logger.model_call_details
+    params: Final = _PARAMS.validate_python(details.get("litellm_params", {}))
+    assert params.get("aanthropic_messages") is flagged
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenEndpointCertificates:
+    ca: str
+    valid: tuple[str, str]
+    expired: tuple[str, str]
+
+
+@pytest.fixture(scope="module")
+def token_endpoint_certificates(tmp_path_factory: pytest.TempPathFactory) -> _TokenEndpointCertificates:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    directory: Final = tmp_path_factory.mktemp("entra")
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    ca_key: Final = ec.generate_private_key(ec.SECP256R1())
+    ca_name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "entra test CA")])
+    ca: Final = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    def leaf(name: str, not_after: datetime.datetime) -> tuple[str, str]:
+        key: Final = ec.generate_private_key(ec.SECP256R1())
+        certificate: Final = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "login.microsoftonline.com")]))
+            .issuer_name(ca_name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_after - datetime.timedelta(days=30))
+            .not_valid_after(not_after)
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("login.microsoftonline.com")]), critical=False)
+            .sign(ca_key, hashes.SHA256())
+        )
+        (directory / f"{name}.pem").write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        (directory / f"{name}.key").write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            )
+        )
+        return str(directory / f"{name}.pem"), str(directory / f"{name}.key")
+
+    (directory / "ca.pem").write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    return _TokenEndpointCertificates(
+        ca=str(directory / "ca.pem"),
+        valid=leaf("valid", now + datetime.timedelta(days=1)),
+        expired=leaf("expired", now - datetime.timedelta(days=1)),
+    )
+
+
+_ADDRESS: Final = TypeAdapter(tuple[str, int])
+
+
+def _serve(handle: Callable[[socket.socket], None]) -> int:
+    listener: Final = socket.create_server(("127.0.0.1", 0))
+
+    def accept() -> None:
+        while True:
+            connection = listener.accept()[0]
+            threading.Thread(target=handle, args=(connection,), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    return _port(listener)
+
+
+def _reset(connection: socket.socket) -> None:
+    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    connection.close()
+
+
+def _read_head(connection: socket.socket) -> None:
+    received: Final = bytearray()
+    while b"\r\n\r\n" not in received and (chunk := connection.recv(4096)):
+        received.extend(chunk)
+
+
+def _proxy(answer: Callable[[socket.socket], None]) -> int:
+    def handle(connection: socket.socket) -> None:
+        _read_head(connection)
+        answer(connection)
+
+    return _serve(handle)
+
+
+def _tunnel_to(port: int) -> Callable[[socket.socket], None]:
+    def tunnel(connection: socket.socket) -> None:
+        upstream: Final = socket.create_connection(("127.0.0.1", port))
+        connection.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+
+        def pipe(source: socket.socket, target: socket.socket) -> None:
+            with contextlib.suppress(OSError):
+                while data := source.recv(65536):
+                    target.sendall(data)
+            with contextlib.suppress(OSError):
+                target.shutdown(socket.SHUT_WR)
+
+        threading.Thread(target=pipe, args=(upstream, connection), daemon=True).start()
+        pipe(connection, upstream)
+
+    return tunnel
+
+
+def _tls_endpoint(certificate: tuple[str, str]) -> int:
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(*certificate)
+
+    def handle(connection: socket.socket) -> None:
+        with contextlib.suppress(OSError), context.wrap_socket(connection, server_side=True) as tls:
+            _read_head(tls)
+
+    return _serve(handle)
+
+
+def _closed_port() -> int:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        return _port(listener)
+
+
+def _port(listener: socket.socket) -> int:
+    return _ADDRESS.validate_python(listener.getsockname())[1]
+
+
+def _ask_for_proxy_credentials(connection: socket.socket) -> None:
+    connection.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\n\r\n")
+
+
+def _close(connection: socket.socket) -> None:
+    connection.close()
+
+
+def _azure_identity_reason(monkeypatch: pytest.MonkeyPatch, environment: Mapping[str, str]) -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+    from azure.identity import ClientSecretCredential
+
+    for name in [name for name in os.environ if name.lower().endswith("_proxy") or name.endswith("CA_BUNDLE")]:
+        monkeypatch.delenv(name)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    credential: Final = ClientSecretCredential(
+        "tenant", "client", "secret", disable_instance_discovery="AZURE_AUTHORITY_HOST" in environment
+    )
+    with pytest.raises(ClientAuthenticationError) as raised:
+        credential.get_token("https://cognitiveservices.azure.com/.default")
+    return str(raised.value).removeprefix("Authentication failed: ")
+
+
+def test_an_unreachable_proxy_is_worded_as_requests_words_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    port: Final = _closed_port()
+
+    reason: Final = _azure_identity_reason(monkeypatch, {"HTTPS_PROXY": f"http://127.0.0.1:{port}"})
+
+    assert reason == messages_host.requests_proxy_unreachable("127.0.0.1", port, errno.ECONNREFUSED)
+
+
+@pytest.mark.parametrize(
+    ("answer", "worded"),
+    [
+        pytest.param(
+            _ask_for_proxy_credentials,
+            messages_host.requests_proxy_authentication_required,
+            id="proxy_asks_for_credentials",
+        ),
+        pytest.param(
+            _close,
+            lambda: messages_host.requests_connection_aborted(None),
+            id="proxy_closes",
+        ),
+        pytest.param(_reset, lambda: messages_host.requests_connection_aborted(errno.ECONNRESET), id="proxy_resets"),
+    ],
+)
+def test_a_proxy_refusing_the_tunnel_is_worded_as_requests_words_it(
+    monkeypatch: pytest.MonkeyPatch, answer: Callable[[socket.socket], None], worded: Callable[[], str]
+) -> None:
+    reason: Final = _azure_identity_reason(monkeypatch, {"HTTPS_PROXY": f"http://127.0.0.1:{_proxy(answer)}"})
+
+    assert reason == worded()
+
+
+def test_a_connection_closed_in_the_handshake_is_worded_as_ssl_words_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    def close_before_handshake(connection: socket.socket) -> None:
+        connection.shutdown(socket.SHUT_WR)
+        connection.recv(65536)
+        connection.close()
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch, {"AZURE_AUTHORITY_HOST": f"https://127.0.0.1:{_serve(close_before_handshake)}"}
+    )
+
+    assert reason == messages_host.requests_tls_eof()
+
+
+def test_a_tunnel_closed_before_the_answer_is_worded_as_requests_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.valid)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {
+            "HTTPS_PROXY": f"http://127.0.0.1:{_proxy(_tunnel_to(endpoint))}",
+            "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca,
+        },
+    )
+
+    assert reason == messages_host.requests_proxy_disconnected()
+
+
+def test_an_expired_certificate_is_worded_as_openssl_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.expired)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {
+            "HTTPS_PROXY": f"http://127.0.0.1:{_proxy(_tunnel_to(endpoint))}",
+            "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca,
+        },
+    )
+
+    assert reason == messages_host.requests_certificate_rejected("certificate has expired")
+
+
+def test_a_certificate_for_another_name_is_worded_as_ssl_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.valid)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {"AZURE_AUTHORITY_HOST": f"https://localhost:{endpoint}", "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca},
+    )
+
+    assert reason == messages_host.requests_certificate_rejected(
+        "Hostname mismatch, certificate is not valid for 'localhost'."
+    )
+
+
+def test_a_failure_without_an_endpoint_answer_raises_what_get_azure_ad_token_raises() -> None:
+    failure: Final = messages_host.entra_token_failure("connection refused")
+
+    assert type(failure) is RuntimeError
+    assert str(failure) == "Failed to get Azure AD token: Authentication failed: connection refused"
+
+
+def test_an_unresolvable_proxy_is_worded_as_requests_words_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup: Final = "Name or service not known"
+    resolve: Final = socket.getaddrinfo
+
+    def unresolved(host: str, *args: object, **kwargs: object) -> object:  # kwargs-ok: getaddrinfo's own arguments
+        if host == "proxy.invalid":
+            raise socket.gaierror(socket.EAI_NONAME, lookup)
+        return resolve(host, *args, **kwargs)  # pyright: ignore[reportArgumentType]  # getaddrinfo's own arguments, passed on
+
+    monkeypatch.setattr(socket, "getaddrinfo", unresolved)
+
+    reason: Final = _azure_identity_reason(monkeypatch, {"HTTPS_PROXY": "http://proxy.invalid:3128"})
+
+    assert reason == messages_host.requests_proxy_unresolved("proxy.invalid", 3128, socket.EAI_NONAME, lookup)
+
+
+def _hold(connection: socket.socket) -> None:
+    _read_head(connection)
+    with contextlib.suppress(OSError):
+        connection.recv(1)
+
+
+def test_a_token_endpoint_that_never_answers_is_worded_as_requests_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    from azure.core.configuration import ConnectionConfiguration
+
+    defaults: Final = ConnectionConfiguration.__init__.__kwdefaults__
+    assert defaults is not None
+    monkeypatch.setitem(defaults, "read_timeout", 0.05)
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(*token_endpoint_certificates.valid)
+
+    def handle(connection: socket.socket) -> None:
+        with contextlib.suppress(OSError), context.wrap_socket(connection, server_side=True) as tls:
+            _hold(tls)
+
+    endpoint: Final = _serve(handle)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {
+            "HTTPS_PROXY": f"http://127.0.0.1:{_proxy(_tunnel_to(endpoint))}",
+            "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca,
+        },
+    )
+
+    assert reason == messages_host.requests_read_timeout("login.microsoftonline.com", 443)
+
+
+def test_a_token_endpoint_answer_that_grants_the_token_raises_nothing() -> None:
+    granted: Final = json.dumps({"access_token": "token", "token_type": "Bearer", "expires_in": 3600}).encode()
+
+    assert messages_host.entra_token_response_failure(200, _JSON, granted) is None
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize("model", ("anthropic/claude-x", "azure_ai/claude-x"))
+def test_a_base_python_cannot_split_keeps_the_native_client(model: str) -> None:
+    assert messages_host.transport_handler({"client": None, "model": model, "api_base": "https://[::1/d"}) == (
+        None,
+        [],
+    )

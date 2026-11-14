@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import errno
 import functools
+import http
+import http.client
 import inspect
 import ipaddress
 import os
 import socket
+import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
@@ -90,12 +96,14 @@ from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_sequence, optional_str
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_KEY
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
 from litellm.utils import clamp_max_tokens
 
+_RaisedT: Final = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
     {
@@ -238,9 +246,11 @@ _HANDLER: Final = cast(  # cast-ok: only the untyped handler's signature is read
     handler.anthropic_messages_handler,  # noqa: TID251  # reads the handler's signature, never calls it
 )
 _ENTRY_PARAMS: Final = frozenset(inspect.signature(_ENTRY).parameters) - {"kwargs"}
+_MAIN_NATIVE_ERROR_PROVIDERS: Final = frozenset({"anthropic"})
 _HANDLER_PARAMS: Final = frozenset(inspect.signature(_HANDLER).parameters) - {"kwargs"}
 _JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
 _Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
+_SecretsRead: TypeAlias = list[tuple[str, str | None]]
 
 
 def _prompt_cached(request: Mapping[str, object], asynchronous: bool, hooked: bool) -> _Prepared:
@@ -517,6 +527,24 @@ async def _unrequested_stream_delivered(
     return delivered
 
 
+def python_stream_types(head: object, kwargs: dict[str, object]) -> None:  # mutable-ok: the call's own kwargs
+    """Has the head hand back the stream types Python returns: its streaming response, the cached replay a hit
+    returns with the metadata `@client` stamps on it, or the cache writer a miss is wrapped in."""
+    logger: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(head, MessagesStreamHead):
+        return
+    head.python_types = True  # rebind-ok: the head carries it back
+    if not isinstance(logger, LiteLLMLoggingObj):
+        return
+    hit: Final = cache.stream_hit(logger)
+    if hit is None:
+        head.cache_writer = functools.partial(cache.stream_writer, logger)  # rebind-ok: the head carries it back
+        return
+    served: Final = datetime.datetime.now(datetime.timezone.utc).astimezone().replace(tzinfo=None)
+    callbacks_legacy_python.finalize(hit, logger, kwargs, logger.start_time, served, cache_hit=True)
+    head.cached = hit  # rebind-ok: the head carries the cached stream back
+
+
 def unrequested_stream(
     head: object,
     kwargs: dict[str, object],  # mutable-ok: the call's own kwargs, as `@client` hands them on
@@ -542,6 +570,8 @@ _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is
 )
 _BODY_READ_TIMEOUT: Final = "Timeout on reading data from socket"  # aiohttp's SocketTimeoutError text
 _UNREACHABLE: Final = "could not reach the provider: "
+_UNSENDABLE_HEADER: Final = "invalid request: failed to parse header value"
+_AIOHTTP_UNSENDABLE_HEADER: Final = "Forbidden control character detected in headers. Potential header injection attack."  # aiohttp's `_safe_header` text
 _TOO_MANY_REDIRECTS: Final = "upstream network error: error following redirect: too many redirects"
 _SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
 _DNS_FAILURE: Final = "failed to lookup address information: "
@@ -560,7 +590,7 @@ _MISSING_KEY: Final = (
 )
 
 
-def _rejection(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+def _rejection(error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool) -> Exception:
     """The error Python's handler raises for a request it refuses before sending it."""
     metadata: Final = request.get("metadata")
     if isinstance(metadata, dict):
@@ -571,10 +601,12 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
     if isinstance(provider_rejection, str):
         _log_resolved_call(request, request_provider)
+        _flag_azure_ai_call(request, request_provider, asynchronous)
         return _public_provider_error(
             _config_error(400, provider_rejection, (), request, request_provider), error, request, request_provider
         )
     if getattr(error, "messages_unsupported_param", False):
+        _flag_azure_ai_call(request, request_provider, asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
         message=str(error),
@@ -626,9 +658,22 @@ def _body_cut(received: int, expected: int | None, reset: bool) -> httpx.Transpo
     return httpx.ReadError(f"{text}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}")
 
 
-def _connect_failure(native: str, request: Mapping[str, object], request_provider: str) -> str | None:
+def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
+    """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
+    to send it, and anthropic's to its default."""
     api_base: Final = request.get("api_base")
-    if not isinstance(api_base, str) and request_provider != "anthropic":
+    if request_provider == "anthropic":
+        return api_base if isinstance(api_base, str) else anthropic_pass_through_api_base()
+    if request_provider == "azure_ai" and not api_base:
+        return dict(secrets_read).get("AZURE_API_BASE")
+    return api_base if isinstance(api_base, str) else None
+
+
+def _connect_failure(
+    native: str, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
+    base: Final = _sent_base(request, request_provider, secrets_read)
+    if base is None:
         return None
     refused: Final = "tcp connect error: Connection refused" in native
     dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
@@ -640,7 +685,7 @@ def _connect_failure(native: str, request: Mapping[str, object], request_provide
         if dns_errno is not None:
             return f"[Errno {dns_errno}] {dns_reason}"
         return "" if tls_eof else None
-    url: Final = httpx.URL(api_base if isinstance(api_base, str) else anthropic_pass_through_api_base())
+    url: Final = httpx.URL(base)
     port: Final = url.port or (443 if url.scheme == "https" else 80)
     if refused:
         try:
@@ -662,12 +707,17 @@ def _aiohttp_connect_failure(url: httpx.URL, port: int, request: Mapping[str, ob
     return f"Cannot connect to host {url.host}:{port} ssl:{'default' if ssl_config is True else ssl_config} [{reason}]"
 
 
-def _transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> str | None:
+def _transport_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
     """The text Python's HTTP client raises for a call that failed before any response arrived."""
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
+    if native == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
+        # httpx names the header value in its text, which may be a credential.
+        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
     if native == _TOO_MANY_REDIRECTS:
         return "Exceeded maximum allowed redirects."
     if native.startswith(_SEND_FAILED):
@@ -682,7 +732,7 @@ def _transport_failure(error: Exception, request: Mapping[str, object], request_
         return "Server disconnected without sending a response." if closed else native
     if not native.startswith(_UNREACHABLE):
         return None
-    connect: Final = _connect_failure(native, request, request_provider)
+    connect: Final = _connect_failure(native, request, request_provider, secrets_read)
     return native if connect is None else connect
 
 
@@ -712,9 +762,11 @@ def _upstream_failure(
     return status, text, tuple(rebuilt.headers.items())
 
 
-def _provider_error(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception | None:
+def _provider_error(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> Exception | None:
     """The provider exception Python's `_handle_error` builds for the same failure."""
-    transport: Final = _transport_failure(error, request, request_provider)
+    transport: Final = _transport_failure(error, request, request_provider, secrets_read)
     failure: Final = _upstream_failure(error, request) if transport is None else (500, transport, ())
     if failure is None:
         return None
@@ -747,6 +799,17 @@ def _config_error(
     )
 
 
+def _mapped_kwargs(
+    request: Mapping[str, object], request_provider: str
+) -> dict[str, object]:  # mutable-ok: the legacy mapper takes a dict
+    """What the exception mapping reads for the debug info. A provider mapped as Python's handler maps it
+    reads the entry's `**kwargs`, so the named `api_base` adds no API Base line. Anthropic, by the owner's
+    ruling, keeps main's native mapping of the whole call, which names the `api_base`."""
+    if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS:
+        return dict(request)
+    return {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+
+
 def _public_provider_error(
     provider_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
 ) -> Exception:
@@ -755,7 +818,7 @@ def _public_provider_error(
             model=str(request["model"]),
             custom_llm_provider=request_provider,
             original_exception=provider_error,
-            extra_kwargs=dict(request),
+            extra_kwargs=_mapped_kwargs(request, request_provider),
         )
     except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
         mapped.__context__ = error
@@ -792,10 +855,29 @@ def _with_deployment_debug_info(error: Exception, request: Mapping[str, object],
     )
 
 
+def _raised(error: _RaisedT) -> _RaisedT:
+    """`error` raised through a Python frame, so its failure log carries a traceback as the one Python raises does."""
+    try:
+        raise error
+    except Exception:  # noqa: BLE001  # catches only the exception it just raised
+        return error
+
+
+def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
+    """`error` raised through a Python frame, as Python's handler raises it. Anthropic, by the owner's ruling,
+    keeps main's native route, which hands the exception back unraised, without a traceback."""
+    return error if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS else _raised(error)
+
+
 def map_failure(
-    error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
+    error: Exception,
+    request: Mapping[str, object],
+    request_provider: str,
+    asynchronous: bool = False,
+    secrets_read: _SecretsRead | None = None,
 ) -> Exception:
-    """Raises what Python's Messages handler raises for the same failure."""
+    """Raises what Python's Messages handler raises for the same failure. `secrets_read` are the
+    secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
@@ -821,19 +903,26 @@ def map_failure(
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
-        return error
+        return _raised_like_python(error, request_provider)
     if getattr(error, "messages_request_error", False):
-        return _rejection(error, request, request_provider)
+        return _rejection(error, request, request_provider, asynchronous)
     if getattr(error, "messages_missing_credential", False):
-        return litellm.AuthenticationError(
-            message=_MISSING_KEY,
-            llm_provider=request_provider,
-            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        return _raised_like_python(
+            litellm.AuthenticationError(
+                message=_MISSING_KEY,
+                llm_provider=request_provider,
+                model=str(request["model"]).removeprefix(f"{request_provider}/"),
+            ),
+            request_provider,
         )
-    provider_error: Final = _provider_error(error, request, request_provider)
+    provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
         return failures.map_native_failure(
-            error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
+            error,
+            str(request["model"]),
+            request_provider,
+            _mapped_kwargs(request, request_provider),
+            optional_str(request.get("api_base")),
         )
     return _public_provider_error(provider_error, error, request, request_provider)
 
@@ -855,6 +944,10 @@ def _resolved_provider(request: Mapping[str, object]) -> str | None:
     return optional_str(request.get("custom_llm_provider")) or inferred_provider(
         str(request["model"]), optional_str(request.get("api_base"))
     )
+
+
+def failure_provider(request: Mapping[str, object]) -> str:
+    return _resolved_provider(request) or "anthropic"
 
 
 def _scope_provider_specific_header(request: Mapping[str, object]) -> None:
@@ -926,6 +1019,13 @@ def _flag_messages_call(logger: object, asynchronous: bool) -> None:
     if not isinstance(logger, LiteLLMLoggingObj):
         return
     logger.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = asynchronous
+
+
+def _flag_azure_ai_call(request: Mapping[str, object], request_provider: str, asynchronous: bool) -> None:
+    """Python's handler flags the call before it gets the credential or refuses a param. By the owner's ruling
+    anthropic keeps main's unflagged failure."""
+    if request_provider == "azure_ai":
+        _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1185,6 +1285,141 @@ def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object])
     )
 
 
+def azure_ad_token(arguments: Mapping[str, object]) -> str:
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    return get_azure_ad_token(_handler_params(arguments)) or ""
+
+
+def map_token_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
+) -> Exception:
+    """Python's handler maps a litellm exception raised while it gets the call's credential, and lets any other
+    exception through as raised."""
+    _flag_azure_ai_call(request, request_provider, asynchronous)
+    if not isinstance(error, BaseLLMException):
+        return error
+    return _public_provider_error(error, error, request, request_provider)
+
+
+def azure_ad_token_failure(error: Exception) -> Exception:
+    """What `get_azure_ad_token` logs and raises when its token provider fails with `error`."""
+    from litellm.llms.azure.common_utils import azure_ad_token_failure as python_failure
+
+    verbose_logger.error("Error calling Azure AD token provider: %s", error)
+    failure: Final = python_failure(error)
+    failure.__cause__ = error
+    return _raised(failure)
+
+
+def non_string_azure_ad_token(token: object) -> TypeError:
+    """What `get_azure_ad_token` logs and raises when its token provider returns `token`, not a string."""
+    verbose_logger.error("Azure AD token provider returned non-string value: %s", type(token))
+    return _raised(TypeError(f"Azure AD token must be a string, got {type(token)}"))
+
+
+def entra_token_failure(reason: str) -> Exception:
+    """What `get_azure_ad_token` raises when azure-identity's `ClientSecretCredential` fails for `reason`."""
+    from azure.core.exceptions import ClientAuthenticationError
+
+    return azure_ad_token_failure(ClientAuthenticationError(message=f"Authentication failed: {reason}"))
+
+
+def requests_proxy_unreachable(host: str, port: int, code: int) -> str:
+    """What `requests` reports when it cannot open a connection to its proxy."""
+    from urllib3.connection import HTTPSConnection
+    from urllib3.exceptions import NewConnectionError, ProxyError
+
+    refused: Final = NewConnectionError(
+        HTTPSConnection(host, port), f"Failed to establish a new connection: [Errno {code}] {os.strerror(code)}"
+    )
+    return str(ProxyError(_PROXY_UNREACHABLE, refused))
+
+
+def requests_proxy_unresolved(host: str, port: int, code: int, lookup: str) -> str:
+    """What `requests` reports when the name of its proxy does not resolve."""
+    from urllib3.connection import HTTPSConnection
+    from urllib3.exceptions import NameResolutionError, ProxyError
+
+    unresolved: Final = NameResolutionError(host, HTTPSConnection(host, port), socket.gaierror(code, lookup))
+    return str(ProxyError(_PROXY_UNREACHABLE, unresolved))
+
+
+def requests_proxy_authentication_required() -> str:
+    """What `requests` reports when its proxy answers the tunnel with 407."""
+    from urllib3.exceptions import ProxyError
+
+    status: Final = http.HTTPStatus.PROXY_AUTHENTICATION_REQUIRED
+    return str(ProxyError(_PROXY_UNREACHABLE, OSError(f"Tunnel connection failed: {status.value} {status.phrase}")))
+
+
+def requests_proxy_disconnected() -> str:
+    """What `requests` reports when the tunnel through its proxy closes before the token response."""
+    from urllib3.exceptions import ProxyError
+
+    return str(ProxyError(_PROXY_UNREACHABLE, http.client.RemoteDisconnected(_REMOTE_CLOSED)))
+
+
+def requests_connection_aborted(code: int | None) -> str:
+    """What `requests` reports when the connection is reset (errno `code`) or closed (None) before an answer."""
+    from urllib3.exceptions import ProtocolError
+
+    cause: Final = http.client.RemoteDisconnected(_REMOTE_CLOSED) if code is None else OSError(code, os.strerror(code))
+    return str(ProtocolError("Connection aborted.", cause))
+
+
+def requests_tls_eof() -> str:
+    """What `requests` reports when the connection ends inside the TLS handshake, as this build's `ssl` words it."""
+    incoming: Final = ssl.MemoryBIO()
+    handshake: Final = ssl.create_default_context().wrap_bio(incoming, ssl.MemoryBIO(), server_hostname="eof.invalid")
+    with contextlib.suppress(ssl.SSLWantReadError):
+        handshake.do_handshake()
+    incoming.write_eof()
+    try:
+        handshake.do_handshake()
+    except ssl.SSLError as eof:
+        return str(eof)
+    raise AssertionError("a handshake over a closed connection completed")
+
+
+def requests_certificate_rejected(reason: str) -> str:
+    """What `requests` reports when OpenSSL rejects the server certificate for `reason`."""
+    site: Final = requests_tls_eof().rsplit(" ", 1)[-1]
+    return f"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: {reason} {site}"
+
+
+def requests_read_timeout(host: str, port: int) -> str:
+    """What `requests` reports when azure-identity's default read timeout passes with no answer."""
+    from azure.core.configuration import ConnectionConfiguration
+    from urllib3 import HTTPSConnectionPool
+    from urllib3.exceptions import ReadTimeoutError
+
+    seconds: Final = ConnectionConfiguration().read_timeout
+    return str(ReadTimeoutError(HTTPSConnectionPool(host, port), None, f"Read timed out. (read timeout={seconds})"))
+
+
+_PROXY_UNREACHABLE: Final = "Unable to connect to proxy"
+_REMOTE_CLOSED: Final = "Remote end closed connection without response"
+
+
+def entra_token_response_failure(status: int, headers: Sequence[tuple[str, str]], body: bytes) -> Exception | None:
+    """What `get_azure_ad_token` raises when the token endpoint gave a native client secret flow this
+    final answer, read by azure-identity's own `ClientSecretCredential` replaying it."""
+    from azure.core.exceptions import ClientAuthenticationError
+
+    from litellm.rust_bridge.host.routes.entra_replay import replayed_credential
+
+    with replayed_credential(status, tuple(headers), body) as credential:
+        try:
+            credential.get_token(_ENTRA_SCOPE)
+        except ClientAuthenticationError as error:
+            return azure_ad_token_failure(error)
+    return None
+
+
+_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+
+
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
@@ -1207,8 +1442,9 @@ class Sent:
 
 def _unsendable_api_base(api_base: object) -> bool:
     """A caller api_base the native URL parser rejects or reads otherwise than httpx and aiohttp
-    (no http(s) scheme, whitespace, control or non-ASCII characters): Python's client decides what
-    such a URL does, from a relative-URL error to a request on the host it finds."""
+    (no http(s) scheme, whitespace, control or non-ASCII characters, credentials, no host or a port
+    Python cannot read): Python's client decides what such a URL does, from a relative-URL error to
+    a request on the host it finds."""
     if not isinstance(api_base, str) or not api_base:
         return False
     return not (
@@ -1216,24 +1452,57 @@ def _unsendable_api_base(api_base: object) -> bool:
         and api_base.isprintable()
         and " " not in api_base
         and api_base.lower().startswith(("http://", "https://"))
+        and _plain_authority(api_base)
     )
 
 
-def transport_handler(request: Mapping[str, object]) -> AsyncHTTPHandler | None:
+def _plain_authority(api_base: str) -> bool:
+    try:
+        parts: Final = urlsplit(api_base)
+    except ValueError:
+        return True
+    return bool(parts.hostname) and parts.username is None and _readable_port(parts)
+
+
+def _readable_port(parts: SplitResult) -> bool:
+    try:
+        return parts.port is None or parts.port >= 0
+    except ValueError:
+        return False
+
+
+def _sent_api_base(request: Mapping[str, object]) -> tuple[object, _SecretsRead]:
+    """The base Python's URL builder reads, and the secrets read to find it: azure_ai falls back to
+    `AZURE_API_BASE`, read once, which the native route then reuses."""
+    api_base: Final = request.get("api_base")
+    if api_base or "model" not in request or _resolved_provider(request) != "azure_ai":
+        return api_base, []
+    environment: Final = get_secret_str("AZURE_API_BASE")
+    return environment, [("AZURE_API_BASE", environment)]
+
+
+def transport_handler(request: Mapping[str, object]) -> tuple[AsyncHTTPHandler | None, _SecretsRead]:
+    """The client the call sends through (None for the native one), and the secrets read to choose
+    it, which the native route reuses rather than reading them again."""
     client: Final = request.get("client")
     if isinstance(client, AsyncHTTPHandler):
-        return client
-    if not http_transport.sends_through_python(client, request.get("timeout")) and not _unsendable_api_base(
-        request.get("api_base")
-    ):
-        return None
-    return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+        return client, []
+    if http_transport.sends_through_python(client, request.get("timeout")):
+        return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC), []
+    api_base, read = _sent_api_base(request)
+    if not _unsendable_api_base(api_base):
+        return None, read
+    return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC), read
 
 
 def decoding_failure(message: str, request: Mapping[str, object], request_provider: str) -> Exception:
     error: Final = httpx.DecodingError(message)
     if request.get("stream") is True:
-        return error
+        # Python's stream iterator attaches the deployment's debug info. Anthropic, by the owner's ruling,
+        # keeps main's native route, which raises the decoding error bare.
+        if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS:
+            return error
+        return _with_deployment_debug_info(error, request, request_provider)
     return map_transport_failure(error, request, request_provider)
 
 
@@ -1249,7 +1518,12 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
 def _sent_url(request: Mapping[str, object], url: str) -> str:
     """The native URL builder trims the caller's api_base; Python sends it as given."""
     api_base: Final = request.get("api_base")
-    if not isinstance(api_base, str) or api_base == api_base.strip() or not _unsendable_api_base(api_base):
+    if (
+        not isinstance(api_base, str)
+        or api_base == api_base.strip()
+        or not _unsendable_api_base(api_base)
+        or _resolved_provider(request) != "anthropic"
+    ):
         return url
     try:
         return _python_messages_url(api_base) if url == _python_messages_url(api_base.strip()) else url
@@ -1309,7 +1583,7 @@ def map_transport_failure(error: Exception, request: Mapping[str, object], reque
                 model=str(request["model"]),
                 custom_llm_provider=request_provider,
                 original_exception=provider_error,
-                extra_kwargs=dict(request),
+                extra_kwargs=_mapped_kwargs(request, request_provider),
             )
         except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
             mapped.__context__ = provider_error

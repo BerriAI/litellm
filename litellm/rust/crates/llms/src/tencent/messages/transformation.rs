@@ -14,7 +14,7 @@ use litellm_router_types::LitellmParams;
 use crate::{
     Error,
     anthropic::{
-        common_utils::{filter_billing_headers_from_system, has_anthropic_credential},
+        common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{transform_messages_request, update_headers_with_anthropic_beta},
@@ -124,7 +124,7 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
                 system: request
                     .params
                     .system
-                    .and_then(filter_billing_headers_from_system),
+                    .and_then(strip_billing_metadata_from_system),
                 ..request.params
             },
             ..request
@@ -269,5 +269,31 @@ mod tests {
                 placement: CredentialPlacement::Header("x-api-key"), ref secret
             } if secret.expose() == expected
         ));
+    }
+
+    #[rstest]
+    #[case::empty_string(serde_json::json!(""), None)]
+    #[case::string(serde_json::json!("be terse"), Some(serde_json::json!("be terse")))]
+    fn an_empty_system_string_is_dropped_as_python_does(
+        #[case] system: serde_json::Value,
+        #[case] expected: Option<serde_json::Value>,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "system": system,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        let transformed = TENCENT_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed)
+                .unwrap()
+                .get("system")
+                .cloned(),
+            expected
+        );
     }
 }

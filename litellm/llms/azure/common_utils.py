@@ -163,6 +163,12 @@ def entra_rejection_as_auth_error(error: Exception) -> EntraRejectionError | Non
     return None if reason is None else _entra_rejection(reason)
 
 
+def azure_ad_token_failure(error: Exception) -> Exception:
+    """What `get_azure_ad_token` raises from a token provider's failure."""
+    auth_error: Final = entra_rejection_as_auth_error(error)
+    return auth_error if auth_error is not None else RuntimeError(f"Failed to get Azure AD token: {error}")
+
+
 def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
     auth_error: Final = entra_rejection_as_auth_error(error)
     if auth_error is None:
@@ -657,10 +663,7 @@ def get_azure_ad_token(
             raise
         except Exception as e:
             verbose_logger.error("Error calling Azure AD token provider: %s", e)
-            auth_error: Final = entra_rejection_as_auth_error(e)
-            if auth_error is not None:
-                raise auth_error from e
-            raise RuntimeError(f"Failed to get Azure AD token: {e}") from e
+            raise azure_ad_token_failure(e) from e
 
     return azure_ad_token
 
