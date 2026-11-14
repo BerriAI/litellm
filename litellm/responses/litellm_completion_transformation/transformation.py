@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -2212,7 +2213,7 @@ class LiteLLMCompletionResponsesConfig:
         qualify: Final = bool(namespace) and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
-            name=f"{namespace}__{raw_name}" if qualify else raw_name,
+            name=chat_member_name(namespace, raw_name) if qualify else raw_name,
             arguments=serialize_tool_call_arguments(raw_arguments),
         )
         function_call_cache_control: Final = _input_item_cache_control(function_call)
@@ -2421,7 +2422,7 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
+        chat_tool_name: Final = chat_member_name(namespace, tool_name) if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
@@ -2465,7 +2466,7 @@ class LiteLLMCompletionResponsesConfig:
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
         flattened_namespace_names: Final = frozenset(
-            f"{(tool.get('name') or '')!s}__{(namespace_tool.get('name') or '')!s}"
+            chat_member_name(f"{tool.get('name') or ''}", f"{namespace_tool.get('name') or ''}")
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for namespace_tools in (tool.get("tools"),)
@@ -2636,7 +2637,8 @@ class LiteLLMCompletionResponsesConfig:
             if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
         )
         qualified_entries: Final = tuple(
-            (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
+            (chat_member_name(namespace, tool_name), (namespace, tool_name))
+            for namespace, tool_name in namespace_entries
         )
         return MappingProxyType(dict(qualified_entries + unambiguous_entries))
 
