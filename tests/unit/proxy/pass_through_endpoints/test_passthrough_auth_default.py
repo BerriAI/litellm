@@ -28,7 +28,6 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-
 from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
@@ -150,3 +149,61 @@ async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str)
     )
 
     assert result == "sk-from-bearer"
+
+
+@pytest.mark.asyncio
+async def test_runtime_check_subpath_auth_false_skips_validation() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request: Final = Request({"type": "http", "headers": []})
+    endpoint: Final = {
+        "path": "/anthropic-proxy",
+        "target": "https://api.anthropic.com",
+        "include_subpath": True,
+        "forward_headers": True,
+        "auth": False,
+    }
+
+    subpath_result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/anthropic-proxy/v1/messages",
+        pass_through_endpoints=[endpoint],
+        api_key="sk-ant-upstream-only",
+    )
+    assert isinstance(subpath_result, UserAPIKeyAuth)
+
+    sibling_result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/anthropic-proxy-other/v1/messages",
+        pass_through_endpoints=[endpoint],
+        api_key="sk-ant-upstream-only",
+    )
+    assert sibling_result == "sk-ant-upstream-only"
+
+    exact_only_endpoint: Final = {**endpoint, "include_subpath": False}
+    exact_only_result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/anthropic-proxy/v1/messages",
+        pass_through_endpoints=[exact_only_endpoint],
+        api_key="sk-ant-upstream-only",
+    )
+    assert exact_only_result == "sk-ant-upstream-only"
+
+
+def test_passthrough_generic_endpoint_exposes_forward_headers() -> None:
+    default_endpoint: Final = PassThroughGenericEndpoint(
+        path="/anthropic-proxy",
+        target="https://api.anthropic.com",
+    )
+    assert default_endpoint.forward_headers is False
+
+    forwarding_endpoint: Final = PassThroughGenericEndpoint(
+        path="/anthropic-proxy",
+        target="https://api.anthropic.com",
+        include_subpath=True,
+        forward_headers=True,
+        auth=False,
+    )
+    assert forwarding_endpoint.forward_headers is True
+    assert forwarding_endpoint.include_subpath is True
+    assert forwarding_endpoint.auth is False
