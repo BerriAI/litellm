@@ -2787,7 +2787,7 @@ def create_pass_through_route(
             # Ensure query_params and custom_body are dicts or None
             final_query_params: Final = query_params_data if isinstance(query_params_data, dict) else {}
             if query_params:
-                final_query_params.update(query_params)
+                final_query_params.update(query_params)  # pyright: ignore[reportUnknownMemberType]  # legacy parsed query mapping lacks generic types
             # Programmatic callers set LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY on
             # request.state (see Bedrock proxy). Parsed JSON envelope otherwise.
             state_custom_body: Final[dict | None] = getattr(

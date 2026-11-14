@@ -367,21 +367,6 @@ async def _fallback_search_attempt(
     )
     if provider_config is None:
         return Failed(target, ValueError(f"Vector store search is not supported for {target.provider}"), False)
-    unsupported: Final = tuple(
-        key
-        for key, value in request.options.items()
-        if value is not None and key not in provider_config.get_supported_openai_params(model="")
-    )
-    if unsupported:
-        return Failed(
-            target,
-            litellm.BadRequestError(
-                message=f"Vector store fallback provider does not support requested parameters: {', '.join(unsupported)}",
-                model=physical_id,
-                llm_provider=target.provider,
-            ),
-            False,
-        )
     litellm_params: Final = GenericLiteLLMParams(**{**connection, **request.metadata, "vector_store_id": physical_id})
     searched: Final = searched_query(
         query=builtins.list(request.query) if isinstance(request.query, tuple) else request.query,

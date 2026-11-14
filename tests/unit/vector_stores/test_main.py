@@ -645,3 +645,97 @@ async def test_fallback_search_preserves_physical_index_for_same_provider_replic
             },
         }
         assert route.calls[0].request.headers["authorization"] == "Bearer backup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backup_provider", ["openai", "valkey"])
+async def test_fallback_maps_max_results_through_actual_search_adapter(
+    monkeypatch: pytest.MonkeyPatch, backup_provider: str
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from redis.asyncio import Redis
+
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    backend: Final = MagicMock(spec=Redis)
+    backend.ft.return_value.search = AsyncMock(return_value=SimpleNamespace(docs=[]))
+    backend.aclose = AsyncMock()
+    connect: Final = MagicMock(return_value=backend)
+    monkeypatch.setattr(Redis, "from_url", connect)
+    primary: Final = VectorStoreTarget(
+        "limited-primary", "openai", {"api_base": "https://limit-primary.example/v1", "api_key": "primary"}
+    )
+    backup: Final = VectorStoreTarget(
+        "limited-backup",
+        backup_provider,
+        {
+            "api_base": "https://limit-backup.example/v1",
+            "api_key": "backup",
+            "valkey_host": "valkey.example",
+            "litellm_embedding_model": "openai/text-embedding-3-small",
+            "litellm_embedding_config": {"api_base": "https://limit-embedding.example/v1", "api_key": "embedding"},
+        },
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://limit-primary.example/v1/vector_stores/limited-primary/search").respond(503)
+        if backup_provider == "openai":
+            backup_http = upstream.post("https://limit-backup.example/v1/vector_stores/limited-backup/search").respond(
+                200, json=MOCK_SEARCH_RESPONSE
+            )
+        else:
+            upstream.post("https://limit-embedding.example/v1/embeddings").respond(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                    "model": "text-embedding-3-small",
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), cooldown_time=0)):
+            response: Final = await vector_stores_main.asearch(
+                "limited-primary",
+                query="q",
+                max_num_results=1,
+                client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            )
+        if backup_provider == "openai":
+            assert json.loads(backup_http.calls[0].request.content)["max_num_results"] == 1
+        else:
+            connect.assert_called_once()
+            backend.ft.assert_called_once_with("limited-backup")
+            sent_query = backend.ft.return_value.search.await_args.args[0]
+            assert sent_query.query_string() == "*=>[KNN 1 @embedding $vec AS vector_distance]"
+            assert response["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_preserves_adapter_rejection_of_unsupported_filter():
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    primary: Final = VectorStoreTarget(
+        "unsupported-filter",
+        "valkey",
+        {"valkey_host": "valkey.example", "litellm_embedding_model": "openai/text-embedding-3-small"},
+    )
+    backup: Final = VectorStoreTarget(
+        "filter-backup", "openai", {"api_base": "https://filter-backup.example/v1", "api_key": "backup"}
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), cooldown_time=0)):
+            with pytest.raises(litellm.APIConnectionError, match="does not support the filters"):
+                await vector_stores_main.asearch(
+                    "unsupported-filter", query="q", filters={"type": "eq", "key": "tenant", "value": "mine"}
+                )
+        assert len(upstream.calls) == 0
