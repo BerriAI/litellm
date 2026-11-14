@@ -599,6 +599,8 @@ class TestOllamaGetModelInfo:
 def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_key(
     monkeypatch, model, generation_path, generation_body, api_key, environment_key, authorization
 ):
+    from concurrent.futures import ThreadPoolExecutor
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.utils import cached_get_model_info_helper
 
@@ -627,13 +629,15 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     client = HTTPHandler(client=httpx.Client(transport=transport))
 
     def complete():
-        litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            api_base="http://ollama-call.test:11434",
-            api_key=api_key,
-            client=client,
-        )
+        with ThreadPoolExecutor(max_workers=1) as success_logging:
+            monkeypatch.setattr("litellm.utils.executor", success_logging)
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="http://ollama-call.test:11434",
+                api_key=api_key,
+                client=client,
+            )
 
     litellm.get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
