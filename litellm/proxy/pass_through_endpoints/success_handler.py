@@ -685,7 +685,11 @@ class PassThroughEndpointLogging:
 
     def is_assemblyai_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
-        if parsed_url.hostname == "api.assemblyai.com" or "/transcript" in parsed_url.path:
+        if (
+            parsed_url.hostname in ("api.assemblyai.com", "api.eu.assemblyai.com", "eu.assemblyai.com")
+            or "/transcript" in parsed_url.path
+            or parsed_url.path.startswith(("/assemblyai", "/eu.assemblyai"))
+        ):
             return True
         return False
 
