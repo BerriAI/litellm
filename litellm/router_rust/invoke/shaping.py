@@ -498,16 +498,12 @@ def update_kwargs_with_deployment(
     from litellm.llms.github_copilot.app_auth import app_config
     from litellm.llms.github_copilot.per_user_auth import (
         github_copilot_per_user_credential_name,
-        names_unloaded_credential,
+        unloaded_credential_refusal,
     )
 
-    if deployment_provider == "github_copilot" and names_unloaded_credential(deployment_params):
-        raise litellm_exceptions.BadRequestError(
-            message="This GitHub Copilot deployment names a credential that is not loaded, so the call is refused "
-            "instead of falling back to the shared device login.",
-            model=str(deployment_model_name),
-            llm_provider="github_copilot",
-        )
+    refusal: Final = unloaded_credential_refusal(deployment_params, deployment_provider, str(deployment_model_name))
+    if refusal is not None:
+        raise refusal
     if (
         app_config(deployment_params) is not None
         and "litellm_credential_name" in kwargs

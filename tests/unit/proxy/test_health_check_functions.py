@@ -1165,5 +1165,26 @@ def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
     )
 
 
+@pytest.mark.asyncio
+async def test_copilot_deployment_naming_an_unloaded_credential_is_unhealthy_without_the_device_login(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.proxy.health_check import perform_health_check
+
+    deployment: Final = {
+        "model_name": "copilot-service-a",
+        "litellm_params": {"model": "github_copilot/claude-sonnet-5.5", "litellm_credential_name": "copilot-service-a"},
+        "model_info": {"id": "copilot-service-a-id"},
+    }
+
+    healthy, unhealthy, exceptions = await perform_health_check(model_list=[deployment])
+
+    assert healthy == []
+    assert [endpoint["model_id"] for endpoint in unhealthy] == ["copilot-service-a-id"]
+    assert "names a credential that is not loaded" in unhealthy[0]["error"]
+    assert exceptions["copilot-service-a-id"].status_code == 400
+    assert respx_mock.calls.call_count == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
