@@ -205,6 +205,22 @@ def test_a_latest_alias_is_charged_under_the_project_limit_of_its_target():
     ) == (BatchEnqueuedTokenScope(key="project_model", value=f"project-1:{target}", limit=100, tokens=40),)
 
 
+def test_a_dated_snapshot_row_is_charged_under_the_project_limit_of_its_base_model():
+    user: Final = _project_user({"gpt-5.5": 100, "gpt-5.5-2026-04-23": 60})
+
+    assert project_limits_every_model(_project_user({"gpt-5.5": 100}), ("gpt-5.5-2026-04-23",), model_group_of=str)
+    assert resolve_project_model_batch_enqueued_token_scopes(
+        user,
+        row_tokens_by_model={"gpt-5.5-2026-04-23": 40},
+        routing_model="gpt-5.4-nano",
+        batch_tokens=40,
+        model_group_of=str,
+    ) == (
+        BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5", limit=100, tokens=40),
+        BatchEnqueuedTokenScope(key="project_model", value="project-1:gpt-5.5-2026-04-23", limit=60, tokens=40),
+    )
+
+
 def test_project_model_limits_are_detected_before_the_batch_file_is_read():
     assert project_has_model_batch_enqueued_token_limits(_project_user({"gpt-5.5": 100}))
 

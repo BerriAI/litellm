@@ -13,6 +13,7 @@ import asyncio
 import itertools
 import logging
 import math
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
@@ -222,13 +223,17 @@ def project_has_model_batch_enqueued_token_limits(user_api_key_dict: UserAPIKeyA
     return bool(_read_project_model_limits(user_api_key_dict))
 
 
+_DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
 def _tightest_limit_by_group(limits: Mapping[str, int], model_group_of: Callable[[str], str]) -> Mapping[str, int]:
     resolved: Final = tuple((model_group_of(name), limit) for name, limit in limits.items())
     return MappingProxyType({group: min(limit for g, limit in resolved if g == group) for group, _ in resolved})
 
 
 def _model_groups(model: str, model_group_of: Callable[[str], str]) -> frozenset[str]:
-    return frozenset(model_group_of(candidate) for candidate in expand_model_latest_alias(model))
+    names: Final = (*expand_model_latest_alias(model), _DATED_SNAPSHOT_SUFFIX.sub("", model))
+    return frozenset(model_group_of(candidate) for candidate in names)
 
 
 def _limited_model_charges(

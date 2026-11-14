@@ -245,11 +245,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if file_bound_model:
             return file_bound_model
 
-        model: Final = data.get("model")
-        if isinstance(model, str) and model:
-            return model
-
-        return None
+        return _batch_create_routing_model(_BATCH_BODY_ADAPTER.validate_python(data))
 
     def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.

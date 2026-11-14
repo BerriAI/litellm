@@ -556,18 +556,13 @@ def _serve_file_to_the_deployment_key(rows: Sequence[_BatchLine]) -> Callable[[h
     return respond
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query_string, routing_headers",
-    [(b"model=routed-batch-model", ()), (b"", ((b"x-litellm-model", b"routed-batch-model"),))],
-    ids=["query", "header"],
-)
-async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_request_key(
+async def _model_routed_batch_data(
     openai_files: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     query_string: bytes,
     routing_headers: tuple[tuple[bytes, bytes], ...],
-):
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[dict[str, object], respx.Route]:
     from starlette.requests import Request
 
     from litellm import Router
@@ -594,7 +589,6 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
     file_route: Final = openai_files.get(_ROUTED_FILE_URL).mock(
         side_effect=_serve_file_to_the_deployment_key(_batch_rows(("Hello " * 50,)))
     )
-    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
     request: Final = Request(
         {
             "type": "http",
@@ -621,6 +615,28 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
         proxy_config=MagicMock(),
         general_settings={},
     )
+    return data, file_route
+
+
+_MODEL_ROUTES: Final = pytest.mark.parametrize(
+    "query_string, routing_headers",
+    [(b"model=routed-batch-model", ()), (b"", ((b"x-litellm-model", b"routed-batch-model"),))],
+    ids=["query", "header"],
+)
+
+
+@pytest.mark.asyncio
+@_MODEL_ROUTES
+async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_request_key(
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: bytes,
+    routing_headers: tuple[tuple[bytes, bytes], ...],
+):
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
+    data, file_route = await _model_routed_batch_data(
+        openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict
+    )
     _, _, batch_limiter = _make_limiters()
 
     with pytest.raises(HTTPException) as exc:
@@ -630,6 +646,31 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
 
     assert exc.value.status_code == 429
     assert file_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@_MODEL_ROUTES
+async def test_model_routed_batch_is_charged_to_the_project_cap_of_the_model_it_routes_to(
+    openai_files: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    query_string: bytes,
+    routing_headers: tuple[tuple[bytes, bytes], ...],
+):
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-batch"),
+        project_id="project-1",
+        project_metadata={"model_batch_enqueued_token_limit": {"routed-batch-model": 1}},
+    )
+    data, _ = await _model_routed_batch_data(openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict)
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type="acreate_batch"
+        )
+
+    assert exc.value.status_code == 429
+    assert "project_model: project-1:routed-batch-model" in str(exc.value.detail)
 
 
 async def _install_managed_file_hook(
