@@ -314,5 +314,9 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "verda": {
+    "base_url": "https://inference.verda.com/v1",
+    "api_key_env": "VERDA_INFERENCE_API_KEY"
   }
 }
