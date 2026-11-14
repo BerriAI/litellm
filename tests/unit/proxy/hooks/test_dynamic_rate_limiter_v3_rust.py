@@ -813,7 +813,7 @@ async def test_fake_calls_case_2_priority_queue_during_saturation(monkeypatch):
         tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
 
     start_time = time.time()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = [await task for task in tasks]
     end_time = time.time()
 
     # Analyze results
@@ -949,7 +949,7 @@ async def test_fake_calls_case_3_spillover_capacity_default_keys(monkeypatch):
         tasks.append(make_request(key_d_user, "key_d", f"key_d_{i}"))
 
     start_time = time.time()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = [await task for task in tasks]
     end_time = time.time()
 
     # Analyze results
@@ -1064,7 +1064,7 @@ async def test_fake_calls_case_4_over_allocated_with_normalization(monkeypatch):
         tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
 
     start_time = time.time()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = [await task for task in tasks]
     end_time = time.time()
 
     # Analyze results
