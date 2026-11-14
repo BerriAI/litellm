@@ -1354,8 +1354,12 @@ def test_completion_streams_through_fallbacks_with_the_requested_guardrail(
 
 @pytest.mark.timeout(30, method="thread")
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "primary_price",
+    ({"input_cost_per_token": 1.0, "output_cost_per_token": 1.0}, {"base_model": "gpt-5.4"}),
+)
 async def test_acompletion_fallback_to_another_model_is_priced_like_a_direct_call_to_it(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, primary_price: dict[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
@@ -1365,8 +1369,6 @@ async def test_acompletion_fallback_to_another_model_is_priced_like_a_direct_cal
             httpx.Response(200, json=OPENAI_ANSWER),
         )
     )
-    primary_price: Final = {"input_cost_per_token": 1.0, "output_cost_per_token": 1.0}
-
     through_fallback: Final = await python_acompletion(
         model="openai/first",
         messages=[{"role": "user", "content": "hello"}],

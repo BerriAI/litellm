@@ -37,7 +37,7 @@ _PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
     "headers",
     "litellm_credential_name",
 }
-_MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+_MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | {"base_model"}
 _GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
