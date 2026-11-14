@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
 
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
@@ -110,23 +110,44 @@ def separate_cached_messages(
     messages: list[AllMessageValues],
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
-    Returns the first continuous block of cached messages, plus every system message once
-    any message is cached, since generateContent rejects a system_instruction beside a
-    cachedContent, and the remaining messages.
+    Returns the conversation prefix that ends at the last cached part of the first continuous block of
+    cached messages, plus every later system message, since generateContent rejects a system_instruction
+    beside a cachedContent, and the remaining messages in their original order.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
         return [], messages
 
-    last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    cached_block: Final = range(filtered_messages[0][0], filtered_messages[last_continuous_block_idx][0] + 1)
-    goes_in_cache: Final = tuple(
-        idx in cached_block or message.get("role") == "system" for idx, message in enumerate(messages)
-    )
+    prefix_end: Final = filtered_messages[get_first_continuous_block_idx(filtered_messages)][0]
+    cached_head, uncached_tail = _split_after_last_cached_part(messages[prefix_end])
+    later_messages: Final = messages[prefix_end + 1 :]
     return (
-        [message for message, cached in zip(messages, goes_in_cache) if cached],
-        [message for message, cached in zip(messages, goes_in_cache) if not cached],
+        [
+            *messages[:prefix_end],
+            cached_head,
+            *(message for message in later_messages if message["role"] == "system"),
+        ],
+        [*uncached_tail, *(message for message in later_messages if message["role"] != "system")],
     )
+
+
+def _split_after_last_cached_part(
+    message: AllMessageValues,
+) -> tuple[AllMessageValues, tuple[AllMessageValues, ...]]:
+    if message["role"] != "user" or message.get("cache_control") is not None:
+        return message, ()
+    content: Final = message["content"]
+    if not isinstance(content, list):
+        return message, ()
+    cut: Final = max(
+        (idx + 1 for idx, part in enumerate(content) if part.get("cache_control") is not None),
+        default=len(content),
+    )
+    if cut in (0, len(content)):
+        return message, ()
+    head: Final[ChatCompletionUserMessage] = {**message, "content": content[:cut]}
+    tail: Final[ChatCompletionUserMessage] = {**message, "content": content[cut:]}
+    return head, (tail,)
 
 
 def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:

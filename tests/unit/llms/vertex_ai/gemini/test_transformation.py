@@ -1,8 +1,11 @@
 
+import asyncio
 import json
 import logging
+import queue
 import uuid
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, Mock
 
@@ -11,6 +14,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents
 from litellm.llms.vertex_ai.gemini import transformation
@@ -654,3 +658,98 @@ async def test_global_drop_params_sends_a_malformed_prompt_cache_breakpoint_part
     assert list(sent) == ["generate"]
     assert "cachedContent" not in sent["generate"]
     assert _REFERENCE_DOCUMENT in json.dumps(sent["generate"])
+
+
+_CACHE_MARKS: Final = (
+    {"prompt_cache_breakpoint": {"mode": "explicit"}},
+    {"cache_control": {"type": "ephemeral"}},
+)
+
+
+def _sent_texts(body: Mapping[str, object]) -> tuple[str, ...]:
+    contents: Final = body.get("contents", ())
+    return tuple(part["text"] for part in chain.from_iterable(content["parts"] for content in contents))
+
+
+def _conversation_marked_on_a_later_turn(**marks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": _REFERENCE_DOCUMENT},
+        {"role": "user", "content": "My favourite colour is blue."},
+        {"role": "assistant", "content": "OK"},
+        {"role": "user", "content": [{"type": "text", "text": "Actually, it is red.", **marks}]},
+        {"role": "assistant", "content": "Noted"},
+        {"role": "user", "content": "What is my favourite colour?"},
+    ]
+
+
+def _document_then_question(question: str, **marks: object) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": _REFERENCE_DOCUMENT, **marks}, {"type": "text", "text": question}],
+        }
+    ]
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marks", _CACHE_MARKS)
+@pytest.mark.asyncio
+async def test_a_mark_on_a_later_turn_caches_the_turns_before_it_and_keeps_the_conversation_order(sync_mode, marks):
+    sent: Final = await _sent_bodies(sync_mode, _conversation_marked_on_a_later_turn(**marks))
+
+    assert _sent_texts(sent["cache"]) + _sent_texts(sent["generate"]) == (
+        "My favourite colour is blue.",
+        "OK",
+        "Actually, it is red.",
+        "Noted",
+        "What is my favourite colour?",
+    )
+    assert sent["generate"]["cachedContent"] == _BREAKPOINT_CACHE_NAME
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marks", _CACHE_MARKS)
+@pytest.mark.asyncio
+async def test_the_part_after_a_mark_stays_out_of_the_cache_so_the_next_question_reuses_it(sync_mode, marks):
+    first: Final = await _sent_bodies(sync_mode, _document_then_question("Which section mentions watchlists?", **marks))
+    second: Final = await _sent_bodies(sync_mode, _document_then_question("Summarize it in one line.", **marks))
+
+    assert _sent_texts(first["cache"]) == (_REFERENCE_DOCUMENT,)
+    assert _sent_texts(first["generate"]) == ("Which section mentions watchlists?",)
+    assert list(second) == ["generate"]
+    assert second["generate"]["cachedContent"] == first["generate"]["cachedContent"]
+    assert _sent_texts(second["generate"]) == ("Summarize it in one line.",)
+
+
+class _LoggedInputRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_inputs: Final[asyncio.Queue[object]] = asyncio.Queue()
+        self.sync_inputs: Final[queue.Queue[object]] = queue.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.async_inputs.put(kwargs["input"])
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.sync_inputs.put(kwargs["input"])
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marks", [{}, *_CACHE_MARKS])
+@pytest.mark.asyncio
+async def test_success_callbacks_log_the_system_message_gemini_was_sent(sync_mode, marks, monkeypatch):
+    recorder: Final = _LoggedInputRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    messages: Final = _reference_messages(**marks)
+
+    await _complete_with(_fake_gemini(HTTPHandler if sync_mode else AsyncHTTPHandler), sync_mode, messages)
+    logged: Final = (
+        recorder.sync_inputs.get(timeout=5)
+        if sync_mode
+        else await asyncio.wait_for(recorder.async_inputs.get(), timeout=5)
+    )
+
+    assert logged == messages

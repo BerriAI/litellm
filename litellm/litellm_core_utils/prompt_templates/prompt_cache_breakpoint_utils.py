@@ -116,14 +116,19 @@ def prompt_cache_breakpoints_as_context_cache_control(message: _MarkedT, drop_pa
     """Every content part's ``prompt_cache_breakpoint`` rewritten as the ``cache_control`` Gemini context caching
     reads, with the marker's ttl, or OpenAI's 30m default, since a Gemini cache takes any ttl.
     A ``cache_control`` the client already wrote on the part wins, TTL included."""
-    if not has_prompt_cache_breakpoint_part(message):
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts: Final = _BREAKPOINT_BLOCKS.validate_python(content)
+    fields: Final = tuple(map(_breakpoint_fields_or_none, parts))
+    if all(_breakpoint_of(part_fields) is None for part_fields in fields):
         return message
     control_for: Final = partial(_context_cache_control_for_prompt_cache_breakpoint, drop_params=drop_params)
-    parts: Final = [
-        _part_with_prompt_cache_breakpoint_renamed(part, control_for)
-        for part in _BREAKPOINT_BLOCKS.validate_python(message.get("content"))
+    renamed: Final = [
+        part if part_fields is None else _prompt_cache_breakpoint_renamed(part_fields, control_for)
+        for part, part_fields in zip(parts, fields)
     ]
-    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its part markers renamed
+    return cast(_MarkedT, {**message, "content": renamed})  # cast-ok: same message shape with its part markers renamed
 
 
 def has_prompt_cache_breakpoint_part(message: Mapping[str, object]) -> bool:
@@ -138,13 +143,6 @@ def has_prompt_cache_breakpoint_part(message: Mapping[str, object]) -> bool:
 
 def _breakpoint_of(fields: Mapping[str, object] | None) -> object:
     return None if fields is None else fields.get("prompt_cache_breakpoint")
-
-
-def _part_with_prompt_cache_breakpoint_renamed(
-    part: object, control_for: Callable[[object], Mapping[str, object] | None]
-) -> object:
-    fields: Final = _breakpoint_fields_or_none(part)
-    return part if fields is None else _prompt_cache_breakpoint_renamed(fields, control_for)
 
 
 def _prompt_cache_breakpoint_renamed(
