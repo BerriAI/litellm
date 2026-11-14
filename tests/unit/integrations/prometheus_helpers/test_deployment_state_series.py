@@ -65,7 +65,7 @@ class ContentionRecordingLock:
         self._lock.release()
 
 
-def test_a_deployment_is_remembered_until_more_than_the_cap_of_deployments_were_seen():
+def test_a_deployment_is_remembered_until_more_than_the_cap_of_deployments_were_seen() -> None:
     tracker, gauge = tracker_and_gauge()
     for index in range(MAX_TRACKED_DEPLOYMENTS):
         tracker.healthy(request_series(f"dep-{index}"))
@@ -78,7 +78,7 @@ def test_a_deployment_is_remembered_until_more_than_the_cap_of_deployments_were_
     }
 
 
-def test_the_deployment_unused_for_longest_is_forgotten_first():
+def test_the_deployment_unused_for_longest_is_forgotten_first() -> None:
     tracker, gauge = tracker_and_gauge()
     tracker.healthy(request_series("busy"))
     for index in range(MAX_TRACKED_DEPLOYMENTS - 1):
@@ -97,7 +97,7 @@ def test_the_deployment_unused_for_longest_is_forgotten_first():
     }
 
 
-def test_a_cooldown_marks_only_the_most_recent_series_of_a_deployment():
+def test_a_cooldown_marks_only_the_most_recent_series_of_a_deployment() -> None:
     tracker, gauge = tracker_and_gauge()
     failing: Final = distinct_series(MAX_SERIES_PER_DEPLOYMENT + 3)
     for series in failing:
@@ -111,7 +111,7 @@ def test_a_cooldown_marks_only_the_most_recent_series_of_a_deployment():
     }
 
 
-def test_repeated_failures_of_one_series_do_not_push_another_series_out_of_the_cooldown():
+def test_repeated_failures_of_one_series_do_not_push_another_series_out_of_the_cooldown() -> None:
     tracker, gauge = tracker_and_gauge()
     first, repeating = request_series("dep-1", "first"), request_series("dep-1", "repeating")
     tracker.partial_outage(first)
@@ -123,7 +123,7 @@ def test_repeated_failures_of_one_series_do_not_push_another_series_out_of_the_c
     assert gauge == {first: COMPLETE_OUTAGE, repeating: COMPLETE_OUTAGE}
 
 
-def test_a_success_under_a_new_label_clears_every_series_a_full_cooldown_marked():
+def test_a_success_under_a_new_label_clears_every_series_a_full_cooldown_marked() -> None:
     tracker, gauge = tracker_and_gauge()
     failing: Final = distinct_series(MAX_SERIES_PER_DEPLOYMENT)
     for series in failing:
@@ -136,7 +136,7 @@ def test_a_success_under_a_new_label_clears_every_series_a_full_cooldown_marked(
     assert gauge == {**{series: HEALTHY for series in failing}, recovered: HEALTHY}
 
 
-def test_no_series_stays_at_two_after_recovery_when_a_cooldown_saw_more_labels_than_it_tracks():
+def test_no_series_stays_at_two_after_recovery_when_a_cooldown_saw_more_labels_than_it_tracks() -> None:
     tracker, gauge = tracker_and_gauge()
     labels: Final = distinct_series(MAX_SERIES_PER_DEPLOYMENT + 1)
     for series in labels[:MAX_SERIES_PER_DEPLOYMENT]:
@@ -149,7 +149,7 @@ def test_no_series_stays_at_two_after_recovery_when_a_cooldown_saw_more_labels_t
     assert gauge == {series: HEALTHY for series in labels}
 
 
-def test_a_series_dropped_during_a_cooldown_stays_cleared_through_a_second_cooldown():
+def test_a_series_dropped_during_a_cooldown_stays_cleared_through_a_second_cooldown() -> None:
     tracker, gauge = tracker_and_gauge()
     labels: Final = distinct_series(MAX_SERIES_PER_DEPLOYMENT + 1)
     for series in labels[:MAX_SERIES_PER_DEPLOYMENT]:
@@ -162,7 +162,7 @@ def test_a_series_dropped_during_a_cooldown_stays_cleared_through_a_second_coold
     assert gauge == {labels[0]: HEALTHY, **{series: COMPLETE_OUTAGE for series in labels[1:]}}
 
 
-def test_failures_beyond_the_series_cap_outside_a_cooldown_leave_the_older_series_at_one():
+def test_failures_beyond_the_series_cap_outside_a_cooldown_leave_the_older_series_at_one() -> None:
     tracker, gauge = tracker_and_gauge()
     labels: Final = distinct_series(MAX_SERIES_PER_DEPLOYMENT + 1)
     for series in labels:
@@ -171,7 +171,7 @@ def test_failures_beyond_the_series_cap_outside_a_cooldown_leave_the_older_serie
     assert gauge == {series: PARTIAL_OUTAGE for series in labels}
 
 
-def test_a_deployment_pushed_out_of_the_tracker_keeps_the_state_its_requests_last_reported():
+def test_a_deployment_pushed_out_of_the_tracker_keeps_the_state_its_requests_last_reported() -> None:
     tracker, gauge = tracker_and_gauge()
     failing: Final = request_series("failing")
     tracker.partial_outage(failing)
@@ -184,7 +184,7 @@ def test_a_deployment_pushed_out_of_the_tracker_keeps_the_state_its_requests_las
     }
 
 
-def test_a_cooling_deployment_stays_at_two_and_recovers_after_other_deployments_fill_the_tracker():
+def test_a_cooling_deployment_stays_at_two_and_recovers_after_other_deployments_fill_the_tracker() -> None:
     tracker, gauge = tracker_and_gauge()
     chat: Final = request_series("cooling")
     responses: Final = request_series("cooling", "https://api.example/v1/responses")
@@ -201,7 +201,7 @@ def test_a_cooling_deployment_stays_at_two_and_recovers_after_other_deployments_
     assert (gauge[chat], gauge[responses]) == (HEALTHY, HEALTHY)
 
 
-def test_the_oldest_cooldown_still_clears_every_series_it_marked_after_more_than_the_cap_cooled_down():
+def test_the_oldest_cooldown_still_clears_every_series_it_marked_after_more_than_the_cap_cooled_down() -> None:
     tracker, gauge = tracker_and_gauge()
     chat: Final = request_series("oldest")
     responses: Final = request_series("oldest", "https://api.example/v1/responses")
@@ -267,7 +267,7 @@ def test_a_write_in_flight_holds_back_the_next_state_change_of_the_deployment(
     waiting_change: StateChange,
     waiting_series: DeploymentStateSeries,
     expected_gauge: Gauge,
-):
+) -> None:
     in_flight: Final = threading.Event()
     release: Final = threading.Event()
     second_settled: Final = threading.Event()
