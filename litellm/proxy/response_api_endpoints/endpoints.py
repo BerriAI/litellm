@@ -37,7 +37,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    EMPTY_MAPPING,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
+    TERMINAL_RESPONSE_STATUSES,
+)
 from litellm.exceptions import EndpointNotSupportedByModelError, RateLimitError
 from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
@@ -2240,7 +2246,18 @@ _UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_F
 _UNTRUSTED_TURN_FIELDS: Final = frozenset(
     (*_UNTRUSTED_ROOT_CONTROL_FIELDS, "standard_callback_dynamic_params", "litellm_params")
 )
-_SOCKET_OWNED_METADATA_FIELDS: Final = frozenset(("tags", "model_group"))
+_SOCKET_ATTRIBUTION_METADATA_FIELDS: Final = (
+    "agent_id",
+    "actor_agent_id",
+    "target_agent_id",
+    "billing_agent_id",
+    "agent_execution_mode",
+    "verified_human_user_id",
+    "session_id",
+    SESSION_ID_OMITTED_METADATA_KEY,
+    CALLER_SESSION_ID_METADATA_KEY,
+)
+_SOCKET_OWNED_METADATA_FIELDS: Final = frozenset(("tags", "model_group", *_SOCKET_ATTRIBUTION_METADATA_FIELDS))
 _TURN_ROW_FIELDS: Final = ("model", "litellm_call_id")
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
@@ -2447,22 +2464,24 @@ def _turn_failure_row(
         {metadata_key: turn_metadata},
         _PROXY_SERVER_REQUEST_ADAPTER.validate_python(socket_request) if isinstance(socket_request, dict) else {},
     )
-    model_group: Final = (
-        _WS_FRAME.validate_python(socket_bucket).get("model_group") if isinstance(socket_bucket, dict) else None
-    )
+    socket_metadata: Final = _WS_FRAME.validate_python(socket_bucket) if isinstance(socket_bucket, dict) else {}
+    model_group: Final = socket_metadata.get("model_group")
     client_metadata: Final = _without_untrusted_metadata("metadata", turn.get("metadata"))
     return {
         **{key: turn[key] for key in _TURN_ROW_FIELDS if key in turn},
         **_socket_trace_id(socket),
-        "metadata": (
-            {
-                name: item
-                for name, item in _WS_FRAME.validate_python(client_metadata).items()
-                if name not in _SOCKET_OWNED_METADATA_FIELDS
-            }
-            if isinstance(client_metadata, dict)
-            else {}
-        ),
+        "metadata": {
+            **(
+                {
+                    name: item
+                    for name, item in _WS_FRAME.validate_python(client_metadata).items()
+                    if name not in _SOCKET_OWNED_METADATA_FIELDS
+                }
+                if isinstance(client_metadata, dict)
+                else {}
+            ),
+            **{name: socket_metadata[name] for name in _SOCKET_ATTRIBUTION_METADATA_FIELDS if name in socket_metadata},
+        },
         metadata_key: {
             **turn_metadata,
             **({"tags": request_tags} if request_tags else {}),

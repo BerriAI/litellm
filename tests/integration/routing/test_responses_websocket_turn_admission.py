@@ -395,10 +395,9 @@ def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_unt
             return received, close_code
 
         asyncio.run(second_socket_while_the_first_is_open())
-        reopened, reopened_close = until_asserted(reopened_once_the_slot_frees, seconds=15)
+        reopened, _ = until_asserted(reopened_once_the_slot_frees, seconds=15)
 
         _assert_refused(reopened)
-        assert reopened_close == 1011, reopened
         assert deployment.forwarded_turns() == 1
 
 

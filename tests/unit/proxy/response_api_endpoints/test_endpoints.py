@@ -2984,6 +2984,9 @@ class TestResponsesWSFirstFrameModelAuth:
                 "model_group": "forged-group",
                 "attempted_fallbacks": 7,
                 "original_model_group": "forged-original-group",
+                "agent_id": "forged-agent",
+                "billing_agent_id": "forged-agent",
+                "session_id": "forged-session",
             },
             "not an object",
         ],
@@ -3004,7 +3007,16 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
         spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": {"tags": ["ws-tag"], "model_group": "mini-group"}},
+            {
+                "model": "gpt-4o-mini",
+                "litellm_metadata": {
+                    "tags": ["ws-tag"],
+                    "model_group": "mini-group",
+                    "agent_id": "socket-agent",
+                    "billing_agent_id": "socket-agent",
+                    "session_id": "socket-session",
+                },
+            },
             UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses"),
             proxy_logging_obj,
             MagicMock(),
@@ -3026,7 +3038,8 @@ class TestResponsesWSFirstFrameModelAuth:
             patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]),
             patch.object(litellm, "turn_off_message_logging", True),
             patch(  # test-quality-ok: stored prompts are off by default and the stored request is under test
-                "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
+                "litellm.proxy.proxy_server.general_settings",
+                {"store_prompts_in_spend_logs": True, "missing_session_id": "omit"},
             ),
         ):
             await (await guard(frame)).bill_refusal(refusal)
@@ -3037,6 +3050,9 @@ class TestResponsesWSFirstFrameModelAuth:
         stored_request = json.loads(row["proxy_server_request"])
         row_metadata = json.loads(row["metadata"])
         assert row["model_group"] == "mini-group"
+        assert row["agent_id"] == "socket-agent"
+        assert row["billing_agent_id"] == "socket-agent"
+        assert row["session_id"] == "socket-session"
         assert row_metadata.get("attempted_fallbacks") != 7
         assert row_metadata.get("original_model_group") != "forged-original-group"
         assert json.loads(row["request_tags"]) == ["ws-tag"]
