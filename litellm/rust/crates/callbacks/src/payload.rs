@@ -4,17 +4,24 @@ use futures_util::future::BoxFuture;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RenderOptions {
+    /// Keys rendered as `null`, added the way a Python dict merge adds a missing key: last.
     pub null_keys: Vec<String>,
 }
 
 pub type Rendered = Result<Vec<Vec<u8>>, String>;
 
+/// The Python side that owns the payloads a [`PayloadRef`] points at.
 pub trait PayloadHost: Send + Sync + 'static {
     fn render(&self, handles: Vec<u64>, options: RenderOptions) -> BoxFuture<'static, Rendered>;
 
     fn release(&self, handle: u64);
 }
 
+/// A handle to a standard logging payload that stays in Python. A callback that reads
+/// `Field::StandardLoggingPayloadRef` gets one of these instead of a JSON copy, so the payload
+/// only crosses the boundary if the callback renders it. [`PayloadRef::render`] asks the host to
+/// serialize it to JSON bytes; [`render_all`] does several from the same host in one call, which
+/// s3_v2 uses to batch. Dropping the ref releases the host's hold on the payload.
 pub struct PayloadRef {
     handle: u64,
     host: Arc<dyn PayloadHost>,
