@@ -107,9 +107,11 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
                     )
                 payloads: Final = tuple(json.loads(line) for line in events)
                 found: Final = next(
-                    payload.get("response_id") or (payload.get("message") or {}).get("id") or payload.get("id")
+                    (payload.get("response") or {}).get("id")
+                    or (payload.get("message") or {}).get("id")
+                    or payload.get("id")
                     for payload in payloads
-                    if payload.get("response_id") or payload.get("message") or payload.get("id")
+                    if payload.get("response") or payload.get("message") or payload.get("id")
                 )
                 return str(found)
             response: Final = rig.candidate.client.post(path, json=body, headers={"Authorization": f"Bearer {key}"})

@@ -12,10 +12,19 @@ Covers three bugs:
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+from typing import Final, NoReturn
 from unittest.mock import MagicMock
 
+import _hashlib
 import pytest
 import respx
+from cryptography.fernet import Fernet
 from starlette.requests import Request
 
 import litellm
@@ -25,7 +34,12 @@ from litellm.proxy._types import (
     PluginConfig,
     UserAPIKeyAuth,
 )
-from litellm.proxy.plugin_routes import list_plugins, register_plugins_from_config
+from litellm.proxy.plugin_routes import (
+    issue_plugin_session_claim,
+    list_plugins,
+    register_plugins_from_config,
+    verify_plugin_session_claim,
+)
 
 
 def _admin() -> UserAPIKeyAuth:
@@ -320,3 +334,50 @@ def test_plugin_proxy_refuses_non_admin_callers_without_contacting_the_plugin(
     assert response.status_code == 403
     assert response.body == b"Plugin proxy access requires proxy_admin role."
     assert not upstream.called
+
+
+def test_plugin_session_claim_opens_under_the_documented_hmac_plugin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt")
+    plugin_key: Final = base64.urlsafe_b64encode(hmac.new(b"sk-salt", b"chat-ui", hashlib.sha256).digest())
+
+    claim: Final[dict[str, object]] = json.loads(
+        Fernet(plugin_key).decrypt(issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin"))
+    )
+
+    assert (claim["plugin"], claim["user_id"], claim["user_role"]) == ("chat-ui", "user-1", "proxy_admin")
+
+
+@pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_urandom_or_hmac_new(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def outside_the_fips_provider(*_: object) -> NoReturn:
+        raise AssertionError("fips_mode must not draw on os.urandom or hmac.new")
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
+    monkeypatch.setattr(os, "urandom", outside_the_fips_provider)
+    monkeypatch.setattr(hmac, "new", outside_the_fips_provider)
+    monkeypatch.setattr(time, "time", lambda: 1_800_000_000.0)
+    fixed_input: Final = (
+        (1).to_bytes(4, "big") + b"litellm-plugin:session-claim:" + b"\x00" + b"chat-ui" + (256).to_bytes(4, "big")
+    )
+    plugin_key: Final = base64.urlsafe_b64encode(hmac.digest(bytes(range(32)), fixed_input, "sha256"))
+    token: Final = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
+
+    claim: Final[dict[str, object]] = json.loads(Fernet(plugin_key).decrypt(token))
+
+    assert (claim["plugin"], claim["user_id"], claim["user_role"]) == ("chat-ui", "user-1", "proxy_admin")
+    assert verify_plugin_session_claim("chat-ui", token) == claim
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_a_plugin_session_claim_under_a_salt_key_that_is_not_hex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt")
+
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be at least 32 bytes of hex"):
+        issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
