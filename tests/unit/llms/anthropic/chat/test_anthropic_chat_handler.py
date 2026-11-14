@@ -1744,6 +1744,66 @@ def test_web_search_tool_result_no_extra_tool_calls():
     # The {} chunks from web_search_tool_result should NOT have been emitted as tool calls
 
 
+def _streamed_block(index: int, block: dict[str, object], *deltas: dict[str, object]) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def test_streamed_search_turn_replays_its_blocks_in_the_order_claude_sent_them():
+    events: Final = (
+        {"type": "message_start", "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}}},
+        *_streamed_block(
+            0,
+            {"type": "thinking", "thinking": ""},
+            {"type": "thinking_delta", "thinking": "I should search."},
+            {"type": "signature_delta", "signature": "sig-before"},
+        ),
+        *_streamed_block(
+            1,
+            {"type": "text", "text": ""},
+            {"type": "text_delta", "text": "Let me "},
+            {"type": "text_delta", "text": "search."},
+        ),
+        *_streamed_block(
+            2,
+            {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {}},
+            {"type": "input_json_delta", "partial_json": '{"query": "Paris"}'},
+        ),
+        *_streamed_block(3, {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Web", "content": []}),
+        *_streamed_block(
+            4,
+            {"type": "thinking", "thinking": ""},
+            {"type": "thinking_delta", "thinking": "The results say France."},
+            {"type": "signature_delta", "signature": "sig-after"},
+        ),
+        *_streamed_block(5, {"type": "text", "text": ""}, {"type": "text_delta", "text": "Paris is in France."}),
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 20}},
+        {"type": "message_stop"},
+    )
+    user_message: Final = {"role": "user", "content": "Where is Paris?"}
+    assistant: Final = _assemble_stream(events).choices[0].message
+
+    saved_history: Final = json.loads(
+        json.dumps([user_message, assistant.model_dump(), {"role": "user", "content": "And Lyon?"}])
+    )
+    replayed: Final = anthropic_messages_pt(messages=saved_history, model="claude-opus-5-5", llm_provider="anthropic")
+
+    assert [
+        (block["type"], block.get("signature") or block.get("text") or block.get("id") or block.get("tool_use_id"))
+        for block in replayed[1]["content"]
+    ] == [
+        ("thinking", "sig-before"),
+        ("text", "Let me search."),
+        ("server_tool_use", "srvtoolu_01Web"),
+        ("web_search_tool_result", "srvtoolu_01Web"),
+        ("thinking", "sig-after"),
+        ("text", "Paris is in France."),
+    ]
+
+
 def test_current_content_block_type_tracking():
     """
     Test that current_content_block_type is properly tracked and reset.
