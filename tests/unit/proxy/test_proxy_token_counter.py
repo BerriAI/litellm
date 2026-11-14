@@ -3446,6 +3446,78 @@ async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_fr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages_format", "tools", "forced", "unforced"),
+    [
+        pytest.param(
+            "openai", [_KIMI_WEATHER], {"type": "function", "function": {"name": "get_weather"}}, "auto", id="openai"
+        ),
+        pytest.param(
+            "anthropic",
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "input_schema": _KIMI_WEATHER["function"]["parameters"],
+                }
+            ],
+            {"type": "tool", "name": "get_weather"},
+            {"type": "auto"},
+            id="anthropic",
+        ),
+    ],
+)
+@pytest.mark.parametrize("drops_tool_choice", [False, True])
+async def test_bedrock_kimi_k3_count_adds_the_template_message_of_a_forced_tool_choice_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    messages_format: TokenCountMessagesFormat,
+    tools: list[dict],
+    forced: dict[str, object],
+    unforced: str | dict[str, object],
+    drops_tool_choice: bool,
+):
+    _framed_kimi(monkeypatch)
+    if drops_tool_choice:
+        monkeypatch.setattr(
+            litellm.proxy.proxy_server,
+            "llm_router",
+            Router(
+                model_list=[
+                    {
+                        "model_name": "kimi",
+                        "litellm_params": {
+                            "model": "bedrock/us.moonshotai.kimi-k3",
+                            "additional_drop_params": ["tool_choice"],
+                        },
+                    }
+                ]
+            ),
+        )
+    encoding: Final = _available_kimi_k3(monkeypatch, tmp_path)
+    question: Final = [{"role": "user", "content": "Weather in Paris?"}]
+
+    async def count(tool_choice: str | dict[str, object] | None) -> int:
+        counted: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", messages=question, tools=tools, tool_choice=tool_choice),
+            call_endpoint=True,
+            messages_format=messages_format,
+        )
+        assert counted.tokenizer_type == "huggingface_tokenizer"
+        return counted.total_tokens
+
+    plain: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER])
+    required: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", question, [_KIMI_WEATHER], "required")
+    unset: Final = await count(None)
+
+    assert plain is not None and required is not None and required > plain
+    assert (await count(unforced), await count(forced)) == (
+        unset,
+        unset if drops_tool_choice else unset + required - plain,
+    )
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_deployment_with_a_custom_tokenizer_keeps_counting_with_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

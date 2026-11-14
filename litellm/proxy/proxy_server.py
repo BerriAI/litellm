@@ -15850,17 +15850,19 @@ async def _kimi_k3_count(
     model: str,
     messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
 ) -> int | None:
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
     if encoding is None:
         return None
     match messages_format:
         case "anthropic":
+            fields: Final = request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
             return await offload_token_count(kimi_k3_anthropic_tokens)(
-                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+                encoding, model, fields if tool_choice is None else {**fields, "tool_choice": tool_choice}
             )
         case "openai":
-            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools, tool_choice)
 
 
 class _TokenCountDeployment(TypedDict, total=False):
@@ -16566,6 +16568,7 @@ async def _count_request_tokens(
             model_to_use,
             kimi_k3_messages,
             counted_tools,
+            counted_tool_choice,
         )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
