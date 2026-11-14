@@ -1408,6 +1408,7 @@ export interface paths {
          *     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
          *     anonymous or bad-flow request just 400s. The native-client consent page adds
          *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+         *     Each ``server`` field is the id of a server the connect page shows as on.
          */
         post: operations["authorize_complete_authorize_complete_post"];
         delete?: never;
@@ -9818,7 +9819,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -29236,6 +29237,11 @@ export interface components {
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /**
+             * Server
+             * @default []
+             */
+            server: string[];
             /** Team Id */
             team_id?: string | null;
         };
@@ -32383,8 +32389,8 @@ export interface components {
             proxy_config_reload_interval_seconds: number;
             /**
              * Redact Tokens In Spend Logs
-             * @description Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.
-             * @default true
+             * @description Set True to mask token-shaped secrets in stored spend log request and response content. Default is False.
+             * @default false
              */
             redact_tokens_in_spend_logs: boolean;
             /**
@@ -69235,7 +69241,9 @@ export interface operations {
                 /** @description Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start */
                 end_date: string;
                 /** @description Comma-separated IDs for up to 100 visible customer organizations */
-                customer_org_ids: string;
+                customer_org_ids?: string | null;
+                /** @description One exact customer organization ID, without splitting or trimming */
+                customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
             };

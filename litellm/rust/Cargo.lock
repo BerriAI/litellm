@@ -4348,6 +4348,7 @@ dependencies = [
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
@@ -4560,6 +4561,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

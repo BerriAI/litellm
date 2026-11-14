@@ -147,8 +147,8 @@ const activityResponse = (url: URL) => {
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
   const url = requestUrl(input);
   if (url.pathname === "/management/v1/customer_organizations/daily/activity/aggregated") {
-    const ids = url.searchParams.get("customer_org_ids")?.split(",") ?? [];
-    const selected = records.filter((row) => ids.includes(row.organization));
+    const organizationId = url.searchParams.get("customer_org_id");
+    const selected = records.filter((row) => row.organization === organizationId);
     return json({
       results: selected.map((row) => daily(row, row.organization)),
       metadata: {
@@ -368,7 +368,7 @@ describe("customerHierarchyUsageCall", () => {
     expect(organizationTotalUrls()).toHaveLength(1);
     expect(organizationTotalUrls()[0].searchParams.get("start_date")).toBe(request.monthStartDate);
     expect(organizationTotalUrls()[0].searchParams.get("end_date")).toBe(request.monthEndDate);
-    expect(organizationTotalUrls()[0].searchParams.get("customer_org_ids")).toBe(request.scope.org);
+    expect(organizationTotalUrls()[0].searchParams.get("customer_org_id")).toBe(request.scope.org);
   });
 
   it("should never send an empty descendant filter and should retain unassigned usage", async () => {
@@ -438,6 +438,24 @@ describe("customerHierarchyUsageCall", () => {
 });
 
 describe("customerChildSpendCall", () => {
+  it("should retain an organization's exact identifier when loading its spend denominator", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/daily/activity/aggregated") && url.searchParams.get("customer_org_id") === " org-1 ")
+        return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 29 } });
+      return serve(input);
+    });
+    const childRequest = {
+      ...request,
+      organizationId: " org-1 ",
+      kind: "teams" as const,
+      entities: [customerUsageEntity("team-a", teams[0])],
+    };
+    const result = await customerChildSpendCall(childRequest);
+    expect(result.organizationSpend).toBe(29);
+    expect(result.monthly[0].spend).toBe(3);
+  });
+
   it.each(["teams", "members"] as const)(
     "should load complete totals for a busy organization without downloading its raw history for %s",
     async (kind) => {
@@ -467,7 +485,7 @@ describe("customerChildSpendCall", () => {
       expect(result.yearly).toEqual(result.monthly);
       expect(organizationTotalUrls()).toHaveLength(1);
       expect(Object.fromEntries(organizationTotalUrls()[0].searchParams)).toEqual({
-        customer_org_ids: "org-1",
+        customer_org_id: "org-1",
         start_date: request.monthStartDate,
         end_date: request.monthEndDate,
       });

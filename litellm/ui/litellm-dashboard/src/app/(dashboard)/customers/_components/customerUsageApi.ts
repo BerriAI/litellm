@@ -161,7 +161,7 @@ const organizationActivityTotals = async (
       query: {
         start_date: request.startDate,
         end_date: request.endDate,
-        customer_org_ids: organizationId,
+        customer_org_id: organizationId,
       },
     },
   );

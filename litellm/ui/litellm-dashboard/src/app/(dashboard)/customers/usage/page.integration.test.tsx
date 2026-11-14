@@ -153,7 +153,7 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
     const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
     const dimension = activityDimension(resource);
     const filter = filterFor(resource);
-    const ids = url.searchParams.get(filter)?.split(",") ?? [];
+    const ids = aggregated ? [url.searchParams.get("customer_org_id")] : url.searchParams.get(filter)?.split(",") ?? [];
     const selected = records
       .filter((record) => ids.includes(record[dimension]))
       .filter(
