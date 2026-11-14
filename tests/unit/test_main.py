@@ -5572,6 +5572,87 @@ async def test_a_replayed_fake_stream_keeps_the_provider_headers_and_served_tier
     assert {chunk.system_fingerprint for chunk in chunks} == {"fp_replayed"}, chunks
 
 
+_OPENAI_TEXT_ANSWER: Final = {
+    "id": "cmpl-replayed",
+    "object": "text_completion",
+    "created": 1712697600,
+    "model": "gpt-3.5-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _fake_streamed_text(entrypoint: str, model: str) -> str:
+    request: Final = {
+        "model": model,
+        "api_key": "fake-key",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "fake_stream": True,
+    }
+    match entrypoint:
+        case "text_completion":
+            replayed_text: Final = litellm.text_completion(prompt="hi", **request)
+            return "".join(chunk.choices[0].text or "" for chunk in replayed_text if chunk.choices)
+        case "atext_completion":
+            streamed: Final = await litellm.atext_completion(prompt="hi", **request)
+            return "".join([chunk.choices[0].text or "" async for chunk in streamed if chunk.choices])
+        case _:
+            replayed: Final = litellm.completion(messages=[{"role": "user", "content": "hi"}], **request)
+            return "".join(chunk.choices[0].delta.content or "" for chunk in replayed if chunk.choices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entrypoint, model, url, answer",
+    [
+        (
+            "text_completion",
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            _OPENAI_TEXT_ANSWER,
+        ),
+        (
+            "atext_completion",
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            _OPENAI_TEXT_ANSWER,
+        ),
+        (
+            "completion",
+            "text-completion-codestral/codestral-latest",
+            "https://codestral.mistral.ai/v1/fim/completions",
+            {
+                "id": "cmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "codestral-latest",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+    ],
+    ids=["text_completion", "atext_completion", "codestral_completion"],
+)
+async def test_a_text_completion_fake_stream_replays_the_plain_answer_as_a_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    text: Final = await _fake_streamed_text(entrypoint, model)
+
+    assert text == "ok"
+    assert route.call_count == 1
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("stream") is not True and "fake_stream" not in sent, sent
+
+
 @pytest.mark.asyncio
 async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acompletion(
     monkeypatch: pytest.MonkeyPatch,

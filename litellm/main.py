@@ -25,7 +25,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -1165,21 +1165,39 @@ def _replayed_stream(
     )
 
 
-async def _replayed_when_done(
-    pending: Awaitable[ModelResponse | CustomStreamWrapper], replay: Callable[[ModelResponse], CustomStreamWrapper]
+_DispatchedAnswer: TypeAlias = ModelResponse | TextCompletionResponse | CustomStreamWrapper
+
+
+def _replayed_answer(
+    done: _DispatchedAnswer, replay: Callable[[ModelResponse], CustomStreamWrapper]
 ) -> ModelResponse | CustomStreamWrapper:
-    done: Final = await pending
-    return replay(done) if isinstance(done, ModelResponse) else done
+    match done:
+        case ModelResponse():
+            return replay(done)
+        case TextCompletionResponse():
+            return replay(
+                litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=done, model_response_object=ModelResponse()
+                )
+            )
+        case CustomStreamWrapper():
+            return done
+
+
+async def _replayed_when_done(
+    pending: Awaitable[_DispatchedAnswer], replay: Callable[[ModelResponse], CustomStreamWrapper]
+) -> ModelResponse | CustomStreamWrapper:
+    return _replayed_answer(await pending, replay)
 
 
 def _replayed_as_stream(
-    dispatched: Awaitable[ModelResponse | CustomStreamWrapper] | ModelResponse | CustomStreamWrapper,
+    dispatched: Awaitable[_DispatchedAnswer] | _DispatchedAnswer,
     replay: Callable[[ModelResponse], CustomStreamWrapper] | None,
-) -> Awaitable[ModelResponse | CustomStreamWrapper] | ModelResponse | CustomStreamWrapper:
-    if replay is None or isinstance(dispatched, CustomStreamWrapper):
+) -> Awaitable[_DispatchedAnswer] | _DispatchedAnswer:
+    if replay is None:
         return dispatched
-    if isinstance(dispatched, ModelResponse):
-        return replay(dispatched)
+    if isinstance(dispatched, (ModelResponse, TextCompletionResponse, CustomStreamWrapper)):
+        return _replayed_answer(dispatched, replay)
     return _replayed_when_done(dispatched, replay)
 
 
