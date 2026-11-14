@@ -2,6 +2,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
@@ -270,7 +271,14 @@ class LiteLLM_Proxy_MCP_Handler:
             tool_permissions: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
                 toolset_ids=list(resolved_toolset_ids)
             )
-            all_server_ids: Final = list(set(tool_permissions.keys()) | set(resolved_mcp_servers))
+            held_server_ids: Final = frozenset(
+                await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+            )
+            named_server_groups: Final = [
+                await LiteLLM_Proxy_MCP_Handler._server_ids_named(name) for name in resolved_mcp_servers
+            ]
+            named_server_ids: Final = frozenset(chain.from_iterable(named_server_groups))
+            all_server_ids: Final = list(set(tool_permissions.keys()) | (named_server_ids & held_server_ids))
             existing_op: Final = user_api_key_auth.object_permission
             if existing_op is not None:
                 merged_tool_perms: Final = dict(existing_op.mcp_tool_permissions or {})
@@ -338,6 +346,20 @@ class LiteLLM_Proxy_MCP_Handler:
             return ("server", name)
         verbose_logger.debug("Key does not have access to toolset '%s', denying it.", name)
         return ("denied_toolset", name)
+
+    @staticmethod
+    async def _server_ids_named(name: str) -> tuple[str, ...]:
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server: Final = global_mcp_server_manager.get_mcp_server_by_name(name)
+        if server is not None:
+            return (server.server_id,)
+        return tuple(await MCPRequestHandler.get_mcp_servers_from_access_groups([name]))
 
     @staticmethod
     async def _holds_access_group_named(name: str, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:

@@ -115,16 +115,17 @@ def initialize_query_engine(client: "Prisma") -> None:
             loop: Final = asyncio.get_running_loop()
             ready: Final[asyncio.Future[str | None]] = loop.create_future()
             Thread(target=_forward_output, args=(stream, loop, ready), daemon=True).start()
+
+            async def connect() -> None:
+                address: Final = await ready
+                if address is None:
+                    raise errors.EngineConnectionError("Query engine exited before publishing its listening address")
+                self.url = address
+                await self.request("GET", "/status")
+
             try:
-                async with asyncio.timeout(timeout.total_seconds()):
-                    address: Final = await ready
-                    if address is None:
-                        raise errors.EngineConnectionError(
-                            "Query engine exited before publishing its listening address"
-                        )
-                    self.url = address
-                    await self.request("GET", "/status")
-            except TimeoutError as error:
+                await asyncio.wait_for(connect(), timeout.total_seconds())
+            except asyncio.TimeoutError as error:
                 raise errors.EngineConnectionError(
                     "Timed out waiting for the query engine's listening address"
                 ) from error

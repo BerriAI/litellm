@@ -2818,6 +2818,16 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    if (
+        client is None
+        and not (api_key or litellm.api_key)
+        and (json_provider := JSONProviderRegistry.get(custom_llm_provider)) is not None
+    ):
+        raise litellm.AuthenticationError(
+            message=f"Set {json_provider.api_key_env} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
@@ -2828,8 +2838,8 @@ def _complete_custom_openai(
     api_key = (
         api_key
         or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+        or (None if JSONProviderRegistry.exists(custom_llm_provider) else litellm.openai_key)
+        or (None if JSONProviderRegistry.exists(custom_llm_provider) else get_secret("OPENAI_API_KEY"))
     )
 
     headers = headers or litellm.headers
