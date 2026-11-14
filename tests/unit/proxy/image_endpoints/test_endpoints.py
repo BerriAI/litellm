@@ -30,6 +30,10 @@ from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
 
 
+async def _pass_through_during_call_hook(*, data, user_api_key_dict, call_type):
+    return data
+
+
 @pytest.mark.asyncio
 async def test_image_generation_prompt_rerouting(monkeypatch):
     """Ensure image prompts are exposed to guardrails and restored afterwards."""
@@ -66,6 +70,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
 
     fake_proxy_logger = SimpleNamespace(
         pre_call_hook=fake_pre_call_hook,
+        during_call_hook=_pass_through_during_call_hook,
         update_request_status=fake_update_request_status,
         post_call_failure_hook=fake_post_call_failure_hook,
         post_call_success_hook=fake_post_call_success_hook,
@@ -283,7 +288,11 @@ async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(mon
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj",
-        SimpleNamespace(pre_call_hook=fake_pre_call_hook, post_call_failure_hook=fake_post_call_failure_hook),
+        SimpleNamespace(
+            pre_call_hook=fake_pre_call_hook,
+            during_call_hook=_pass_through_during_call_hook,
+            post_call_failure_hook=fake_post_call_failure_hook,
+        ),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
@@ -341,7 +350,11 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj",
-        SimpleNamespace(pre_call_hook=fake_pre_call_hook, post_call_failure_hook=fake_post_call_failure_hook),
+        SimpleNamespace(
+            pre_call_hook=fake_pre_call_hook,
+            during_call_hook=_pass_through_during_call_hook,
+            post_call_failure_hook=fake_post_call_failure_hook,
+        ),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")

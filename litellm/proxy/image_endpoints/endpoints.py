@@ -168,6 +168,12 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        data = await proxy_logging_obj.during_call_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type="image_generation",
+        )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,

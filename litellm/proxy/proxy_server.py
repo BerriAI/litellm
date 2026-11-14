@@ -14229,6 +14229,11 @@ async def audio_transcriptions(
                 data=data,
                 call_type="transcription",
             )
+            data = await proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type="transcription",
+            )
 
             ## ROUTE TO CORRECT ENDPOINT ##
             llm_call: Final = await route_request(
