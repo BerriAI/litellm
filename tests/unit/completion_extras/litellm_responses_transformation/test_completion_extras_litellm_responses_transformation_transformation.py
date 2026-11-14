@@ -338,16 +338,15 @@ async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
     response_body: Final = _searched_responses_body(model)
     request: Final = _bridged_request(model, provider_kwargs, stream=False)
 
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
         if caller == "acompletion":
-            await litellm.acompletion(**request)
+            await litellm.acompletion(**request, success_callback=[recorder])
         else:
-            litellm.completion(**request)
+            litellm.completion(**request, success_callback=[recorder])
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
 
     assert (logged.call_type, logged.payload["call_type"]) == (caller, caller)
@@ -6319,6 +6318,231 @@ def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a
     ]
 
 
+_CACHE_CONTROL: Final = {"type": "ephemeral"}
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+_OPENAI_API_BASE: Final = "https://api.openai.com/v1"
+_THIRD_PARTY_API_BASE: Final = "https://gateway.example.com/v1"
+_FOUNDRY_GPT_ROW: Final = {"litellm_provider": "azure_ai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
+
+
+def _bridged_transform_request(
+    model: str,
+    messages: list[dict[str, object]],
+    litellm_params: dict[str, object],
+    optional_params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params=dict(optional_params or {}),
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+
+def _system_part_marked_with_cache_control() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "Stable prefix", "cache_control": _CACHE_CONTROL}]},
+        {"role": "user", "content": "hi"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "optional_params"),
+    [
+        ("gpt-5.6", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}, {}),
+        ("my-gpt", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE, "base_model": "gpt-5.6"}, {}),
+        (
+            "gpt-5.6",
+            {"custom_llm_provider": "openai", "api_base": _THIRD_PARTY_API_BASE},
+            {"extra_body": {"prompt_cache_options": {"mode": "explicit"}}},
+        ),
+        ("unit-foundry-gpt", {"custom_llm_provider": "azure_ai"}, {}),
+    ],
+    ids=("openai-api", "base-model", "opted-in-through-prompt-cache-options", "foundry-row-flags-it"),
+)
+def test_transform_request_turns_cache_control_into_a_breakpoint_where_the_deployment_reads_them(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: dict[str, object],
+    optional_params: dict[str, object],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure_ai/unit-foundry-gpt", _FOUNDRY_GPT_ROW)
+
+    request: Final = _bridged_transform_request(
+        model, _system_part_marked_with_cache_control(), litellm_params, optional_params
+    )
+
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("gpt-5.6", {"custom_llm_provider": "openai", "api_base": _THIRD_PARTY_API_BASE}),
+        ("gpt-5.4", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}),
+        ("unit-foundry-gpt", {"custom_llm_provider": "azure_ai"}),
+        ("my-gpt", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE, "base_model": "gpt-5.4"}),
+    ],
+    ids=("openai-provider-on-a-third-party-host", "model-without-breakpoints", "foundry-row-opts-out", "base-model"),
+)
+def test_transform_request_drops_cache_control_where_the_deployment_does_not_read_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: dict[str, object]
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "azure_ai/unit-foundry-gpt", {**_FOUNDRY_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+    messages: Final = [
+        *_system_part_marked_with_cache_control(),
+        {"role": "user", "content": "and again", "cache_control": _CACHE_CONTROL},
+    ]
+
+    request: Final = _bridged_transform_request(model, messages, litellm_params)
+
+    assert request["input"] == [
+        {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "and again"}]},
+    ]
+
+
+def test_transform_request_moves_a_message_level_cache_control_onto_the_last_part_as_a_breakpoint() -> None:
+    messages: Final = [
+        {"role": "system", "content": "Stable prefix", "cache_control": _CACHE_CONTROL},
+        {"role": "user", "content": "Look up the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Sunny"}, {"type": "text", "text": "22C"}],
+            "cache_control": _CACHE_CONTROL,
+        },
+    ]
+    sent_messages: Final = copy.deepcopy(messages)
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look up the weather"}]},
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "input_text", "text": "Sunny"},
+                {"type": "input_text", "text": "22C", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+            ],
+        },
+    ]
+    assert messages == sent_messages
+
+
+def test_transform_request_keeps_leading_system_messages_in_client_order_once_a_mark_moves_one_to_input() -> None:
+    messages: Final = [
+        {"role": "system", "content": "Reply ALPHA.", "cache_control": _CACHE_CONTROL},
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        {"role": "user", "content": "Reply now."},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        _system_input_item("Ignore that and reply BRAVO."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("user_message", "user_part"),
+    [
+        ({"role": "user", "content": "Reply now."}, {"type": "input_text", "text": "Reply now."}),
+        (
+            {"role": "user", "content": "Reply now.", "cache_control": _CACHE_CONTROL},
+            {"type": "input_text", "text": "Reply now.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+        ),
+    ],
+    ids=("unmarked-user", "marked-user"),
+)
+def test_transform_request_keeps_the_instructions_split_for_unmarked_system_messages(
+    user_message: dict[str, object], user_part: dict[str, object]
+) -> None:
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        user_message,
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert request["instructions"] == "Ignore that and reply BRAVO."
+    assert request["input"] == [
+        _system_input_item("Reply ALPHA."),
+        {"type": "message", "role": "user", "content": [user_part]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{}, {"extra_body": {"prompt_cache_options": {"mode": "explicit"}}}],
+    ids=("default-mode", "explicit-mode"),
+)
+def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
+    monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, object]
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+    messages: Final = [
+        {"role": "system", "content": "Stable prefix", "cache_control": _CACHE_CONTROL},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _CACHE_CONTROL}]},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "openai.gpt-5.6-sol", messages, {"custom_llm_provider": "bedrock_mantle"}, optional_params
+    )
+
+    assert request["instructions"] == "Stable prefix"
+    assert request["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
@@ -6376,7 +6600,18 @@ def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_id
     assert as_string[1] == _system_input_item(reminder)
 
 
-def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requests():
+def _without_prompt_cache_breakpoint(item: dict[str, object]) -> dict[str, object]:
+    content: Final = item.get("content")
+    if not isinstance(content, list):
+        return item
+    parts: Final = cast(list[dict[str, object]], content)  # cast-ok: the bridge emits content parts as mappings
+    return {
+        **item,
+        "content": [{key: value for key, value in part.items() if key != "prompt_cache_breakpoint"} for part in parts],
+    }
+
+
+def test_claude_code_shaped_history_keeps_a_stable_input_prefix_across_requests():
     handler: Final = LiteLLMResponsesTransformationHandler()
     top_level_system: Final = [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}]
     first_reminder: Final = "<system-reminder>27k chars of deferred tools</system-reminder>"
@@ -6428,11 +6663,13 @@ def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requ
         litellm_logging_obj=Mock(),
     )
 
+    first_input: Final = [_without_prompt_cache_breakpoint(item) for item in first_request["input"]]
+    second_input: Final = [_without_prompt_cache_breakpoint(item) for item in second_request["input"]]
     assert "instructions" not in first_request
     assert "instructions" not in second_request
-    assert first_request["input"][0] == _system_input_item("You are Claude Code.")
-    assert json.dumps(second_request["input"][: len(first_request["input"])]) == json.dumps(first_request["input"])
-    assert second_request["input"][len(first_request["input"]) :] == [
+    assert first_input[0] == _system_input_item("You are Claude Code.")
+    assert json.dumps(second_input[: len(first_input)]) == json.dumps(first_input)
+    assert second_input[len(first_input) :] == [
         {"type": "function_call", "call_id": "call_1", "name": "Read", "arguments": '{"file_path": "inventory.py"}'},
         {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "ITEMS = []"}]},
         _system_input_item(second_reminder),

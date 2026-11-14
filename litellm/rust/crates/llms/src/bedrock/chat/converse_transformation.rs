@@ -203,6 +203,8 @@ impl BaseConfig for AmazonConverseConfig {
                     // Anthropic. A caller calling `.strip()` on it would break
                     // on this path alone.
                     content: Some(text),
+                    reasoning_content: None,
+                    thinking_blocks: None,
                 },
                 finish_reason: finish_reason_for(
                     ConverseStopReason::parse(response.stop_reason)
@@ -308,7 +310,7 @@ fn converse_body(conversation: &Conversation, optional_params: &Map<String, Valu
         .map(|turn| {
             json!({
                 "role": <&'static str>::from(turn.role),
-                "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
+                "content": turn.texts().map(|text| json!({"text": text})).collect::<Vec<_>>(),
             })
         })
         .collect();

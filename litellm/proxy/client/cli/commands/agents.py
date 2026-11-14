@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -27,16 +28,21 @@ from litellm.proxy.common_utils.codex_model_catalog import (
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
-from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
+from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_pkce_login, load_token, login
 from .claude_settings import (
+    API_KEY_HELPER_KEY,
     ENV_KEY,
+    LAUNCH_KEY_OVERLAY_PREFIX,
+    OVERLAY_FILE_NAME,
     ClaudeSettingsError,
     claude_settings_path,
     install_statusline_script,
+    is_lite_api_key_helper,
+    is_lite_api_key_helper_for,
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
-from .config import subscription_default
+from .config import pkce_default, subscription_default
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
@@ -130,6 +136,7 @@ def build_agent_env(
     profiles: frozenset[str],
     *,
     subscription: bool = False,
+    helper_renews_key: bool = False,
 ) -> dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
@@ -148,6 +155,8 @@ def build_agent_env(
     travels in the x-litellm-api-key header through ANTHROPIC_CUSTOM_HEADERS, and no
     ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
     Claude Code stop using the subscription (and its connectors).
+    With helper_renews_key=True the Anthropic profile leaves ANTHROPIC_AUTH_TOKEN out, so Claude Code takes
+    its key from the renewing apiKeyHelper in its settings instead of a launch-time copy that expires.
     With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
     LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY and
     OPENAI_BASE_URL are left exactly as the caller had them, so the key is never offered to Codex as an
@@ -161,6 +170,8 @@ def build_agent_env(
             env[ANTHROPIC_CUSTOM_HEADERS_ENV] = _custom_headers_with_litellm_key(
                 env.get(ANTHROPIC_CUSTOM_HEADERS_ENV, ""), api_key
             )
+            env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
+        elif helper_renews_key:
             env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
         else:
             env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
@@ -246,7 +257,7 @@ def _settings_json(base: Mapping[str, JsonValue], api_key: str, inherited_header
         own_headers if isinstance(own_headers, str) else inherited_headers, api_key
     )
     overlay: Final = {**base_env, **_SUBSCRIPTION_SETTINGS_ENV, ANTHROPIC_CUSTOM_HEADERS_ENV: headers}
-    return json.dumps({**base, ENV_KEY: overlay}, separators=(",", ":"))
+    return json.dumps({**base, API_KEY_HELPER_KEY: "", ENV_KEY: overlay}, separators=(",", ":"))
 
 
 def _inherited_custom_headers(settings_files: Sequence[Mapping[str, JsonValue]], environ: Mapping[str, str]) -> str:
@@ -274,21 +285,81 @@ def claude_settings_files(
         raise AgentRunError(str(e)) from e
 
 
-OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+def claude_api_key_helper(
+    args: Sequence[str],
+    read_settings: Callable[[Path], Mapping[str, JsonValue]],
+    environ: Mapping[str, str],
+    project_dir: Path,
+) -> JsonValue:
+    """The first apiKeyHelper in Claude Code's settings precedence, the user's last `--settings` on top. One lite
+    cannot read counts as none, so the key stays exported as before."""
+    override_value, _ = _split_settings_flags(args)
+    try:
+        override: Final = () if override_value is None else (_load_settings_override(override_value),)
+    except AgentRunError:
+        return None
+    settings_files: Final = (*override, *_readable_settings_files(read_settings, environ, project_dir))
+    return next((settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None)
 
 
-def write_settings_overlay(text: str, environ: Mapping[str, str]) -> Path:
+def _claude_settings_blank_auth_token(
+    read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
+) -> bool:
+    """Whether the ANTHROPIC_AUTH_TOKEN Claude Code takes from its settings files is the blank one a
+    `lite login --pkce --config-claude` writes, which hides a key exported at launch."""
+    tokens: Final = (
+        _settings_env(settings).get(ANTHROPIC_AUTH_TOKEN_ENV)
+        for settings in _readable_settings_files(read_settings, environ, project_dir)
+    )
+    return next((token for token in tokens if token is not None), None) == ""
+
+
+def _launch_key_overlay_args(
+    command: Sequence[str],
+    base_url: str,
+    api_key: str,
+    settings_hide_key: bool,
+    environ: Mapping[str, str],
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """A `--settings` overlay carrying the key this launch resolved, and the proxy it was issued for, when Claude
+    Code's settings would hide it. It merges the user's last `--settings`, since Claude Code keeps only the last.
+    The file is named by its contents, so two launches share one only when they carry the same settings."""
+    if not settings_hide_key:
+        return (), tuple(command[1:])
+    user_value, rest = _split_settings_flags(tuple(command[1:]))
+    base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
+    overlay: Final = {
+        API_KEY_HELPER_KEY: "",
+        **base,
+        ENV_KEY: {
+            ANTHROPIC_AUTH_TOKEN_ENV: api_key,
+            ANTHROPIC_BASE_URL_ENV: base_url.rstrip("/"),
+            **_settings_env(base),
+        },
+    }
+    text: Final = json.dumps(overlay, separators=(",", ":"))
+    name: Final = f"{LAUNCH_KEY_OVERLAY_PREFIX}{hashlib.sha256(text.encode()).hexdigest()[:16]}.json"
+    return (_SETTINGS_FLAG, str(write_overlay(name, text, environ))), rest
+
+
+def _readable_settings_files(
+    read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
+) -> tuple[Mapping[str, JsonValue], ...]:
+    try:
+        return claude_settings_files(read_settings, environ, project_dir)
+    except AgentRunError:
+        return ()
+
+
+def write_settings_overlay(name: str, text: str, environ: Mapping[str, str]) -> Path:
     """Write the overlay next to Claude Code's own settings.json (so under CLAUDE_CONFIG_DIR when set) and return
-    its path. One file per user, rewritten on every launch, mode 0600 whether or not it already existed. It carries
-    the LiteLLM key, which is why it is a private file and not an inline `--settings` argument that every local
-    user could read from the process list, and why it does not pile up in the temp dir."""
-    path: Final = claude_settings_path(environ).parent / OVERLAY_FILE_NAME
+    its path. The file is replaced in one step with mode 0600, so a Claude Code starting at the same time never
+    reads half of it. It carries the LiteLLM key, which is why it is a private file and not an inline `--settings`
+    argument that every local user could read from the process list, and why it does not pile up in the temp dir."""
+    path: Final = claude_settings_path(environ).parent / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    if os.name == "posix":
-        os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    _replace_file(path, text)
     return path
 
 
@@ -297,22 +368,23 @@ def subscription_launch_args(
     api_key: str,
     environ: Mapping[str, str],
     settings_files: Sequence[Mapping[str, JsonValue]],
-    write_overlay: Callable[[str, Mapping[str, str]], Path],
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The `--settings` that keeps Claude Code on its claude.ai login, plus the user's remaining args.
 
     Claude Code applies `env` from its settings files over the process environment, so a key that `lite up` or
     `lite configure claude` left in ANTHROPIC_AUTH_TOKEN would land back in `Authorization`, and an
-    ANTHROPIC_CUSTOM_HEADERS there would drop the x-litellm-api-key header. The overlay blanks both credential
-    keys (read as unset for this session only) and carries the custom headers with the LiteLLM key appended,
-    taking the headers from the user's `--settings`, else the settings files in Claude Code's precedence order,
-    else the process environment. Any `--settings` the user passed is stripped and the last one (inline JSON or a
-    file, the one Claude Code would keep) is merged in, since Claude Code keeps only the last `--settings`.
+    ANTHROPIC_CUSTOM_HEADERS there would drop the x-litellm-api-key header, and an apiKeyHelper outranks the
+    claude.ai login. The overlay blanks both credential keys and the helper (read as unset for this session only)
+    and carries the custom headers with the LiteLLM key appended, taking the headers from the user's
+    `--settings`, else the settings files in Claude Code's precedence order, else the process environment. Any
+    `--settings` the user passed is stripped and the last one (inline JSON or a file, the one Claude Code would
+    keep) is merged in, since Claude Code keeps only the last `--settings`.
     """
     inherited: Final = _inherited_custom_headers(settings_files, environ)
     user_value, rest = _split_settings_flags(tuple(command[1:]))
     base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
-    overlay: Final = write_overlay(_settings_json(base, api_key, inherited), environ)
+    overlay: Final = write_overlay(OVERLAY_FILE_NAME, _settings_json(base, api_key, inherited), environ)
     return (_SETTINGS_FLAG, str(overlay)), rest
 
 
@@ -1099,15 +1171,18 @@ def run_agent(
     reattach_terminal: Callable[[], None] | None = None,
     preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
     read_settings: Callable[[Path], Mapping[str, JsonValue]] = load_json_or_empty,
-    write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
+    write_overlay: Callable[[str, str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
+    key_from_stored_login: bool = False,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
     On success this replaces the current process and never returns. Raises
     AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
     a failed pre-launch config sync (pi). reattach_terminal, when given, runs
-    just before handoff to restore stdin.
+    just before handoff to restore stdin. key_from_stored_login says api_key is the
+    stored `lite login` key, the only one lite's apiKeyHelper may stand in for, since
+    it prints that login's key and would replace a key passed with --api-key.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -1123,6 +1198,23 @@ def run_agent(
         (verify_subscription if subscription else verify)(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
+    project: Final = project_dir if project_dir is not None else Path.cwd()
+    reads_helper: Final = not subscription and PROFILE_ANTHROPIC in profiles
+    configured_helper: Final = (
+        claude_api_key_helper(command[1:], read_settings, env_before_sync, project) if reads_helper else None
+    )
+    settings_helper: Final = (
+        claude_api_key_helper((), read_settings, env_before_sync, project) if reads_helper else None
+    )
+    helper_renews_key: Final = key_from_stored_login and is_lite_api_key_helper_for(configured_helper, base_url)
+    settings_hide_key: Final = (
+        reads_helper
+        and not helper_renews_key
+        and (
+            is_lite_api_key_helper(settings_helper)
+            or _claude_settings_blank_auth_token(read_settings, env_before_sync, project)
+        )
+    )
     synced: Final = (
         _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     )
@@ -1134,7 +1226,14 @@ def run_agent(
 
     env: Final = MappingProxyType(
         {
-            **build_agent_env(env_before_sync, base_url, api_key, profiles, subscription=subscription),
+            **build_agent_env(
+                env_before_sync,
+                base_url,
+                api_key,
+                profiles,
+                subscription=subscription,
+                helper_renews_key=helper_renews_key,
+            ),
             **(synced if isinstance(synced, Mapping) else _NO_EXTRA_ENV),
         }
     )
@@ -1149,13 +1248,11 @@ def run_agent(
             command,
             api_key,
             env_before_sync,
-            claude_settings_files(
-                read_settings, env_before_sync, project_dir if project_dir is not None else Path.cwd()
-            ),
+            claude_settings_files(read_settings, env_before_sync, project),
             write_overlay,
         )
         if subscription and os.path.basename(command[0]) == "claude"
-        else ((), tuple(command[1:]))
+        else _launch_key_overlay_args(command, base_url, api_key, settings_hide_key, env_before_sync, write_overlay)
     )
     if reattach_terminal is not None:
         reattach_terminal()
@@ -1173,15 +1270,17 @@ def resolve_api_key(ctx: click.Context) -> str:
     if api_key:
         return api_key
 
+    vault: Final = context_secret_vault(ctx)
+    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
     if not _is_interactive():
         raise click.ClickException(
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
-            "non-interactive use, or run `lite login` from a terminal."
+            f"non-interactive use, or run `{'lite login --pkce' if pkce else 'lite login'}` from a terminal."
         )
 
     click.echo("No LiteLLM credentials found; starting login...")
-    ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
+    ctx.invoke(login, pkce=pkce)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=vault)
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key
@@ -1210,6 +1309,7 @@ def _launch(
     ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
+    key_from_stored_login: Final = ctx_obj.get("api_key_from_token_file", False) or not ctx_obj.get("api_key")
     api_key: Final = resolve_api_key(ctx)
 
     display_name, _profiles = agent_profile(binary)
@@ -1225,6 +1325,7 @@ def _launch(
             skip_verify=skip_verify,
             subscription=use_subscription,
             reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
+            key_from_stored_login=key_from_stored_login,
         )
     except AgentRunError as e:
         raise click.ClickException(str(e))
@@ -1268,7 +1369,6 @@ def agent_commands() -> tuple[click.Command, ...]:
 
 
 __all__ = [
-    "OVERLAY_FILE_NAME",
     "AgentRunError",
     "ListedModel",
     "ModelSyncSkipped",

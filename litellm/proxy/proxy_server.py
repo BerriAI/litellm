@@ -517,6 +517,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     open_sse_before_first_byte,
     proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
@@ -581,7 +582,9 @@ from litellm.proxy.common_utils.model_listing_utils import (
     caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
+    dispatched_model,
     label_entries,
+    unlisted_alias_targets,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -12767,7 +12770,10 @@ class ProxyStartupEvent:
 async def _names_hidden_by_listing_callbacks(
     user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
 ) -> frozenset[str]:
-    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names)
+    return _with_router_aliases_to(await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names))
+
+
+def _with_router_aliases_to(hidden: frozenset[str]) -> frozenset[str]:
     if not hidden or llm_router is None:
         return hidden
     aliases: Final = llm_router.registry().aliases()
@@ -12780,11 +12786,47 @@ async def _names_hidden_by_listing_callbacks(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ListingCallbackVerdict:
+    hid: frozenset[str]
+    hidden: frozenset[str]
+    kept_alias_targets: frozenset[str]
+
+
+async def _listing_callback_verdict(
+    user_api_key_dict: UserAPIKeyAuth,
+    listed_names: Sequence[str],
+    alias_targets: Sequence[str],
+    internal_to_public: Mapping[str, str],
+) -> _ListingCallbackVerdict:
+    router_aliases: Final = llm_router.registry().aliases() if llm_router is not None else {}
+    target_reads: Final = MappingProxyType(
+        {
+            target: frozenset(
+                internal_to_public.get(name, name)
+                for name in (target, resolve_model_group_alias(router_aliases, target))
+                if name is not None
+            )
+            for target in alias_targets
+        }
+    )
+    offered_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(dict.fromkeys((*listed_names, *chain.from_iterable(target_reads.values()))))
+    )
+    hid: Final = offered_hid.intersection(listed_names)
+    return _ListingCallbackVerdict(
+        hid,
+        _with_router_aliases_to(hid),
+        frozenset(target for target, names in target_reads.items() if offered_hid.isdisjoint(names)),
+    )
+
+
 def _describable_model_groups(
     listed_entries: Sequence[tuple[str, str]],
     hidden_names: frozenset[str] | set[str],
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
+    kept_alias_targets: frozenset[str],
 ) -> DeployedModelGroups:
     listing_team_id: Final = team_id or user_api_key_dict.team_id
     return DeployedModelGroups(
@@ -12792,8 +12834,8 @@ def _describable_model_groups(
         hidden_names | undiscoverable_model_groups(llm_router, user_api_key_dict, listing_team_id),
         listing_team_id,
         (
-            frozenset(lookup_id for _, lookup_id in listed_entries)
-            if ProxyLogging.callback_capabilities().listed_models_filters
+            frozenset((*(lookup_id for _, lookup_id in listed_entries), *kept_alias_targets))
+            if ProxyLogging.filters_listed_models()
             else None
         ),
     )
@@ -12895,16 +12937,26 @@ async def _key_model_listing(
     excluded: Final = hidden_names | undiscoverable_model_names(
         names, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
-    listed_entries: Final = await _entries_kept_by_listing_callbacks(
-        TeamModelNameTranslator.listing_entries(
-            [name for name in names if name not in excluded], llm_router, general_settings_view()
-        ),
-        user_api_key_dict,
+    translated_entries: Final = TeamModelNameTranslator.listing_entries(
+        [name for name in names if name not in excluded], llm_router, general_settings_view()
     )
-    entries: Final = alias_listing_entries(
-        listed_entries,
-        caller_aliases,
-        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in translated_entries),
+        unlisted_alias_targets(translated_entries, caller_aliases),
+        TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings_view()),
+    )
+    listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in verdict.hidden)
+    entries: Final = tuple(
+        entry
+        for entry in alias_listing_entries(
+            listed_entries,
+            caller_aliases,
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
+        )
+        if entry[0] not in verdict.hid
     )
     return _KeyModelListing(
         rows=tuple(
@@ -13247,18 +13299,18 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict,
-        tuple(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(
-                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
-            )
-        ),
+    offered_entries: Final = TeamModelNameTranslator.listing_entries(
+        tuple(m for m in all_models if m not in hidden_names), llm_router, settings
     )
-    if hidden_names or callback_hidden_names:
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(response_id for response_id, _ in offered_entries),
+        unlisted_alias_targets(offered_entries, caller_aliases),
+        internal_to_public,
+    )
+    if hidden_names or verdict.hidden:
         all_models = [
-            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in verdict.hidden
         ]
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -13267,11 +13319,17 @@ async def model_info(
     listed_entries: Final = TeamModelNameTranslator.listing_entries(
         tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
     )
-    aliased_model_id: Final = alias_target(
-        model_id,
-        caller_aliases,
-        listed_entries,
-        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    aliased_model_id: Final = (
+        None
+        if model_id in verdict.hid
+        else alias_target(
+            model_id,
+            caller_aliases,
+            listed_entries,
+            _describable_model_groups(
+                listed_entries, hidden_names, user_api_key_dict, team_id, verdict.kept_alias_targets
+            ),
+        )
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
@@ -15338,6 +15396,7 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -15354,8 +15413,10 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
+    COUNTED_CHAT_PARAMS,
     ChatCountBridgeError,
     chat_count_request,
+    counted_chat_params,
     with_provider_file_ids,
 )
 
@@ -15468,17 +15529,29 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_COUNT_OPTION_DEFAULTS: Final = TypeAdapter(Mapping[str, JsonValue])
+_REQUEST_DROP_SETTINGS: Final = ("drop_params", "additional_drop_params")
 
 
-def _deployment_with_request_drop_params(
+def _count_options_with_defaults(
+    count_options: Mapping[str, JsonValue], defaults: Mapping[str, object], additional_drop_params: object
+) -> Mapping[str, JsonValue]:
+    default_options: Final = _COUNT_OPTION_DEFAULTS.validate_python(
+        {name: defaults[name] for name in COUNT_TOKEN_OPTION_NAMES if defaults.get(name) is not None}
+    )
+    return MappingProxyType(without_dropped_paths({**default_options, **count_options}, additional_drop_params))
+
+
+def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: object,
+    sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if drop_params is None:
+    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
     litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    return {**resolved_deployment, "litellm_params": {**litellm_params, **overrides}}
 
 
 def _counted_request_messages(
@@ -15508,6 +15581,7 @@ async def _try_provider_token_count(
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -15535,6 +15609,7 @@ async def _try_provider_token_count(
             output_format=output_format,
             context_management=context_management,
             chat_params=chat_params,
+            count_options=count_options,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -15573,7 +15648,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
-    forwarded_edits: bool = False,
+    forwards_request_fields: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -15597,7 +15672,7 @@ async def _provider_token_count(
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if pinned_count_model is None or (forwarded_edits and counted.status_code == 400)
+        if pinned_count_model is None or (forwards_request_fields and counted.status_code == 400)
         else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
@@ -16184,6 +16259,7 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16203,6 +16279,7 @@ async def count_request_tokens(
         request_litellm_params=request_litellm_params,
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
+        count_options=count_options,
     )
     return await logged_token_count(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
@@ -16249,6 +16326,7 @@ async def _count_request_tokens(
     request_litellm_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
+    count_options: Mapping[str, JsonValue],
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -16295,7 +16373,11 @@ async def _count_request_tokens(
             model_to_use = _model
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
-    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
+    count_deployment: Final = _deployment_with_request_drop_settings(deployment, sent_params)
+    count_litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(
+        (count_deployment or {}).get("litellm_params") or {}
+    )
+    deployment_defaults: Final = {**count_litellm_params, **_router_default_litellm_params(llm_router)}
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
@@ -16363,10 +16445,26 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            deployment_params=deployment_defaults,
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    chat_params: Final[Mapping[str, JsonValue]] = (
+        chat_count.params
+        if chat_count is not None
+        else counted_chat_params(
+            request.model_dump(include=set(COUNTED_CHAT_PARAMS), exclude_none=True),
+            deployment_defaults,
+            (),
+            drop_policy(count_litellm_params),
+        )
+        if messages_format == "openai"
+        else MappingProxyType({})
+    )
+    forwarded_count_options: Final = _count_options_with_defaults(
+        count_options, deployment_defaults, count_litellm_params.get("additional_drop_params")
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -16397,13 +16495,15 @@ async def _count_request_tokens(
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
-                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                chat_params=chat_params,
+                count_options=forwarded_count_options,
             ),
             model_to_use=model_to_use,
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
-            forwarded_edits=context_edits is not None and edited_request is None,
+            forwards_request_fields=(context_edits is not None and edited_request is None)
+            or bool(forwarded_count_options),
         )
     )
     if isinstance(ladder, TokenCountResponse):
@@ -19271,37 +19371,121 @@ async def model_group_info(
     undiscoverable_group_names: Final = undiscoverable_model_names(
         all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
-    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
+    caller_aliases: Final = await request_caller_aliases(user_api_key_dict)
+    requested_names: Final = (
+        None
+        if model_group is None
+        else _names_a_model_group_row_reads(model_group, caller_aliases, llm_router.registry().aliases())
+    )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    listed_group_names: Final = tuple(
+        dict.fromkeys(
+            name
+            for name in all_models_str
+            if name not in undiscoverable_group_names
+            and (requested_names is None or not requested_names.isdisjoint((name, internal_to_public.get(name, name))))
+        )
+    )
 
-    # Append A2A agents to model groups
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
     )
 
-    model_groups: Final = await append_agents_to_model_group(
-        model_groups=get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=listed_group_names,
-            model_group=model_group,
-            team_id=user_api_key_dict.team_id,
+    agent_groups: Final = await append_agents_to_model_group(model_groups=[], user_api_key_dict=user_api_key_dict)
+    verdict: Final = await _listing_callback_verdict(
+        user_api_key_dict,
+        tuple(
+            dict.fromkeys(
+                (
+                    *(internal_to_public.get(name, name) for name in listed_group_names),
+                    *(group.model_group for group in agent_groups),
+                )
+            )
         ),
-        user_api_key_dict=user_api_key_dict,
+        unlisted_alias_targets(
+            TeamModelNameTranslator.public_name_entries(listed_group_names, internal_to_public), caller_aliases
+        ),
+        internal_to_public,
     )
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
-    public_group_names: Final = tuple(
-        internal_to_public.get(group.model_group, group.model_group) for group in model_groups
+    kept_entries: Final = tuple(
+        (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in verdict.hidden
     )
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
-        user_api_key_dict, tuple(dict.fromkeys(public_group_names))
+    blocked_names: Final = llm_router.health().fully_blocked_model_names()
+    requested_entries: Final = tuple(
+        entry
+        for entry in _listing_with_aliases_to_unpaused_models(
+            kept_entries,
+            TeamModelNameTranslator.public_name_entries(
+                tuple(name for name, _ in kept_entries if name not in blocked_names), internal_to_public
+            ),
+            caller_aliases,
+            _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None, verdict.kept_alias_targets),
+        )
+        if (model_group is None or entry[0] == model_group) and entry[0] not in verdict.hid
+    )
+    lookup_ids: Final = tuple(dict.fromkeys(lookup_id for _, lookup_id in requested_entries))
+    groups_by_lookup_id: Final = MappingProxyType(
+        dict(
+            zip(
+                lookup_ids,
+                get_model_group_info(
+                    llm_router=llm_router,
+                    all_models_str=lookup_ids,
+                    model_group=None,
+                    team_id=user_api_key_dict.team_id,
+                ),
+                strict=True,
+            )
+        )
     )
 
     return {
         "data": [
-            group
-            for group, public_name in zip(model_groups, public_group_names, strict=True)
-            if public_name not in callback_hidden_names
+            *(
+                _model_group_row_listed_as(groups_by_lookup_id[lookup_id], listed_name, lookup_id)
+                for listed_name, lookup_id in requested_entries
+            ),
+            *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
+
+
+def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, router_aliases: object) -> frozenset[str]:
+    return frozenset(
+        name
+        for name in (
+            model_group,
+            dispatched_model(model_group, aliases),
+            resolve_model_group_alias(router_aliases, model_group),
+        )
+        if name is not None
+    )
+
+
+def _listing_with_aliases_to_unpaused_models(
+    listed_entries: Sequence[tuple[str, str]],
+    unpaused_public_entries: Sequence[tuple[str, str]],
+    aliases: CallerAliases,
+    deployed: Container[str],
+) -> tuple[tuple[str, str], ...]:
+    described: Final = alias_listing_entries(unpaused_public_entries, aliases, deployed)
+    lookup_by_name: Final = MappingProxyType(dict(described))
+    shown_names: Final = frozenset(name for name, _ in (*listed_entries, *unpaused_public_entries))
+    return (
+        *((name, lookup_by_name.get(name, lookup_id)) for name, lookup_id in listed_entries),
+        *(entry for entry in described if entry[0] not in shown_names),
+    )
+
+
+def _model_group_row_listed_as(row: ModelGroupInfoProxy, listed_name: str, lookup_id: str) -> ModelGroupInfoProxy:
+    if listed_name == lookup_id:
+        return row
+    return row.model_copy(
+        update={
+            "model_group": listed_name,
+            "is_public_model_group": listed_name in (litellm.public_model_groups or ()),
+        }
+    )
 
 
 @router.get(
@@ -19503,6 +19687,9 @@ async def async_queue_request(
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
         data.pop(STREAM_USAGE_INJECTED_FIELD, None)
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {

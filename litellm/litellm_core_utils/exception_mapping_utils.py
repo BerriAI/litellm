@@ -2279,7 +2279,7 @@ def _map_azure_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"{exception_provider} APIConnectionError - {message}\n{redact_string(traceback.format_exc())}",
+            message=f"{exception_provider} APIConnectionError - {message or type(original_exception).__name__}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
@@ -2662,10 +2662,7 @@ def exception_type(
     if isinstance(original_exception, Exception) and getattr(original_exception, "status_code", None) == 401:
         from litellm.llms.github_copilot.per_user_auth import github_copilot_caller_rejection
 
-        github_copilot_rejection: Final = github_copilot_caller_rejection(
-            original_exception,
-            cast(object, extra_kwargs),  # cast-ok: extra_kwargs arrives as an untyped request dict
-        )
+        github_copilot_rejection: Final = github_copilot_caller_rejection(original_exception, extra_kwargs)
         if github_copilot_rejection is not None:
             raise github_copilot_rejection from original_exception
     if isinstance(original_exception, ImportError) and (
