@@ -274,6 +274,30 @@ async def test_cost_based_routing_ranks_prices_set_only_in_model_info_in_usd(mak
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("section", ["litellm_params", "model_info"])
+@pytest.mark.parametrize("currency", ["EUR", "HUF"])
+async def test_cost_based_routing_ranks_a_free_currency_priced_deployment_first(
+    make_core: MakeCore, section: str, currency: str
+) -> None:
+    free_prices: Final = {
+        "pricing_currency": currency,
+        "usd_per_currency_unit": "1.20",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    free: Final = (
+        deployment("g", "free", **free_prices)
+        if section == "litellm_params"
+        else deployment("g", "free", model_info=free_prices)
+    )
+    core: Final = make_core(
+        model_list=[free, deployment("g", "paid", input_cost_per_token=1e-06, output_cost_per_token=1e-06)],
+        routing_strategy="cost-based-routing",
+    )
+    assert await picked_ids(core, "g", messages=MESSAGES) == {"free"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("override", ["bogus", "lar1", "provider-budget-routing", 5])
 async def test_an_unsupported_request_routing_strategy_is_ignored(make_core: MakeCore, override: object) -> None:
     core: Final = make_core(model_list=_two())

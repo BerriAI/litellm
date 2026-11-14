@@ -41,14 +41,13 @@ import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelE
 import {
   PRICING_CURRENCIES,
   configuredPrices,
-  isPricingCurrency,
+  formCurrencySetting,
   parsedRate,
   pricePreview,
   rateProblem,
   reinterpretedFields,
   storedCurrencySetting,
   withoutDerivedPricing,
-  type CurrencySetting,
 } from "../utils/pricingCurrency";
 import { PricingCurrencyPreview } from "./molecules/models/PricingCurrencyPreview";
 import {
@@ -216,14 +215,6 @@ const buildSchema = (
       }
     }
   });
-
-export const formCurrencySetting = (values: {
-  pricing_currency?: string;
-  usd_per_currency_unit?: string;
-}): CurrencySetting => ({
-  currency: isPricingCurrency(values.pricing_currency) ? values.pricing_currency : "USD",
-  rate: values.usd_per_currency_unit ?? "",
-});
 
 const pricingEdits = (
   values: Partial<Record<TouchedPricingField, string | number | null | undefined>>,

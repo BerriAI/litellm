@@ -12,6 +12,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import (
     deployment_backend_models,
     deployment_pricing_models,
@@ -30,6 +31,13 @@ def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float 
     if row is None:
         return None, None
     return _as_rate(row.get("input_cost_per_token")), _as_rate(row.get("output_cost_per_token"))
+
+
+def _configured_rate(deployment: Mapping[str, object], field: str) -> float | None:
+    """The deployment's own price for ``field``, ``litellm_params`` first, so a configured zero ranks as free."""
+    sections: Final = (as_str_mapping(deployment.get("litellm_params")), as_str_mapping(deployment.get("model_info")))
+    rates: Final = (_as_rate(section.get(field)) for section in sections if section is not None)
+    return next((rate for rate in rates if rate is not None), None)
 
 
 def _cost_map() -> Mapping[str, object]:
@@ -280,20 +288,8 @@ class LowestCostLoggingHandler(CustomLogger):
             deployment_view: object = _deployment
             map_input_cost, map_output_cost = _deployment_cost_map_rates(deployment_view)
 
-            # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
-            item_input_cost = None
-            item_output_cost = None
-            if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
-                item_input_cost = _deployment.get("litellm_params", {}).get("input_cost_per_token")
-
-            if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
-                item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
-
-            if item_input_cost is None and _deployment.get("model_info", {}).get("input_cost_per_token", None):
-                item_input_cost = _deployment.get("model_info", {}).get("input_cost_per_token")
-
-            if item_output_cost is None and _deployment.get("model_info", {}).get("output_cost_per_token", None):
-                item_output_cost = _deployment.get("model_info", {}).get("output_cost_per_token")
+            item_input_cost = _configured_rate(_deployment, "input_cost_per_token")
+            item_output_cost = _configured_rate(_deployment, "output_cost_per_token")
 
             if item_input_cost is None:
                 item_input_cost = map_input_cost if map_input_cost is not None else 5.0

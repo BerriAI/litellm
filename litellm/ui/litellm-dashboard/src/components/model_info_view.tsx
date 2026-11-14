@@ -18,7 +18,7 @@ import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
-import { currencyPatch, storedCurrencySetting, withoutDerivedPricing } from "../utils/pricingCurrency";
+import { currencyPatchFor, withoutDerivedPricing } from "../utils/pricingCurrency";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
@@ -50,11 +50,7 @@ import {
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, {
-  formCurrencySetting,
-  type ModelEditSubmitValues,
-  type TouchedPricingField,
-} from "./ModelInfoEditForm";
+import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -311,13 +307,7 @@ export default function ModelInfoView({
       if (isFieldTouched("cache_write_cost_1h")) {
         updatedLitellmParams.cache_creation_input_token_cost_above_1hr = values.cache_write_cost_1h;
       }
-      Object.assign(
-        updatedLitellmParams,
-        currencyPatch(
-          storedCurrencySetting(localModelData?.litellm_params, localModelData?.model_info),
-          formCurrencySetting(values),
-        ),
-      );
+      Object.assign(updatedLitellmParams, currencyPatchFor(localModelData, values));
 
       const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
       const selectedCredentialName: string | null = values.litellm_credential_name ?? null;

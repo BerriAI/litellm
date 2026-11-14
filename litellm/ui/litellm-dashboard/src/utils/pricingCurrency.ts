@@ -86,6 +86,20 @@ export const rateProblem = (setting: CurrencySetting): RateProblem | null => {
   return parsedRate(setting) === null ? "positive" : null;
 };
 
+export const formCurrencySetting = (values: {
+  pricing_currency?: string;
+  usd_per_currency_unit?: string;
+}): CurrencySetting => ({
+  currency: isPricingCurrency(values.pricing_currency) ? values.pricing_currency : "USD",
+  rate: values.usd_per_currency_unit ?? "",
+});
+
+export const currencyPatchFor = (
+  model: { litellm_params?: Record<string, unknown> | null; model_info?: Record<string, unknown> | null } | null,
+  values: { pricing_currency?: string; usd_per_currency_unit?: string },
+): Record<string, unknown> =>
+  currencyPatch(storedCurrencySetting(model?.litellm_params, model?.model_info), formCurrencySetting(values));
+
 export const currencyPatch = (stored: CurrencySetting, edited: CurrencySetting): Record<string, unknown> => {
   if (edited.currency === "USD") {
     return stored.currency === "USD" ? {} : { [PRICING_CURRENCY_FIELD]: "USD", [USD_PER_CURRENCY_UNIT_FIELD]: null };
@@ -178,5 +192,8 @@ export const usdRate = (
 export const withoutDerivedPricing = (modelInfo: Record<string, unknown> | null | undefined): Record<string, unknown> =>
   Object.fromEntries(Object.entries(modelInfo ?? {}).filter(([key]) => !DERIVED_MODEL_INFO_KEYS.has(key)));
 
-export const formatAmount = (amount: number): string =>
-  amount === 0 ? "0" : Math.abs(amount) >= 0.01 ? amount.toFixed(4).replace(/\.?0+$/, "") : amount.toPrecision(4);
+export const formatAmount = (amount: number): string => {
+  if (amount === 0) return "0";
+  if (Math.abs(amount) >= 0.01) return amount.toFixed(4).replace(/\.?0+$/, "");
+  return amount.toPrecision(4);
+};
