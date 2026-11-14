@@ -113,11 +113,10 @@ class GetModelCostMap:
         return _loaded_snapshot(model_cost_inputs.provenance.revision).rows
 
     @staticmethod
-    def loaded_model_cost_map_entry(key: str) -> Mapping[str, object] | None:
-        """The loaded catalog's entry for ``key``, else for the key that differs from it only in case."""
+    def loaded_model_cost_map_key(key: str) -> str | None:
+        """``key`` as the loaded catalog spells it, matched exactly first and then ignoring case."""
         snapshot: Final = _loaded_snapshot(model_cost_inputs.provenance.revision)
-        exact: Final = snapshot.rows.get(key)
-        return exact if exact is not None else snapshot.rows.get(snapshot.keys_by_casefold.get(key.casefold(), key))
+        return key if key in snapshot.rows else snapshot.keys_by_casefold.get(key.casefold())
 
     @staticmethod
     def loaded_model_cost_map_fields() -> frozenset[str]:

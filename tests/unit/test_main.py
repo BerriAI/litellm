@@ -10810,12 +10810,13 @@ def foundry_reasoner_row(monkeypatch: pytest.MonkeyPatch) -> str:
     return model
 
 
-def test_a_model_map_declaration_alone_forwards_reasoning_effort_without_rounding_it(
+def test_a_model_map_declaration_alone_checks_reasoning_effort_without_rounding_it(
     foundry_reasoner_row: str, respx_mock: respx.MockRouter
 ) -> None:
-    assert _chat_body_sent(respx_mock, foundry_reasoner_row, "medium", {"id": "reasoner-1"}, drop_params=True)[
-        "reasoning_effort"
-    ] == "medium"
+    assert _chat_body_sent(respx_mock, foundry_reasoner_row, "low", {"id": "reasoner-1"})["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in _chat_body_sent(
+        respx_mock, foundry_reasoner_row, "medium", {"id": "reasoner-1"}, drop_params=True
+    )
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
