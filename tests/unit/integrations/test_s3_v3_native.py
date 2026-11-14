@@ -297,6 +297,42 @@ LIVE_BODY_FIELDS: Final = (
 LIVE_RESPONSE_FIELDS: Final = ("id", "created")
 LIVE_HEADERS: Final = ("content-md5", "x-amz-content-sha256", "content-disposition")
 LIVE_KEY: Final = re.compile(r"\d{4}-\d\d-\d\d/time-\d\d-\d\d-\d\d-\d{6}_[^/]+\.json$")
+TRACEBACK_FRAME: Final = re.compile(r'^  File "(?P<path>[^"]+)", line \d+, in (?P<function>.+)$')
+ENVIRONMENT_ROOTS: Final = (
+    (re.compile(r"^.*/litellm/"), "litellm/"),
+    (re.compile(r"^.*/site-packages/"), "<site-packages>/"),
+    (re.compile(r"^.*/lib/python3\.\d+/"), "<stdlib>/"),
+)
+
+
+def _portable_path(path: str) -> str:
+    return next((root.sub(name, path) for root, name in ENVIRONMENT_ROOTS if root.match(path)), path)
+
+
+def _portable_traceback_line(line: str) -> str | None:
+    frame: Final = TRACEBACK_FRAME.match(line)
+    if frame is not None:
+        return f"{_portable_path(frame['path'])} in {frame['function']}"
+    return None if line.startswith(" ") else line
+
+
+def _portable_traceback(text: str) -> str:
+    return "\n".join(line for line in map(_portable_traceback_line, text.splitlines()) if line is not None)
+
+
+def _with_portable_traceback(body: object) -> object:
+    if not isinstance(body, dict):
+        return body
+    error: Final = body.get("error_information")
+    if not isinstance(error, dict) or not isinstance(error.get("traceback"), str):
+        return body
+    return {**body, "error_information": {**error, "traceback": _portable_traceback(error["traceback"])}}
+
+
+def _with_portable_put(put: object) -> object:
+    if not isinstance(put, dict):
+        return put
+    return {**put, "body_json": _with_portable_traceback(put.get("body_json"))}
 
 
 def _live_record(request: Received) -> dict[str, object]:
@@ -315,7 +351,7 @@ def _live_record(request: Received) -> dict[str, object]:
         "headers": {name: "<live>" if name in LIVE_HEADERS else request.headers.get(name) for name in COMPARED_HEADERS},
         "signed_headers": _signed_headers(request),
         "body_keys": list(body),
-        "body_json": body,
+        "body_json": _with_portable_traceback(body),
     }
 
 
@@ -325,7 +361,7 @@ def _assert_same_live_puts(golden: Golden, bucket: FakeBucket, count: int) -> No
     assert isinstance(python_puts, list)
     assert len(python_puts) == len(rust_puts) == count
     for python_put, rust_put in zip(python_puts, rust_puts, strict=True):
-        assert rust_put == python_put
+        assert rust_put == _with_portable_put(python_put)
     for put in bucket.puts():
         assert put.headers["authorization"] == _botocore_authorization(put, bucket.port)
 
@@ -1432,3 +1468,58 @@ async def test_excluded_payload_fields_are_left_out_like_python(
         )
     await _settled(logger)
     _assert_same_live_puts(golden, bucket, 1)
+
+
+RECORDED_TRACEBACK: Final = (
+    '  File "/home/user/wt/rust-s3/litellm/main.py", line 956, in acompletion\n'
+    "    init_response: Final = await loop.run_in_executor(None, func_with_context)\n"
+    "                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+    '  File "/usr/local/lib/python3.13/concurrent/futures/thread.py", line 59, in run\n'
+    "    result = self.fn(*self.args, **self.kwargs)\n"
+    '  File "/home/user/wt/rust-s3/litellm/main.py", line 1235, in mock_completion\n'
+    "    _handle_mock_potential_exceptions(\n"
+    "    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n"
+    "    ...<3 lines>...\n"
+    "    )\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("other", "same"),
+    [
+        (
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 970, in acompletion\n'
+            "    init_response: Final = await loop.run_in_executor(None, func_with_context)\n"
+            '  File "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/concurrent/futures/thread.py",'
+            " line 58, in run\n"
+            "    result = self.fn(*self.args, **self.kwargs)\n"
+            "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 1240, in mock_completion\n'
+            "    _handle_mock_potential_exceptions(\n",
+            True,
+        ),
+        (
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 956, in acompletion\n'
+            '  File "/usr/local/lib/python3.13/concurrent/futures/thread.py", line 59, in run\n'
+            '  File "/home/runner/work/litellm/litellm/litellm/utils.py", line 1235, in mock_completion\n',
+            False,
+        ),
+        (
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 956, in acompletion\n'
+            '  File "/usr/local/lib/python3.13/concurrent/futures/thread.py", line 59, in run\n'
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 1235, in completion\n',
+            False,
+        ),
+        (
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 956, in acompletion\n'
+            '  File "/home/runner/work/litellm/litellm/litellm/main.py", line 1235, in mock_completion\n',
+            False,
+        ),
+    ],
+    ids=["other-machine-and-python", "other-litellm-file", "other-function", "missing-frame"],
+)
+def test_a_recorded_traceback_matches_only_the_same_frames_from_another_environment(other: str, same: bool) -> None:
+    assert (_portable_traceback(other) == _portable_traceback(RECORDED_TRACEBACK)) is same
+    assert _portable_traceback(RECORDED_TRACEBACK) == (
+        "litellm/main.py in acompletion\n<stdlib>/concurrent/futures/thread.py in run\nlitellm/main.py in mock_completion"
+    )
