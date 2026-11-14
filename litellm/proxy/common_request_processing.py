@@ -5,10 +5,20 @@ import json
 import logging
 import math
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import lru_cache, partial
 from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
@@ -56,6 +66,9 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger import subclass_overrides_hook
+from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.legacy import hook_subscribers
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
@@ -153,7 +166,11 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3,
+    get_or_create_request_stash,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
@@ -163,9 +180,13 @@ from litellm.proxy.route_llm_request import (
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    HookRun,
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
+    hook_fields,
+    routes_through_apply_guardrail,
+    run_hook_subscribers,
 )
 from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
@@ -317,6 +338,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    bind_v2_request_scope,
+    check_customer_request_model_access,
+    customer_request_auth,
     get_metadata_variable_name,
     global_then_key_alias_target,
     pre_call_served_model,
@@ -327,6 +351,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -791,6 +816,23 @@ _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(str
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
+class _DashboardBillingRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    dashboard_fallback_model: str | None = None
+
+
+async def _check_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
+    if llm_router is None or not isinstance(auth, UserAPIKeyAuth):
+        return
+    if auth.dashboard_session_origin is None:
+        return
+    from litellm.proxy.auth.fallback_model_access import dashboard_fallback_billing_allowed
+
+    model: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).dashboard_fallback_model
+    if isinstance(model, str) and not await dashboard_fallback_billing_allowed(model, auth, RoutingContext(llm_router)):
+        raise HTTPException(403, "Dashboard fallbacks cannot change the billing team")
+
+
 def _is_auto_router(params: Mapping[str, object]) -> bool:
     model: Final = params.get("model")
     return isinstance(model, str) and model.startswith(AUTO_ROUTER_MODEL_PREFIX)
@@ -1022,6 +1064,7 @@ async def hierarchical_router_settings_updates(
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+_FALLBACK_LIST: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object], config=ConfigDict(strict=True))
 _DECODED_JSON: Final = TypeAdapter(object)
 _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
@@ -2266,6 +2309,271 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+def _fallback_refusal_ends_the_walk(
+    exc: Exception, at_saturation: bool, general_settings: Mapping[str, object]
+) -> bool:
+    """At saturation the requested model still has room, so a fallback refused for any reason is a miss. Otherwise a
+    fallback's own non-rate-limit failure, or a hard per-model 429, is the answer the caller gets."""
+    from litellm.proxy.common_utils.proxy_rate_limit_error import (
+        PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
+        ProxyRateLimitError,
+        per_model_rate_limits_disable_fallbacks,
+    )
+
+    if at_saturation:
+        return False
+    if not isinstance(exc, ProxyRateLimitError):
+        return True
+    return exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS and per_model_rate_limits_disable_fallbacks(
+        general_settings
+    )
+
+
+async def _fallback_access_groups(
+    fallback_model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router, proxy_logging_obj: ProxyLogging
+) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import (
+        collect_matched_model_access_groups,
+        get_project_object,
+        get_team_membership,
+        get_team_object,
+    )
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        return ()
+    team_id: Final = user_api_key_dict.team_id
+    user_id: Final = user_api_key_dict.user_id
+    project_id: Final = user_api_key_dict.project_id
+    team_object: Final = (
+        await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_id is not None
+        else None
+    )
+    team_membership: Final = (
+        await get_team_membership(
+            user_id=user_id,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if user_id is not None and team_id is not None
+        else None
+    )
+    project_object: Final = (
+        await get_project_object(
+            project_id=project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if project_id is not None
+        else None
+    )
+    return await collect_matched_model_access_groups(
+        model=fallback_model,
+        valid_token=user_api_key_dict,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        team_membership=team_membership,
+        team_membership_loaded=True,
+    )
+
+
+_PER_TOKEN_PRICES: Final[TypeAdapter[tuple[float, float]]] = TypeAdapter(tuple[float, float])
+_RESERVATION_ENTRIES: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+_MODEL_ACCESS_GROUP_ENTITY: Final = "Model access group"
+
+
+def _per_token_prices(llm_router: Router, model: str) -> tuple[float, float] | None:
+    info: Final = llm_router.registry().group(model)
+    if info is None:
+        return None
+    try:
+        return _PER_TOKEN_PRICES.validate_python((info.input_cost_per_token, info.output_cost_per_token))
+    except ValidationError:
+        return None
+
+
+def _reserved_access_groups(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str] | None:
+    """The model access groups the request's ``budget_reservation`` already holds, None when its entries are
+    unreadable."""
+    reservation: Final = user_api_key_dict.budget_reservation
+    if reservation is None:
+        return frozenset()
+    try:
+        entries: Final = _RESERVATION_ENTRIES.validate_python(reservation.get("entries") or ())
+    except ValidationError:
+        return None
+    return frozenset(
+        str(entry.get("entity_id")) for entry in entries if entry.get("entity_type") == _MODEL_ACCESS_GROUP_ENTITY
+    )
+
+
+def _reservation_covers(
+    user_api_key_dict: UserAPIKeyAuth,
+    access_groups: Sequence[str],
+    held: frozenset[str] | None,
+    requested_model: str,
+    fallback_model: str,
+    llm_router: Router,
+) -> bool:
+    """Whether the budget auth reserved for ``requested_model`` still fits ``fallback_model``: the fallback costs no
+    more per token than the model the estimate was made for, and every access group ``held`` by the reservation
+    grants the fallback, so settlement never charges a group that did not serve."""
+    if user_api_key_dict.budget_reservation is None:
+        return True
+    if held is None:
+        return False
+    requested: Final = _per_token_prices(llm_router, requested_model)
+    fallback: Final = _per_token_prices(llm_router, fallback_model)
+    if requested is None or fallback is None or fallback[0] > requested[0] or fallback[1] > requested[1]:
+        return False
+    return held <= frozenset(access_groups)
+
+
+def _fallback_pricing_admits(requested_model: str, fallback_model: str, llm_router: Router) -> bool:
+    """A zero-cost ``requested_model`` waived the aggregate budget checks at auth, so only another zero-cost model may
+    take its place, and an unpriced fallback is refused while ``block_requests_for_models_without_pricing`` is on."""
+    from litellm.proxy.auth.auth_checks import (
+        _unpriced_models_in_request,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
+    )
+
+    if is_model_cost_zero(model=requested_model, llm_router=llm_router) and not is_model_cost_zero(
+        model=fallback_model, llm_router=llm_router
+    ):
+        return False
+    return not (
+        litellm.block_requests_for_models_without_pricing
+        and _unpriced_models_in_request(model=fallback_model, llm_router=llm_router)
+    )
+
+
+async def _release_pre_call_hold(
+    proxy_logging_obj: ProxyLogging,
+    request_data: Mapping[str, object],
+    refusal: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Give back the slot and tokens the rate limiter holds for a model the walk is leaving: the requested model a
+    later hook rate limited after the limiter admitted it, or a fallback the proxy refused after admitting it. The
+    walk's next attempt overwrites the request's stash, so a hold not released here stays charged until the window
+    resets. The request has not failed, so only the limiters' releases run, not the failure logging and alerting of
+    ``post_call_failure_hook``. The dynamic rate limiter admits through its own inner limiter, so its team-share
+    reservation is released alongside the registered limiter's slot and tokens."""
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    dynamic_limiters: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        PROXY_DynamicRateLimitHandlerV3
+    )
+    for holder in (limiter, *dynamic_limiters):
+        if not isinstance(holder, (PROXY_MaxParallelRequestsHandler_v3, PROXY_DynamicRateLimitHandlerV3)):
+            continue
+        await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
+            request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
+        )
+
+
+async def _fallback_grant(
+    fallback_model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+    proxy_logging_obj: ProxyLogging,
+    requested_model: str,
+    listed_as: str | None = None,
+) -> list[str] | None:
+    """The model access groups a pre-call fallback to ``fallback_model`` charges, or None when the caller may not use
+    it. The caller passes the group the fallback is served by, through every alias rewrite, and the name the fallback
+    list gave it as ``listed_as``, so an alias never skips the budgets of the model that answers nor those set on the
+    listed name: an agent-owned key never leaves the model it asked for, as at auth, then the key, team and project allowlists
+    while ``enforce_fallback_model_access`` is on, the end user's allowlist, the pricing rules, every per-model budget layer, the budgets of the access groups that grant the model, and the budget auth reserved for
+    ``requested_model``, the same checks a direct request passes at auth."""
+    from litellm.proxy.auth.auth_checks import (
+        _model_access_group_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
+        can_customer_access_model,
+        get_end_user_object,
+    )
+    from litellm.proxy.auth.fallback_model_access import (
+        dashboard_fallback_billing_allowed,
+        is_model_authorized_for_token,
+        router_fallback_access_check,
+    )
+    from litellm.proxy.auth.user_api_key_auth import (
+        _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
+    )
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client, user_api_key_cache
+
+    if llm_router is None:
+        return []
+    if user_api_key_dict.agent_id is not None:
+        return None
+    if router_fallback_access_check.is_enforced() and not await is_model_authorized_for_token(
+        model=fallback_model, valid_token=user_api_key_dict, llm_router=llm_router
+    ):
+        return None
+    if not _fallback_pricing_admits(requested_model, fallback_model, llm_router):
+        return None
+    try:
+        if not await dashboard_fallback_billing_allowed(fallback_model, user_api_key_dict, llm_router):
+            return None
+        end_user: Final = (
+            await get_end_user_object(
+                end_user_id=user_api_key_dict.end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_api_key_dict.end_user_id is not None and prisma_client is not None
+            else None
+        )
+        if end_user is not None and end_user.models:
+            can_customer_access_model(
+                model=fallback_model, end_user_object=end_user, llm_router=llm_router, valid_token=user_api_key_dict
+            )
+        if not is_model_cost_zero(model=fallback_model, llm_router=llm_router):
+            budget_names: Final = tuple(
+                dict.fromkeys(
+                    (listed_as or fallback_model, fallback_model, llm_router.registry().resolve(fallback_model))
+                )
+            )
+            for budget_name in budget_names:
+                if not await _is_within_every_model_budget(
+                    valid_token=user_api_key_dict, model_max_budget_limiter=model_max_budget_limiter, model=budget_name
+                ):
+                    return None
+        access_groups: Final = await _fallback_access_groups(
+            fallback_model, user_api_key_dict, llm_router, proxy_logging_obj
+        )
+        held: Final = _reserved_access_groups(user_api_key_dict)
+        await _model_access_group_max_budget_check(
+            matched_model_access_groups=tuple(group for group in access_groups if group not in (held or ())),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if not _reservation_covers(user_api_key_dict, access_groups, held, requested_model, fallback_model, llm_router):
+            return None
+    except Exception as e:  # noqa: BLE001  # fail closed: a grant the walk cannot settle must not admit the fallback
+        verbose_proxy_logger.warning(
+            "Skipping fallback to model=%s: %s",
+            fallback_model.replace("\r", "").replace("\n", ""),
+            e,
+        )
+        return None
+    return list(access_groups)
+
+
 async def _team_member_within_fallback_model_budget(
     user_api_key_dict: UserAPIKeyAuth,
     model: str,
@@ -2383,6 +2691,7 @@ class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
         self.served_model = served_model
+        self.dashboard_fallback_model: str | None = None
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
 
@@ -2702,6 +3011,7 @@ class ProxyBaseLLMRequestProcessing:
             proxy_config=proxy_config,
         )
         request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        customer_auth: Final = customer_request_auth(request_fields)
         metadata_variable_name: Final = get_metadata_variable_name(request, request_fields)
         if logging_auth is not None:
             request_metadata: Final = request_fields.get(metadata_variable_name)
@@ -2850,6 +3160,7 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        _ = bind_v2_request_scope(self.data, user_api_key_dict, request.headers)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         prefetch_model = self.data.get("model")
@@ -2895,6 +3206,12 @@ class ProxyBaseLLMRequestProcessing:
                 aliased_model, kind="served", served_model=self.served_model
             )
 
+        check_customer_request_model_access(
+            _REQUEST_FIELDS.validate_python(self.data),  # pyright: ignore[reportUnknownMemberType]  # validate the legacy request carrier at this boundary
+            customer_auth,
+            llm_router,
+        )
+
         return self.data, logging_obj
 
     async def _pre_call_with_fallbacks(
@@ -2918,6 +3235,12 @@ class ProxyBaseLLMRequestProcessing:
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
             RateLimitFallback,
+            arm_saturation_fallback_walk,
+            disarm_saturation_fallback_walk,
+            drop_client_saturation_opt_in,
+            fallback_on_saturation_enabled,
+            is_saturation_fallback,
+            mark_saturation_fallbacks_exhausted,
             per_model_rate_limits_disable_fallbacks,
             with_rate_limit_fallback,
         )
@@ -2932,12 +3255,26 @@ class ProxyBaseLLMRequestProcessing:
                 and per_model_rate_limits_disable_fallbacks(general_settings_view)
             )
 
-        configured_fallbacks: Final = (
-            self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+        router_settings: Final = (
+            await self._hierarchical_router_settings(user_api_key_dict, proxy_config, proxy_logging_obj)
             if llm_router is not None
             else None
         )
-        pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
+        configured_fallbacks: Final = (
+            self._configured_fallbacks(llm_router=llm_router, router_settings=router_settings)
+            if llm_router is not None
+            else None
+        )
+        scrubbed: Final[dict] = self.data  # mutable-ok: caller-defined request-payload shape
+        payload: Final = cast(MutableMapping[str, object], scrubbed)  # cast-ok: untyped caller payload
+        drop_client_saturation_opt_in(payload)
+        walk: Final = arm_saturation_fallback_walk()
+        self.data = scrubbed
+        pristine: Final = (
+            independent_snapshot(scrubbed)
+            if configured_fallbacks or fallback_on_saturation_enabled(router_settings)
+            else None
+        )
 
         try:
             return await self.common_processing_pre_call_logic(
@@ -2959,20 +3296,17 @@ class ProxyBaseLLMRequestProcessing:
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
             original_model: Final = rate_limited_data.get("model")
-            if (
-                pristine is None
-                or not configured_fallbacks
-                or rate_limited_data.get("disable_fallbacks")
-                or not isinstance(original_model, str)
-                or is_hard_per_model_limit(original_exc)
-            ):
+            # The limiter raises this one while the requested model still has room, so a walk that admits nothing
+            # ends on that model instead of a 429.
+            at_saturation: Final = is_saturation_fallback(original_exc)
+            if pristine is None or not isinstance(original_model, str) or is_hard_per_model_limit(original_exc):
                 raise
-
-            fallback_models: Final = self._resolve_fallback_models(
-                model=original_model,
-                fallbacks=configured_fallbacks,
+            fallback_models: Final = (
+                self._resolve_fallback_models(model=original_model, fallbacks=configured_fallbacks)
+                if configured_fallbacks and not rate_limited_data.get("disable_fallbacks")
+                else None
             )
-            if not fallback_models:
+            if not fallback_models and not at_saturation:
                 raise
 
             verbose_proxy_logger.info(
@@ -2988,10 +3322,25 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
+            await _release_pre_call_hold(
+                proxy_logging_obj, _REQUEST_FIELDS.validate_python(rate_limited_data), original_exc, user_api_key_dict
+            )
             attempt_numbers: Final[Iterator[int]] = itertools.count(1)
+            requested_groups: Final = user_api_key_dict.matched_model_access_groups
             try:
-                for fallback_model in fallback_models:
+                for fallback_model in fallback_models or ():
                     if fallback_model == original_model:
+                        continue
+                    if (
+                        grant := await _fallback_grant(
+                            pre_call_served_model(fallback_model, user_api_key_dict, group_alias),
+                            user_api_key_dict,
+                            llm_router,
+                            proxy_logging_obj,
+                            original_model,
+                            listed_as=fallback_model,
+                        )
+                    ) is None:
                         continue
                     if not await _team_member_within_fallback_model_budget(
                         user_api_key_dict=user_api_key_dict,
@@ -3003,6 +3352,7 @@ class ProxyBaseLLMRequestProcessing:
                         continue
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
+                    self.dashboard_fallback_model = fallback_model
                     try:
                         if endpoint_unsupported_by_model(
                             route_type,
@@ -3012,6 +3362,7 @@ class ProxyBaseLLMRequestProcessing:
                         ):
                             continue
                         attempt = next(attempt_numbers)
+                        user_api_key_dict.matched_model_access_groups = grant  # rebind-ok: bill the fallback's groups
                         admitted: tuple[
                             Mapping[str, object], LiteLLMLoggingObj
                         ] = await self.common_processing_pre_call_logic(
@@ -3031,9 +3382,16 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError as fallback_exc:
-                        if is_hard_per_model_limit(fallback_exc):
+                    except Exception as fallback_exc:  # noqa: BLE001  # the helper decides which refusals end the walk
+                        user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
+                        if _fallback_refusal_ends_the_walk(fallback_exc, at_saturation, general_settings_view):
                             raise
+                        await _release_pre_call_hold(
+                            proxy_logging_obj,
+                            self.data,  # pyright: ignore[reportUnknownMemberType]  # caller-defined request-payload shape
+                            fallback_exc,
+                            user_api_key_dict,
+                        )
                         continue
                     else:
                         admitted_data, admitted_logging_obj = admitted
@@ -3050,19 +3408,65 @@ class ProxyBaseLLMRequestProcessing:
                         )
                         self.data = stamped
                         return stamped, admitted_logging_obj
+                if not at_saturation:
+                    self.data = rate_limited_data
+                    raise original_exc
+                verbose_proxy_logger.info(
+                    "No fallback of model=%s is below the saturation threshold, serving the request on it",
+                    original_model.replace("\r", "").replace("\n", ""),
+                )
+                mark_saturation_fallbacks_exhausted()
+                self.data = independent_snapshot(dict(_REQUEST_FIELDS.validate_python(pristine)))
+                return await self.common_processing_pre_call_logic(
+                    request=request,
+                    general_settings=general_settings,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                    proxy_config=proxy_config,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    model=model,  # the requested name as the first attempt saw it, so its aliases apply once, not again
+                    route_type=route_type,  # pyright: ignore[reportArgumentType]  # the proxy hands its route literal over as str, as the two calls above take it
+                    llm_router=llm_router,
+                )
             except BaseException:
+                user_api_key_dict.matched_model_access_groups = requested_groups  # rebind-ok: undo the fallback
                 self.data = rate_limited_data
                 raise
-
-            self.data = rate_limited_data
-            raise original_exc
+        finally:
+            disarm_saturation_fallback_walk(walk)
 
     @staticmethod
-    def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-        key_router_settings: Final = user_api_key_dict.router_settings
-        key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
-        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.settings().fallbacks
-        return fallbacks if isinstance(fallbacks, list) and fallbacks else None
+    async def _hierarchical_router_settings(
+        user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig, proxy_logging_obj: ProxyLogging
+    ) -> Mapping[str, object] | None:
+        """The key's ``router_settings``, else its team's, read through the same cached lookup the request body
+        gets them from, so the pre-call fallback walk and the router agree on Key > Team > Global."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        return _ROUTER_SETTINGS_ADAPTER.validate_python(
+            await proxy_config.get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+
+    @staticmethod
+    def _configured_fallbacks(llm_router: Router, router_settings: Mapping[str, object] | None) -> list[object] | None:
+        settings_fallbacks: Final = router_settings.get("fallbacks") if router_settings is not None else None
+        fallbacks: Final[object] = (
+            settings_fallbacks if settings_fallbacks is not None else llm_router.settings().fallbacks
+        )
+        try:
+            configured: Final = _FALLBACK_LIST.validate_python(fallbacks)
+        except ValidationError:
+            return None
+        return configured or None
 
     @staticmethod
     def _resolve_fallback_models(model: str, fallbacks: list) -> list[str] | None:
@@ -3364,6 +3768,8 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
             phase_event("litellm.request.pre_call_completed")
+
+        await _check_dashboard_request_billing(self, user_api_key_dict, llm_router)
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 
@@ -4127,11 +4533,9 @@ class ProxyBaseLLMRequestProcessing:
                 is not True
             ):
                 continue
-            leaf_attrs = type(cb).__dict__
-            holds_until_moderated = "async_post_call_streaming_iterator_hook" in leaf_attrs
+            holds_until_moderated = subclass_overrides_hook(type(cb), "async_post_call_streaming_iterator_hook")
             if (
-                "apply_guardrail" not in leaf_attrs
-                or cb.use_native_lifecycle_hooks
+                not routes_through_apply_guardrail(cb)
                 or cb.mask_response_content
                 or cb.run_in_parallel
                 or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
@@ -4577,7 +4981,7 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
         """
-        _response = assembled_response
+        run: Final[HookRun[LLMResponseTypes]] = HookRun(response=assembled_response)
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
@@ -4589,47 +4993,18 @@ class ProxyBaseLLMRequestProcessing:
                 data=captured_data, llm_router=_global_llm_router
             )
             stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
-            for cb in litellm.callbacks:
-                if not isinstance(cb, CustomGuardrail):
-                    continue
-                if cb.guardrail_name in stream_gated:
-                    continue
-                if not cb.should_run_guardrail(
-                    data=guardrail_data,
-                    event_type=GuardrailEventHooks.post_call,
-                ):
-                    continue
-                try:
-                    guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
-                        # Skip — unified-routed guardrails already ran via
-                        # unified_guardrail's end-of-stream block in the
-                        # streaming iterator pipeline.  Running them again
-                        # here would duplicate the guardrail API call
-                        # (e.g. double OpenAI Moderation charges).
-                        continue
-                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
-                        # Skip — the guardrail already scanned the assembled
-                        # response via its own streaming iterator hook in the
-                        # streaming pipeline. re running this function async_post_call_success_hook
-                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
-                        continue
-                    else:
-                        guardrail_result = await cb.async_post_call_success_hook(
-                            user_api_key_dict=captured_user_api_key_dict,
-                            data=guardrail_data,
-                            response=_response,
-                        )
-                    if guardrail_result is not None:
-                        _response = guardrail_result
-                except Exception as e:
-                    verbose_proxy_logger.exception(
-                        "Error running post-call guardrail %s on streaming response: %s",
-                        getattr(cb, "guardrail_name", type(cb).__name__),
-                        e,
-                    )
-                    if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
-                        captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
+            await run_hook_subscribers(
+                hook_subscribers(Hook.post_call_success, litellm.callbacks, parallel=False),
+                hook_fields(guardrail_data, run, Field.response),
+                partial(
+                    ProxyBaseLLMRequestProcessing._deferred_stream_guardrail,
+                    run,
+                    guardrail_data,
+                    stream_gated,
+                    captured_user_api_key_dict,
+                    captured_logging_obj,
+                ),
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error in deferred streaming guardrail initialization: %s",
@@ -4644,7 +5019,7 @@ class ProxyBaseLLMRequestProcessing:
                 # async markers stored in litellm_params).
                 asyncio.create_task(
                     _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
-                        _response,
+                        run.response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
@@ -4656,6 +5031,55 @@ class ProxyBaseLLMRequestProcessing:
                     "Error in deferred streaming success logging: %s",
                     e,
                 )
+
+    @staticmethod
+    async def _deferred_stream_guardrail(
+        run: HookRun[LLMResponseTypes],
+        guardrail_data: dict[str, object],  # mutable-ok: the captured request merged with model-level guardrails
+        stream_gated: frozenset[str],
+        captured_user_api_key_dict: "UserAPIKeyAuth",
+        captured_logging_obj: LiteLLMLoggingObj,
+        cb: object,
+        request: object,
+    ) -> None:
+        if not isinstance(cb, CustomGuardrail):
+            return
+        if cb.guardrail_name in stream_gated:
+            return
+        if not cb.should_run_guardrail(
+            data=guardrail_data,
+            event_type=GuardrailEventHooks.post_call,
+        ):
+            return
+        try:
+            if routes_through_apply_guardrail(cb):
+                # Skip — unified-routed guardrails already ran via
+                # unified_guardrail's end-of-stream block in the
+                # streaming iterator pipeline.  Running them again
+                # here would duplicate the guardrail API call
+                # (e.g. double OpenAI Moderation charges).
+                return
+            if subclass_overrides_hook(type(cb), "async_post_call_streaming_iterator_hook"):
+                # Skip — the guardrail already scanned the assembled
+                # response via its own streaming iterator hook in the
+                # streaming pipeline. re running this function async_post_call_success_hook
+                # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
+                return
+            run.adopt(
+                await cb.async_post_call_success_hook(
+                    user_api_key_dict=captured_user_api_key_dict,
+                    data=guardrail_data,
+                    response=run.response,
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error running post-call guardrail %s on streaming response: %s",
+                getattr(cb, "guardrail_name", type(cb).__name__),
+                e,
+            )
+            if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
+                captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
 
     def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
         if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:

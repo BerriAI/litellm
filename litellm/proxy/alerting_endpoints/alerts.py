@@ -12,7 +12,7 @@ from litellm.models.alert import (
     AlertView,
     AlertViewPage,
 )
-from litellm.models.performance_alert import AlertMonitoring, AlertMonitoringUpdate
+from litellm.models.performance_alert import AlertMonitoring, AlertMonitoringUpdate, ModelDeprecationMonitoringUpdate
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import AlertMonitoringRepositoryDep, AlertRepositoryDep
@@ -60,7 +60,7 @@ async def list_alerts(
     return AlertViewPage(data=await store.enrich(page.data), next_cursor=page.next_cursor)
 
 
-@router.get("/alerts/monitoring", response_model=AlertMonitoring, summary="Read performance monitoring settings")
+@router.get("/alerts/monitoring", response_model=AlertMonitoring, summary="Read alert monitoring settings")
 async def get_monitoring(user: Auth, repository: AlertMonitoringRepositoryDep) -> AlertMonitoring:
     """Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin."""
     _authorize(user, write=False)
@@ -69,14 +69,16 @@ async def get_monitoring(user: Auth, repository: AlertMonitoringRepositoryDep) -
     return await repository.monitoring()
 
 
-@router.patch("/alerts/monitoring", response_model=AlertMonitoring, summary="Enable or disable performance monitoring")
+@router.patch("/alerts/monitoring", response_model=AlertMonitoring, summary="Enable or disable alert monitoring")
 async def update_monitoring(
-    data: AlertMonitoringUpdate, user: Auth, repository: AlertMonitoringRepositoryDep
+    data: AlertMonitoringUpdate | ModelDeprecationMonitoringUpdate, user: Auth, repository: AlertMonitoringRepositoryDep
 ) -> AlertMonitoring:
     """Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts."""
     _authorize(user, write=True)
     if repository is None:
         raise HTTPException(status_code=503, detail="Alerts require a database connection")
+    if isinstance(data, ModelDeprecationMonitoringUpdate):
+        return await repository.set_model_deprecations_enabled(data.model_deprecations_enabled)
     if data.enabled and (await repository.monitoring()).disabled_by_config:
         raise HTTPException(status_code=409, detail="Performance monitoring is disabled in proxy settings")
     return await repository.set_enabled(data.enabled)

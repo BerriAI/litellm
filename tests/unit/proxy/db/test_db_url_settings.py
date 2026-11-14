@@ -2,7 +2,7 @@
 
 The model assembles ``DATABASE_URL`` (and optionally
 ``DATABASE_URL_READ_REPLICA``) from the discrete ``DATABASE_*`` env vars
-emitted by the ``helm/litellm`` chart, before Prisma initializes. It covers
+emitted by the ``litellm/deploy/helm/litellm`` chart, before Prisma initializes. It covers
 both token auth (mint a short-lived AWS RDS IAM or Microsoft Entra ID token)
 and password auth, for both the writer and the read replica.
 
