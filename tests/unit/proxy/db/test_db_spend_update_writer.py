@@ -21,7 +21,7 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
@@ -145,6 +145,73 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
     payload: Final = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]["payload"]
     assert payload["model_group"] == "openai-outage"
     assert payload["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registered_names", "expected_model", "expected_model_group"),
+    [
+        (("Research Agent",), "a2a_agent/Research Agent", "a2a_agent/Research Agent"),
+        ((), UNKNOWN_MODEL_SPEND_LOG_MODEL, ""),
+    ],
+)
+async def test_update_database_keeps_a_registered_agent_name_with_a_space_on_a_failed_a2a_call(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_names: tuple[str, ...],
+    expected_model: str,
+    expected_model_group: str,
+):
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.types.agents import AgentResponse
+
+    registry: Final = agent_registry.AgentRegistry()
+    for index, name in enumerate(registered_names):
+        registry.register_agent(AgentResponse(agent_id=f"agent-{index}", agent_name=name, agent_card_params={}))
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.disable_spend_logs", True
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "a2a_agent/Research Agent",
+                "call_type": "asend_message",
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": "test-token",
+                        "model_group": "a2a_agent/Research Agent",
+                        "status": "failure",
+                    }
+                },
+            },
+            completion_response=ValueError("Task not found"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.0,
+        )
+        await asyncio.sleep(0)
+
+    payload: Final = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]["payload"]
+    assert (payload["model"], payload["model_group"]) == (expected_model, expected_model_group)
 
 
 def _tool_call_response(*names: str) -> object:

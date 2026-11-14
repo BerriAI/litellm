@@ -191,22 +191,36 @@ def _set_litellm_params_on_logging_obj(
     }
 
 
-def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: Mapping[str, object]) -> str:
+async def _record_send_message_billing(
+    kwargs: Mapping[str, object],
+    request: "SendMessageRequest",
+    response_dict: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    agent_id: str | None,
+) -> None:
+    prompt_tokens, completion_tokens, _ = await asyncify(A2ARequestUtils.calculate_usage_from_request_response)(
+        request=request,
+        response_dict=response_dict,
+    )
+    _set_usage_on_logging_obj(kwargs=kwargs, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+    if "error" not in response_dict:
+        _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
+    _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
+
+
+def _get_a2a_model_info(
+    a2a_client: "A2AClientType", kwargs: Mapping[str, object], agent_name: str | None = None
+) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
 
     Sets model info on the litellm_logging_obj if available.
-    Returns the agent name for logging.
+    Returns the logged agent name, agent_name when given, else the remote agent card's name.
     """
-    agent_name = "unknown"
-
-    agent_card: Final = _get_a2a_client_agent_card(a2a_client)
-
-    if agent_card is not None:
-        agent_name = getattr(agent_card, "name", "unknown") or "unknown"
+    logged_agent_name: Final = agent_name if agent_name is not None else _get_a2a_agent_card_name(a2a_client)
 
     # Build model string
-    model: Final = f"a2a_agent/{agent_name}"
+    model: Final = f"a2a_agent/{logged_agent_name}"
     custom_llm_provider: Final = "a2a_agent"
 
     # Set on litellm_logging_obj if available (for standard logging payload)
@@ -217,7 +231,11 @@ def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: Mapping[str, object
         litellm_logging_obj.model_call_details["model"] = model
         litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
 
-    return agent_name
+    return logged_agent_name
+
+
+def _get_a2a_agent_card_name(a2a_client: "A2AClientType") -> str:
+    return getattr(_get_a2a_client_agent_card(a2a_client), "name", None) or "unknown"
 
 
 def _get_a2a_client_agent_card(a2a_client: "A2AClientType") -> Optional["AgentCard"]:
@@ -420,6 +438,7 @@ async def asend_message(
     litellm_params: dict[str, object] | None = None,
     agent_id: str | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     **kwargs: object,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -434,6 +453,7 @@ async def asend_message(
         api_base: API base URL (required for completion bridge, optional for standard A2A)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
         agent_id: Optional agent ID for tracking in SpendLogs
+        agent_name: Agent name logged as a2a_agent/<agent_name>; URL agents fall back to the remote agent card's name
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
@@ -483,13 +503,21 @@ async def asend_message(
     if custom_llm_provider:
         if request is None:
             raise ValueError("request is required for completion bridge")
-        return await _send_message_via_completion_bridge(
+        bridge_response: Final = await _send_message_via_completion_bridge(
             request=request,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             litellm_params=litellm_params,
             agent_extra_headers=agent_extra_headers,
         )
+        await _record_send_message_billing(
+            kwargs=kwargs,
+            request=request,
+            response_dict=bridge_response.model_dump(mode="json", exclude_none=True),
+            litellm_params=litellm_params,
+            agent_id=agent_id,
+        )
+        return bridge_response
 
     # Standard A2A client flow
     if request is None:
@@ -516,9 +544,9 @@ async def asend_message(
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
 
-    agent_name: Final = _get_a2a_model_info(a2a_client, kwargs)
+    logged_agent_name: Final = _get_a2a_model_info(a2a_client, kwargs, agent_name)
 
-    verbose_logger.info("A2A send_message request_id=%s, agent=%s", request.id, agent_name)
+    verbose_logger.info("A2A send_message request_id=%s, agent=%s", request.id, logged_agent_name)
 
     # Get agent card URL for localhost retry logic
     agent_card: Final = _get_a2a_client_agent_card(a2a_client)
@@ -530,7 +558,7 @@ async def asend_message(
         agent_card=agent_card,
         card_url=card_url,
         api_base=api_base,
-        agent_name=agent_name,
+        agent_name=logged_agent_name,
     )
 
     verbose_logger.info("A2A send_message completed, request_id=%s", request.id)
@@ -538,29 +566,13 @@ async def asend_message(
     # Wrap in LiteLLM response type for _hidden_params support
     response: Final = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
 
-    # Calculate token usage from request and response
-    response_dict: Final[dict[str, object]] = a2a_response.root.model_dump(mode="json", exclude_none=True)
-    (
-        prompt_tokens,
-        completion_tokens,
-        _,
-    ) = await asyncify(A2ARequestUtils.calculate_usage_from_request_response)(
-        request=request,
-        response_dict=response_dict,
-    )
-
-    # Set usage on logging obj for standard logging payload
-    _set_usage_on_logging_obj(
+    await _record_send_message_billing(
         kwargs=kwargs,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
+        request=request,
+        response_dict=a2a_response.root.model_dump(mode="json", exclude_none=True),
+        litellm_params=litellm_params,
+        agent_id=agent_id,
     )
-
-    # Merge agent pricing params into the logging obj so cost is calculated
-    _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
-
-    # Set agent_id on logging obj for SpendLogs tracking
-    _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
     return response
 
@@ -646,6 +658,7 @@ async def asend_message_streaming(
     metadata: dict[str, object] | None = None,
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     **kwargs: object,
 ) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
     """
@@ -661,6 +674,7 @@ async def asend_message_streaming(
         agent_id: Optional agent ID for tracking in SpendLogs
         metadata: Optional metadata dict (contains user_api_key, user_id, team_id, etc.)
         proxy_server_request: Optional proxy server request data
+        agent_name: Agent name logged as a2a_agent/<agent_name>; URL agents fall back to the remote agent card's name
 
     Yields:
         SendStreamingMessageResponse chunks from the agent
@@ -705,14 +719,41 @@ async def asend_message_streaming(
             request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
         )
 
-        async for chunk in A2ACompletionBridgeHandler.handle_streaming(
+        bridge_stream: Final = A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
             agent_extra_headers=agent_extra_headers,
-        ):
-            yield chunk
+        )
+        caller_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        bridge_logging_obj: Final = (
+            caller_logging_obj
+            if isinstance(caller_logging_obj, Logging)
+            else _build_streaming_logging_obj(
+                request=request,
+                agent_name=agent_name or "unknown",
+                agent_id=agent_id,
+                litellm_params=litellm_params,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+            )
+        )
+        _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
+        _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
+
+        bridge_iterator: Final = A2AStreamingIterator(
+            stream=bridge_stream,
+            request=request,
+            logging_obj=bridge_logging_obj,
+            agent_name=agent_name or "unknown",
+        )
+        try:
+            async for chunk in bridge_iterator:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            await bridge_iterator.abill_on_disconnect()
+            raise
         return
 
     if request is None:
@@ -741,19 +782,19 @@ async def asend_message_streaming(
 
     assert a2a_client is not None
 
-    agent_name: Final = _get_a2a_model_info(a2a_client, kwargs)
+    logged_agent_name: Final = _get_a2a_model_info(a2a_client, kwargs, agent_name)
 
     if logging_obj is None:
         logging_obj = _build_streaming_logging_obj(
             request=request,
-            agent_name=agent_name,
+            agent_name=logged_agent_name,
             agent_id=agent_id,
             litellm_params=litellm_params,
             metadata=metadata,
             proxy_server_request=proxy_server_request,
         )
 
-    verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, agent_name)
+    verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, logged_agent_name)
 
     agent_card: Final = _get_a2a_client_agent_card(a2a_client)
     card_url: Final = get_agent_card_url(agent_card) if agent_card else None
@@ -764,18 +805,23 @@ async def asend_message_streaming(
         agent_card=agent_card,
         card_url=card_url,
         api_base=api_base,
-        agent_name=agent_name,
+        agent_name=logged_agent_name,
     )
 
     _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
-    async for chunk in A2AStreamingIterator(
+    url_agent_iterator: Final = A2AStreamingIterator(
         stream=stream,
         request=request,
         logging_obj=logging_obj,
-        agent_name=agent_name,
-    ):
-        yield chunk
+        agent_name=logged_agent_name,
+    )
+    try:
+        async for chunk in url_agent_iterator:
+            yield chunk
+    except (GeneratorExit, asyncio.CancelledError):
+        await url_agent_iterator.abill_on_disconnect()
+        raise
 
 
 async def create_a2a_client(
