@@ -4209,6 +4209,13 @@ def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMess
             ]
         case "system_after_assistant":
             return [question, {"role": "assistant", "content": "Checking."}, {"role": "system", "content": guarded}]
+        case "system_after_function_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking."},
+                {"role": "function", "name": "lookup", "content": "Sunny."},
+                {"role": "system", "content": guarded},
+            ]
         case "system_after_unanswered_tool_call":
             return [
                 question,
@@ -4265,7 +4272,13 @@ async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_n
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "placement", ["mid_conversation_system", "system_after_tool_result", "system_between_tool_call_and_result"]
+    "placement",
+    [
+        "mid_conversation_system",
+        "system_after_tool_result",
+        "system_between_tool_call_and_result",
+        "system_after_function_result",
+    ],
 )
 async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_without_tools_is_guarded(
     use_async: bool, placement: str
