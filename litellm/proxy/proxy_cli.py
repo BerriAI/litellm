@@ -1751,6 +1751,9 @@ def run_server(
                     PrismaManager,
                     should_update_prisma_schema,
                 )
+                from litellm.proxy.db.prisma_generate import ensure_shipped_prisma_client
+
+                ensure_shipped_prisma_client()
 
                 if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
                     check_prisma_schema_diff(db_url=None)

@@ -6064,10 +6064,13 @@ class PrismaClient:
             from prisma import Prisma
             from prisma.types import DatasourceOverride
         except Exception as e:
+            from litellm.proxy.db.prisma_generate import manual_generate_hint
+
+            generate_hint: Final = manual_generate_hint()
             verbose_proxy_logger.error("Failed to import Prisma client: %s", e)
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
-            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
-            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
+            verbose_proxy_logger.error("Please run '%s' to generate the Prisma client.", generate_hint)
+            raise Exception(f"Unable to find Prisma binaries. Please run '{generate_hint}' first.")
         token_auth: Final = self.token_auth
         writer_token_auth: Final = None if database_url_is_pooled() else token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
