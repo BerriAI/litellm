@@ -1,13 +1,13 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Mutex,
     time::Duration,
 };
 
 use litellm_redis_client::{Declared, Error as RedisError, RedisBatch, commands};
+use parking_lot::Mutex;
 
 use super::{DualCache, MemorySettings};
-use crate::{Error, FromValue, Send, codec, memory::lock, request::Misses};
+use crate::{Error, FromValue, Send, codec, request::Misses};
 
 /// A batch-reading family's `DualCache` settings, as the host reads them from `litellm` globals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,7 +171,7 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
     fn reserve(&self, keys: &[String], local: &[Option<V>]) -> Reservation {
         let now = self.now();
         let refresh_after = self.reads.refresh_after;
-        let mut recent = lock(&self.reads.recent);
+        let mut recent = self.reads.recent.lock();
         let due = keys
             .iter()
             .zip(local)
@@ -190,7 +190,7 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
     }
 
     pub(crate) fn release(&self, reservation: Reservation) {
-        let mut recent = lock(&self.reads.recent);
+        let mut recent = self.reads.recent.lock();
         for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
             match previous {
                 Some(read) => recent.insert(key, read),

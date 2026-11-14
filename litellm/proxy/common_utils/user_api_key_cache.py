@@ -4,6 +4,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast, overload
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -46,6 +47,14 @@ _TTL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 def _ttl(kwargs: Mapping[str, object]) -> float | None:
     return _TTL.validate_python(kwargs.get("ttl"))
+
+
+class CacheLease:
+    __slots__ = ("__weakref__", "key", "shared")
+
+    def __init__(self, key: str, shared: str | None) -> None:
+        self.key: Final = key
+        self.shared: Final = shared
 
 
 class UserApiKeyCache(DualCache):
@@ -106,6 +115,7 @@ class UserApiKeyCache(DualCache):
         self._models: Final = FrozenModelCache(self.in_memory_cache)
         self._redis_connection: RedisCache | None = None
         self._shared: AuthCacheStore | None = None
+        self._leases: Final[WeakValueDictionary[str, CacheLease]] = WeakValueDictionary()
         self.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
 
     @property
@@ -182,9 +192,43 @@ class UserApiKeyCache(DualCache):
             return
         self._python_memory(key).set_cache(key=key, value=value, ttl=effective_ttl)
 
+    async def lease(self, key: str) -> CacheLease:
+        """Taken on a cache miss, before the database read that will fill ``key``, and handed to
+        ``async_set_leased``. Evicting the key voids it: the rows read under it may predate the write behind
+        that eviction. With ``enable_redis_auth_cache`` an eviction on any worker voids it. Loads of one key
+        on this worker share a lease until an eviction, and it is dropped once none holds it."""
+        held: Final = self._leases.get(key)
+        if held is not None:
+            return held
+        shared: Final = None if self._shared is None else await self._shared.lease(key)
+        return self._leases.setdefault(key, CacheLease(key, shared))
+
+    async def async_set_leased(self, lease: CacheLease, value: CacheValue, ttl: float | None) -> bool:
+        """Caches ``value`` unless the lease's key was evicted since it was taken; False when refused."""
+        if self._leases.get(lease.key) is not lease:
+            return False
+        shared: Final = self._shared
+        if shared is None:
+            await self.async_set_cache(key=lease.key, value=value, ttl=ttl)
+            return True
+        payload: Final[object] = CacheCodec.serialize(value, model_type=None)
+        written: Final = await shared.set_leased(lease.key, lease.shared, payload, ttl)
+        if self._leases.get(lease.key) is not lease:
+            return False
+        if not written:
+            self._void_leases((lease.key,))
+            return False
+        shared.set_local(lease.key, payload, ttl)
+        return True
+
+    def _void_leases(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            _ = self._leases.pop(key, None)
+
     def delete_local(self, key: str) -> None:
         """Drops this worker's memory copy alone, as a cross-worker eviction broadcast does."""
         self.in_memory_cache.delete_cache(key)
+        self._void_leases((key,))
         if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
             self.budget_windows_absent_cache.delete_cache(key)
         if self._shared is not None:
@@ -209,8 +253,13 @@ class UserApiKeyCache(DualCache):
         cached: Final = self._models.get(key, model_type)
         return cached if cached is not None else self.get_cache(key=key, model_type=model_type, local_only=True)
 
-    async def async_set_frozen_model(self, key: str, value: BaseModel, ttl: float) -> None:
-        await self.async_set_cache(key=key, value=value, ttl=ttl)
+    async def async_set_frozen_model(
+        self, key: str, value: BaseModel, ttl: float, *, lease: CacheLease | None = None
+    ) -> None:
+        if lease is None:
+            await self.async_set_cache(key=key, value=value, ttl=ttl)
+        elif not await self.async_set_leased(lease, value, ttl):
+            return
         remaining: Final = self._shared.local_ttl(key) if self._shared is not None else ttl
         if remaining is not None and remaining > 0:
             self._models.remember(key, value, min(ttl, remaining))
@@ -382,6 +431,7 @@ class UserApiKeyCache(DualCache):
 
     def delete_cache(self, key: str) -> None:
         self.in_memory_cache.delete_cache(key)
+        self._void_leases((key,))
         if self._shared is not None:
             self._shared.delete_sync((key,))
             return
@@ -392,6 +442,7 @@ class UserApiKeyCache(DualCache):
 
     async def async_delete_cache(self, key: str) -> None:
         self.in_memory_cache.delete_cache(key)
+        self._void_leases((key,))
         if self._shared is not None:
             await self._shared.delete((key,))
             return
@@ -403,6 +454,7 @@ class UserApiKeyCache(DualCache):
     def declare_delete(self, key: str) -> Awaitable[None] | None:
         """The DEL on the request's pre-call batch; None without Redis or outside a request, so the caller deletes."""
         self.in_memory_cache.delete_cache(key)
+        self._void_leases((key,))
         return None if self._shared is None else self._shared.declare_delete(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
@@ -412,6 +464,7 @@ class UserApiKeyCache(DualCache):
         Both partitions are cleared even when one raises, because a caller
         batching these has already committed the rows they cache.
         """
+        self._void_leases(keys)
         if self._shared is not None:
             for key in keys:
                 self.in_memory_cache.delete_cache(key)
@@ -430,6 +483,7 @@ class UserApiKeyCache(DualCache):
             raise failed[0]
 
     def flush_cache(self) -> None:
+        self._leases.clear()
         self.budget_windows_absent_cache.flush_cache()
         self.in_memory_cache.flush_cache()
         if self._shared is not None:

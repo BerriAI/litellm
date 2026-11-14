@@ -13,7 +13,7 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -44,6 +44,8 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, Patch, on
+from litellm.integrations.custom_logger_v2.host import V2Outcome
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
@@ -831,13 +833,18 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+def _cost_field_cap(field: str) -> float:
+    return 1 if any(unit in field for unit in ("token", "character", "pixel")) else 1000
+
+
 def validate_model_cost_values(model_data, exceptions=None):
     """
-    Validates that cost values in model data do not exceed 1.
+    Validates that cost values in model data do not exceed their cap: 1 for per-token, per-character and
+    per-pixel fields, 1000 for every other unit (second, image, request, query).
 
     Args:
         model_data (dict): The model data dictionary
-        exceptions (list, optional): List of model IDs that are allowed to have costs > 1
+        exceptions (list, optional): List of model IDs that are allowed to have costs above the cap
 
     Returns:
         tuple: (is_valid, violations) where is_valid is a boolean and violations is a list of error messages
@@ -939,8 +946,9 @@ def validate_model_cost_values(model_data, exceptions=None):
                         # Skip if we can't convert to float
                         continue
 
-                if isinstance(cost_value, (int, float)) and cost_value > 1:
-                    violations.append(f"Model '{model_id}' has {field} = {cost_value} which exceeds 1")
+                cap = _cost_field_cap(field)
+                if isinstance(cost_value, (int, float)) and cost_value > cap:
+                    violations.append(f"Model '{model_id}' has {field} = {cost_value} which exceeds {cap}")
 
         # Check nested cost fields
         for field in nested_cost_fields:
@@ -1169,6 +1177,16 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_second_768p": {"type": "number"},
             "output_cost_per_second_2k": {"type": "number"},
             "output_cost_per_second_1080p": {"type": "number"},
+            "output_cost_per_video_clip": {
+                "type": "object",
+                "patternProperties": {
+                    "^[1-9][0-9]*s$": {
+                        "type": "object",
+                        "additionalProperties": {"type": "number", "exclusiveMinimum": 0},
+                    }
+                },
+                "additionalProperties": False,
+            },
             "output_cost_per_second_4k": {"type": "number"},
             "output_cost_per_token": {"type": "number"},
             "output_cost_per_token_above_32k_tokens": {"type": "number"},
@@ -1450,20 +1468,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     validate(actual_json, _COST_MAP_ROW_SCHEMA)
 
     # Validate cost values
-    # Define exceptions for models that are allowed to have costs > 1
-    # Add model IDs here if they legitimately have costs > 1
-    exceptions = [
-        # Add any model IDs that should be exempt from the cost validation
-        # Example: "expensive-model-id",
-        "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
-        "fal_ai/bytedance/seedance-2.0/text-to-video",
-        "fal_ai/bytedance/seedance-2.0/image-to-video",
-        "fal_ai/bytedance/seedance-2.0/reference-to-video",
-        "fal_ai/bytedance/seedance-2.5/us/draft/complete",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/image-to-video",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/reference-to-video",  # 1080p is $1.164/second per fal.ai
-        "fal_ai/bytedance/seedance-2.5/us/text-to-video",  # 1080p is $1.164/second per fal.ai
-    ]
+    exceptions: list[str] = []
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
 
@@ -11907,3 +11912,390 @@ async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(mo
     await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
 
     assert hook.seen_call_types == (CallTypes.acompact_responses,)
+
+
+_REWRITTEN_RESPONSE: Final = ModelResponse(id="rewritten-by-the-deployment-hook")
+
+
+class _DeploymentLogger(CustomLogger):
+    def __init__(
+        self,
+        name: str,
+        journal: list[object],
+        replacement: object = None,
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.journal = journal
+        self.replacement = replacement
+        self.error = error
+        self.seen: list[tuple[object, ...]] = []
+
+    def _record(self, *seen: object) -> object:
+        self.journal.append(self.name)
+        self.seen.append(seen)
+        if self.error is not None:
+            raise self.error
+        return self.replacement
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        return cast("dict[str, object] | None", self._record(kwargs, call_type))
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> object:
+        return self._record(request_data, response, call_type)
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        self._record(request_data, exception, call_type, fallback_depth)
+
+
+class _DeploymentGuardrail(CustomGuardrail):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(guardrail_name="deployment-guard", default_on=True)
+        self.error = error
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> object:
+        raise self.error
+
+
+class _DeploymentV2(CustomLoggerV2):
+    def __init__(self, journal: list[object], replacement: object = None, outcome: Abort | None = None) -> None:
+        self.journal = journal
+        self.replacement = replacement
+        self.outcome = outcome
+
+    @on(Hook.pre_deployment_call, reads={Field.model}, may_abort=True)
+    async def pre_deployment(self, view: object, ctx: CallContext[object]) -> Abort | None:
+        self.journal.append(("v2", getattr(view, "model")))  # noqa: B009  # the view's declared field
+        return self.outcome
+
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response}, may_abort=True)
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | Abort | None:
+        self.journal.append(("v2", getattr(view, "response")))  # noqa: B009  # see above
+        if self.outcome is not None:
+            return self.outcome
+        return None if self.replacement is None else Patch().set(Field.response, self.replacement)
+
+    @on(Hook.post_deployment_failure, reads={Field.error}, may_abort=True)
+    async def post_failure(self, view: object, ctx: CallContext[object]) -> Abort | None:
+        self.journal.append(("v2", str(getattr(view, "error"))))  # noqa: B009  # see above
+        return self.outcome
+
+
+def _with_inert_v2(callbacks: list[object], inert: bool) -> list[object]:
+    return [*callbacks, _DeploymentV2([])] if inert else callbacks
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_pre_deployment_hooks_run_in_order_and_a_returned_dict_replaces_the_kwargs(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    replaced: Final[dict[str, object]] = {"model": "replaced"}
+    first: Final = _DeploymentLogger("first", journal, replacement=replaced)
+    keeper: Final = _DeploymentLogger("keeper", journal)
+    last: Final = _DeploymentLogger("last", journal)
+    monkeypatch.setattr(litellm, "callbacks", _with_inert_v2([first, "a-string-callback", keeper, last], inert))
+
+    result: Final = await async_pre_call_deployment_hook({"model": "original"}, "acompletion", include_v2=True)
+
+    assert journal == ["first", "keeper", "last"]
+    assert first.seen[0][0] == {"model": "original"}
+    assert keeper.seen[0][0] is replaced
+    assert last.seen[0][0] is replaced
+    assert result is replaced
+    assert first.seen[0][1] is CallTypes.acompletion
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_a_pre_deployment_hook_error_propagates_unchanged_and_stops_the_hook(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    error: Final = ValueError("rejected before the deployment")
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        _with_inert_v2([_DeploymentLogger("first", journal, error=error), _DeploymentLogger("next", journal)], inert),
+    )
+
+    with pytest.raises(ValueError, match="rejected before the deployment") as raised:
+        await async_pre_call_deployment_hook({"model": "m"}, "acompletion", include_v2=True)
+
+    assert raised.value is error
+    assert journal == ["first"]
+
+
+async def test_a_pre_deployment_v2_callback_between_legacy_hooks_sees_the_first_rewrite_and_its_abort_stops_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final[list[object]] = []
+    abort: Final = Abort(status=403, message="deployment not allowed")
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _DeploymentLogger("first", journal, replacement={"model": "rewritten"}),
+            _DeploymentV2(journal, outcome=abort),
+            _DeploymentLogger("after", journal),
+        ],
+    )
+
+    with pytest.raises(V2Outcome) as raised:
+        await async_pre_call_deployment_hook({"model": "m"}, "acompletion", include_v2=True)
+
+    assert raised.value.outcome is abort
+    assert journal == ["first", ("v2", "rewritten")]
+
+
+@pytest.mark.parametrize(
+    "hook_call",
+    [
+        pytest.param(lambda: async_pre_call_deployment_hook({"model": "m"}, "acompletion"), id="pre"),
+        pytest.param(
+            lambda: async_post_call_success_deployment_hook({"model": "m"}, ModelResponse(), CallTypes.acompletion),
+            id="success",
+        ),
+        pytest.param(
+            lambda: async_post_call_failure_deployment_hook({"model": "m"}, ValueError("x"), "acompletion"),
+            id="failure",
+        ),
+    ],
+)
+async def test_callers_that_do_not_ask_for_v2_callbacks_run_only_the_legacy_hooks(
+    monkeypatch: pytest.MonkeyPatch, hook_call: Callable[[], object]
+) -> None:
+    journal: Final[list[object]] = []
+    monkeypatch.setattr(litellm, "callbacks", [_DeploymentV2(journal), _DeploymentLogger("legacy", journal)])
+
+    await cast("Awaitable[object]", hook_call())
+
+    assert journal == ["legacy"]
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_post_deployment_success_chains_replacements_and_swallows_a_logger_error(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    replacement: Final = ModelResponse(id="replaced")
+    first: Final = _DeploymentLogger("first", journal, replacement=replacement)
+    broken: Final = _DeploymentLogger("broken", journal, error=RuntimeError("logger bug"))
+    last: Final = _DeploymentLogger("last", journal)
+    monkeypatch.setattr(litellm, "callbacks", _with_inert_v2([first, broken, last], inert))
+    request: Final[dict[str, object]] = {"model": "m"}
+    response: Final = ModelResponse(id="original")
+
+    result: Final = await async_post_call_success_deployment_hook(
+        request, response, CallTypes.acompletion, include_v2=True
+    )
+
+    assert journal == ["first", "broken", "last"]
+    assert first.seen[0][0] is request
+    assert first.seen[0][1] is response
+    assert broken.seen[0][1] is replacement
+    assert last.seen[0][1] is replacement
+    assert result is replacement
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_post_deployment_success_reraises_a_guardrail_error_and_stops_the_hook(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    error: Final = ValueError("response blocked")
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        _with_inert_v2([_DeploymentGuardrail(error), _DeploymentLogger("next", journal)], inert),
+    )
+
+    with pytest.raises(ValueError, match="response blocked") as raised:
+        await async_post_call_success_deployment_hook({}, ModelResponse(), CallTypes.acompletion, include_v2=True)
+
+    assert raised.value is error
+    assert journal == []
+
+
+async def test_a_post_deployment_success_v2_callback_between_legacy_hooks_sees_and_replaces_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final[list[object]] = []
+    first_reply: Final = ModelResponse(id="first")
+    native_reply: Final = ModelResponse(id="v2")
+    second: Final = _DeploymentLogger("second", journal)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _DeploymentLogger("first", journal, replacement=first_reply),
+            _DeploymentV2(journal, replacement=native_reply),
+            second,
+        ],
+    )
+
+    result: Final = await async_post_call_success_deployment_hook(
+        {}, ModelResponse(id="original"), CallTypes.acompletion, include_v2=True
+    )
+
+    assert journal == ["first", ("v2", first_reply), "second"]
+    assert second.seen[0][1] is native_reply
+    assert result is native_reply
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_post_deployment_failure_hands_every_logger_a_snapshot_and_swallows_their_errors(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    broken: Final = _DeploymentLogger("broken", journal, error=RuntimeError("logger bug"))
+    last: Final = _DeploymentLogger("last", journal)
+    monkeypatch.setattr(litellm, "callbacks", _with_inert_v2([broken, last], inert))
+    error: Final = ValueError("deployment failed")
+
+    await async_post_call_failure_deployment_hook(
+        {"model": "m", "fallback_depth": 2, "attempted_targets": object()}, error, "acompletion", include_v2=True
+    )
+
+    assert journal == ["broken", "last"]
+    request, seen_error, call_type, depth = last.seen[0]
+    assert dict(cast("Mapping[str, object]", request)) == {"model": "m", "fallback_depth": 2}
+    assert type(seen_error) is ValueError
+    assert seen_error is not error
+    assert broken.seen[0][1] is seen_error
+    assert (call_type, depth) == (CallTypes.acompletion, 2)
+
+
+async def test_a_post_deployment_failure_v2_callback_between_legacy_hooks_runs_in_list_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final[list[object]] = []
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_DeploymentLogger("first", journal), _DeploymentV2(journal), _DeploymentLogger("second", journal)],
+    )
+
+    await async_post_call_failure_deployment_hook({}, ValueError("deployment failed"), "acompletion", include_v2=True)
+
+    assert journal == ["first", ("v2", "deployment failed"), "second"]
+
+
+class _PreDeploymentRewriter(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        self.seen.append("legacy")
+        return {**kwargs, "mock_response": "rewritten by the pre-deployment hook"}
+
+
+class _PostDeploymentSuccessRewriter(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> object:
+        self.seen.append("legacy")
+        return _REWRITTEN_RESPONSE
+
+
+class _PostDeploymentFailureRecorder(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+        self.failures: tuple[Exception, ...] = ()
+
+    async def async_post_call_failure_deployment_hook(
+        self, request_data: Mapping[str, object], exception: Exception, call_type: CallTypes | None
+    ) -> None:
+        self.seen.append("legacy")
+        self.failures = (*self.failures, exception)
+
+
+def _deployment_gate(hook: Hook, seen: list[str]) -> CustomLoggerV2:
+    class Gate(CustomLoggerV2):
+        @on(hook, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("v2")
+
+    return Gate()
+
+
+def _install_deployment_hook(
+    monkeypatch: pytest.MonkeyPatch, legacy: CustomLogger, v2_hook: Hook | None, seen: list[str]
+) -> None:
+    gate: Final = [] if v2_hook is None else [_deployment_gate(v2_hook, seen)]
+    monkeypatch.setattr(litellm, "callbacks", [*gate, legacy])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+async def test_pre_deployment_call_sends_the_kwargs_the_legacy_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+    _install_deployment_hook(
+        monkeypatch, _PreDeploymentRewriter(seen), Hook.pre_deployment_call if with_v2 else None, seen
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="original", num_retries=0
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "rewritten by the pre-deployment hook"
+    assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+async def test_post_deployment_success_returns_what_the_legacy_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+    _install_deployment_hook(
+        monkeypatch, _PostDeploymentSuccessRewriter(seen), Hook.post_deployment_success if with_v2 else None, seen
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="original", num_retries=0
+    )
+
+    assert response is _REWRITTEN_RESPONSE
+    assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_real_error(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+    recorder: Final = _PostDeploymentFailureRecorder(seen)
+    _install_deployment_hook(monkeypatch, recorder, Hook.post_deployment_failure if with_v2 else None, seen)
+    error: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini")
+
+    with pytest.raises(litellm.AuthenticationError, match="bad key") as raised:
+        await litellm.acompletion(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response=error, num_retries=0
+        )
+
+    assert len(recorder.failures) == 1
+    assert type(recorder.failures[0]) is type(raised.value)
+    assert recorder.failures[0] is not raised.value
+    assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])

@@ -1,71 +1,75 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import {
-  act,
-  fireEvent,
-  renderWithProviders,
-  screen,
-  testQueryClient,
-  waitFor,
-  within,
-} from "../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../../tests/test-utils";
 import CustomersPage from "./page";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
-
 const NOW = new Date("2024-03-15T12:00:00Z");
 const requests: URL[] = [];
-const listRequests: URL[] = [];
 const creations: unknown[] = [];
 let failed = false;
-
+const original = Array.from({ length: 30 }, (_, index) => ({
+  customer_org_id: `customer-${String(index).padStart(2, "0")}`,
+  alias: `Customer ${String(index).padStart(2, "0")}`,
+  spend: index === 0 ? 8 : 0,
+  budget: index === 0 ? { max_budget: 10, budget_duration: "1mo" } : null,
+  budget_usage:
+    index === 0
+      ? [
+          { source: "scalar", budget_duration: "1mo", spend: 8, max_budget: 10, reset_at: null },
+          { source: "window", budget_duration: "12mo", spend: 100, max_budget: 100, reset_at: null },
+        ]
+      : [],
+  member_count: 0,
+  created_at: new Date(Date.UTC(2024, 1, index + 1)).toISOString(),
+}));
+let organizations = [...original];
 const handleRequest = async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
-  if (url.pathname.endsWith("/.well-known/litellm-ui-config")) {
+  if (url.pathname.endsWith("/.well-known/litellm-ui-config"))
     return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
-  }
-  if (url.pathname === "/management/v1/users/me") {
+  if (url.pathname === "/management/v1/users/me")
     return Response.json({ user_id: "admin", user_role: "proxy_admin", user_email: null });
-  }
-  if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET") {
-    listRequests.push(url);
+  if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET")
     return Response.json({
-      data: [
-        { customer_org_id: "customer-a", alias: "Customer A", spend: 51, budget: { max_budget: 500 }, member_count: 3 },
-        { customer_org_id: "over-budget", spend: 750, budget: { max_budget: 500 }, member_count: 2 },
-        { customer_org_id: "zero-budget", spend: 1, budget: { max_budget: 0 }, member_count: 1 },
-        { customer_org_id: "no-budget", spend: 0, budget: null, member_count: 0 },
-        { customer_org_id: "unused-budget", spend: 0, budget: { max_budget: 500 }, member_count: 4 },
-      ],
-      meta: { total_count: 30, page: Number(url.searchParams.get("page")), page_size: 25, total_pages: 2 },
+      data: organizations,
+      meta: { total_count: organizations.length, page: 1, page_size: 100, total_pages: 1 },
       links: {},
     });
-  }
   if (url.pathname === "/management/v1/customer_organizations/daily/activity/aggregated") {
     requests.push(url);
     if (failed) return Response.json({ detail: "Unavailable" }, { status: 503 });
     const previous = url.searchParams.get("start_date") === "2024-02-01";
+    const metrics = (spend: number) => ({
+      spend,
+      api_requests: 10,
+      successful_requests: 9,
+      failed_requests: 1,
+      total_tokens: 100,
+      prompt_tokens: 60,
+      completion_tokens: 40,
+      cache_read_input_tokens: 10,
+      cache_creation_input_tokens: 0,
+      total_response_time_ms: 9000,
+      timed_requests: 9,
+    });
     return Response.json({
       results: [
         {
-          date: previous ? "2024-02-01" : "2024-03-01",
-          breakdown: {
-            entities: {
-              "customer-a": { metrics: { spend: previous ? 3 : 15, api_requests: 10, total_tokens: 300 } },
-            },
-          },
-        },
-        {
           date: previous ? "2024-02-15" : "2024-03-15",
+          metrics: {
+            ...metrics(previous ? 20 : 100),
+            api_requests: 20,
+            successful_requests: 18,
+            failed_requests: 2,
+            total_tokens: 200,
+            prompt_tokens: 120,
+            completion_tokens: 80,
+          },
           breakdown: {
             entities: {
-              "customer-a": {
-                metrics: {
-                  spend: previous ? 4 : 36,
-                  api_requests: previous ? 10 : 30,
-                  total_tokens: previous ? 100 : 500,
-                },
-              },
+              "customer-00": { metrics: metrics(previous ? 5 : 75) },
+              "customer-29": { metrics: metrics(previous ? 15 : 25) },
             },
           },
         },
@@ -74,9 +78,13 @@ const handleRequest = async (request: Request): Promise<Response> => {
     });
   }
   if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
-    const body: unknown = await request.json();
+    const body = await request.json();
     creations.push(body);
-    return Response.json({ customer_org_id: "new-org" }, { status: 201 });
+    organizations = [
+      ...organizations,
+      { ...original[1], customer_org_id: body.customer_org_id, alias: body.alias, created_at: NOW.toISOString() },
+    ];
+    return Response.json({ customer_org_id: body.customer_org_id }, { status: 201 });
   }
   throw new Error(`Unexpected request ${request.method} ${url.pathname}`);
 };
@@ -86,17 +94,19 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   testQueryClient.clear();
   requests.length = 0;
-  listRequests.length = 0;
   creations.length = 0;
+  organizations = [...original];
   failed = false;
   const claims = { key: "sk-test", user_id: "admin", user_role: "proxy_admin", exp: NOW.getTime() / 1000 + 3600 };
   document.cookie = `token=${btoa("{}")}.${btoa(JSON.stringify(claims))}.test; Path=/`;
-  vi.stubGlobal("fetch", vi.fn(handleRequest));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => handleRequest(new Request(input, init))),
+  );
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
     window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
 });
-
 afterEach(() => {
   testQueryClient.clear();
   vi.unstubAllGlobals();
@@ -104,150 +114,83 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-describe("customer organization usage", () => {
-  it("should change range totals in one aggregate request while retaining recorded budget spend", async () => {
+const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
+
+describe("customer organization overview", () => {
+  it("keeps complete totals and shares while sorting, paginating, and searching", async () => {
     const user = userEvent.setup();
-    const onUrlUpdate = vi.fn();
-    renderWithProviders(<CustomersPage />, { searchParams: "?page=2", onUrlUpdate });
-    const row = await screen.findByRole("row", { name: /Customer A/ });
-    expect(screen.getByRole("heading", { name: "Customer organizations" })).toBeInTheDocument();
-    expect(within(row).getByRole("cell", { name: "$51.00 / $500.00 10.2% used" })).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "Budget usage" })).not.toBeInTheDocument();
-    expect(within(row).getByText("3")).toBeInTheDocument();
-    expect(within(row).getByText("40")).toBeInTheDocument();
-    expect(within(row).getByText("800")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
-    await user.click(screen.getByRole("button", { name: /Previous month/ }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(await screen.findByText("$7.00")).toBeInTheDocument();
-    const updatedRow = screen.getByRole("row", { name: /Customer A/ });
+    renderWithProviders(<CustomersPage />);
+    await screen.findByRole("link", { name: "Customer 29" });
+    expect(customerLinks()[0]).toHaveTextContent("Customer 29");
+    const overview = screen.getByRole("region", { name: "Overall customer usage" });
+    expect(within(overview).getByText("$100.00")).toBeInTheDocument();
+    expect(within(overview).getByText("20")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("meter")).toHaveAttribute(
+      "aria-valuenow",
+      "25",
+    );
+    await user.click(screen.getByRole("button", { name: "Share of overall spend" }));
+    await waitFor(() => expect(customerLinks()[0]).toHaveTextContent("Customer 00"));
+    expect(screen.getByRole("columnheader", { name: "Share of overall spend" })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    const row = screen.getByRole("row", { name: /Customer 00/ });
+    expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
+    expect(within(row).getByText("Reached limit")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: /Search by customer/ }), { target: { value: "Customer 29" } });
+    await screen.findByText("Page 1 of 1");
+    expect(customerLinks()).toHaveLength(1);
+    expect(within(screen.getByRole("row", { name: /Customer 29/ })).getByText("25%")).toBeInTheDocument();
+    expect(within(overview).getByText("$100.00")).toBeInTheDocument();
+  });
+
+  it("restores saved sorting and changes summary dates without changing monthly shares", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPage />, {
+      searchParams: "?sort_by=customer&sort_order=asc&range=2024-02-01..2024-02-29",
+    });
+    await screen.findByRole("link", { name: "Customer 00" });
+    expect(customerLinks()[0]).toHaveTextContent("Customer 00");
     expect(
-      within(updatedRow).getByRole("cell", { name: "$7.00 Recorded budget spend $51.00 / $500.00 10.2% used" }),
+      within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
     ).toBeInTheDocument();
-    expect(within(updatedRow).getByText("3")).toBeInTheDocument();
-    expect(within(updatedRow).getByRole("link", { name: "Customer A" })).toHaveAttribute(
+    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
       "href",
-      "/ui/customers/usage?org=customer-a&from=2024-02-01&to=2024-02-29",
+      "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",
     );
-    expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-02-01");
-    expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
-    expect(listRequests.at(-1)?.searchParams.get("page")).toBe("1");
-    expect(requests).toHaveLength(2);
-    expect(requests.at(-1)?.searchParams.get("customer_org_ids")).toBe(
-      "customer-a,over-budget,zero-budget,no-budget,unused-budget",
-    );
-    expect(requests.at(-1)?.searchParams.has("page")).toBe(false);
-    expect(onUrlUpdate.mock.lastCall?.[0].queryString).toContain("range=2024-02-01..2024-02-29");
-  });
-
-  it("should restore a custom range from the URL and sends edited calendar days", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPage />, { searchParams: "?range=2024-01-03..2024-01-10" });
-    await screen.findByRole("row", { name: /Customer A/ });
-    expect(requests.at(-1)?.searchParams.get("start_date")).toBe("2024-01-03");
-    expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-01-10");
-    await user.click(screen.getByRole("button", { name: /3 Jan 2024/ }));
-    act(() => fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-02-01" } }));
-    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2024-02-29" } }));
+    await user.click(screen.getByRole("button", { name: /1 Feb 2024/ }));
+    await user.click(screen.getByRole("button", { name: /This month/ }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(await screen.findByText("$7.00")).toBeInTheDocument();
-    expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2024-02-29");
+    expect(
+      await within(screen.getByRole("region", { name: "Overall customer usage" })).findByText("$100.00"),
+    ).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
   });
 
-  it("should show over-budget percentages, zero and missing limits, and members without usage", async () => {
-    renderWithProviders(<CustomersPage />);
-    const over = await screen.findByRole("row", { name: /over-budget/ });
-    expect(within(over).getByText("Recorded budget spend $750.00 / $500.00")).toBeInTheDocument();
-    expect(within(over).getByText("150% used")).toBeInTheDocument();
-    const zero = screen.getByRole("row", { name: /zero-budget/ });
-    expect(within(zero).getByText("Recorded budget spend $1.00 / $0.00")).toBeInTheDocument();
-    expect(within(zero).getByText("Percentage unavailable for a $0 budget")).toBeInTheDocument();
-    const uncapped = screen.getByRole("row", { name: /no-budget/ });
-    expect(within(uncapped).getByText("$0.00")).toBeInTheDocument();
-    expect(within(uncapped).getByText("No max budget")).toBeInTheDocument();
-    const unused = screen.getByRole("row", { name: /unused-budget/ });
-    expect(within(unused).getByText("$0.00 / $500.00")).toBeInTheDocument();
-    expect(within(unused).getByText("0% used")).toBeInTheDocument();
-    expect(within(unused).getByText("4")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Customer members" })).toBeInTheDocument();
-  });
-
-  it("should block ranges over 400 days before Apply and accepts the boundary", async () => {
+  it("shows a newly created customer first and resets the search, sort, and page", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<CustomersPage />);
-    await screen.findByRole("row", { name: /Customer A/ });
-    await user.click(screen.getByRole("button", { name: /1 Mar 2024/ }));
-    act(() => fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2024-01-01" } }));
-    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-05" } }));
-    expect(screen.getByText("Select a date range of 400 days or less.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
-    expect(requests).toHaveLength(1);
-    act(() => fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-02-04" } }));
-    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Apply" }));
-    await waitFor(() => expect(requests).toHaveLength(2));
-    expect(requests.at(-1)?.searchParams.get("end_date")).toBe("2025-02-04");
+    renderWithProviders(<CustomersPage />, { searchParams: "?search=customer&sort_by=customer&sort_order=asc&page=2" });
+    await screen.findByRole("link", { name: "Customer 25" });
+    await user.click(screen.getByRole("button", { name: "Create customer organization" }));
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
+    fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create customer" }));
+    await screen.findByRole("link", { name: "New organization" });
+    expect(customerLinks()[0]).toHaveTextContent("New organization");
+    expect(screen.getByRole("textbox", { name: /Search by customer/ })).toHaveValue("");
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+    expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
   });
 
-  it("should use the default month when a saved URL exceeds the range limit", async () => {
-    renderWithProviders(<CustomersPage />, { searchParams: "?range=2020-01-01..2024-03-31" });
-    await screen.findByRole("row", { name: /Customer A/ });
-    expect(requests).toHaveLength(1);
-    expect(requests[0].searchParams.get("start_date")).toBe("2024-03-01");
-    expect(requests[0].searchParams.get("end_date")).toBe("2024-03-31");
-  });
-
-  it("should show a failure instead of presenting missing usage as zero", async () => {
+  it("reports failed usage instead of displaying partial totals or zero shares", async () => {
     failed = true;
     renderWithProviders(<CustomersPage />);
-    expect(await screen.findByText("Could not load customer organization usage.")).toBeInTheDocument();
-    expect(screen.queryByRole("row", { name: /Customer A/ })).not.toBeInTheDocument();
-  });
-
-  it("creates an organization and its member budget profiles from the customer page", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPage />);
-    await user.click(screen.getByRole("button", { name: "Create customer organization" }));
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: " New customer " } });
-    fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: " new-org " } });
-    fireEvent.change(screen.getByLabelText("Customer monthly budget (USD)"), { target: { value: "1000" } });
-    fireEvent.change(screen.getByLabelText("Group 1 yearly budget (USD)"), { target: { value: "1500" } });
-    await user.click(screen.getByRole("radio", { name: "Use power_user as default" }));
-    const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Create customer" }));
-    await waitFor(() =>
-      expect(creations).toEqual([
-        {
-          customer_org_id: "new-org",
-          alias: "New customer",
-          budget: { max_budget: 1000, budget_duration: "1mo" },
-          default_budgets: [
-            {
-              name: "power_user",
-              budget_limits: [
-                { budget_duration: "1mo", max_budget: 200 },
-                { budget_duration: "12mo", max_budget: 1500 },
-              ],
-            },
-            {
-              name: "default_user",
-              budget_limits: [
-                { budget_duration: "1mo", max_budget: 50 },
-                { budget_duration: "12mo", max_budget: 500 },
-              ],
-            },
-            {
-              name: "low_user",
-              budget_limits: [
-                { budget_duration: "1mo", max_budget: 10 },
-                { budget_duration: "12mo", max_budget: 100 },
-              ],
-            },
-          ],
-          default_budget_template: "power_user",
-        },
-      ]),
-    );
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findAllByText("Could not load customer organization usage.")).toHaveLength(2);
+    expect(screen.queryByRole("link", { name: "Customer 29" })).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 });

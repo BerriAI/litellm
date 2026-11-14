@@ -4173,6 +4173,7 @@ async def run_centralized_common_checks(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
+            budget_limits=budget_row.budget_limits if budget_row is not None else None,
             user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
@@ -4523,8 +4524,8 @@ async def _authorize_authenticated_request(
 ) -> UserAPIKeyAuth | None:
     """Authorize an already-authenticated request: disabled-route check, the single
     ``common_checks`` gate (which also reserves budget), and end-user fallback
-    resolution. Returns the auth object the exception handler recovered when a check
-    failed but the request may proceed anyway, else ``None``.
+    resolution. Returns a dashboard billing projection or recovered auth object,
+    otherwise ``None``.
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
@@ -4532,6 +4533,36 @@ async def _authorize_authenticated_request(
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
     _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)
 
+    from litellm.proxy.auth.auth_checks import dashboard_model_billing_auth
+    from litellm.proxy.proxy_server import llm_router as billing_router
+
+    billing_model: Final = _get_model_from_request_context(
+        request_data, route, request, llm_router=billing_router, team_id=user_api_key_auth_obj.team_id
+    )
+    billing_auth: Final = (
+        await dashboard_model_billing_auth(
+            user_api_key_auth_obj,
+            billing_model,
+            llm_router=billing_router,
+        )
+        if RouteChecks.is_llm_api_route(route=route)
+        else user_api_key_auth_obj
+    )
+    recovered: Final = await _authorize_authenticated_request_checks(
+        billing_auth, request, request_data, route, api_key, force_virtual_key_checks=force_virtual_key_checks
+    )
+    return (recovered or billing_auth) if billing_auth is not user_api_key_auth_obj else recovered
+
+
+async def _authorize_authenticated_request_checks(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict[str, object],  # mutable-ok: common checks update the ASGI body cache
+    route: str,
+    api_key: str,
+    *,
+    force_virtual_key_checks: bool = False,
+) -> UserAPIKeyAuth | None:
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
     # authorization failures (ProxyException, or plain Exception from
@@ -4834,30 +4865,29 @@ async def user_api_key_auth(
         )
 
         settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
-        user_api_key_auth_obj: Final = (
-            authenticated.model_copy() if settings.get("access_group_rules") else authenticated
-        )
-        user_api_key_auth_obj.budget_reservation = None
-        user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
-            safe_get_request_headers(request), user_api_key_auth_obj
-        )
-        _seed_request_destinations(user_api_key_auth_obj, request)
+        request_auth: Final = authenticated.model_copy() if settings.get("access_group_rules") else authenticated
+        request_auth.budget_reservation = None
+        request_auth.agent_caller = agent_caller_from_headers(safe_get_request_headers(request), request_auth)
+        _seed_request_destinations(request_auth, request)
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
         # against, and budget reservation would increment live spend counters that
         # only the endpoint's post-call path releases; the endpoint never runs, since
         # the parse failure is raised below.
-        if body_parse_exception is None:
-            recovered_auth_obj: Final = await _authorize_authenticated_request(
-                user_api_key_auth_obj=user_api_key_auth_obj,
+        authorized_auth: Final = (
+            await _authorize_authenticated_request(
+                user_api_key_auth_obj=request_auth,
                 request=request,
                 request_data=request_data,
                 route=route,
                 api_key=api_key,
             )
-            if recovered_auth_obj is not None:
-                return recovered_auth_obj
+            if body_parse_exception is None
+            else None
+        )
+
+    user_api_key_auth_obj: Final = authorized_auth or request_auth
 
     # Identity is now resolved. Seed it AFTER the auth span closes so the Baggage
     # persists on the request task (detaching the span's context token inside the

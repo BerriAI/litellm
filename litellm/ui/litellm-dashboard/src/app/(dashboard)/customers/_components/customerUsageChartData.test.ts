@@ -38,10 +38,21 @@ const day = (date: string, total: SpendMetrics, breakdown: Partial<DailyData["br
 });
 
 const snapshot = (): CustomerHierarchyUsage => ({
-  organization: { id: "org", label: "Organization", spend: 0, budgetLimit: null, budgetResetAt: null },
+  organization: {
+    id: "org",
+    label: "Organization",
+    spend: 0,
+    budgetLimit: null,
+    budgetDuration: null,
+    budgetLimits: [],
+    budgetResetAt: null,
+  },
   team: null,
   member: null,
   memberBudgets: [],
+  monthlyOrganizationSpend: 0,
+  monthlyMembers: [],
+  yearlyMembers: [],
   metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA },
   results: [
     day("2026-11-01", metrics(100, 1_000, 100), {

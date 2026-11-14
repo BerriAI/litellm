@@ -1,7 +1,17 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { act, chooseSelectOption, fireEvent, render, screen, waitFor, within } from "../../../../../tests/test-utils";
+import {
+  act,
+  chooseSelectOption,
+  fireEvent,
+  renderWithProviders as render,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../../../tests/test-utils";
+import CustomersLayout from "../layout";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import type { Organization, Member, CustomerHierarchyEntity } from "./customerHierarchyForms";
 
@@ -21,6 +31,7 @@ const audit = {
   spend: 5,
 };
 const organization: Organization = {
+  budget_groups_revision: "a".repeat(64),
   ...audit,
   customer_org_id: "org-1",
   alias: "Example organization",
@@ -64,12 +75,16 @@ const lastRequest = (): Request => {
 describe("CustomerHierarchySettings", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "http://localhost");
+    testQueryClient.clear();
     fetchMock.mockReset();
     onSaved.mockReset();
     onDeleted.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    testQueryClient.clear();
+    vi.unstubAllGlobals();
+  });
 
   it("should render the existing organization settings and read-only identifier", () => {
     render(
@@ -341,6 +356,43 @@ describe("CustomerHierarchySettings", () => {
       expect(url.searchParams.get("cascade")).toBe(entity.kind === "team" ? "true" : null);
     },
   );
+
+  it("clears the free-tier warning when a successful deletion frees capacity", async () => {
+    let atCapacity = true;
+    fetchMock.mockImplementation(async (input) => {
+      const request = input as Request;
+      if (request.method === "DELETE") {
+        atCapacity = false;
+        return new Response(null, { status: 204 });
+      }
+      const limits = {
+        limits_apply: true,
+        organization_limit: 5,
+        teams_per_organization_limit: 5,
+        members_per_team_limit: 5,
+        organization_count: 1,
+        any_limit_reached: atCapacity,
+      };
+      return json(limits);
+    });
+    render(
+      <CustomersLayout>
+        <CustomerHierarchySettings
+          entity={{ kind: "member", record: member }}
+          organization={organization}
+          onSaved={onSaved}
+          onDeleted={onDeleted}
+        />
+      </CustomersLayout>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Free customer portal limit reached");
+    fireEvent.click(screen.getByRole("button", { name: "Delete customer member" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete customer member" });
+    fireEvent.change(within(dialog).getByPlaceholderText("member-1"), { target: { value: "member-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText(/Free tier: up to 5 customers/)).toBeInTheDocument();
+  });
 
   it("should keep the confirmation pending until a delete returns204", async () => {
     const user = userEvent.setup();

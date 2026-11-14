@@ -12,6 +12,7 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
 import CustomerHierarchyNavigation, { customerHierarchyHref } from "./CustomerHierarchyNavigation";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
+import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
@@ -41,13 +42,16 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
-  const budget = entity.kind === "member" ? entity.record.effective_budget : entity.record.budget;
+  const budget = entity.kind === "organization" ? entity.record.budget : entity.record.effective_budget;
   const budgetEntity: CustomerUsageEntity = {
     id: customerEntityId(entity),
     label,
     spend: entity.record.spend,
     budgetLimit: budget?.max_budget ?? null,
+    budgetDuration: budget?.budget_duration ?? null,
+    budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: entity.record.budget_reset_at ?? null,
+    budgetUsage: entity.record.budget_usage,
   };
   const budgetScope = {
     org: selected.organization.customer_org_id,
@@ -356,7 +360,14 @@ export default function CustomerHierarchyManager() {
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       <section>
-        {tab === "settings" ? (
+        {tab === "budget_groups" ? (
+          <CustomerBudgetGroups
+            key={scope.org}
+            organization={selected.organization}
+            onSaved={hierarchy.organizationSaved}
+          />
+        ) : null}
+        {tab === "settings" && (
           <CustomerHierarchySettings
             key={customerEntityId(entity)}
             organization={selected.organization}
@@ -364,7 +375,8 @@ export default function CustomerHierarchyManager() {
             onSaved={hierarchy.refresh}
             onDeleted={onDeleted}
           />
-        ) : (
+        )}
+        {(tab === "teams" || tab === "members") && (
           <HierarchyChildTable hierarchy={hierarchy} selected={selected} scope={scope} />
         )}
       </section>

@@ -229,15 +229,19 @@ class StreamingLogBuilder(Protocol):
 
 
 class DeploymentHook(Protocol):
-    def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
+    def __call__(self, kwargs: dict[str, object], call_type: str, *, include_v2: bool) -> Awaitable[object]: ...
 
 
 class DeploymentSuccessHook(Protocol):
-    def __call__(self, request_data: dict[str, object], response: object, call_type: object) -> Awaitable[object]: ...
+    def __call__(
+        self, request_data: dict[str, object], response: object, call_type: object, *, include_v2: bool
+    ) -> Awaitable[object]: ...
 
 
 class DeploymentFailureHook(Protocol):
-    def __call__(self, request_data: Mapping[str, object], exception: Exception, call_type: str) -> Awaitable[None]: ...
+    def __call__(
+        self, request_data: Mapping[str, object], exception: Exception, call_type: str, *, include_v2: bool
+    ) -> Awaitable[None]: ...
 
 
 def update_logging(
@@ -517,7 +521,7 @@ def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitab
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentHook, utils.async_pre_call_deployment_hook
     )
-    return hook(kwargs, call_type)
+    return hook(kwargs, call_type, include_v2=True)
 
 
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
@@ -528,7 +532,12 @@ def after_deployment_success(kwargs: dict[str, object], response: object, call_t
         DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
     )
     typed: Final = CallTypes(call_type)
-    return hook(kwargs, _messages_stream(response) if typed == CallTypes.anthropic_messages else response, typed)
+    return hook(
+        kwargs,
+        _messages_stream(response) if typed == CallTypes.anthropic_messages else response,
+        typed,
+        include_v2=True,
+    )
 
 
 def _messages_stream(response: object) -> object:
@@ -558,7 +567,7 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
     )
-    return hook(kwargs, error, call_type)
+    return hook(kwargs, error, call_type, include_v2=True)
 
 
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])

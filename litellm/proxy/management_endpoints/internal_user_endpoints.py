@@ -23,7 +23,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -31,9 +31,11 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    evict_budget_windows_absent_marker,
     forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_team_object,
@@ -51,7 +53,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
-from litellm.proxy.common_utils.timezone_utils import keeps_due_budget_reset
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -92,11 +94,16 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
-from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_helpers.utils import (
+    BUDGET_WINDOWS_ADAPTER,
+    budget_windows_json,
+    management_endpoint_wrapper,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
+from litellm.repositories.chunked_in import update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -135,6 +142,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _LOCK_ALL_USERS_SQL: Final = (
@@ -542,7 +550,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
-    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
     Returns:
     - key: (str) The generated api key for the user
@@ -1235,6 +1243,7 @@ async def user_info_v2(
             rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
+            budget_limits=user_data.get("budget_limits"),
             budget_reset_at=user_data.get("budget_reset_at"),
             metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
             created_at=user_data.get("created_at"),
@@ -1370,12 +1379,28 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _windows_by_user(
+    users: Sequence["prisma_models.LiteLLM_UserTable"], requested: Sequence[BudgetLimitEntry] | None
+) -> MappingProxyType[str, str]:
+    return MappingProxyType(
+        {
+            user.user_id: budget_windows_json(
+                requested,
+                stored=None
+                if user.budget_limits is None
+                else BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
+            )
+            for user in users
+        }
+    )
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1396,13 +1421,14 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         ):  # models default to [], spend defaults to 0, we should not reset these values
             non_default_values[k] = v
 
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
+
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
         validate_budget_duration(non_default_values["budget_duration"])
         non_default_values["budget_reset_at"] = (
             get_budget_reset_time(budget_duration=non_default_values["budget_duration"])
@@ -1419,8 +1445,6 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_duration" not in non_default_values:  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
             non_default_values["budget_duration"] = litellm.internal_user_budget_duration
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
             non_default_values["budget_reset_at"] = get_budget_reset_time(
                 budget_duration=non_default_values["budget_duration"]
             )
@@ -1600,6 +1624,10 @@ async def _update_single_user_helper(
             )
         ):
             del non_default_values["budget_reset_at"]
+        if "budget_limits" in non_default_values:
+            non_default_values["budget_limits"] = budget_windows_json(
+                user_request.budget_limits, stored=existing_user_row.budget_limits
+            )
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1616,7 +1644,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "budget_limits",
+            "model_max_budget",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1716,6 +1751,13 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        if "budget_limits" in non_default_values:
+            await evict_budget_windows_absent_marker(
+                entity_type=Litellm_EntityType.USER,
+                entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
+                user_api_key_cache=user_api_key_cache,
+            )
 
         await evict_and_broadcast(
             cache_keys=(non_default_values["user_id"],),
@@ -1818,7 +1860,7 @@ async def user_update(
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+        - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
 
     """
     try:
@@ -2047,6 +2089,8 @@ async def bulk_user_update(
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
 
+        shared_values: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "budget_limits"})
+
         successful_updates = 0
         failed_updates: Final = 0
         results: Final[list[UserUpdateResult]] = []
@@ -2055,31 +2099,67 @@ async def bulk_user_update(
             # Perform bulk database update
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
-                _ = await user_tx_db(transaction).update_many(
-                    where={},
-                    data=(
-                        {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
-                        if "model_max_budget" in non_default_values
-                        else non_default_values
-                    ),
+                locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
+                windows_by_user: Final[Mapping[str, str]] = (
+                    _windows_by_user(locked_users, data.user_updates.budget_limits)
+                    if "budget_limits" in non_default_values
+                    else MappingProxyType({})
                 )
+                if shared_values:
+                    _ = await user_tx_db(transaction).update_many(
+                        where={},
+                        data=(
+                            {**shared_values, "model_max_budget": json.dumps(shared_values["model_max_budget"])}
+                            if "model_max_budget" in shared_values
+                            else dict(shared_values)
+                        ),
+                    )
+                for windows_json in frozenset(windows_by_user.values()):
+                    _ = await update_many_in(
+                        user_tx_db(transaction),
+                        "user_id",
+                        (uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json),
+                        data={"budget_limits": windows_json},
+                        atomicity="caller_transaction",
+                    )
 
-            for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
+            for start in range(0, len(locked_users), _USER_CACHE_INVALIDATION_BATCH_SIZE):
                 await asyncio.gather(
                     *(
                         evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
-                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
-                    )
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                    ),
+                    *(
+                        evict_budget_windows_absent_marker(
+                            entity_type=Litellm_EntityType.USER,
+                            entity_id=user.user_id,
+                            user_api_key_cache=user_api_key_cache,
+                        )
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                        if user.user_id in windows_by_user
+                    ),
+                    *(
+                        _invalidate_user_spend_counter_if_changed({**non_default_values, "user_id": user.user_id})
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                    ),
                 )
 
             # Create individual success results
-            for user in all_users_in_db:
+            for user in locked_users:
                 results.append(
                     UserUpdateResult(
                         user_id=user.user_id,
                         user_email=user.user_email,
                         success=True,
-                        updated_user={"user_id": user.user_id, **non_default_values},
+                        updated_user={
+                            "user_id": user.user_id,
+                            **non_default_values,
+                            **(
+                                {"budget_limits": _JSON_VALUE_ADAPTER.validate_json(windows_by_user[user.user_id])}
+                                if user.user_id in windows_by_user
+                                else {}
+                            ),
+                        },
                     )
                 )
                 successful_updates += 1
@@ -2093,7 +2173,7 @@ async def bulk_user_update(
                         litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
                         user_api_key_dict=user_api_key_dict,
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=f"Updated {len(all_users_in_db)} users",
+                        before_value=f"Updated {len(results)} users",
                         after_value=json.dumps(non_default_values),
                     )
                 )
@@ -2102,16 +2182,12 @@ async def bulk_user_update(
 
         except Exception as e:
             verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
-            # Fall back to individual updates if bulk update fails
-            for user in all_users_in_db:
-                user_update_request = data.user_updates.model_copy()
-                user_update_request.user_id = user.user_id
-                users_to_update.append(user_update_request)
+            raise HTTPException(status_code=500, detail={"error": str(e)}) from e
 
         if successful_updates > 0:
             return BulkUpdateUserResponse(
                 results=results,
-                total_requested=len(all_users_in_db),
+                total_requested=len(results),
                 successful_updates=successful_updates,
                 failed_updates=failed_updates,
             )

@@ -668,7 +668,7 @@ async def get_logging_payload_async(
     from litellm.proxy.proxy_server import general_settings_view
 
     call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
-    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is not False
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is True
     build: Final = partial(
         get_logging_payload,
         kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
@@ -1535,7 +1535,7 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 def _without_tokens(value: str) -> str:
     from litellm.proxy.proxy_server import general_settings_view
 
-    if general_settings_view().get("redact_tokens_in_spend_logs") is False:
+    if general_settings_view().get("redact_tokens_in_spend_logs") is not True:
         return value
     return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
@@ -1584,7 +1584,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs. Token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
+    and logprobs. When enabled, token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()

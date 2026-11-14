@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCustomerOrganizationBody, initialCustomerOrganizationFields } from "./customerOrganizationForm";
+import {
+  buildCustomerOrganizationBody,
+  defaultCustomerCapPolicy,
+  initialCustomerOrganizationFields,
+} from "./customerOrganizationForm";
 
 const fields = () => ({
   ...initialCustomerOrganizationFields(),
@@ -14,7 +18,15 @@ describe("buildCustomerOrganizationBody", () => {
       monthlyBudget: "1000.25",
       tpm: "3000",
       rpm: "25",
-      groups: [{ id: "custom", name: " power ", monthlyBudget: "200.50", yearlyBudget: "1500" }],
+      groups: [
+        {
+          id: "custom",
+          name: " power ",
+          monthlyBudget: "200.50",
+          yearlyBudget: "1500",
+          capPolicy: defaultCustomerCapPolicy,
+        },
+      ],
       defaultGroupId: "custom",
     };
     const result = buildCustomerOrganizationBody(input);
@@ -27,6 +39,7 @@ describe("buildCustomerOrganizationBody", () => {
         default_budgets: [
           {
             name: "power",
+            cap_policy: "pause_until_reset",
             budget_limits: [
               { budget_duration: "1mo", max_budget: 200.5 },
               { budget_duration: "12mo", max_budget: 1500 },
@@ -52,8 +65,8 @@ describe("buildCustomerOrganizationBody", () => {
       ...fields(),
       monthlyBudget: "0",
       groups: [
-        { id: "monthly", name: "monthly", monthlyBudget: "0", yearlyBudget: "" },
-        { id: "yearly", name: "yearly", monthlyBudget: "", yearlyBudget: "120" },
+        { id: "monthly", name: "monthly", monthlyBudget: "0", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy },
+        { id: "yearly", name: "yearly", monthlyBudget: "", yearlyBudget: "120", capPolicy: defaultCustomerCapPolicy },
       ],
       defaultGroupId: "yearly",
     };

@@ -6,6 +6,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl, ConnectFlowStatus } from "@/components/networking";
 import { OAuth2ConnectButton } from "@/components/chat/MCPAppsPanel";
+import { Button } from "@/components/ui/button";
 import i18n from "@/i18n/i18n";
 
 interface Props {
@@ -14,7 +15,15 @@ interface Props {
   accessToken: string;
   onConnected: () => void;
   failed: boolean;
+  finish?: FinishSelection;
 }
+
+export type FinishSelection =
+  | { status: "waiting" }
+  | { status: "nothing-on" }
+  | { status: "ready"; serverIds: readonly string[] };
+
+const FINISH_WITHOUT_SERVERS: FinishSelection = { status: "ready", serverIds: [] };
 
 /** Finish remains an explicit POST because a cross-site navigation must never mint a code. */
 export function isLoopbackOrigin(origin: string | null): boolean {
@@ -44,7 +53,9 @@ const copyFor = (
   if (flow.state === "unscoped") {
     return [
       t("chat.connectFlowBanner.unscoped.title", { client: clientLabel }),
-      t("chat.connectFlowBanner.unscoped.description", { client: clientLabel }),
+      flow.selectable === false
+        ? t("chat.connectFlowBanner.unscoped.fixed", { client: clientLabel })
+        : t("chat.connectFlowBanner.unscoped.description", { client: clientLabel }),
     ];
   }
   if (flow.state === "multi") {
@@ -89,7 +100,14 @@ const vendorServersFor = (
   return [{ server_id: flow.server_id, server_name: flow.server_name }];
 };
 
-const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
+const ConnectFlowBanner: React.FC<Props> = ({
+  flowHandle,
+  flow,
+  accessToken,
+  onConnected,
+  failed,
+  finish = FINISH_WITHOUT_SERVERS,
+}) => {
   const { t } = useTranslation();
   const action = `${getProxyBaseUrl()}/authorize/complete`;
   const state = failed || flow === undefined ? "stale" : flow.state;
@@ -130,13 +148,17 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
           ))}
           <form method="POST" action={action}>
             <input type="hidden" name="flow" value={flowHandle} />
+            {finish.status === "ready" &&
+              finish.serverIds.map((serverId) => <input key={serverId} type="hidden" name="server" value={serverId} />)}
             {canFinish && (
-              <button
+              <Button
                 type="submit"
-                className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                disabled={finish.status !== "ready"}
+                aria-describedby={finish.status === "nothing-on" ? "connect-flow-nothing-on" : undefined}
+                className="h-[38px] px-4 font-semibold"
               >
                 {t("chat.connectFlowBanner.finish")}
-              </button>
+              </Button>
             )}
             {canCancel && (
               <button
@@ -153,6 +175,11 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
                 <input type="checkbox" name="delivery" value="manual" />
                 {t("chat.connectFlowBanner.manualDelivery")}
               </label>
+            )}
+            {finish.status === "nothing-on" && (
+              <p id="connect-flow-nothing-on" className="mt-2 text-[13px] text-muted-foreground">
+                {t("chat.connectFlowBanner.nothingOn")}
+              </p>
             )}
           </form>
         </div>

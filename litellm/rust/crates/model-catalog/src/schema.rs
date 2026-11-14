@@ -19,6 +19,7 @@ struct ModelEntry {
 #[derive(JsonSchema)]
 #[allow(dead_code)]
 struct PriceBlocks {
+    output_cost_per_video_clip: Option<BTreeMap<String, BTreeMap<String, UnitPrice>>>,
     /// USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).
     guardrail_cost_per_unit: Option<BTreeMap<String, UnitPrice>>,
     /// Rates that replace the same-named base fields while the request falls inside the stated UTC windows.

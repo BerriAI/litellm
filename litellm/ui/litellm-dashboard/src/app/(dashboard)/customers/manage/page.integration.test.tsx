@@ -113,6 +113,94 @@ function BrowserNavigationProbe() {
 }
 
 describe("customer hierarchy management", () => {
+  it("should preserve a draft on refresh and conflict, then reload and save the current configuration", async () => {
+    const user = userEvent.setup();
+    const standard = {
+      budget_id: "standard",
+      name: "Standard",
+      budget_limits: [{ budget_duration: "1mo", max_budget: 10 }],
+    };
+    const alternate = { budget_id: "alternate", name: "Alternate", max_budget: 20, budget_duration: "7d" };
+    const initial = {
+      ...organization,
+      budget_groups_revision: "a".repeat(64),
+      default_budgets: [standard, alternate],
+      default_budget_template_id: "standard",
+    };
+    const external = { budget_id: "external", name: "Added elsewhere", max_budget: 30 };
+    const refreshed = {
+      ...initial,
+      budget_groups_revision: "b".repeat(64),
+      alias: "Refreshed customer",
+      default_budgets: [...initial.default_budgets, external],
+    };
+    const saved = {
+      ...refreshed,
+      budget_groups_revision: "c".repeat(64),
+      default_budget_template_id: "alternate",
+      default_budgets: [
+        { ...standard, budget_limits: [{ budget_duration: "1mo", max_budget: 15 }] },
+        alternate,
+        external,
+      ],
+    };
+    fetchMock.mockImplementation(async () => json(initial));
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&tab=budget_groups" });
+    const monthly = await screen.findByRole("spinbutton", { name: "Group 1 monthly budget (USD)" });
+    fireEvent.change(monthly, { target: { value: "15" } });
+    await user.click(screen.getByRole("radio", { name: "Use Alternate as default" }));
+    fetchMock.mockImplementation(async () => json(refreshed));
+    await act(() => testQueryClient.invalidateQueries({ queryKey: ["customer-hierarchy"] }));
+    expect(await screen.findByRole("heading", { name: "Refreshed customer" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    expect(screen.getByRole("radio", { name: "Use Alternate as default" })).toBeChecked();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => json({ detail: "Budget groups changed. Reload before saving." }, 409));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Budget groups changed.");
+    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    const request = fetchMock.mock.calls[0][0];
+    if (!(request instanceof Request)) throw new Error("Expected HTTP request");
+    expect(await request.clone().json()).toMatchObject({ expected_revision: initial.budget_groups_revision });
+    fetchMock.mockImplementation(async () => json(refreshed));
+    await user.click(screen.getByRole("button", { name: "Discard edits and reload" }));
+    expect(await screen.findByDisplayValue("Added elsewhere")).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(10);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
+      target: { value: "15" },
+    });
+    await user.click(screen.getByRole("radio", { name: "Use Alternate as default" }));
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => json(saved));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
+    expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
+    expect(screen.getByRole("radio", { name: "Use Alternate as default" })).toBeChecked();
+    const writes = fetchMock.mock.calls
+      .map(([input]) => input)
+      .filter((input): input is Request => input instanceof Request && input.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(await writes[0].clone().json()).toMatchObject({
+      expected_revision: refreshed.budget_groups_revision,
+      default_budgets: [
+        { budget_id: "standard", name: "Standard", budget_limits: [{ budget_duration: "1mo", max_budget: 15 }] },
+        { budget_id: "alternate", name: "Alternate" },
+        { budget_id: "external", name: "Added elsewhere" },
+      ],
+    });
+  });
+
+  it("should show budget groups only at organization scope without requesting child tables", async () => {
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&tab=budget_groups" });
+    expect(await screen.findByRole("link", { name: "Budget groups" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/manage")}?org=org-1&tab=budget_groups`,
+    );
+    expect(screen.getByRole("button", { name: "Add budget group" })).toBeEnabled();
+    expect(requestedUrls().map((url) => url.pathname)).toEqual(["/management/v1/customer_organizations/org-1"]);
+  });
+
   beforeEach(() => {
     auth.userRole = "Admin";
     vi.spyOn(toast, "success").mockReturnValue("test-toast");
@@ -134,7 +222,7 @@ describe("customer hierarchy management", () => {
     const table = await screen.findByRole("table", { name: "Customer teams" });
     expect(within(table).getByRole("button", { name: "Product" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Example customer" })).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Current budget" })).toHaveAttribute("aria-valuenow", "12");
+    expect(screen.getByRole("progressbar", { name: "Recorded budget spend" })).toHaveAttribute("aria-valuenow", "12");
     expect(
       requestedUrls()
         .find((url) => url.pathname === "/management/v1/customer_teams")
@@ -150,6 +238,33 @@ describe("customer hierarchy management", () => {
       ["org-1", "1"],
       ["org-1", "2"],
     ]);
+  });
+
+  it("should show effective member window limits without treating them as an absent budget", async () => {
+    fetchMock.mockImplementation(async (input) =>
+      requestUrl(input).pathname === "/management/v1/customer_members/member-a"
+        ? json({
+            ...member,
+            effective_budget: {
+              max_budget: null,
+              budget_limits: [
+                { budget_duration: "1mo", max_budget: 10 },
+                { budget_duration: "12mo", max_budget: 100 },
+              ],
+            },
+          })
+        : serve(input),
+    );
+    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1&team=team-a&member=member-a" });
+    const summary = await screen.findByRole("region", { name: "Current budget" });
+    expect(within(summary).getByText("Unavailable / $10.00")).toBeInTheDocument();
+    expect(within(summary).getByText("Unavailable / $100.00")).toBeInTheDocument();
+    expect(within(summary).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
+      "href",
+      `${uiHref("customers/manage")}?org=org-1&team=team-a&member=member-a&tab=settings`,
+    );
+    expect(within(summary).queryByText(/No limit/)).not.toBeInTheDocument();
+    expect(within(summary).queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("should list customer members across an organization and open their customer team context", async () => {

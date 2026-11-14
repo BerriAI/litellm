@@ -61,6 +61,19 @@ const members = [
   },
 ];
 const records = [
+  ...[
+    { date: "2026-03-01", spend: 42 },
+    { date: "2025-12-31", spend: 100 },
+  ].map(({ date, spend }) => ({
+    organization: "org-1",
+    team: "team-a",
+    member: "member-a",
+    model: "model-a",
+    key: "hash-a",
+    alias: "Assistant key",
+    metrics: metrics(spend, 50, 1),
+    date,
+  })),
   {
     organization: "org-1",
     team: "team-a",
@@ -80,6 +93,26 @@ const records = [
     alias: "Search key",
     metrics: metrics(3, 600, 5),
     date: "2026-11-02",
+  },
+  {
+    organization: "org-1",
+    team: "team-a",
+    member: "member-a",
+    model: "model-a",
+    key: "hash-a",
+    alias: "Assistant key",
+    metrics: metrics(8, 300, 1),
+    date: "2026-11-10",
+  },
+  {
+    organization: "org-1",
+    team: "",
+    member: "",
+    model: "model-a",
+    key: "hash-c",
+    alias: "Organization key",
+    metrics: metrics(7, 200, 1),
+    date: "2026-11-10",
   },
 ];
 const fetchMock = vi.fn<typeof fetch>();
@@ -104,10 +137,13 @@ const filterFor = (resource: string | undefined) =>
     team: "customer_team_ids",
     member: "customer_member_ids",
   })[activityDimension(resource)];
-const activityUrl = (resource: string, id: string) => {
+const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
   const filter = filterFor(resource);
   return requestedUrls().findLast(
-    (url) => url.pathname === `/management/v1/${resource}/daily/activity` && url.searchParams.get(filter) === id,
+    (url) =>
+      url.pathname === `/management/v1/${resource}/daily/activity` &&
+      url.searchParams.get(filter) === id &&
+      url.searchParams.get("end_date") === endDate,
   );
 };
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
@@ -117,7 +153,13 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
     const dimension = activityDimension(resource);
     const filter = filterFor(resource);
     const ids = url.searchParams.get(filter)?.split(",") ?? [];
-    const selected = records.filter((record) => ids.includes(record[dimension]));
+    const selected = records
+      .filter((record) => ids.includes(record[dimension]))
+      .filter(
+        (record) =>
+          record.date >= (url.searchParams.get("start_date") ?? "") &&
+          record.date <= (url.searchParams.get("end_date") ?? ""),
+      );
     const results = selected.map((record) => {
       const key = { metrics: record.metrics, metadata: { key_alias: record.alias, team_id: null } };
       const entry = { metrics: record.metrics, metadata: {}, api_key_breakdown: { [record.key]: key } };
@@ -148,6 +190,8 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
 
 describe("CustomerHierarchyUsagePage", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     testQueryClient.clear();
     registerBaseUrlGetter(() => "http://localhost");
     fetchMock.mockReset();
@@ -160,6 +204,7 @@ describe("CustomerHierarchyUsagePage", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     testQueryClient.clear();
     vi.unstubAllGlobals();
   });
@@ -231,7 +276,7 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_teams", "team-a")?.pathname).toBe("/management/v1/customer_teams/daily/activity");
     expect(activityUrl("customer_teams", "team-a")?.searchParams.get("customer_team_ids")).toBe("team-a");
     const teamBudget = screen.getByRole("region", { name: "Current budget" });
-    expect(within(teamBudget).getByText("$40.00 / No cap")).toBeInTheDocument();
+    expect(within(teamBudget).getByText("$40.00 / No limit")).toBeInTheDocument();
     expect(within(teamBudget).getByRole("link", { name: "Set budget" })).toHaveAttribute(
       "href",
       "/ui/customers/manage?org=org-1&team=team-a&tab=settings",
@@ -280,16 +325,20 @@ describe("CustomerHierarchyUsagePage", () => {
     ]);
   });
 
-  it("should retain a separate member spend table with range usage and current budget status across chart breakdowns", async () => {
+  it("should retain monthly member usage and whole-customer shares across chart breakdowns", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
     const table = await screen.findByRole("table", { name: "Customer member spend" });
     const firstMember = within(table).getAllByRole("row")[1];
     expect(firstMember).toHaveTextContent("Member One");
-    expect(within(firstMember).getByText("$12.00")).toBeInTheDocument();
-    expect(within(firstMember).getByText("$40.00 / $10.00")).toBeInTheDocument();
-    expect(within(firstMember).getByText("Over budget")).toBeInTheDocument();
+    expect(within(firstMember).getByText("$20.00 / No monthly limit")).toBeInTheDocument();
+    expect(within(firstMember).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
+      "aria-valuetext",
+      "66.7%",
+    );
+    expect(firstMember).toHaveTextContent("Recorded budget spend$40.00 / $10.00");
+    expect(within(firstMember).getByText("Reached limit")).toBeInTheDocument();
 
     await selectBreakdown(user, "Customer teams");
     await user.click(screen.getByRole("radio", { name: "Tokens" }));
@@ -335,6 +384,105 @@ describe("CustomerHierarchyUsagePage", () => {
     );
   });
 
+  it.each([
+    { monthlySpend: 8, yearlySpend: 62, status: "Within budget" },
+    { monthlySpend: 10, yearlySpend: 62, status: "Reached limit" },
+    { monthlySpend: 8, yearlySpend: 100, status: "Reached limit" },
+  ])(
+    "should use each recorded budget window consistently across the table and summary (%#)",
+    async ({ monthlySpend, yearlySpend, status }) => {
+      const user = userEvent.setup();
+      const budgetUsage = [
+        { source: "scalar", budget_duration: "1mo", max_budget: 50, spend: 40, reset_at: "2026-12-01T00:00:00Z" },
+        {
+          source: "window",
+          budget_duration: "1mo",
+          max_budget: 10,
+          spend: monthlySpend,
+          window_start: "2026-11-01T17:00:00Z",
+          reset_at: "2026-12-01T17:00:00Z",
+        },
+        {
+          source: "window",
+          budget_duration: "12mo",
+          max_budget: 100,
+          spend: yearlySpend,
+          window_start: "2026-01-01T17:00:00Z",
+          reset_at: "2027-01-01T17:00:00Z",
+        },
+      ];
+      fetchMock.mockImplementation((input) => {
+        const url = requestUrl(input);
+        const member = {
+          ...members[0],
+          budget_usage: budgetUsage,
+          effective_budget: {
+            max_budget: 50,
+            budget_duration: "1mo",
+            budget_limits: [
+              { budget_duration: "1mo", max_budget: 10 },
+              { budget_duration: "12mo", max_budget: 100 },
+            ],
+          },
+        };
+        if (url.pathname === "/management/v1/customer_members")
+          return Promise.resolve(json(list(url.searchParams.get("parent_team_id") === "team-a" ? [member] : [])));
+        if (url.pathname.endsWith("/customer_members/member-a")) return Promise.resolve(json(member));
+        return Promise.resolve(serve(input));
+      });
+      renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+      const table = await screen.findByRole("table", { name: "Customer member spend" });
+      const row = within(table).getAllByRole("row")[1];
+      expect(within(row).getByText("$40.00 / $50.00")).toBeInTheDocument();
+      expect(within(row).getByText(`$${monthlySpend.toFixed(2)} / $10.00`)).toBeInTheDocument();
+      expect(within(row).getByText(`$${yearlySpend.toFixed(2)} / $100.00`)).toBeInTheDocument();
+      expect(
+        within(row)
+          .getAllByRole("progressbar")
+          .map((bar) => bar.getAttribute("aria-valuenow")),
+      ).toEqual(["80", String(monthlySpend * 10)]);
+      expect(within(row).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
+        "aria-valuetext",
+        "66.7%",
+      );
+      expect(within(row).getAllByRole("cell")[5]).toHaveTextContent(status);
+      await user.click(within(row).getByRole("button", { name: "Member One" }));
+      expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
+      const summary = screen.getByRole("region", { name: "Current budget" });
+      expect(within(summary).getByText("$40.00 / $50.00")).toBeInTheDocument();
+      expect(within(summary).getByText(`$${monthlySpend.toFixed(2)} / $10.00`)).toBeInTheDocument();
+      expect(within(summary).getByText(`$${yearlySpend.toFixed(2)} / $100.00`)).toBeInTheDocument();
+      expect(
+        within(summary)
+          .getAllByRole("progressbar")
+          .map((bar) => bar.getAttribute("aria-valuenow")),
+      ).toEqual(["80", String(monthlySpend * 10)]);
+    },
+  );
+
+  it("should retain limits but not invent window spend when an older backend omits usage", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/management/v1/customer_members")
+        return Promise.resolve(
+          json(
+            list(
+              url.searchParams.get("parent_team_id") === "team-a"
+                ? [{ ...members[0], effective_budget: { budget_limits: [{ budget_duration: "1mo", max_budget: 10 }] } }]
+                : [],
+            ),
+          ),
+        );
+      return Promise.resolve(serve(input));
+    });
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    const table = await screen.findByRole("table", { name: "Customer member spend" });
+    const row = within(table).getAllByRole("row")[1];
+    expect(within(row).getByText("Unavailable / $10.00")).toBeInTheDocument();
+    expect(within(row).getByText("Budget usage unavailable")).toBeInTheDocument();
+    expect(within(row).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
   it("should request a changed date range without showing stale totals or losing the customer scope", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
@@ -355,10 +503,14 @@ describe("CustomerHierarchyUsagePage", () => {
     await user.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
-      expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("start_date")).toBe("2026-10-01"),
+      expect(activityUrl("customer_organizations", "org-1", "2026-10-07")?.searchParams.get("start_date")).toBe(
+        "2026-10-01",
+      ),
     );
-    expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("end_date")).toBe("2026-10-07");
-    expect(activityUrl("customer_organizations", "org-1")?.pathname).toBe(
+    expect(activityUrl("customer_organizations", "org-1", "2026-10-07")?.searchParams.get("end_date")).toBe(
+      "2026-10-07",
+    );
+    expect(activityUrl("customer_organizations", "org-1", "2026-10-07")?.pathname).toBe(
       "/management/v1/customer_organizations/daily/activity",
     );
     expect(screen.getByRole("status", { name: "Loading customer usage" })).toBeInTheDocument();
@@ -425,7 +577,7 @@ describe("CustomerHierarchyUsagePage", () => {
     const budget = await screen.findByRole("region", { name: "Current budget" });
     expect(within(budget).getByText("$40.00 / $0.00")).toBeInTheDocument();
     expect(within(budget).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
-    expect(within(budget).getByText(/Configured reset:.*UTC/)).toBeInTheDocument();
+    expect(within(budget).getByTitle(/Configured reset:.*UTC/)).toBeInTheDocument();
     expect(within(budget).queryByRole("link", { name: "Set budget" })).not.toBeInTheDocument();
   });
 });

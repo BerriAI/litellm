@@ -82,6 +82,14 @@ def test_register_model_receives_cache_pricing_fields():
     litellm.model_cost.pop(model_key, None)
 
 
+def test_register_model_given_neither_a_table_nor_a_url_registers_nothing():
+    registered: Final = model_cost_inputs.registered_keys()
+
+    assert litellm.register_model(None) is None
+
+    assert model_cost_inputs.registered_keys() == registered
+
+
 def test_register_model_strips_none_litellm_provider():
     """``get_model_info`` returns ``litellm_provider: None`` for deployments
     registered without a provider (e.g. ``Router.add_deployment`` flows).

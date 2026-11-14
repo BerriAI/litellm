@@ -693,6 +693,26 @@ async def test_an_alias_next_to_a_member_must_name_that_members_organization() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("member_id", (None, "new-member"))
+async def test_a_scoped_key_cannot_create_another_organization_before_being_rejected(member_id: str | None) -> None:
+    organizations: Final = _OrganizationTable((_organization("existing"),))
+    registrar: Final = _OrganizationRegistrar(organizations)
+    prisma: Final = _Prisma(_MemberTable({}), organizations)
+
+    with pytest.raises(ProxyException) as denied:
+        await _resolve(
+            prisma,
+            CustomerRequestIdentity(customer_org_alias="new-organization", customer_member_id=member_id),
+            key_metadata={"customer_org_id": "org-1"},
+            register_organization=registrar,
+        )
+
+    assert (denied.value.code, denied.value.param) == ("403", CUSTOMER_MEMBER_ID_HEADER)
+    assert registrar.calls == ()
+    assert tuple(row["customer_org_id"] for row in organizations.rows) == ("org-1",)
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_alias_becomes_a_new_organization_charged_for_the_request() -> None:
     organizations: Final = _OrganizationTable(())
     registrar: Final = _OrganizationRegistrar(organizations)
@@ -718,8 +738,11 @@ async def test_an_unknown_alias_becomes_a_new_organization_charged_for_the_reque
 
 
 @pytest.mark.asyncio
-async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous() -> None:
-    failing: Final = _OrganizationRegistrar(_OrganizationTable(()), Failure(ErrorCode.ALREADY_EXISTS))
+@pytest.mark.parametrize("error", (ErrorCode.ALREADY_EXISTS, ErrorCode.FREE_TIER_LIMIT))
+async def test_an_alias_that_cannot_be_registered_runs_untracked_and_a_shared_alias_is_rejected_as_ambiguous(
+    error: ErrorCode,
+) -> None:
+    failing: Final = _OrganizationRegistrar(_OrganizationTable(()), Failure(error))
     untracked: Final = await _resolve(
         _Prisma(_MemberTable({})), CustomerRequestIdentity(customer_org_alias="ghost"), register_organization=failing
     )
@@ -785,9 +808,12 @@ async def test_a_member_the_aliased_organization_has_never_seen_is_registered_th
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_organization_when_registration_fails() -> (
-    None
-):
+@pytest.mark.parametrize("error", (ErrorCode.BUDGET_REQUIRED, ErrorCode.FREE_TIER_LIMIT))
+@pytest.mark.parametrize("team_id", (None, "team-1"))
+async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_organization_when_registration_fails(
+    error: ErrorCode,
+    team_id: str | None,
+) -> None:
     members: Final = _MemberTable({})
     registrar: Final = _Registrar(members)
     no_alias: Final = await _resolve(
@@ -795,10 +821,12 @@ async def test_an_unknown_member_runs_untracked_without_an_alias_and_on_the_orga
     )
     assert (no_alias, registrar.calls) == (None, ())
 
-    failing: Final = _Registrar(members, Failure(ErrorCode.BUDGET_REQUIRED))
+    failing: Final = _Registrar(members, Failure(error))
     prisma: Final = _Prisma(members, _OrganizationTable((_organization("acme", max_budget=5.0),)))
     organization_only: Final = await _resolve(
-        prisma, CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme"), register=failing
+        prisma,
+        CustomerRequestIdentity(customer_member_id="user-7", customer_org_alias="acme", customer_team_id=team_id),
+        register=failing,
     )
     assert failing.calls == (("org-1", "user-7"),)
     assert organization_only is not None

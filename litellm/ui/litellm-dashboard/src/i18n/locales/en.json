@@ -976,7 +976,8 @@
         "providerRequired": "Please select a provider",
         "vectorStoreIdRequired": "Please input the vector store ID from your api provider",
         "selectField": "Please select the {{field}}",
-        "inputField": "Please input the {{field}}"
+        "inputField": "Please input the {{field}}",
+        "hybridSearchNeedsPipeline": "Hybrid search needs a search pipeline with a normalization-processor"
       },
       "toasts": {
         "invalidMetadata": "Invalid JSON in metadata field",
@@ -1062,6 +1063,8 @@
         "opensearchEndpoint": "OpenSearch Endpoint",
         "awsRegionOptional": "AWS Region (optional)",
         "indexNameOptional": "Index Name (optional)",
+        "searchPipelineOptional": "Search Pipeline (optional)",
+        "hybridSearch": "Hybrid Search",
         "vectorBucketName": "Vector Bucket Name",
         "indexName": "Index Name",
         "awsRegion": "AWS Region"
@@ -1114,7 +1117,9 @@
           "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
           "embeddingField": "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
           "textField": "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
-          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs"
+          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+          "searchPipeline": "The name of a search pipeline in your OpenSearch cluster. LiteLLM runs every search through it. Hybrid search needs one with a normalization-processor, since OpenSearch returns unnormalized hybrid scores without one",
+          "hybridSearch": "Turn on to combine a BM25 keyword match on the Text Field with the k-NN vector search. Needs a Search Pipeline with a normalization-processor"
         },
         "s3Vectors": {
           "bucketName": "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
@@ -5224,6 +5229,13 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "ariaInternalUserAccess": {
+          "label": "Aria access for internal users",
+          "description": "Choose whether internal users can ask Aria about their own usage or permitted team usage. Admins and proxy-wide viewers are unaffected. Active dashboards check for changes every 30 seconds.",
+          "none": "No access",
+          "own_usage": "Own usage only",
+          "own_and_team_usage": "Own and team usage"
+        },
         "disableAria": {
           "label": "Hide Aria Agent for everyone",
           "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",
@@ -9376,11 +9388,15 @@
       "toolsLoadFailed": "Could not load tools for {{serverName}}",
       "empty": {
         "connectMode": "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access.",
+        "loadFailed": "Could not load your MCP servers. Reload the page to try again.",
         "noServers": "No MCP servers configured. Add servers in Tools -> MCP Servers.",
         "noneConnected": "No servers connected yet.",
         "noMatch": "No servers match your search."
       },
       "authorized": "Authorized",
+      "signInToUse": "Sign in to use",
+      "requiredByClient": "Required by this client",
+      "useServer": "Include {{serverName}} in this connection",
       "disconnect": "Disconnect",
       "back": "Back",
       "defaultDescription": "MCP server",
@@ -9390,13 +9406,15 @@
         "transport": "Transport",
         "status": "Status",
         "connected": "Connected",
-        "notConnected": "Not connected"
+        "notConnected": "Not connected",
+        "on": "On",
+        "off": "Off"
       },
       "availableTools": "Available Tools",
       "noTools": "No tools available",
       "title": "MCP Servers",
       "beta": "Beta",
-      "connectModeSubtitle": "Click a server to see its tools and connect",
+      "connectModeSubtitle": "Turn off any server this connection should not use. Click a server to see its tools or sign in",
       "subtitle": "Browse tools, authenticate once, use in chat",
       "loadingTools": "Loading tools...",
       "toolsAvailable_one": "{{count}} tool available",
@@ -9404,7 +9422,8 @@
       "searchPlaceholder": "Search servers...",
       "tabs": {
         "all": "All",
-        "connected": "Connected"
+        "connected": "Connected",
+        "on": "On"
       }
     },
     "connectFlowBanner": {
@@ -9416,7 +9435,8 @@
       },
       "unscoped": {
         "title": "Connect your MCP servers to {{client}}",
-        "description": "Authorize the servers you want to use below, then click Finish connecting to return to {{client}}."
+        "description": "{{client}} gets every server that is on. Turn off the ones it should not use, sign in where needed, then click Finish connecting.",
+        "fixed": "{{client}} will get every server you can reach. Sign in to the ones that need it below, then click Finish connecting to return to {{client}}."
       },
       "multi": {
         "title": "Allow {{client}} to use {{servers}}",
@@ -9430,6 +9450,7 @@
       },
       "connectServer": "Connect {{server}}",
       "finish": "Finish connecting",
+      "nothingOn": "Turn on at least one server to finish connecting.",
       "cancel": "Cancel",
       "manualDelivery": "My client is on a remote or SSH machine"
     },
@@ -20630,6 +20651,20 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "budgetGroups": {
+      "atCap": "At the cap",
+      "atCapLabel": "Group {{index}} at the cap",
+      "pauseUntilReset": "Pause until reset",
+      "pauseAllowIncrease": "Pause, they can request more",
+      "title": "Budget groups",
+      "discard": "Discard edits and reload"
+    },
+    "limits": {
+      "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
+      "reachedTitle": "Free customer portal limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "upgrade": "Upgrade to Enterprise"
+    },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
@@ -20764,8 +20799,13 @@
       "subtitle": "Usage across each customer organization’s customer teams and customer members.",
       "create": "Create customer organization",
       "searchPlaceholder": "Search by customer organization ID or alias",
+      "overallUsage": "Overall customer usage",
+      "overallUsageHelp": "Usage across all external customer organizations for the selected dates.",
+      "newestFirst": "Newest first",
+      "budgetAndShareHelp": "Budget spend follows each configured reset period. Share of overall spend uses the current UTC calendar month across all customer organizations, regardless of search or pagination. Status reflects all configured budget limits. The date picker controls the summary above.",
       "columns": {
         "customer": "$t(customerPortal.entities.organization)",
+        "overallSpendShare": "Share of overall spend",
         "spend": "Spend",
         "requests": "Requests",
         "tokens": "Tokens",
@@ -20840,7 +20880,7 @@
       "removeGroup": "Remove {{name}}",
       "addGroup": "Add budget group",
       "defaultHelp": "The selected default group is assigned to new members automatically.",
-      "resetHelp": "Reaching either cap pauses usage until that budget resets.",
+      "resetHelp": "Each group's At the cap setting decides what happens when a member reaches either cap.",
       "advanced": "Advanced limits",
       "creating": "Creating customer...",
       "errors": {
@@ -20906,7 +20946,7 @@
       "previous": "Previous",
       "next": "Next",
       "allOrganizationUsage": "View all customer organization usage",
-      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Budgets compare recorded spend with the configured cap.",
+      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Budget resets follow the configured period.",
       "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "invalidIdentifier": "Select a valid customer identifier.",
       "incompletePages": "Could not load the complete usage range. Please choose fewer days.",
@@ -20926,12 +20966,28 @@
       "topTeams": "Top customer teams",
       "topMembers": "Top customer members",
       "memberSpend": "Customer member spend",
-      "memberSpendHint": "Usage in the selected date range. Cap status uses each customer member’s recorded budget spend.",
+      "memberSpendHint": "Budget spend follows each configured reset period. Share and tokens use the current UTC calendar month. These values are independent of the chart date range.",
       "searchMembers": "Search customer members",
       "member": "$t(customerPortal.entities.member)",
-      "currentBudget": "Spend / cap",
+      "currentBudget": "Spend / limit",
       "status": "Status",
-      "noCap": "No cap",
+      "noLimit": "No limit",
+      "limitConfigured": "Limit configured",
+      "monthlySpend": "Spend this month / monthly limit",
+      "yearlySpend": "Yearly spend / yearly limit",
+      "customerSpendShare": "Share of customer spend",
+      "noMonthlyLimit": "No monthly limit",
+      "noYearlyLimit": "No yearly limit",
+      "reachedLimit": "Reached limit",
+      "withinMonthlyBudget": "Within monthly limit",
+      "monthlyLimitAmount": "Monthly limit: {{amount}}",
+      "yearlyLimitAmount": "Yearly limit: {{amount}}",
+      "budgetRemaining": "{{amount}} remains",
+      "budgetOver": "{{amount}} over",
+      "calendarMonth": "Current UTC calendar month",
+      "budgetUsageHint": "Recorded spend updates after accounting completes. Pending requests are excluded.",
+      "budgetUsageUnavailable": "Budget usage unavailable",
+      "unknownSpend": "Unavailable",
       "atBudget": "At budget",
       "withinBudget": "Within budget",
       "noMembers": "No customer members in this customer scope.",

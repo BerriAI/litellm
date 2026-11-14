@@ -34,6 +34,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -67,7 +68,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
-    reject_caller_opensearch_index_name,
+    reject_caller_opensearch_store_params,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -1153,7 +1154,7 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
-        reject_caller_opensearch_index_name(
+        reject_caller_opensearch_store_params(
             caller_body=retrieval_config,
             request_fields=merged_retrieval_config,
             source="retrieval_config",
@@ -1164,6 +1165,9 @@ async def rag_query(
             else MappingProxyType(
                 {key: value for key, value in retrieval_config.items() if key not in EXPLICIT_CREDENTIAL_KEYS}
             )
+        )
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
         )
         request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
             data={},

@@ -14,6 +14,7 @@ from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_hea
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
     context_management_betas,
     count_tokens_feature_betas,
     merge_anthropic_beta_headers,
@@ -39,6 +40,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         litellm_params: dict[str, object] | None = None,
         messages: Sequence[object] = (),
         context_management: JsonValue = None,
+        thinking: JsonValue = None,
     ) -> dict[str, str]:
         """
         Get the required headers for the Azure AI Anthropic CountTokens API.
@@ -51,6 +53,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
             litellm_params: Optional LiteLLM parameters for additional auth config
             messages: The request messages, read for betas the counted features need
             context_management: The edit spec the count forwards, read for the betas its edits need
+            thinking: The thinking the count forwards, read for the betas inference adds for it
 
         Returns:
             Dictionary of required headers with both x-api-key and Azure authentication
@@ -63,7 +66,10 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
                 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
                 (
                     *count_tokens_feature_betas("azure_ai", {}, messages),
-                    *filter_and_transform_beta_headers(list(context_management_betas(context_management)), "azure_ai"),
+                    *filter_and_transform_beta_headers(
+                        [*context_management_betas(context_management), *AnthropicModelInfo().thinking_betas(thinking)],
+                        "azure_ai",
+                    ),
                 ),
             ),
             **({"x-api-key": api_key} if api_key else {}),

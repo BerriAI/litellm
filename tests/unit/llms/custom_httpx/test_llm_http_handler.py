@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
@@ -26,6 +26,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, on
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
@@ -73,6 +74,7 @@ from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoo
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CallTypes,
     ImageObject,
     ImageResponse,
     ModelResponse,
@@ -6902,3 +6904,67 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
         )
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
             _ = tuple([event async for event in stream])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+def test_sync_responses_send_the_params_the_pre_deployment_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+
+    class TemperatureRewriter(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object] | None:
+            seen.append("legacy")
+            return {**kwargs, "temperature": 0.25}
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("v2")
+
+    monkeypatch.setattr(litellm, "callbacks", [*([Gate()] if with_v2 else []), TemperatureRewriter()])
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    _, _, _, response_params, _ = BaseLLMHTTPHandler()._run_sync_responses_pre_call_deployment_hook(
+        model="gpt-5.5",
+        input="hi",
+        custom_llm_provider="openai",
+        response_api_optional_request_params={"temperature": 1.0},
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+    )
+
+    assert response_params["temperature"] == 0.25
+    assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+def test_sync_responses_run_a_v2_callback_pre_deployment_hook_without_any_legacy_override(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[object]] = []
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, reads={Field.model}, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append(getattr(view, "model"))  # noqa: B009  # the view's declared field
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), *([Gate()] if with_v2 else [])])
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+    params: Final[dict[str, object]] = {"temperature": 1.0}
+
+    _, _, _, response_params, _ = BaseLLMHTTPHandler()._run_sync_responses_pre_call_deployment_hook(
+        model="gpt-5.5",
+        input="hi",
+        custom_llm_provider="openai",
+        response_api_optional_request_params=params,
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+    )
+
+    assert seen == (["gpt-5.5"] if with_v2 else [])
+    assert response_params["temperature"] == 1.0

@@ -11,6 +11,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
+    Iterable,
     Iterator,
     Mapping,
     MutableMapping,
@@ -18,7 +19,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import lru_cache, partial
 from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
@@ -66,6 +67,9 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger import subclass_overrides_hook
+from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.legacy import hook_subscribers
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
@@ -74,6 +78,13 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
     strip_bug_report_notice,
+)
+from litellm.litellm_core_utils.cloud_storage_security import (
+    file_id_embeds_s3_uri_matching,
+    is_managed_s3_uri,
+    media_file_ids,
+    names_an_unlisted_s3_bucket,
+    s3_media_uris,
 )
 from litellm.litellm_core_utils.core_helpers import (
     finite_cost,
@@ -112,7 +123,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
-from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
@@ -120,7 +131,7 @@ from litellm.proxy.auth.auth_checks import (
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, client_side_s3_bucket_check, get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
@@ -170,6 +181,10 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedResourceAccessChecker,
+    is_base64_encoded_unified_file_id,
+)
 from litellm.proxy.route_llm_request import (
     endpoint_unsupported_by_model,
     route_request,
@@ -177,9 +192,13 @@ from litellm.proxy.route_llm_request import (
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    HookRun,
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
+    hook_fields,
+    routes_through_apply_guardrail,
+    run_hook_subscribers,
 )
 from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
@@ -331,6 +350,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    bind_v2_request_scope,
     check_customer_request_model_access,
     customer_request_auth,
     get_metadata_variable_name,
@@ -343,6 +363,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -807,6 +828,23 @@ _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(str
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
+class _DashboardBillingRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    dashboard_fallback_model: str | None = None
+
+
+async def _check_dashboard_request_billing(processing: object, auth: object, llm_router: Router | None) -> None:
+    if llm_router is None or not isinstance(auth, UserAPIKeyAuth):
+        return
+    if auth.dashboard_session_origin is None:
+        return
+    from litellm.proxy.auth.fallback_model_access import dashboard_fallback_billing_allowed
+
+    model: Final = _DashboardBillingRequest.model_validate(processing, from_attributes=True).dashboard_fallback_model
+    if isinstance(model, str) and not await dashboard_fallback_billing_allowed(model, auth, RoutingContext(llm_router)):
+        raise HTTPException(403, "Dashboard fallbacks cannot change the billing team")
+
+
 def _is_auto_router(params: Mapping[str, object]) -> bool:
     model: Final = params.get("model")
     return isinstance(model, str) and model.startswith(AUTO_ROUTER_MODEL_PREFIX)
@@ -1057,6 +1095,83 @@ def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
         return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
     except ValidationError:
         return None
+
+
+async def _key_may_read_unified_file_id(
+    managed_files: ManagedResourceAccessChecker, user_api_key_dict: UserAPIKeyAuth, unified_file_id: str
+) -> bool:
+    try:
+        return await managed_files.can_user_call_unified_file_id(unified_file_id, user_api_key_dict)
+    except HTTPException:
+        return False
+
+
+async def _leading_readable_file_ids(
+    managed_files: ManagedResourceAccessChecker, user_api_key_dict: UserAPIKeyAuth, unified_file_ids: Iterable[str]
+) -> AsyncIterator[str]:
+    for file_id in unified_file_ids:
+        if not await _key_may_read_unified_file_id(managed_files, user_api_key_dict, file_id):
+            return
+        yield file_id
+
+
+async def _unified_file_ids_the_key_may_read(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files: object,
+    is_refused: Callable[[str], bool],
+) -> frozenset[str]:
+    if not isinstance(managed_files, ManagedResourceAccessChecker):
+        return frozenset()
+    file_ids_hiding_a_refused_uri: Final = filter(
+        partial(file_id_embeds_s3_uri_matching, matches=is_refused),
+        filter(is_base64_encoded_unified_file_id, media_file_ids(data)),
+    )
+    return frozenset(
+        [
+            file_id
+            async for file_id in _leading_readable_file_ids(
+                managed_files, user_api_key_dict, file_ids_hiding_a_refused_uri
+            )
+        ]
+    )
+
+
+def _unlisted_s3_uri_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    if general_settings.get("allow_client_side_credentials") is True:
+        return lambda _: False
+    return partial(names_an_unlisted_s3_bucket, is_listed=client_side_s3_bucket_check(general_settings))
+
+
+async def refuse_s3_media_the_key_may_not_read(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    managed_files: object,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if not s3_media_uris(data):
+        return
+    is_unlisted: Final = _unlisted_s3_uri_check(general_settings)
+    readable_file_ids: Final = await _unified_file_ids_the_key_may_read(
+        data, user_api_key_dict, managed_files, lambda uri: is_managed_s3_uri(uri) or is_unlisted(uri)
+    )
+    s3_uris: Final = s3_media_uris(data, readable_file_ids)
+    managed_uris: Final = tuple(filter(is_managed_s3_uri, s3_uris))
+    if managed_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs under LiteLLM-managed storage can only be sent by a proxy admin key "
+            f"({', '.join(managed_uris)}). Use a LiteLLM managed file id that this key's user or team created.",
+        )
+    unlisted_uris: Final = tuple(filter(is_unlisted, s3_uris))
+    if unlisted_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs can only name a bucket listed in `general_settings.allowed_client_side_s3_buckets` "
+            f"({', '.join(unlisted_uris)}). Ask the proxy admin to list the bucket there.",
+        )
 
 
 async def _enforce_guardrail_added_tag_budgets(
@@ -2248,7 +2363,7 @@ async def _cancel_llm_call_on_client_disconnect(
         )
 
 
-async def _await_llm_call_cancelling_on_disconnect(
+async def await_llm_call_cancelling_on_disconnect(
     request: Request,
     llm_api_call: "asyncio.Future[_LlmCallT]",
 ) -> _LlmCallT:
@@ -2478,7 +2593,11 @@ async def _fallback_grant(
         can_customer_access_model,
         get_end_user_object,
     )
-    from litellm.proxy.auth.fallback_model_access import is_model_authorized_for_token, router_fallback_access_check
+    from litellm.proxy.auth.fallback_model_access import (
+        dashboard_fallback_billing_allowed,
+        is_model_authorized_for_token,
+        router_fallback_access_check,
+    )
     from litellm.proxy.auth.user_api_key_auth import (
         _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the pre-call walk shares the auth-time fallback contract
     )
@@ -2495,6 +2614,8 @@ async def _fallback_grant(
     if not _fallback_pricing_admits(requested_model, fallback_model, llm_router):
         return None
     try:
+        if not await dashboard_fallback_billing_allowed(fallback_model, user_api_key_dict, llm_router):
+            return None
         end_user: Final = (
             await get_end_user_object(
                 end_user_id=user_api_key_dict.end_user_id,
@@ -2659,6 +2780,7 @@ class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
         self.served_model = served_model
+        self.dashboard_fallback_model: str | None = None
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
 
@@ -2961,13 +3083,21 @@ class ProxyBaseLLMRequestProcessing:
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
-        requested_model: Final = self.data.get("model")
+        raw_request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        requested_model: Final = raw_request_fields.get("model")
         if requested_model is not None and not isinstance(requested_model, str):
             raise ProxyException(
                 message="'model' must be a string.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
+            )
+        if route_type != "call_mcp_tool":
+            await refuse_s3_media_the_key_may_not_read(
+                raw_request_fields,
+                user_api_key_dict,
+                _REQUEST_FIELDS.validate_python(general_settings),
+                proxy_logging_obj.get_proxy_hook("managed_files"),
             )
         self.data = await add_litellm_data_to_request(
             data=self.data,
@@ -3127,6 +3257,7 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        _ = bind_v2_request_scope(self.data, user_api_key_dict, request.headers)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         prefetch_model = self.data.get("model")
@@ -3318,6 +3449,7 @@ class ProxyBaseLLMRequestProcessing:
                         continue
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
+                    self.dashboard_fallback_model = fallback_model
                     try:
                         if endpoint_unsupported_by_model(
                             route_type,
@@ -3371,7 +3503,7 @@ class ProxyBaseLLMRequestProcessing:
                                 ),
                             )
                         )
-                        self.data = stamped
+                        self.data = stamped  # pyright: ignore[reportGeneralTypeIssues]  # cyclic payload inference
                         return stamped, admitted_logging_obj
                 if not at_saturation:
                     self.data = rate_limited_data
@@ -3734,6 +3866,8 @@ class ProxyBaseLLMRequestProcessing:
             )
             phase_event("litellm.request.pre_call_completed")
 
+        await _check_dashboard_request_billing(self, user_api_key_dict, llm_router)
+
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 
         if not self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):
@@ -3775,7 +3909,7 @@ class ProxyBaseLLMRequestProcessing:
 
             try:
                 if general_settings.get("cancel_on_disconnect", False):
-                    responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                    responses = await await_llm_call_cancelling_on_disconnect(request, llm_responses)
                 else:
                     responses = await llm_responses
             except asyncio.CancelledError:
@@ -4496,11 +4630,9 @@ class ProxyBaseLLMRequestProcessing:
                 is not True
             ):
                 continue
-            leaf_attrs = type(cb).__dict__
-            holds_until_moderated = "async_post_call_streaming_iterator_hook" in leaf_attrs
+            holds_until_moderated = subclass_overrides_hook(type(cb), "async_post_call_streaming_iterator_hook")
             if (
-                "apply_guardrail" not in leaf_attrs
-                or cb.use_native_lifecycle_hooks
+                not routes_through_apply_guardrail(cb)
                 or cb.mask_response_content
                 or cb.run_in_parallel
                 or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
@@ -4946,7 +5078,7 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
         """
-        _response = assembled_response
+        run: Final[HookRun[LLMResponseTypes]] = HookRun(response=assembled_response)
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
@@ -4958,47 +5090,18 @@ class ProxyBaseLLMRequestProcessing:
                 data=captured_data, llm_router=_global_llm_router
             )
             stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
-            for cb in litellm.callbacks:
-                if not isinstance(cb, CustomGuardrail):
-                    continue
-                if cb.guardrail_name in stream_gated:
-                    continue
-                if not cb.should_run_guardrail(
-                    data=guardrail_data,
-                    event_type=GuardrailEventHooks.post_call,
-                ):
-                    continue
-                try:
-                    guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
-                        # Skip — unified-routed guardrails already ran via
-                        # unified_guardrail's end-of-stream block in the
-                        # streaming iterator pipeline.  Running them again
-                        # here would duplicate the guardrail API call
-                        # (e.g. double OpenAI Moderation charges).
-                        continue
-                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
-                        # Skip — the guardrail already scanned the assembled
-                        # response via its own streaming iterator hook in the
-                        # streaming pipeline. re running this function async_post_call_success_hook
-                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
-                        continue
-                    else:
-                        guardrail_result = await cb.async_post_call_success_hook(
-                            user_api_key_dict=captured_user_api_key_dict,
-                            data=guardrail_data,
-                            response=_response,
-                        )
-                    if guardrail_result is not None:
-                        _response = guardrail_result
-                except Exception as e:
-                    verbose_proxy_logger.exception(
-                        "Error running post-call guardrail %s on streaming response: %s",
-                        getattr(cb, "guardrail_name", type(cb).__name__),
-                        e,
-                    )
-                    if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
-                        captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
+            await run_hook_subscribers(
+                hook_subscribers(Hook.post_call_success, litellm.callbacks, parallel=False),
+                hook_fields(guardrail_data, run, Field.response),
+                partial(
+                    ProxyBaseLLMRequestProcessing._deferred_stream_guardrail,
+                    run,
+                    guardrail_data,
+                    stream_gated,
+                    captured_user_api_key_dict,
+                    captured_logging_obj,
+                ),
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error in deferred streaming guardrail initialization: %s",
@@ -5013,7 +5116,7 @@ class ProxyBaseLLMRequestProcessing:
                 # async markers stored in litellm_params).
                 asyncio.create_task(
                     _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
-                        _response,
+                        run.response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
@@ -5025,6 +5128,55 @@ class ProxyBaseLLMRequestProcessing:
                     "Error in deferred streaming success logging: %s",
                     e,
                 )
+
+    @staticmethod
+    async def _deferred_stream_guardrail(
+        run: HookRun[LLMResponseTypes],
+        guardrail_data: dict[str, object],  # mutable-ok: the captured request merged with model-level guardrails
+        stream_gated: frozenset[str],
+        captured_user_api_key_dict: "UserAPIKeyAuth",
+        captured_logging_obj: LiteLLMLoggingObj,
+        cb: object,
+        request: object,
+    ) -> None:
+        if not isinstance(cb, CustomGuardrail):
+            return
+        if cb.guardrail_name in stream_gated:
+            return
+        if not cb.should_run_guardrail(
+            data=guardrail_data,
+            event_type=GuardrailEventHooks.post_call,
+        ):
+            return
+        try:
+            if routes_through_apply_guardrail(cb):
+                # Skip — unified-routed guardrails already ran via
+                # unified_guardrail's end-of-stream block in the
+                # streaming iterator pipeline.  Running them again
+                # here would duplicate the guardrail API call
+                # (e.g. double OpenAI Moderation charges).
+                return
+            if subclass_overrides_hook(type(cb), "async_post_call_streaming_iterator_hook"):
+                # Skip — the guardrail already scanned the assembled
+                # response via its own streaming iterator hook in the
+                # streaming pipeline. re running this function async_post_call_success_hook
+                # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
+                return
+            run.adopt(
+                await cb.async_post_call_success_hook(
+                    user_api_key_dict=captured_user_api_key_dict,
+                    data=guardrail_data,
+                    response=run.response,
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error running post-call guardrail %s on streaming response: %s",
+                getattr(cb, "guardrail_name", type(cb).__name__),
+                e,
+            )
+            if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
+                captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
 
     def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
         if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:

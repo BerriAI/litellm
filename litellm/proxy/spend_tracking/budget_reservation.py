@@ -4,9 +4,10 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
@@ -64,13 +65,16 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
     key_counter,
+    key_window_counter,
     model_access_group_counter,
     org_counter,
     project_counter,
     tag_counter,
     team_counter,
     team_member_counter,
+    team_window_counter,
     user_counter,
+    user_window_counter,
 )
 from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
@@ -584,7 +588,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=key_counter(valid_token.token),
+                window_counter=partial(key_window_counter, valid_token.token),
                 entity_type="Key",
                 entity_id=valid_token.token,
                 budget_limits=valid_token.budget_limits,
@@ -607,7 +611,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=team_counter(team_id),
+                window_counter=partial(team_window_counter, team_id),
                 entity_type="Team",
                 entity_id=team_id,
                 budget_limits=team_object.budget_limits,
@@ -616,6 +620,16 @@ async def _get_budget_counters(
         )
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
+    if (not is_team_key or apply_user_budget_to_team_keys) and user_object is not None:
+        counters.extend(
+            _get_budget_limit_counters(
+                window_counter=partial(user_window_counter, user_object.user_id),
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=0.0,
+            )
+        )
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
@@ -936,7 +950,7 @@ async def _get_project_budget_counter(
 
 
 def _get_budget_limit_counters(
-    entity_prefix: str,
+    window_counter: Callable[[str], str],
     entity_type: str,
     entity_id: str,
     budget_limits: Sequence[object] | None,
@@ -963,7 +977,7 @@ def _get_budget_limit_counters(
             continue
         counters.append(
             _BudgetCounter(
-                counter_key=f"{entity_prefix}:window:{budget_duration}",
+                counter_key=window_counter(str(budget_duration)),
                 max_budget=float(max_budget),
                 fallback_spend=0.0,
                 entity_type=entity_type,

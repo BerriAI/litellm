@@ -4413,19 +4413,23 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
 
 @pytest.mark.parametrize("model", ["azure/gpt-6-luna", "azure/gpt-6-luna-2026-09-22"])
 @pytest.mark.parametrize(
-    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    ("prompt_tokens", "cost_suffix"),
     [
-        (100_000, 5e-08, 5e-09, 2.5e-07),
-        (300_000, 1e-07, 1e-08, 3.75e-07),
+        (100_000, ""),
+        (300_000, "_above_272k_tokens"),
     ],
 )
-def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
-    _local_model_cost_map, model, prompt_tokens, input_rate, cache_read_rate, output_rate
-):
-    """azure/gpt-6-luna bills Azure's Flex Global rates, half of Standard, with the long context step past 272K."""
-    cached_tokens = 20_000
-    completion_tokens = 1_000
-    usage = Usage(
+def test_generic_cost_per_token_azure_flex_uses_registered_tier_rates(
+    _local_model_cost_map: None, model: str, prompt_tokens: int, cost_suffix: str
+) -> None:
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    input_rate, cache_read_rate, output_rate = (
+        rate if (rate := model_info.get(f"{key}{cost_suffix}_flex")) is not None else model_info[f"{key}{cost_suffix}"]
+        for key in ("input_cost_per_token", "cache_read_input_token_cost", "output_cost_per_token")
+    )
+    cached_tokens: Final = 20_000
+    completion_tokens: Final = 1_000
+    usage: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
@@ -4437,7 +4441,7 @@ def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
         custom_llm_provider="azure",
         service_tier="flex",
     )
-    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    expected_prompt: Final = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(completion_tokens * output_rate)
 
@@ -4623,16 +4627,13 @@ def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_mult
 GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
     "input_cost_per_token",
     "input_cost_per_token_batches",
-    "input_cost_per_token_flex",
     "input_cost_per_token_priority",
     "output_cost_per_token",
     "output_cost_per_token_batches",
-    "output_cost_per_token_flex",
     "output_cost_per_token_priority",
     "output_cost_per_reasoning_token",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_batches",
-    "cache_read_input_token_cost_flex",
     "cache_read_input_token_cost_priority",
 )
 

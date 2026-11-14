@@ -3,6 +3,10 @@ from typing import Final
 import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_headers
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+)
 
 _HISTORY: Final = ({"role": "user", "content": "Hello"},)
 
@@ -55,6 +59,26 @@ def test_count_tokens_on_a_tool_change_request_sends_the_tool_change_beta(
     request_data: dict[str, object], expected_beta: str
 ) -> None:
     assert count_tokens_headers("token", request_data) == {
+        "Authorization": "Bearer token",
+        "anthropic-beta": expected_beta,
+    }
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected_beta"),
+    [
+        ({"type": "adaptive", "display": "updates"}, ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER),
+        (
+            {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+            ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
+        ),
+    ],
+    ids=["display_updates", "block_binding"],
+)
+def test_count_tokens_with_a_beta_thinking_field_sends_the_beta_vertex_inference_sends(
+    thinking: dict[str, object], expected_beta: str
+) -> None:
+    assert count_tokens_headers("token", {"messages": list(_HISTORY), "thinking": thinking}) == {
         "Authorization": "Bearer token",
         "anthropic-beta": expected_beta,
     }

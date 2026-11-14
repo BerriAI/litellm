@@ -16,12 +16,16 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
+from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
-from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
+    BudgetGroupChange,
+    BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
     MemberCreate,
@@ -38,9 +42,12 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 
 if TYPE_CHECKING:
     from prisma import Json, Prisma
+    from prisma.models import LiteLLM_BudgetWindowSpend
 
 
 class ErrorCode(str, Enum):
+    FREE_TIER_LIMIT = "free_tier_limit"
+    CAPACITY_BUSY = "capacity_busy"
     NOT_FOUND = "not_found"
     PARENT_NOT_FOUND = "parent_not_found"
     ALREADY_EXISTS = "already_exists"
@@ -59,6 +66,7 @@ class ErrorCode(str, Enum):
     REQUEST_ALREADY_PENDING = "request_already_pending"
     EXPIRY_IN_PAST = "expiry_in_past"
     KEY_NOT_IN_ORG = "key_not_in_org"
+    CONFIGURATION_CONFLICT = "configuration_conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,8 +74,38 @@ class Failure:
     code: ErrorCode
 
 
+FREE_ORGANIZATION_LIMIT: Final = 5
+FREE_TEAMS_PER_ORGANIZATION_LIMIT: Final = 5
+FREE_MEMBERS_PER_TEAM_LIMIT: Final = 5
+FREE_CAPACITY_ADVISORY_LOCK: Final = 714023581
+FREE_CAPACITY_LOCK_TIMEOUT_MS: Final = 1000
+
+
+class CustomerPortalLimits(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    limits_apply: bool
+    organization_limit: int = FREE_ORGANIZATION_LIMIT
+    teams_per_organization_limit: int = FREE_TEAMS_PER_ORGANIZATION_LIMIT
+    members_per_team_limit: int = FREE_MEMBERS_PER_TEAM_LIMIT
+    organization_count: int
+    any_limit_reached: bool
+
+
+class _CapacityCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    full_organizations: int
+    full_teams: int
+
+
 _LOCK_ORGANIZATION_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1 FOR UPDATE'
+)
+_LOCK_TEMPLATES_SQL: Final = (
+    'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id IN '
+    '(SELECT unnest(budget_template_ids) FROM "LiteLLM_CustomerOrganizationTable" WHERE customer_org_id = $1) '
+    "ORDER BY budget_id FOR UPDATE"
 )
 
 _LOCK_CUSTOMER_IDENTITIES_SQL: Final = (
@@ -155,6 +193,23 @@ def budget_window_values(
 
 def budget_values(budget: Budget) -> Mapping[str, object]:
     return _VALUES.validate_python(budget.model_dump(include=set(Budget.model_fields)))
+
+
+def group_budget_patch(group: BudgetGroupChange, current: OrganizationBudget | None) -> Budget:
+    patch: Final = Budget.model_validate(group.model_dump(exclude_unset=True, exclude={"budget_id", "name"}))
+    if patch.budget_limits is None:
+        return patch
+    resets: Final = (
+        {limit.budget_duration: limit.reset_at for limit in (current.budget_limits or ())} if current else {}
+    )
+    return patch.model_copy(
+        update={
+            "budget_limits": tuple(
+                limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)})
+                for limit in patch.budget_limits
+            )
+        }
+    )
 
 
 _JSON_BUDGET_COLUMNS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})
@@ -436,14 +491,61 @@ def _member_ids(rows: Sequence[PrismaRecord]) -> tuple[str, ...]:
 
 
 class CustomerHierarchyStore:
-    def __init__(self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None) -> None:
+    def __init__(
+        self, db: "Prisma", now: datetime, settings: BudgetResetSettings | None = None, *, premium_user: bool
+    ) -> None:
         self.db = db
+        self.premium_user = premium_user
         self.now = now
         self.settings = settings if settings is not None else get_budget_reset_settings()
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.budgets: TableActions[PrismaRecord] = db.litellm_budgettable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+        self.window_spend: TableActions[LiteLLM_BudgetWindowSpend] = db.litellm_budgetwindowspend  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
+
+    async def lock_free_capacity(self, scope: str | None = None) -> None:
+        await self.db.query_raw("SELECT set_config('lock_timeout', $1, true)", f"{FREE_CAPACITY_LOCK_TIMEOUT_MS}ms")
+        if scope is None:
+            await self.db.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock($1)", FREE_CAPACITY_ADVISORY_LOCK)
+            return
+        await self.db.query_raw(
+            "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended($1, $2))",
+            scope,
+            FREE_CAPACITY_ADVISORY_LOCK,
+        )
+
+    async def member_capacity_reached(self, team_ids: Sequence[str]) -> bool:
+        if self.premium_user or not team_ids:
+            return False
+        for team_id in sorted(frozenset(team_ids)):
+            await self.lock_free_capacity(f"members:{team_id}")
+            if await self.members.count(where={"parent_team_ids": {"has": team_id}}) >= FREE_MEMBERS_PER_TEAM_LIMIT:
+                return True
+        return False
+
+    async def portal_limits(self) -> CustomerPortalLimits:
+        organization_count: Final = await self.organizations.count()
+        counts: Final = TypeAdapter(tuple[_CapacityCounts, ...]).validate_python(
+            await self.db.query_raw(
+                'SELECT (SELECT COUNT(*) FROM (SELECT parent_org_id FROM "LiteLLM_CustomerTeamTable" '
+                "GROUP BY parent_org_id HAVING COUNT(*) >= $1) AS full_orgs) AS full_organizations, "
+                '(SELECT COUNT(*) FROM (SELECT team_id FROM "LiteLLM_CustomerMemberTable", '
+                "unnest(parent_team_ids) AS team_id GROUP BY team_id HAVING COUNT(*) >= $2) AS full_members) AS full_teams",
+                FREE_TEAMS_PER_ORGANIZATION_LIMIT,
+                FREE_MEMBERS_PER_TEAM_LIMIT,
+            )
+        )
+        return CustomerPortalLimits(
+            limits_apply=not self.premium_user,
+            organization_count=organization_count,
+            any_limit_reached=not self.premium_user
+            and (
+                organization_count >= FREE_ORGANIZATION_LIMIT
+                or counts[0].full_organizations > 0
+                or counts[0].full_teams > 0
+            ),
+        )
 
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
         records: Final = tuple(
@@ -462,9 +564,10 @@ class CustomerHierarchyStore:
         budgets: Final = {budget.budget_id: budget for budget in resolved}
 
         counts: Final = await self.organization_member_counts(tuple(record.customer_org_id for record in records))
-        return tuple(
+        responses: Final = tuple(
             organization_response(record, budgets, counts.get(record.customer_org_id, 0)) for record in records
         )
+        return await customer_budget_usage(responses, self.window_spend, self.now, self.settings)
 
     async def organization_member_counts(self, organization_ids: tuple[str, ...]) -> Mapping[str, int]:
         if not organization_ids:
@@ -491,11 +594,21 @@ class CustomerHierarchyStore:
 
     async def get_team(self, team_id: str) -> Team | Failure:
         row: Final = await self.teams.find_unique(where={"customer_team_id": team_id}, include=_MEMBER_INCLUDE)
-        return team_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        if row is None:
+            return Failure(ErrorCode.NOT_FOUND)
+        responses: Final = await customer_budget_usage(
+            (team_response(row, self.now),), self.window_spend, self.now, self.settings
+        )
+        return responses[0]
 
     async def get_member(self, member_id: str) -> CustomerMember | Failure:
         row: Final = await self.members.find_unique(where={"customer_member_id": member_id}, include=_MEMBER_INCLUDE)
-        return member_response(row, self.now) if row is not None else Failure(ErrorCode.NOT_FOUND)
+        if row is None:
+            return Failure(ErrorCode.NOT_FOUND)
+        responses: Final = await customer_budget_usage(
+            (member_response(row, self.now),), self.window_spend, self.now, self.settings
+        )
+        return responses[0]
 
     async def create_budget(self, budget: Budget, actor: str, name: str | None = None) -> str:
         budget_id: Final = str(uuid4())
@@ -582,6 +695,13 @@ class CustomerHierarchyStore:
         alias_failure: Final = await self.claim_organization_alias(payload.alias, None)
         if alias_failure is not None:
             return alias_failure
+        if not self.premium_user:
+            await self.lock_free_capacity()
+            if await self.organizations.count() >= FREE_ORGANIZATION_LIMIT and (
+                payload.customer_org_id is None
+                or await self.organizations.find_unique(where={"customer_org_id": payload.customer_org_id}) is None
+            ):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         default_index: Final = default_template_index(payload.default_budgets, payload.default_budget_template)
         if isinstance(default_index, Failure):
             return default_index
@@ -634,6 +754,7 @@ class CustomerHierarchyStore:
         alias_failure: Final = await self.claim_organization_alias(payload.alias, organization_id)
         if alias_failure is not None:
             return alias_failure
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization
@@ -703,6 +824,7 @@ class CustomerHierarchyStore:
         return None
 
     async def resolve_member_template(self, organization_id: str, template_id: str | None) -> str | Failure | None:
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return Failure(ErrorCode.PARENT_NOT_FOUND)
@@ -713,10 +835,66 @@ class CustomerHierarchyStore:
             return selected
         return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
 
+    async def configure_templates(
+        self, organization_id: str, payload: BudgetGroupsUpdate, actor: str
+    ) -> Organization | Failure:
+        await self.lock_organization(organization_id)
+        await self.db.query_raw(_LOCK_TEMPLATES_SQL, organization_id)
+        organization: Final = await self.get_organization(organization_id)
+        if isinstance(organization, Failure):
+            return organization
+        if payload.expected_revision != organization.budget_groups_revision:
+            return Failure(ErrorCode.CONFIGURATION_CONFLICT)
+        originals: Final = {group.budget_id: group for group in organization.default_budgets}
+        retained: Final = tuple(group.budget_id for group in payload.default_budgets if group.budget_id is not None)
+        if len(set(retained)) != len(retained) or not set(retained).issubset(originals):
+            return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
+        names: Final = tuple(group.name for group in payload.default_budgets)
+        if len(set(names)) != len(names):
+            return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
+        if payload.default_budget_template is not None and payload.default_budget_template not in names:
+            return Failure(ErrorCode.INVALID_DEFAULT_BUDGET)
+        removed: Final = tuple(budget_id for budget_id in originals if budget_id not in retained)
+        if await count_in(self.members, "budget_id", removed):
+            return Failure(ErrorCode.TEMPLATE_IN_USE)
+        ids: Final = tuple(
+            [
+                await self.write_configured_template(group, originals.get(group.budget_id or ""), actor)
+                for group in payload.default_budgets
+            ]
+        )
+        default_id: Final = (
+            ids[names.index(payload.default_budget_template)] if payload.default_budget_template else None
+        )
+        await self.write_template_metadata(organization_id, ids, default_id, actor)
+        await self._delete_unused_budgets(removed)
+        return await self.get_organization(organization_id)
+
+    async def write_configured_template(
+        self, group: BudgetGroupChange, current: OrganizationBudget | None, actor: str
+    ) -> str:
+        patch: Final = group_budget_patch(group, current)
+        if current is None:
+            return await self.create_budget(patch, actor, group.name)
+        if patch.model_fields_set:
+            await self.update_budget(current.budget_id, patch, actor)
+        if group.name != current.name:
+            await update_budget_row(self.budgets, current.budget_id, {"name": group.name}, actor)
+        return current.budget_id
+
     async def create_team(self, payload: TeamCreate, actor: str) -> Team | Failure:
         parent: Final = await self.organizations.find_unique(where={"customer_org_id": payload.parent_org_id})
         if parent is None:
             return Failure(ErrorCode.PARENT_NOT_FOUND)
+        if not self.premium_user:
+            await self.lock_free_capacity(f"teams:{payload.parent_org_id}")
+            if await self.teams.count(
+                where={"parent_org_id": payload.parent_org_id}
+            ) >= FREE_TEAMS_PER_ORGANIZATION_LIMIT and (
+                payload.customer_team_id is None
+                or await self.teams.find_unique(where={"customer_team_id": payload.customer_team_id}) is None
+            ):
+                return Failure(ErrorCode.FREE_TIER_LIMIT)
         budget_id: Final = await self.create_budget(payload.budget, actor) if payload.budget is not None else None
         override_id: Final = (
             await self.create_budget(payload.budget_override, actor) if payload.budget_override is not None else None
@@ -773,6 +951,11 @@ class CustomerHierarchyStore:
         organization_id: Final = await self.member_organization(payload)
         if isinstance(organization_id, Failure):
             return organization_id
+        if await self.member_capacity_reached(payload.parent_team_ids) and (
+            payload.customer_member_id is None
+            or await self.members.find_unique(where={"customer_member_id": payload.customer_member_id}) is None
+        ):
+            return Failure(ErrorCode.FREE_TIER_LIMIT)
         template_id: Final = await self.resolve_member_template(organization_id, payload.budget_id)
         if isinstance(template_id, Failure):
             return template_id
@@ -875,7 +1058,12 @@ class CustomerHierarchyStore:
             order=[{"created_at": "asc"}, {"customer_team_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
-        return Page(tuple(team_response(row, self.now) for row in rows), count)
+        return Page(
+            await customer_budget_usage(
+                tuple(team_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+            ),
+            count,
+        )
 
     async def list_members(
         self, parent_team_id: str | None, page: int, page_size: int, *, parent_org_id: str | None = None
@@ -892,7 +1080,12 @@ class CustomerHierarchyStore:
             order=[{"created_at": "asc"}, {"customer_member_id": "asc"}],
             include=_MEMBER_INCLUDE,
         )
-        return Page(tuple(member_response(row, self.now) for row in rows), count)
+        return Page(
+            await customer_budget_usage(
+                tuple(member_response(row, self.now) for row in rows), self.window_spend, self.now, self.settings
+            ),
+            count,
+        )
 
     async def _delete_unused_budgets(self, budget_ids: Sequence[str]) -> None:
         where: Final[Mapping[str, object]] = {field: {"none": {}} for field in _BUDGET_REFERENCE_FIELDS}
@@ -931,12 +1124,8 @@ class CustomerHierarchyStore:
         for team in teams:
             await self._delete_team_members(team.customer_team_id)
         team_ids: Final = tuple(team.customer_team_id for team in teams)
-        budget_ids: Final = tuple(
-            budget_id
-            for team in teams
-            for budget_id in (team.budget_id, team.budget_override_id)
-            if budget_id is not None
-        )  # comprehension-ok: two bounded sources per team
+        team_budget_ids: Final = chain.from_iterable((team.budget_id, team.budget_override_id) for team in teams)
+        budget_ids: Final = tuple(budget_id for budget_id in team_budget_ids if budget_id is not None)
         await delete_many_in(self.teams, "customer_team_id", team_ids, atomicity="caller_transaction")
         await self._delete_unused_budgets(budget_ids)
         return True
@@ -973,10 +1162,7 @@ class CustomerHierarchyStore:
         elif await self.members.count(where={"parent_team_ids": {"has": team_id}}):
             return Failure(ErrorCode.HAS_CHILDREN)
         await self.teams.delete(where={"customer_team_id": team_id})
-        if team.budget_id is not None:
-            await self._delete_unused_budgets(
-                tuple(b for b in (team.budget_id, team.budget_override_id) if b is not None)
-            )
+        await self._delete_unused_budgets(tuple(b for b in (team.budget_id, team.budget_override_id) if b is not None))
         return None
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
@@ -996,9 +1182,13 @@ class CustomerHierarchyStore:
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(self, db: TransactionSource, *, premium_user: bool, clock: Callable[[], datetime] = utc_now) -> None:
         self.db = db
         self.clock = clock
+        self.premium_user = premium_user
+
+    async def portal_limits(self) -> CustomerPortalLimits | Failure:
+        return await self.transaction(lambda store: store.portal_limits())
 
     async def transaction(
         self,
@@ -1006,11 +1196,11 @@ class CustomerHierarchy:
         *,
         operation_type: TransactionOperation = TransactionOperation.READ_WRITE,
     ) -> T | Failure:
-        from prisma.errors import ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
+        from prisma.errors import DataError, ForeignKeyViolationError, RecordNotFoundError, UniqueViolationError
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx, self.clock()))
+                return await operation(CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user))
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
@@ -1019,6 +1209,10 @@ class CustomerHierarchy:
             return Failure(
                 ErrorCode.HAS_CHILDREN if operation_type is TransactionOperation.DELETE else ErrorCode.PARENT_NOT_FOUND
             )
+        except DataError as error:
+            if PrismaDBExceptionHandler.is_lock_timeout_error(error):
+                return Failure(ErrorCode.CAPACITY_BUSY)
+            raise
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))
@@ -1097,6 +1291,11 @@ class CustomerHierarchy:
 
     async def add_template(self, organization_id: str, payload: BudgetTemplate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.add_template(organization_id, payload, actor))
+
+    async def configure_templates(
+        self, organization_id: str, payload: BudgetGroupsUpdate, actor: str
+    ) -> Organization | Failure:
+        return await self.transaction(lambda store: store.configure_templates(organization_id, payload, actor))
 
     async def update_template(
         self, organization_id: str, budget_id: str, payload: TemplatePatch, actor: str

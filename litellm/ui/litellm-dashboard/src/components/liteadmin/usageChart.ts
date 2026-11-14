@@ -63,8 +63,9 @@ export function usageChartSource(
   const filters = [user_id && `User ${user_id}`, team_ids && `Teams ${team_ids}`, tags && `Tags ${tags}`].filter(
     Boolean,
   );
+  const ownScope = defaultScope === "All teams" ? "Your permitted team usage" : "Your usage";
   const scope =
-    access.mode === "usage" && access.scope.type === "user" ? "Your usage" : filters.join(" · ") || defaultScope;
+    access.mode === "usage" && access.scope.type !== "global" ? ownScope : filters.join(" · ") || defaultScope;
   return { report: report.data, period: `${start_date} to ${end_date} (UTC)`, scope };
 }
 

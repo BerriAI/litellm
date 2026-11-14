@@ -1806,3 +1806,145 @@ async def test_customer_budget_reset_reloads_cached_hierarchy_spend(
         assert tuple(scope.spend for scope in after.scopes) == (0.0, 0.0, 0.0)
     finally:
         await client.db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_customer_budget_reset_reloads_the_cached_organization_alias_spend(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        CustomerHierarchyAuth,
+        get_customer_organization_hierarchy,
+    )
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    _seed_customer_hierarchy(parity_database)
+    with psycopg.connect(parity_database) as connection:
+        connection.execute("UPDATE \"LiteLLM_CustomerOrganizationTable\" SET spend=5, alias='customer-org-alias'")
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    await client.db.connect()
+    try:
+        before: Final = await get_customer_organization_hierarchy(
+            "customer-org-alias", client, proxy_server.user_api_key_cache
+        )
+        assert isinstance(before, CustomerHierarchyAuth)
+        assert tuple(scope.spend for scope in before.scopes) == (5.0,)
+        await ResetBudgetJob(
+            proxy_logging_obj=proxy_server.proxy_logging_obj, prisma_client=client
+        ).reset_budget_for_litellm_budget_table()
+        after: Final = await get_customer_organization_hierarchy(
+            "customer-org-alias", client, proxy_server.user_api_key_cache
+        )
+        assert isinstance(after, CustomerHierarchyAuth)
+        assert tuple(scope.spend for scope in after.scopes) == (0.0,)
+    finally:
+        await client.db.disconnect()
+
+
+class _HeldTable:
+    """A table whose ``find_many`` waits for ``release`` after reading, so a reset can land mid-load."""
+
+    def __init__(self, table: object, reading: asyncio.Event, release: asyncio.Event) -> None:
+        self._table = table
+        self._reading = reading
+        self._release = release
+
+    async def find_many(self, **kwargs: object) -> object:
+        rows: Final = await self._table.find_many(**kwargs)
+        self._reading.set()
+        await self._release.wait()
+        return rows
+
+
+@pytest.mark.asyncio
+async def test_customer_budget_reset_is_not_undone_by_a_hierarchy_load_in_flight(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request that read the member rows before the reset committed finishes loading after the reset
+    dropped the cache entry. The spend it read is the closed window's, so the next request reloads."""
+    from types import SimpleNamespace
+
+    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_hierarchy
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    _seed_customer_hierarchy(parity_database)
+    with psycopg.connect(parity_database) as connection:
+        connection.execute('UPDATE "LiteLLM_CustomerMemberTable" SET spend=5')
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    await client.db.connect()
+    reading, release = asyncio.Event(), asyncio.Event()
+    held_client: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_customermembertable=client.db.litellm_customermembertable,
+            litellm_customerteamtable=_HeldTable(client.db.litellm_customerteamtable, reading, release),
+        )
+    )
+    try:
+        in_flight: Final = asyncio.create_task(
+            get_customer_hierarchy("member", held_client, proxy_server.user_api_key_cache)
+        )
+        await reading.wait()
+        await ResetBudgetJob(
+            proxy_logging_obj=proxy_server.proxy_logging_obj, prisma_client=client
+        ).reset_budget_for_litellm_budget_table()
+        release.set()
+        stale: Final = await in_flight
+        assert stale is not None
+        assert stale.scopes[-1].spend == 5.0
+        after: Final = await get_customer_hierarchy("member", client, proxy_server.user_api_key_cache)
+        assert after is not None
+        assert tuple(scope.spend for scope in after.scopes) == (0.0, 0.0, 0.0)
+    finally:
+        release.set()
+        await client.db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_customer_budget_reset_is_not_undone_by_an_organization_alias_load_in_flight(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        CustomerHierarchyAuth,
+        get_customer_organization_hierarchy,
+    )
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    _seed_customer_hierarchy(parity_database)
+    with psycopg.connect(parity_database) as connection:
+        connection.execute("UPDATE \"LiteLLM_CustomerOrganizationTable\" SET spend=5, alias='customer-org-alias'")
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    await client.db.connect()
+    reading, release = asyncio.Event(), asyncio.Event()
+    held_client: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_customerorganizationtable=_HeldTable(client.db.litellm_customerorganizationtable, reading, release)
+        )
+    )
+    try:
+        in_flight: Final = asyncio.create_task(
+            get_customer_organization_hierarchy("customer-org-alias", held_client, proxy_server.user_api_key_cache)
+        )
+        await reading.wait()
+        await ResetBudgetJob(
+            proxy_logging_obj=proxy_server.proxy_logging_obj, prisma_client=client
+        ).reset_budget_for_litellm_budget_table()
+        release.set()
+        stale: Final = await in_flight
+        assert isinstance(stale, CustomerHierarchyAuth)
+        assert tuple(scope.spend for scope in stale.scopes) == (5.0,)
+        after: Final = await get_customer_organization_hierarchy(
+            "customer-org-alias", client, proxy_server.user_api_key_cache
+        )
+        assert isinstance(after, CustomerHierarchyAuth)
+        assert tuple(scope.spend for scope in after.scopes) == (0.0,)
+    finally:
+        release.set()
+        await client.db.disconnect()

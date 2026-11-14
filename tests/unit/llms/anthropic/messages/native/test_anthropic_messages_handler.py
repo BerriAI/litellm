@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Final, List
@@ -23,6 +23,8 @@ import litellm
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, on
+from litellm.llms.anthropic.messages.native.handler import _execute_pre_request_hooks
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -2996,3 +2998,136 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
     else:
         assert route.calls.last.request.url.path.endswith("/chat/completions")
         assert "qa-opaque-reasoning" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("with_v2", [False, True])
+async def test_messages_send_the_request_the_pre_request_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, with_v2: bool
+) -> None:
+    seen: Final[list[str]] = []
+
+    class MockRewriter(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> dict[str, object] | None:
+            seen.append("legacy")
+            return {**kwargs, "mock_response": "rewritten by the pre-request hook"}
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("v2")
+
+    monkeypatch.setattr(litellm, "callbacks", [*([Gate()] if with_v2 else []), MockRewriter()])
+
+    response: Final = await messages.acreate(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        mock_response="original",
+    )
+
+    assert isinstance(response, dict)
+    assert response["content"][0]["text"] == "rewritten by the pre-request hook"
+    assert seen == (["v2", "v2", "legacy"] if with_v2 else ["legacy"])
+
+
+class _PreRequestHook(CustomLogger):
+    def __init__(self, name: str, journal: list[object], reply: object = None, error: Exception | None = None) -> None:
+        super().__init__()
+        self.name = name
+        self.journal = journal
+        self.reply = reply
+        self.error = error
+        self.seen: list[object] = []
+
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        self.journal.append(self.name)
+        self.seen.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.reply if not callable(self.reply) else self.reply(kwargs)
+
+
+class _ToolsWatcher(CustomLoggerV2):
+    def __init__(self, journal: list[object]) -> None:
+        self.journal = journal
+
+    @on(Hook.pre_deployment_call, reads={Field.tools}, may_abort=True)
+    async def watch(self, view: object, ctx: CallContext[object]) -> None:
+        self.journal.append(("v2", getattr(view, "tools")))  # noqa: B009  # the view's declared field
+
+
+async def _pre_request_hooks() -> dict[str, object]:
+    return await _execute_pre_request_hooks(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "original"}],
+        stream=False,
+        custom_llm_provider="anthropic",
+    )
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_pre_request_hooks_run_in_order_and_a_returned_dict_replaces_the_request(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    replaced: Final[dict[str, object]] = {"tools": [{"name": "replaced"}]}
+    first: Final = _PreRequestHook("first", journal, reply=replaced)
+    keeper: Final = _PreRequestHook("keeper", journal)
+    last: Final = _PreRequestHook("last", journal)
+    monkeypatch.setattr(litellm, "callbacks", [first, keeper, last, *([_ToolsWatcher([])] if inert else [])])
+
+    result: Final = await _pre_request_hooks()
+
+    assert journal == ["first", "keeper", "last"]
+    assert first.seen[0] == {
+        "tools": [{"name": "original"}],
+        "stream": False,
+        "litellm_params": {"custom_llm_provider": "anthropic"},
+    }
+    assert keeper.seen[0] is replaced
+    assert result is replaced
+
+
+@pytest.mark.parametrize("inert", [False, True])
+async def test_a_pre_request_hook_error_propagates_unchanged_and_stops_the_hook(
+    monkeypatch: pytest.MonkeyPatch, inert: bool
+) -> None:
+    journal: Final[list[object]] = []
+    error: Final = ValueError("request refused")
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _PreRequestHook("first", journal, error=error),
+            _PreRequestHook("next", journal),
+            *([_ToolsWatcher([])] if inert else []),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="request refused") as raised:
+        await _pre_request_hooks()
+
+    assert raised.value is error
+    assert journal == ["first"]
+
+
+async def test_a_v2_callback_between_pre_request_hooks_sees_the_first_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal: Final[list[object]] = []
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _PreRequestHook("first", journal, reply=lambda kwargs: {**kwargs, "tools": [{"name": "rewritten"}]}),
+            _ToolsWatcher(journal),
+            _PreRequestHook("second", journal),
+        ],
+    )
+
+    await _pre_request_hooks()
+
+    assert journal == ["first", ("v2", [{"name": "rewritten"}]), "second"]
