@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -491,6 +495,15 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body.pop("output_config", None)
     else:
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
+
+
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
 
 
 def normalize_custom_field_on_tools(request_body: dict) -> None:
