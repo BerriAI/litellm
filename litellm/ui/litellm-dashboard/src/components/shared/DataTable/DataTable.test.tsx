@@ -822,6 +822,29 @@ describe("DataTable row activation", () => {
     expect(onRowClick).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a drag-selection inside a cell instead of opening the row", async () => {
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    render(
+      <DataTable
+        data={[person("a", "Alice")]}
+        columns={rowClickColumns}
+        onRowClick={onRowClick}
+        getRowLabel={(row) => `Open person ${row.name}`}
+      />,
+    );
+    const cell = screen.getByTestId("name-cell");
+
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: cell, offset: 0 },
+      { target: cell, offset: 5 },
+      { keys: "[/MouseLeft]", target: cell, offset: 5 },
+    ]);
+
+    expect(window.getSelection()?.toString()).toBe("Alice");
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
   it("activates a focused row with Enter and Space and exposes its accessible label", async () => {
     const user = userEvent.setup();
     const onRowClick = vi.fn();

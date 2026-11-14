@@ -302,6 +302,9 @@ function DataTableBodyRow<TData>({
     if (target.closest(INTERACTIVE_SELECTOR) !== null) {
       return;
     }
+    if (window.getSelection()?.isCollapsed === false) {
+      return;
+    }
     onRowClick(row.original);
   };
 
