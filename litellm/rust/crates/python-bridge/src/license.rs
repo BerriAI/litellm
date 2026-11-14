@@ -50,10 +50,7 @@ impl LicenseVerifier {
         let Some(license) = license else {
             return Ok(Entitlements(litellm_license::Entitlements::Community));
         };
-        let error = match self
-            .public_key
-            .verify(&license, jiff::Zoned::now().datetime())
-        {
+        let error = match self.public_key.verify_now(&license) {
             Ok(signed) => {
                 return Ok(Entitlements(litellm_license::Entitlements::Signed(signed)));
             }

@@ -8,7 +8,7 @@ repository.workspace = true
 [dependencies]
 backon.workspace = true
 base64.workspace = true
-jiff = { version = "0.2.37", default-features = false, features = ["std", "serde"] }
+jiff = { version = "0.2.37", default-features = false, features = ["std", "serde", "tz-system", "tzdb-zoneinfo"] }
 litellm-http.workspace = true
 rsa = { version = "0.9.10", features = ["sha2"] }
 serde.workspace = true

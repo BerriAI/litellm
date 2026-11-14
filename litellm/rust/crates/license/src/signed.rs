@@ -1,6 +1,7 @@
 use base64::Engine;
 use base64::alphabet::STANDARD;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use jiff::Zoned;
 use jiff::civil::{Date, DateTime, Time};
 use jiff::fmt::strtime;
 use rsa::RsaPublicKey;
@@ -33,6 +34,11 @@ impl PublicKey {
     pub fn litellm() -> Self {
         Self::from_pem(include_str!("../public_key.pem"))
             .expect("the bundled license public key is a valid PEM")
+    }
+
+    /// Checks `license` against the local wall clock, which is how the proxy has always read `expiration_date`
+    pub fn verify_now(&self, license: &str) -> Result<License, Error> {
+        self.verify(license, Zoned::now().datetime())
     }
 
     /// A base64 `payload.signature` license, signed with RSA-PSS over SHA-256 at the maximum salt length, stays
@@ -271,7 +277,10 @@ mod tests {
     }
 
     #[rstest]
-    fn bundled_public_key_is_a_2048_bit_rsa_key() {
-        assert_eq!(PublicKey::litellm().0.n().bits(), 2048);
+    fn bundled_public_key_rejects_a_license_it_did_not_sign() {
+        assert!(matches!(
+            PublicKey::litellm().verify_now(&license("2999-01-01")),
+            Err(Error::Signature(_))
+        ));
     }
 }
