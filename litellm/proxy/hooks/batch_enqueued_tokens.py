@@ -10,16 +10,17 @@ the reservation is refunded when the batch reaches a terminal state
 """
 
 import asyncio
+import itertools
 import logging
 import math
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -29,6 +30,7 @@ from litellm.constants import (
     BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
     MODEL_BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
 )
+from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -141,7 +143,9 @@ class _StoredReservation:
 
 
 _LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
-_MODEL_LIMITS_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, Annotated[int, Field(gt=0)]])
+_MODEL_LIMITS_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(
+    Mapping[str, Annotated[StrictInt, Field(gt=0)]]
+)
 _NO_MODEL_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
@@ -223,27 +227,33 @@ def _tightest_limit_by_group(limits: Mapping[str, int], model_group_of: Callable
     return MappingProxyType({group: min(limit for g, limit in resolved if g == group) for group, _ in resolved})
 
 
+def _model_groups(model: str, model_group_of: Callable[[str], str]) -> frozenset[str]:
+    return frozenset(model_group_of(candidate) for candidate in expand_model_latest_alias(model))
+
+
 def _limited_model_charges(
     limits: Mapping[str, int],
     tokens_by_model: Mapping[str, int],
     model_group_of: Callable[[str], str],
 ) -> Iterator[tuple[str, int, int]]:
     group_limits: Final = _tightest_limit_by_group(limits, model_group_of)
-    groups_and_tokens: Final = ((model_group_of(model), tokens) for model, tokens in tokens_by_model.items())
-    return ((group, group_limits[group], tokens) for group, tokens in groups_and_tokens if group in group_limits)
+    return itertools.chain.from_iterable(
+        (
+            (group, group_limits[group], tokens)
+            for group in _model_groups(model, model_group_of)
+            if group in group_limits
+        )
+        for model, tokens in tokens_by_model.items()
+    )
 
 
-def project_limits_batch_model(
+def project_limits_every_model(
     user_api_key_dict: UserAPIKeyAuth,
-    model: str | None,
+    models: Iterable[str],
     model_group_of: Callable[[str], str],
 ) -> bool:
-    if model is None:
-        return False
-    charges: Final = _limited_model_charges(
-        _read_project_model_limits(user_api_key_dict), MappingProxyType({model: 0}), model_group_of
-    )
-    return next(charges, None) is not None
+    group_limits: Final = _tightest_limit_by_group(_read_project_model_limits(user_api_key_dict), model_group_of)
+    return all(not group_limits.keys().isdisjoint(_model_groups(model, model_group_of)) for model in models)
 
 
 def resolve_project_model_batch_enqueued_token_scopes(

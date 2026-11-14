@@ -140,6 +140,12 @@ def _check_project_batch_limits(
         )
 
 
+def _stored_metadata_with(
+    request: BatchLimitRequest, stored_metadata: Mapping[str, object]
+) -> dict[str, object] | None:
+    return None if request.metadata is None else {**stored_metadata, **request.metadata}
+
+
 async def _check_user_permission_for_project(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
@@ -871,9 +877,16 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
+        stored_metadata: Final[dict[str, object]] = (
+            existing_project.metadata if isinstance(existing_project.metadata, dict) else {}
+        )
+        merged_metadata: Final = None if data.sent_metadata else _stored_metadata_with(data, stored_metadata)
+        merged_request: Final = (
+            data if merged_metadata is None else data.model_copy(update={"metadata": merged_metadata})
+        )
         _check_project_batch_limits(
-            data=data,
-            existing_metadata=existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
+            data=merged_request,
+            existing_metadata=stored_metadata,
             user_api_key_dict=user_api_key_dict,
         )
         await validate_guardrail_names(
@@ -894,7 +907,7 @@ async def update_project(
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             _raise_on_missing_project_model_quota_on_update(
-                data,
+                merged_request,
                 existing_project,
                 _router_access_group_names(llm_router),
                 quota_policy,
@@ -902,7 +915,7 @@ async def update_project(
             )
 
         # Prepare update data
-        update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
+        update_data = _jsonified(prisma_client, merged_request.model_dump(exclude_none=True, exclude={"project_id"}))
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
         # Handle budget updates

@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenOverLimit,
@@ -29,7 +30,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     batch_response_view,
     canonical_provider_batch_id,
     project_has_model_batch_enqueued_token_limits,
-    project_limits_batch_model,
+    project_limits_every_model,
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
@@ -156,10 +157,13 @@ def test_project_model_scope_takes_its_groups_tightest_limit_whichever_name_the_
         _project_user({"gpt-5.5": 0}),
         _project_user({"gpt-5.5": "lots"}),
         _project_user(["gpt-5.5"]),
+        _project_user({"gpt-5.5": True}),
+        _project_user({"gpt-5.5": "100"}),
+        _project_user({"gpt-5.5": 100.0}),
         _project_user({"gpt-5.5": 100}, project_id=None),
         UserAPIKeyAuth(api_key="k", project_id="project-1"),
     ],
-    ids=["scalar", "zero", "non-numeric", "list", "no project id", "no metadata"],
+    ids=["scalar", "zero", "non-numeric", "list", "boolean", "numeric string", "float", "no project id", "no metadata"],
 )
 def test_project_model_scopes_ignore_unusable_limits(user):
     assert not project_has_model_batch_enqueued_token_limits(user)
@@ -172,18 +176,33 @@ def test_project_model_scopes_ignore_unusable_limits(user):
 
 
 @pytest.mark.parametrize(
-    ("model", "expected"),
-    [("gpt-5.5", True), ("gpt-latest", True), ("unlisted-model", False), (None, False)],
-    ids=["limited model", "alias of a limited group", "unlisted model", "unknown routing model"],
+    ("models", "expected"),
+    [
+        (("gpt-5.5",), True),
+        (("gpt-latest",), True),
+        (("unlisted-model",), False),
+        (("gpt-5.5", "unlisted-model"), False),
+    ],
+    ids=["limited model", "alias of a limited group", "unlisted model", "one of the models is unlisted"],
 )
-def test_project_limits_batch_model_only_for_models_with_a_limit(model, expected):
+def test_project_limits_every_model_only_when_each_model_has_a_limit(models, expected):
     groups: Final = MappingProxyType({"gpt-latest": "gpt-5.5"})
     assert (
-        project_limits_batch_model(
-            _project_user({"gpt-5.5": 100}), model, model_group_of=lambda name: groups.get(name, name)
+        project_limits_every_model(
+            _project_user({"gpt-5.5": 100}), models, model_group_of=lambda name: groups.get(name, name)
         )
         is expected
     )
+
+
+def test_a_latest_alias_is_charged_under_the_project_limit_of_its_target():
+    alias, target = next(iter(get_model_latest_aliases()["openai"].items()))
+    user: Final = _project_user({target: 100})
+
+    assert project_limits_every_model(user, (alias,), model_group_of=str)
+    assert resolve_project_model_batch_enqueued_token_scopes(
+        user, row_tokens_by_model={alias: 40}, routing_model=alias, batch_tokens=40, model_group_of=str
+    ) == (BatchEnqueuedTokenScope(key="project_model", value=f"project-1:{target}", limit=100, tokens=40),)
 
 
 def test_project_model_limits_are_detected_before_the_batch_file_is_read():

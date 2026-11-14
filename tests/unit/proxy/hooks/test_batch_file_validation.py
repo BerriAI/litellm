@@ -2429,6 +2429,42 @@ async def test_a_project_allowance_for_the_routing_model_replaces_per_minute_lim
 
 
 @pytest.mark.asyncio
+async def test_a_routing_model_allowance_keeps_project_input_limits_on_the_other_row_models():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+    user: Final = _project_model_limited_user({"gpt-4o-mini": allowance}).model_copy(
+        update={
+            "project_metadata": {
+                "model_batch_enqueued_token_limit": {"gpt-4o-mini": allowance},
+                "model_itpm_limit": {"gpt-5.5": 1},
+            }
+        }
+    )
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_itpm" in str(exc.value.detail)
+    whole_allowance: Final = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-4o-mini", limit=allowance, tokens=allowance
+    )
+    refilled: Final = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
 async def test_daily_token_limit_still_applies_alongside_a_project_model_reservation():
     rate_limiter, local_cache = _enqueued_rate_limiter()
     afile_content_mock, patches = _enqueued_batch_patches()

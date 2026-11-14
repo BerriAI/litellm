@@ -57,7 +57,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     BatchEnqueuedTokenReservation,
     BatchEnqueuedTokenScope,
     project_has_model_batch_enqueued_token_limits,
-    project_limits_batch_model,
+    project_limits_every_model,
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
@@ -1389,8 +1389,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     scopes=enqueued_scopes,
                 )
                 if not key_and_team_scopes:
-                    project_covers_batch: Final = project_limits_batch_model(
-                        user_api_key_dict, routing_model, self._model_group_of
+                    project_covers_batch: Final = routing_model is not None and project_limits_every_model(
+                        user_api_key_dict, (routing_model, *batch_usage.per_model_usage), self._model_group_of
                     )
                     remaining_descriptors: Final = [
                         descriptor

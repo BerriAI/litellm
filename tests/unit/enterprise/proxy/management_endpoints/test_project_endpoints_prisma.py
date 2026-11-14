@@ -2528,8 +2528,8 @@ async def test_team_admin_can_write_batch_keys_a_project_does_not_enforce(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "requested_limit",
-    [{"gpt-5.5": 1000, "gpt-5.4": 0}, {"gpt-5.5": "lots"}, [1000]],
-    ids=["one model at zero", "a non-numeric limit", "not a model map"],
+    [{"gpt-5.5": 1000, "gpt-5.4": 0}, {"gpt-5.5": "lots"}, [1000], {"gpt-5.5": True}, {"gpt-5.5": "2000"}],
+    ids=["one model at zero", "a non-numeric limit", "not a model map", "a boolean limit", "a numeric string limit"],
 )
 async def test_project_update_rejects_a_model_batch_enqueued_token_limit_it_cannot_enforce(
     monkeypatch: pytest.MonkeyPatch, requested_limit: object
@@ -2549,3 +2549,25 @@ async def test_project_update_rejects_a_model_batch_enqueued_token_limit_it_cann
     assert exc.value.code == "400"
     assert "model_batch_enqueued_token_limit must map each model name to a positive integer" in exc.value.message
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "top_level_fields",
+    [{"model_tpm_limit": {"gpt-5.5": 2000}}, {"tags": ["batch"]}],
+    ids=["a per-model limit", "a premium metadata field"],
+)
+@pytest.mark.parametrize("caller", [_TEAM_ADMIN, _PROXY_ADMIN], ids=["team admin", "proxy admin"])
+async def test_project_update_with_only_top_level_fields_keeps_the_stored_metadata(
+    monkeypatch: pytest.MonkeyPatch, top_level_fields: dict[str, object], caller: UserAPIKeyAuth
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    await update_project(
+        data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", **top_level_fields),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=caller,
+    )
+
+    assert _written_project_data(mock_prisma)["metadata"] == {**_stored_project_metadata(), **top_level_fields}
