@@ -38,6 +38,7 @@ from integration.authorization._hidden_alias_budget import (
     async_anthropic_client,
     async_openai_client,
     base_url,
+    budget_refusal_error_type,
     chat_statuses,
     clear_provider_script,
     error_type,
@@ -599,7 +600,7 @@ def _assert_refused_like_target(rig: AliasRig, candidate: Gateway, key: str, sha
         target_marker: Final = f"target-{route}-" + uuid.uuid4().hex
         via_shadow: Final = send(candidate, shadow, key, shadow_marker)
         by_name: Final = send(candidate, target, key, target_marker)
-        assert _refusal(by_name) == (BUDGET_EXCEEDED, "budget_exceeded"), by_name.text
+        assert _refusal(by_name) == (BUDGET_EXCEEDED, budget_refusal_error_type(route)), by_name.text
         assert via_shadow.status_code == by_name.status_code, via_shadow.text
         assert error_type(via_shadow) == error_type(by_name), via_shadow.text
         observed: Final = upstream_requests(rig.gateway.upstream_url)
@@ -621,7 +622,7 @@ def _assert_refused_on_every_route(rig: AliasRig, candidate: Gateway, key: str, 
         marker: Final = f"chain-{route}-" + uuid.uuid4().hex
         refused: Final = send(candidate, model, key, marker)
         assert refused.status_code == BUDGET_EXCEEDED, refused.text
-        assert error_type(refused) == "budget_exceeded", refused.text
+        assert error_type(refused) == budget_refusal_error_type(route), refused.text
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 
@@ -828,9 +829,9 @@ def _deployment_id(rig: AliasRig, name: str) -> str:
     return identities[0]
 
 
-def _assert_budget_refusal(status_code: int, body: str) -> None:
+def _assert_budget_refusal(status_code: int, body: str, route: str = "chat") -> None:
     assert status_code == BUDGET_EXCEEDED, body
-    assert "budget_exceeded" in body, body
+    assert budget_refusal_error_type(route) in body, body
 
 
 def _assert_no_served_row(key: str, marker: str) -> None:
@@ -881,7 +882,7 @@ async def test_exhausted_key_is_refused_on_shadowing_alias_through_streamed_anth
                     extra_headers=spend_marker(marker),
                 ) as stream:
                     await stream.get_final_message()
-        _assert_budget_refusal(refused.value.status_code, str(refused.value.body))
+        _assert_budget_refusal(refused.value.status_code, str(refused.value.body), route="messages")
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 
