@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
-from typing import Awaitable, Callable, Final, Literal, Optional, assert_never
+from typing import Awaitable, Callable, Final, Literal, Optional
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
@@ -18,6 +18,7 @@ import openai
 import pytest
 import requests
 from azure.core.pipeline.transport import RequestsTransport
+from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.azure.common_utils import (
