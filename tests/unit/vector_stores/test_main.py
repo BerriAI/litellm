@@ -503,10 +503,14 @@ async def test_a_slow_google_token_fetch_for_one_rag_store_does_not_hold_up_anot
     with responses.RequestsMock() as google:
         google.add_callback(responses.POST, GOOGLE_TOKEN_URL, callback=token_response)
         slow_search: Final = asyncio.ensure_future(
-            _search_rag_store("https://vertex.test/slow", _authorized_user_credentials(f"slow-store-{uuid.uuid4().hex}"))
+            _search_rag_store(
+                "https://vertex.test/slow", _authorized_user_credentials(f"slow-store-{uuid.uuid4().hex}")
+            )
         )
         assert await asyncio.to_thread(slow_fetch_started.wait, 5)
-        await _search_rag_store("https://vertex.test/fast", _authorized_user_credentials(f"fast-store-{uuid.uuid4().hex}"))
+        await _search_rag_store(
+            "https://vertex.test/fast", _authorized_user_credentials(f"fast-store-{uuid.uuid4().hex}")
+        )
         other_store_searched.set()
         await slow_search
 
@@ -525,9 +529,7 @@ async def test_a_rag_store_reloads_a_rotated_key_file_when_google_rejects_the_ol
     key_file.write_text(_authorized_user_credentials(f"old-key-{uuid.uuid4().hex}"))
     old_key_deleted: Final = threading.Event()
 
-    def token_response(
-        request: requests_mock_lib.Request, context: requests_mock_lib.Context
-    ) -> dict[str, object]:
+    def token_response(request: requests_mock_lib.Request, context: requests_mock_lib.Context) -> dict[str, object]:
         is_old_key: Final = "old-key" in request.text
         if is_old_key and old_key_deleted.is_set():
             context.status_code = 400
@@ -548,3 +550,98 @@ async def test_a_rag_store_reloads_a_rotated_key_file_when_google_rejects_the_ol
         "Bearer ya29.old",
         "Bearer ya29.new",
     ]
+
+
+@pytest.mark.asyncio
+async def test_registered_fallback_uses_backup_credentials_and_native_resource(monkeypatch: pytest.MonkeyPatch):
+    from litellm.types.utils import CredentialItem
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="fallback-test",
+                credential_values={"api_base": "https://backup-fallback.example", "api_key": "backup-test-key"},
+                credential_info={},
+            )
+        ],
+    )
+    primary: Final = VectorStoreTarget(
+        "vs_primary_fallback",
+        "openai",
+        {"api_base": "https://primary-fallback.example/v1", "api_key": "primary-test-key"},
+    )
+    backup: Final = VectorStoreTarget(
+        "vs_backup_fallback",
+        "pg_vector",
+        {"litellm_credential_name": "fallback-test"},
+    )
+    plan: Final = VectorStoreFallbackPlan((primary, backup), cooldown_time=0)
+    with respx.mock(assert_all_called=True) as upstream:
+        first: Final = upstream.post(
+            "https://primary-fallback.example/v1/vector_stores/vs_primary_fallback/search"
+        ).respond(503)
+        second: Final = upstream.post(
+            "https://backup-fallback.example/v1/vector_stores/vs_backup_fallback/search"
+        ).respond(200, json=MOCK_SEARCH_RESPONSE)
+        with vector_store_fallback_context(plan):
+            response: Final = await vector_stores_main.asearch(
+                "vs_primary_fallback", query=["q"], client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            )
+        assert first.calls[0].request.headers["authorization"] == "Bearer primary-test-key"
+        assert second.calls[0].request.headers["authorization"] == "Bearer backup-test-key"
+        assert json.loads(second.calls[0].request.content)["query"] == ["q"]
+        assert response == {
+            **MOCK_SEARCH_RESPONSE,
+            "_hidden_params": {
+                "api_base": "https://backup-fallback.example",
+                "additional_headers": {
+                    "x-litellm-vector-store-id": "vs_backup_fallback",
+                    "x-litellm-attempted-fallbacks": "1",
+                    "x-litellm-model-api-base": "https://backup-fallback.example",
+                },
+            },
+        }
+
+
+@pytest.mark.asyncio
+async def test_fallback_search_preserves_physical_index_for_same_provider_replica():
+    from litellm.vector_stores.fallbacks import (
+        VectorStoreFallbackPlan,
+        VectorStoreTarget,
+        vector_store_fallback_context,
+    )
+
+    primary: Final = VectorStoreTarget(
+        "store_primary", "openai", {"api_base": "https://primary-index.example/v1", "api_key": "primary"}
+    )
+    backup: Final = VectorStoreTarget(
+        "store_backup", "openai", {"api_base": "https://backup-index.example/v1", "api_key": "backup"}
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://primary-index.example/v1/vector_stores/native-index/search").respond(503)
+        route: Final = upstream.post("https://backup-index.example/v1/vector_stores/native-index/search").respond(
+            200, json=MOCK_SEARCH_RESPONSE
+        )
+        with vector_store_fallback_context(VectorStoreFallbackPlan((primary, backup), "native-index", 0)):
+            response: Final = await vector_stores_main.asearch(
+                "native-index", query="q", client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            )
+        assert response == {
+            **MOCK_SEARCH_RESPONSE,
+            "_hidden_params": {
+                "api_base": "https://backup-index.example/v1",
+                "additional_headers": {
+                    "x-litellm-vector-store-id": "store_backup",
+                    "x-litellm-attempted-fallbacks": "1",
+                    "x-litellm-model-api-base": "https://backup-index.example/v1",
+                },
+            },
+        }
+        assert route.calls[0].request.headers["authorization"] == "Bearer backup"

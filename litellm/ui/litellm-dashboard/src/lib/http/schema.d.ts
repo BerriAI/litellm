@@ -53893,6 +53893,10 @@ export interface components {
         VectorStoreUpdateRequest: {
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            } | null;
             /** Vector Store Description */
             vector_store_description?: string | null;
             /** Vector Store Id */

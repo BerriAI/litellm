@@ -271,6 +271,7 @@ async def _statuses(
     proxy: Final = ProxyState(monkeypatch, store_reads=AsyncMock(side_effect=row))
     monkeypatch.setattr(proxy.prisma.db.litellm_managedvectorstorestable, "update", AsyncMock(side_effect=row))
     monkeypatch.setattr(proxy.prisma.db.litellm_managedvectorstorestable, "delete", AsyncMock())
+    monkeypatch.setattr(proxy.prisma.db.litellm_managedvectorstorestable, "find_many", AsyncMock(return_value=[]))
     token: Final = hash_token(_KEY)
     caller: Final = (await _caller(proxy, layer, how)).model_copy(
         update={"token": token, "allowed_routes": [path] if path.startswith("/vector_store/") else []}

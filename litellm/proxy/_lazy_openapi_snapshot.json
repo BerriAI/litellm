@@ -66706,6 +66706,18 @@
               ],
               "title": "Custom Llm Provider"
             },
+            "litellm_params": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm Params"
+            },
             "vector_store_description": {
               "anyOf": [
                 {

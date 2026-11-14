@@ -103,7 +103,11 @@ def sent_query_image(query_image: object, extra_body: object) -> object:
 
 
 def _without_retrieval_query(params: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in params.items() if key not in RETRIEVAL_QUERY_PARAMS}
+    return {
+        key: value
+        for key, value in params.items()
+        if key not in (*RETRIEVAL_QUERY_PARAMS, "fallbacks", "_vector_store_fallback_plan")
+    }
 
 
 def store_search_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:

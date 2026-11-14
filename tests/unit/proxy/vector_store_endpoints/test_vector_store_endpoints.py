@@ -3345,6 +3345,7 @@ class TestConfigOwnedVectorStores:
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
+        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
         registry = self._registry()
 
         with (
@@ -3371,6 +3372,7 @@ class TestConfigOwnedVectorStores:
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
+        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
         registry = self._registry()
 
         with (
@@ -3668,3 +3670,290 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
     written = mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
     assert json.loads(written["vector_store_metadata"]) == {"owner": "search-team", "tier": 2}
+
+
+@pytest.mark.asyncio
+async def test_create_vector_store_persists_fallback_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from prisma.models import LiteLLM_ManagedVectorStoresTable
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="backup", custom_llm_provider="openai")]
+    )
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+    database: Final = MagicMock()
+    database.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    database.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
+    row: Final = LiteLLM_ManagedVectorStoresTable(
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        litellm_params=json.dumps({"fallbacks": ["backup"]}),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    database.db.litellm_managedvectorstorestable.create = AsyncMock(return_value=row)
+    saved: Final = await create_vector_store_in_db(
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        prisma_client=database,
+        litellm_params={"fallbacks": ["backup"]},
+    )
+    written: Final = database.db.litellm_managedvectorstorestable.create.await_args.kwargs["data"]
+    assert json.loads(written["litellm_params"])["fallbacks"] == ["backup"]
+    assert saved["litellm_params"]["fallbacks"] == ["backup"]
+    assert registry.get_litellm_managed_vector_store_from_registry("primary") == saved
+
+
+@pytest.mark.asyncio
+async def test_create_vector_store_rejects_unknown_fallback_before_persisting(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry())
+    database: Final = MagicMock()
+    database.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    database.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
+    database.db.litellm_managedvectorstorestable.create = AsyncMock()
+    with pytest.raises(HTTPException) as rejected:
+        await create_vector_store_in_db(
+            vector_store_id="primary",
+            custom_llm_provider="openai",
+            prisma_client=database,
+            litellm_params={"fallbacks": ["missing"]},
+        )
+    assert rejected.value.status_code == 400
+    database.db.litellm_managedvectorstorestable.create.assert_not_awaited()
+
+
+@pytest.fixture
+def fallback_management_database(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from prisma.models import LiteLLM_ManagedVectorStoresTable
+
+    from litellm.proxy import proxy_server
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            vector_store_id=store_id,
+            custom_llm_provider="openai",
+            litellm_params={"fallbacks": ["backup"]} if store_id == "primary" else {},
+        )
+        for store_id in ("primary", "backup", "reserve")
+    ]
+    rows: Final = {
+        store["vector_store_id"]: LiteLLM_ManagedVectorStoresTable(
+            vector_store_id=store["vector_store_id"],
+            custom_llm_provider="openai",
+            litellm_params=json.dumps(store["litellm_params"]),
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        for store in stores
+    }
+    database: Final = MagicMock()
+    table: Final = database.db.litellm_managedvectorstorestable
+    table.find_unique = AsyncMock(side_effect=lambda *, where: rows.get(where["vector_store_id"]))
+    table.find_many = AsyncMock(return_value=list(rows.values()))
+    table.update = AsyncMock()
+    table.delete = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+    return database
+
+
+@pytest.mark.asyncio
+async def test_delete_referenced_fallback_rejects_before_database_or_registry_mutation(
+    fallback_management_database: MagicMock,
+) -> None:
+    from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
+    from litellm.types.vector_stores import VectorStoreDeleteRequest
+
+    with pytest.raises(HTTPException) as rejected:
+        await delete_vector_store(
+            data=VectorStoreDeleteRequest(vector_store_id="backup"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert rejected.value.status_code == 400
+    assert "exactly one registered store" in rejected.value.detail
+    fallback_management_database.db.litellm_managedvectorstorestable.delete.assert_not_awaited()
+    assert litellm.vector_store_registry is not None
+    assert litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("backup") is not None
+
+
+@pytest.mark.asyncio
+async def test_update_fallback_rejects_nested_chain_before_database_or_registry_mutation(
+    fallback_management_database: MagicMock,
+) -> None:
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    with pytest.raises(HTTPException) as rejected:
+        await update_vector_store(
+            data=VectorStoreUpdateRequest(vector_store_id="backup", litellm_params={"fallbacks": ["reserve"]}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert rejected.value.status_code == 400
+    assert "Nested vector store fallback chains" in rejected.value.detail
+    fallback_management_database.db.litellm_managedvectorstorestable.update.assert_not_awaited()
+    assert litellm.vector_store_registry is not None
+    backup: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("backup")
+    assert backup is not None
+    assert backup["litellm_params"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_fallback_persists_reference_and_updates_registry(
+    fallback_management_database: MagicMock,
+) -> None:
+    from prisma.models import LiteLLM_ManagedVectorStoresTable
+
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    table: Final = fallback_management_database.db.litellm_managedvectorstorestable
+    table.update.return_value = LiteLLM_ManagedVectorStoresTable(
+        vector_store_id="primary",
+        custom_llm_provider="openai",
+        litellm_params=json.dumps({"fallbacks": ["reserve"]}),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    response: Final = await update_vector_store(
+        data=VectorStoreUpdateRequest(vector_store_id="primary", litellm_params={"fallbacks": ["reserve"]}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert response["status"] == "success"
+    table.update.assert_awaited_once()
+    assert table.update.await_args.kwargs["where"] == {"vector_store_id": "primary"}
+    assert json.loads(table.update.await_args.kwargs["data"]["litellm_params"])["fallbacks"] == ["reserve"]
+    assert litellm.vector_store_registry is not None
+    primary: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry("primary")
+    assert primary is not None
+    assert primary["litellm_params"]["fallbacks"] == ["reserve"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", [False, True])
+async def test_search_resolution_preserves_registered_physical_ids_and_shared_index_alias(
+    monkeypatch: pytest.MonkeyPatch, alias: bool
+):
+    from dataclasses import replace
+
+    import httpx
+    import respx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.vector_store_endpoints.endpoints import resolve_vector_store_search_target
+    from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
+    from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.fallbacks import vector_store_fallback_context
+    from litellm.vector_stores.main import asearch
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            vector_store_id=f"connection-{host}",
+            custom_llm_provider="openai",
+            vector_store_name=host,
+            litellm_params={
+                "vector_store_id": f"native-{host}",
+                "api_base": f"https://{host}.index-alias.example/v1",
+                "api_key": host,
+                **({"fallbacks": ["connection-backup"]} if host == "primary" else {}),
+            },
+        )
+        for host in ("primary", "backup")
+    ]
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            [
+                LiteLLM_ManagedVectorStoreIndex(
+                    id="alias-record",
+                    index_name="public-index",
+                    litellm_params=IndexCreateLiteLLMParams(
+                        vector_store_name="primary", vector_store_index="shared-physical"
+                    ),
+                )
+            ]
+        ),
+    )
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    resolved, physical = await resolve_vector_store_search_target(
+        "public-index" if alias else "connection-primary", caller
+    )
+    assert resolved is not None
+    plan: Final = await resolve_vector_store_fallback_plan(resolved, caller, physical_index=physical)
+    assert plan is not None
+    primary_id: Final = "shared-physical" if alias else "native-primary"
+    backup_id: Final = "shared-physical" if alias else "native-backup"
+    request_data: Final = {
+        **build_request_data_from_managed_vector_store(resolved),
+        **({"vector_store_id": physical} if physical is not None else {}),
+    }
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"https://primary.index-alias.example/v1/vector_stores/{primary_id}/search").respond(503)
+        backup: Final = upstream.post(
+            f"https://backup.index-alias.example/v1/vector_stores/{backup_id}/search"
+        ).respond(200, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []})
+        with vector_store_fallback_context(replace(plan, cooldown_time=0)):
+            response: Final = await asearch(
+                **request_data, query="q", client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            )
+        assert backup.calls[0].request.headers["authorization"] == "Bearer backup"
+        assert response["data"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index_allowed,store_allowed", [(False, True), (True, False)])
+async def test_search_index_alias_requires_index_read_and_store_ownership(
+    monkeypatch: pytest.MonkeyPatch, index_allowed: bool, store_allowed: bool
+):
+    from litellm.proxy.vector_store_endpoints.endpoints import resolve_vector_store_search_target
+    from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="private-connection",
+                    custom_llm_provider="openai",
+                    vector_store_name="private",
+                    team_id="owner",
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            [
+                LiteLLM_ManagedVectorStoreIndex(
+                    id="private-alias",
+                    index_name="private-index",
+                    litellm_params=IndexCreateLiteLLMParams(vector_store_name="private", vector_store_index="physical"),
+                )
+            ]
+        ),
+    )
+    caller: Final = UserAPIKeyAuth(
+        team_id="owner" if store_allowed else "outsider",
+        metadata={"allowed_vector_store_indexes": [{"index_name": "private-index", "index_permissions": ["read"]}]}
+        if index_allowed
+        else {},
+    )
+    with pytest.raises(HTTPException) as denied:
+        await resolve_vector_store_search_target("private-index", caller)
+    assert denied.value.status_code == 403

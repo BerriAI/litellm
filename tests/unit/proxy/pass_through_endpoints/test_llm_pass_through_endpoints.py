@@ -12074,3 +12074,256 @@ class TestOpenSearchProxyRoute:
         policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
         granted: Final = frozenset(action for statement in policy["Statement"] for action in statement["Action"])
         assert (response.status_code, action in granted) == (200, True)
+
+
+@pytest.fixture
+def vector_fallback_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy import proxy_server
+    from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.fallbacks import vector_store_fallback_cooldowns
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    vector_store_fallback_cooldowns.flush_cache()
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[], cooldown_time=0))
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            [
+                LiteLLM_ManagedVectorStoreIndex(
+                    id="fallback-index",
+                    index_name="public-docs",
+                    litellm_params=IndexCreateLiteLLMParams(
+                        vector_store_index="physical-docs", vector_store_name="primary"
+                    ),
+                )
+            ]
+        ),
+    )
+    _act_as(monkeypatch, UserAPIKeyAuth(api_key="sk-fallback-test", user_role="proxy_admin"))
+    yield TestClient(proxy_server.app)
+    vector_store_fallback_cooldowns.flush_cache()
+
+
+def _fallback_test_stores(monkeypatch: pytest.MonkeyPatch, provider: str, backup_provider: str | None = None) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.types.utils import CredentialItem
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    CredentialAccessor.upsert_credentials(
+        [
+            CredentialItem(
+                credential_name="fallback-backup-credential",
+                credential_values={"api_base": "https://backup.example.test", "api_key": "backup-secret"},
+                credential_info={},
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                {
+                    "vector_store_id": "primary",
+                    "vector_store_name": "primary",
+                    "custom_llm_provider": provider,
+                    "litellm_params": {
+                        "api_base": "https://primary.example.test",
+                        "api_key": "primary-secret",
+                        "fallbacks": ["backup"],
+                    },
+                },
+                {
+                    "vector_store_id": "backup",
+                    "vector_store_name": "backup",
+                    "custom_llm_provider": backup_provider or provider,
+                    "litellm_credential_name": "fallback-backup-credential",
+                    "litellm_params": {},
+                },
+            ]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "provider,route,upstream_path,payload,auth_header,auth_value",
+    [
+        (
+            "azure_ai",
+            "/azure_ai/indexes/public-docs/docs/search?api-version=2024-07-01",
+            "/indexes/physical-docs/docs/search",
+            {"search": "hello"},
+            "api-key",
+            "backup-secret",
+        ),
+        (
+            "milvus",
+            "/milvus/v2/vectordb/entities/search",
+            "/v2/vectordb/entities/search",
+            {"collectionName": "public-docs", "data": [[1, 2]]},
+            "authorization",
+            "Bearer backup-secret",
+        ),
+    ],
+)
+def test_vector_read_fallback_sends_to_backup_with_named_credentials_and_same_index(
+    vector_fallback_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    route: str,
+    upstream_path: str,
+    payload: dict[str, object],
+    auth_header: str,
+    auth_value: str,
+) -> None:
+    _fallback_test_stores(monkeypatch, provider)
+    with respx.mock(assert_all_called=True) as upstream:
+        primary: Final = upstream.post(url__startswith="https://primary.example.test" + upstream_path).mock(
+            return_value=httpx.Response(503, json={"error": "unavailable"})
+        )
+        backup: Final = upstream.post(url__startswith="https://backup.example.test" + upstream_path).mock(
+            return_value=httpx.Response(200, json={"results": ["backup-result"]})
+        )
+        response: Final = vector_fallback_client.post(route, json=payload)
+    assert (response.status_code, response.json()) == (200, {"results": ["backup-result"]})
+    assert (primary.call_count, backup.call_count) == (1, 1)
+    assert backup.calls.last.request.headers[auth_header] == auth_value
+    assert response.headers["x-litellm-vector-store-id"] == "backup"
+    assert response.headers["x-litellm-attempted-fallbacks"] == "1"
+    assert response.headers["x-litellm-model-api-base"].startswith("https://backup.example.test")
+    if provider == "azure_ai":
+        assert dict(backup.calls.last.request.url.params) == {"api-version": "2024-07-01"}
+        assert json.loads(backup.calls.last.request.content) == payload
+    else:
+        assert json.loads(backup.calls.last.request.content) == {"collectionName": "physical-docs", "data": [[1, 2]]}
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+def test_vector_passthrough_terminal_error_does_not_try_backup(
+    vector_fallback_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    _fallback_test_stores(monkeypatch, "azure_ai")
+    with respx.mock(assert_all_called=False) as upstream:
+        primary: Final = upstream.post("https://primary.example.test/indexes/physical-docs/docs/search").mock(
+            return_value=httpx.Response(status_code, json={"error": "terminal"})
+        )
+        backup: Final = upstream.route(host="backup.example.test").mock(return_value=httpx.Response(200, json={}))
+        response: Final = vector_fallback_client.post(
+            "/azure_ai/indexes/public-docs/docs/search", json={"search": "hello"}
+        )
+    assert response.status_code == status_code
+    assert (primary.call_count, backup.call_count) == (1, 0)
+
+
+def test_vector_passthrough_mismatched_provider_is_not_sent_native_request(
+    vector_fallback_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fallback_test_stores(monkeypatch, "azure_ai", backup_provider="milvus")
+    with respx.mock(assert_all_called=False) as upstream:
+        primary: Final = upstream.post("https://primary.example.test/indexes/public-docs/docs/search").mock(
+            return_value=httpx.Response(503, json={"error": "unavailable"})
+        )
+        backup: Final = upstream.route(host="backup.example.test").mock(return_value=httpx.Response(200, json={}))
+        response: Final = vector_fallback_client.post(
+            "/azure_ai/indexes/public-docs/docs/search", json={"search": "hello"}
+        )
+    assert response.status_code == 503
+    assert (primary.call_count, backup.call_count) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    "route,payload",
+    [
+        ("/azure_ai/indexes/public-docs/docs/index", {"value": [{"@search.action": "upload", "id": "1"}]}),
+        ("/azure_ai/indexes/public-docs", {"name": "public-docs"}),
+    ],
+)
+def test_vector_passthrough_write_failure_never_replays_on_backup(
+    vector_fallback_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    payload: dict[str, object],
+) -> None:
+    _fallback_test_stores(monkeypatch, "azure_ai")
+    with respx.mock(assert_all_called=False) as upstream:
+        primary: Final = upstream.route(host="primary.example.test").mock(
+            side_effect=httpx.ReadTimeout("ambiguous write")
+        )
+        backup: Final = upstream.route(host="backup.example.test").mock(return_value=httpx.Response(200, json={}))
+        response: Final = vector_fallback_client.request(
+            "PUT" if route.endswith("public-docs") else "POST", route, json=payload
+        )
+    assert response.status_code >= 400
+    assert (primary.call_count, backup.call_count) == (1, 0)
+
+
+@pytest.mark.parametrize("hook_changes_body", [False, True])
+def test_opensearch_fallback_resigns_request_for_backup_and_preserves_physical_index(
+    vector_fallback_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    hook_changes_body: bool,
+) -> None:
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    primary_base: Final = "https://primary.us-east-1.aoss.amazonaws.com"
+    backup_base: Final = "https://backup.us-west-2.aoss.amazonaws.com"
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                {
+                    "vector_store_id": name,
+                    "vector_store_name": name,
+                    "custom_llm_provider": "opensearch",
+                    "litellm_params": {
+                        "api_base": base,
+                        "aws_access_key_id": OPENSEARCH_ACCESS_KEY,
+                        "aws_secret_access_key": OPENSEARCH_SECRET_KEY,
+                        **({"fallbacks": ["backup"]} if name == "primary" else {}),
+                    },
+                }
+                for name, base in (("primary", primary_base), ("backup", backup_base))
+            ]
+        ),
+    )
+
+    class RewriteSearch(CustomLogger):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object]:
+            return {**data, "query": {"match": {"text": "redacted"}}}
+
+    if hook_changes_body:
+        monkeypatch.setattr(litellm, "callbacks", [RewriteSearch()])
+    body: Final = b'{"query":{"match":{"text":"hello"}}}'
+    with respx.mock(assert_all_called=True) as upstream:
+        primary: Final = upstream.post(primary_base + "/physical-docs/_search?size=1").mock(
+            return_value=httpx.Response(503, json={"error": "unavailable"})
+        )
+        backup: Final = upstream.post(backup_base + "/physical-docs/_search?size=1").mock(
+            return_value=httpx.Response(200, json={"hits": {"hits": []}})
+        )
+        response: Final = vector_fallback_client.post(
+            "/opensearch/public-docs/_search?size=1", content=body, headers={"Content-Type": "application/json"}
+        )
+    assert (response.status_code, response.json()) == (200, {"hits": {"hits": []}})
+    assert (primary.call_count, backup.call_count) == (1, 1)
+    if hook_changes_body:
+        assert json.loads(backup.calls.last.request.content) == {"query": {"match": {"text": "redacted"}}}
+        assert primary.calls.last.request.content == backup.calls.last.request.content
+    else:
+        assert backup.calls.last.request.content == body
+    assert _verified_sigv4_scope(primary.calls.last.request) == ("aoss", "us-east-1")
+    assert _verified_sigv4_scope(backup.calls.last.request) == ("aoss", "us-west-2")
+    assert response.headers["x-litellm-vector-store-id"] == "backup"

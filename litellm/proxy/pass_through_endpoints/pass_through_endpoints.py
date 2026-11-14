@@ -9,6 +9,7 @@ from base64 import b64encode
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Iterable,
@@ -188,6 +189,17 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
+from litellm.vector_stores.fallbacks import (
+    Failed,
+    Served,
+    VectorStoreFallbackPlan,
+    VectorStoreTarget,
+    classify_error,
+    classify_status,
+    execute_with_vector_store_fallbacks,
+    served_api_base,
+    served_headers,
+)
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
@@ -1417,6 +1429,151 @@ def _prepare_passthrough_client_body(
     return _PassthroughClientBody(scoped_body, eu_jev_body)
 
 
+@dataclass(frozen=True, slots=True)
+class VectorStorePassthroughRequest:
+    url: str
+    headers: Mapping[str, str]
+    body: bytes | None = None
+    keep_query: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class VectorStorePassthroughFallback:
+    plan: VectorStoreFallbackPlan
+    prepare: Callable[[VectorStoreTarget, Mapping[str, object] | None], Awaitable[VectorStorePassthroughRequest]]
+
+
+async def _vector_store_passthrough_attempt(
+    target: VectorStoreTarget,
+    routing: VectorStorePassthroughFallback,
+    client: httpx.AsyncClient,
+    method: str,
+    query: httpx.QueryParams,
+    body: Mapping[str, object] | None,
+) -> Served[httpx.Response] | Failed[httpx.Response]:
+    try:
+        prepared: Final = await routing.prepare(target, body)
+        params: Final = None if prepared.keep_query else query
+        outgoing: Final = (
+            client.build_request(method, prepared.url, headers=prepared.headers, content=prepared.body, params=params)
+            if prepared.body is not None
+            else client.build_request(
+                method,
+                prepared.url,
+                headers=prepared.headers,
+                json=body if method not in ("GET", "HEAD") else None,
+                params=params,
+            )
+        )
+    except Exception as error:  # noqa: BLE001  # preparation failure must not mark a backend unhealthy
+        return Failed(target=target, error=error, retryable=False)
+    try:
+        response: Final = await client.send(outgoing, stream=True)
+        if response.status_code < 400:
+            return Served(
+                target=VectorStoreTarget(
+                    store_id=target.store_id,
+                    provider=target.provider,
+                    params={**target.params, "api_base": prepared.url},
+                ),
+                value=response,
+            )
+        await response.aread()
+        await response.aclose()
+        return Failed(target=target, error=None, retryable=classify_status(response.status_code), value=response)
+    except Exception as error:  # noqa: BLE001  # the shared policy classifies upstream failures
+        return classify_error(target, error)
+
+
+@dataclass(frozen=True, slots=True)
+class _VectorStorePassthroughResponse:
+    response: httpx.Response
+    headers: Mapping[str, str]
+
+
+async def _send_vector_store_passthrough(
+    routing: VectorStorePassthroughFallback,
+    client: httpx.AsyncClient,
+    method: str,
+    query: httpx.QueryParams,
+    body: Mapping[str, object] | None,
+    logger: LiteLLMLoggingObj,
+) -> _VectorStorePassthroughResponse:
+    outcome: Final = await execute_with_vector_store_fallbacks(
+        routing.plan,
+        lambda candidate: _vector_store_passthrough_attempt(candidate, routing, client, method, query, body),
+    )
+    if isinstance(outcome, Failed) and outcome.value is None:
+        raise outcome.error or HTTPException(status_code=503, detail="No vector store is available")
+    assert outcome.value is not None
+    safe_api_base: Final = served_api_base(
+        VectorStoreTarget(
+            store_id=outcome.target.store_id,
+            provider=outcome.target.provider,
+            params={"api_base": str(outcome.value.request.url)},
+        )
+    )
+    logger.model_call_details["api_base"] = safe_api_base  # rebind-ok: the request logger records the selected upstream
+    if isinstance(outcome, Served):
+        metadata: Final = get_or_create_metadata_bucket(logger.litellm_params)[1]  # pyright: ignore[reportUnknownVariableType]  # legacy logger returns a mutable metadata bucket
+        metadata["served_vector_store_id"] = outcome.target.store_id
+        logger.model_call_details["served_vector_store_id"] = outcome.target.store_id  # rebind-ok: log served store
+    return _VectorStorePassthroughResponse(
+        response=outcome.value,
+        headers={
+            **(served_headers(outcome) if isinstance(outcome, Served) else {}),
+            "x-litellm-model-api-base": safe_api_base,
+        },
+    )
+
+
+def _validate_vector_store_passthrough_stream(
+    stream: bool | None, routing: VectorStorePassthroughFallback | None
+) -> None:
+    if stream and routing is not None:
+        raise HTTPException(status_code=400, detail="Vector store passthrough fallback requires a non-streaming read")
+
+
+@dataclass(frozen=True, slots=True)
+class _PassthroughUpstreamResponse:
+    response: httpx.Response
+    url: httpx.URL
+    headers: Mapping[str, str]
+
+
+async def _send_non_streaming_passthrough(
+    request: Request,
+    client: httpx.AsyncClient,
+    url: httpx.URL,
+    headers: Mapping[str, str],
+    query: Mapping[str, str | Sequence[str]] | None,
+    body: Mapping[str, object] | None,
+    raw_body: str | bytes | None,
+    multipart: bool,
+    routing: VectorStorePassthroughFallback | None,
+    logger: LiteLLMLoggingObj,
+) -> _PassthroughUpstreamResponse:
+    if routing is not None:
+        served: Final = await _send_vector_store_passthrough(
+            routing, client, request.method, httpx.QueryParams(query), body, logger
+        )
+        return _PassthroughUpstreamResponse(served.response, served.response.request.url, served.headers)
+    if raw_body is not None:
+        outgoing: Final = client.build_request(request.method, url, headers=headers, params=query, content=raw_body)
+        response: Final = await client.send(outgoing, stream=True)
+        return _PassthroughUpstreamResponse(response, url, MappingProxyType({}))
+    regular_response: Final = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+        request=request,
+        async_client=client,
+        url=url,
+        headers=dict(headers),
+        requested_query_params=None if query is None else dict(query),
+        _parsed_body=body,
+        forward_multipart=multipart,
+    )
+    return _PassthroughUpstreamResponse(regular_response, url, MappingProxyType({}))
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1436,6 +1593,7 @@ async def pass_through_request(
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
+    vector_store_fallback: VectorStorePassthroughFallback | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1461,6 +1619,7 @@ async def pass_through_request(
             litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
+        vector_store_fallback: Authorized read fallback plan and per-target request preparation callback
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1840,6 +1999,8 @@ async def pass_through_request(
             stream=stream,
         )
 
+        _validate_vector_store_passthrough_stream(stream, vector_store_fallback)
+
         if stream:
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
@@ -1951,27 +2112,21 @@ async def pass_through_request(
                 status_code=relay_response.status_code,
             )
 
-        if state_raw_body is not None:
-            # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
-            # to be forwarded so the signature/Content-Length stay valid.
-            raw_body_request: Final = async_client.build_request(
-                request.method,
-                url,
-                headers=outbound_headers,
-                params=requested_query_params,
-                content=state_raw_body,
-            )
-            response = await async_client.send(raw_body_request, stream=True)
-        else:
-            response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
-                request=request,
-                async_client=async_client,
-                url=url,
-                headers=outbound_headers,
-                requested_query_params=requested_query_params,
-                _parsed_body=upstream_body,
-                forward_multipart=is_multipart,
-            )
+        upstream_result: Final = await _send_non_streaming_passthrough(
+            request,
+            async_client,
+            url,
+            outbound_headers,
+            requested_query_params,
+            upstream_body,
+            state_raw_body,
+            is_multipart,
+            vector_store_fallback,
+            logging_obj,
+        )
+        response = upstream_result.response  # rebind-ok: existing finalizer consumes selected response
+        url = upstream_result.url  # rebind-ok: selected vector-store URL or original URL for other routes
+        vector_store_headers: Final = upstream_result.headers
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         upstream_usage = apply_upstream_reported_usage(
@@ -2238,6 +2393,8 @@ async def pass_through_request(
             response_cost=logging_obj.finalized_cost.amount if logging_obj.finalized_cost is not None else None,
             litellm_logging_obj=logging_obj,
         )
+
+        custom_headers.update(vector_store_headers)
 
         # Call response headers hook
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
@@ -2515,6 +2672,7 @@ def create_pass_through_route(
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
+    vector_store_fallback: VectorStorePassthroughFallback | None = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2666,6 +2824,7 @@ def create_pass_through_route(
                         upstream_request_filter=upstream_request_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
+                        vector_store_fallback=vector_store_fallback,
                     )
                 finally:
                     _clear_pass_through_request_state(request.state)

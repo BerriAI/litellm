@@ -8,6 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import copy
 import hmac
 import inspect
 import json
@@ -157,6 +158,8 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
     UpstreamRequest,
+    VectorStorePassthroughFallback,
+    VectorStorePassthroughRequest,
     WebsocketFrameModelAllowed,
     WebsocketFrameModelGate,
     WebsocketFrameModelRefused,
@@ -180,6 +183,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     has_vector_store_index_access,
     is_allowed_to_call_vector_store_endpoint,
     normalize_litellm_params,
+    resolve_vector_store_fallback_plan,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
@@ -207,6 +211,7 @@ from litellm.types.utils import (
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 from litellm.utils import ProviderConfigManager, with_named_credential
+from litellm.vector_stores.fallbacks import VectorStoreTarget
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
@@ -999,6 +1004,66 @@ async def openrouter_proxy_route(
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
+async def _vector_store_passthrough_fallback(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    provider: LlmProviders,
+    physical_index: str,
+    endpoint: str,
+    read: bool,
+) -> VectorStorePassthroughFallback | None:
+    if not read:
+        return None
+    plan: Final = await resolve_vector_store_fallback_plan(
+        vector_store,
+        user_api_key_dict,
+        physical_index=physical_index,
+        passthrough_provider=provider.value,
+    )
+    if plan is None:
+        return None
+    config: Final = ProviderConfigManager.get_provider_vector_stores_config(provider=provider)
+    if config is None:
+        raise HTTPException(status_code=400, detail="No vector store passthrough adapter is available")
+
+    async def prepare(target: VectorStoreTarget, _body: Mapping[str, object] | None) -> VectorStorePassthroughRequest:
+        params: Final = dict(with_named_credential(target.params))
+        base: Final = config.get_complete_url(api_base=_optional_str(params.get("api_base")), litellm_params=params)
+        credentials: Final = config.get_auth_credentials(litellm_params=params)
+        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(credentials.get("headers") or {})
+        base_url: Final = httpx.URL(base)
+        url: Final = base_url.copy_with(
+            path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/" + endpoint.lstrip("/"))
+        )
+        return VectorStorePassthroughRequest(url=str(url), headers={"Content-Type": "application/json", **headers})
+
+    return VectorStorePassthroughFallback(plan=plan, prepare=prepare)
+
+
+def _azure_vector_store_read(method: str, endpoint: str) -> bool:
+    segments: Final = tuple(endpoint.split("?", 1)[0].strip("/").split("/"))
+    index_position: Final = next((position for position, value in enumerate(segments) if value == "indexes"), None)
+    if index_position is None or len(segments) <= index_position + 1:
+        return False
+    suffix: Final = segments[index_position + 2 :]
+    return method == "GET" or (
+        method == "POST" and suffix in (("docs", "search"), ("docs", "suggest"), ("docs", "autocomplete"), ("analyze",))
+    )
+
+
+def _azure_physical_index_endpoint(endpoint: str, physical_index: str) -> str:
+    from urllib.parse import quote
+
+    segments: Final = tuple(endpoint.split("/"))
+    index_position: Final = next((position for position, value in enumerate(segments) if value == "indexes"), None)
+    if index_position is None:
+        return endpoint
+    return "/".join(
+        quote(physical_index, safe="") if position == index_position + 1 else value
+        for position, value in enumerate(segments)
+    )
+
+
 @router.api_route(
     "/milvus/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -1090,15 +1155,13 @@ async def milvus_proxy_route(
         vector_store=vector_store,
         user_api_key_dict=user_api_key_dict,
     )
-    litellm_params = vector_store.get("litellm_params") or {}
+    litellm_params: Final = dict(with_named_credential(build_request_data_from_managed_vector_store(vector_store)))
     auth_credentials: Final = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
     extra_headers = auth_credentials.get("headers") or {}
 
-    litellm_params = vector_store.get("litellm_params") or {}
-
-    base_target_url = provider_config.get_complete_url(
-        api_base=litellm_params.get("api_base"), litellm_params=litellm_params
+    base_target_url = provider_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # legacy provider configuration boundary
+        api_base=_optional_str(litellm_params.get("api_base")), litellm_params=litellm_params
     )
 
     if base_target_url is None:
@@ -1116,11 +1179,22 @@ async def milvus_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
+    vector_fallback: Final = await _vector_store_passthrough_fallback(
+        vector_store,
+        user_api_key_dict,
+        LlmProviders.MILVUS,
+        vector_store_index,
+        endpoint,
+        read=(request.method, "/" + endpoint.strip("/"))
+        in provider_config.get_vector_store_endpoints_by_type()["read"],
+    )
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers=extra_headers,
+        custom_llm_provider=LlmProviders.MILVUS.value,
+        vector_store_fallback=vector_fallback,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
@@ -1242,6 +1316,55 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     )
     if isinstance(prepared, IndexRefusal):
         raise HTTPException(status_code=prepared.status_code, detail=prepared.message)
+    registry: Final = litellm.vector_store_registry
+    vector_store: Final = (
+        registry.get_litellm_managed_vector_store_from_registry_by_name(index_object.litellm_params.vector_store_name)
+        if registry is not None
+        else None
+    )
+    fallback_plan: Final = (
+        await resolve_vector_store_fallback_plan(
+            vector_store,
+            user_api_key_dict,
+            physical_index=index_object.litellm_params.vector_store_index,
+            passthrough_provider=LlmProviders.OPENSEARCH.value,
+        )
+        if vector_store is not None and operation is not None and operation.permission == "read"
+        else None
+    )
+    original_body: Final = await request.body()
+
+    def original_json_body() -> Mapping[str, object]:
+        try:
+            decoded_body: Final[object] = json.loads(original_body) if original_body else {}
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        return as_str_mapping(decoded_body) or {}
+
+    original_json: Final = original_json_body()
+
+    async def prepare_fallback(
+        target: VectorStoreTarget, current_body: Mapping[str, object] | None
+    ) -> VectorStorePassthroughRequest:
+        outgoing_body: Final = original_body if current_body == original_json else json.dumps(current_body).encode()
+        candidate: Final = await prepare_index_request(
+            config=OpenSearchVectorStoreConfig(aws=OpenSearchIndexAWS()),
+            method=request.method,
+            path=path,
+            operation=operation,
+            provider_index=index_object.litellm_params.vector_store_index,
+            content_type=request.headers.get("content-type"),
+            query=tuple(request.query_params.multi_items()),
+            body=outgoing_body,
+            store_params=with_named_credential(target.params),
+            can_read=has_vector_store_index_access(user_api_key_dict, path.index_name, "read"),
+        )
+        if isinstance(candidate, IndexRefusal):
+            raise HTTPException(status_code=candidate.status_code, detail=candidate.message)
+        return VectorStorePassthroughRequest(
+            url=candidate.url, headers=candidate.headers, body=candidate.body, keep_query=True
+        )
+
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=prepared.url,
@@ -1249,10 +1372,16 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
         custom_llm_provider=LlmProviders.OPENSEARCH.value,
         keep_target_query=True,
         upstream_headers_filter=lambda _forwarded: prepared.headers,
+        vector_store_fallback=(
+            VectorStorePassthroughFallback(plan=fallback_plan, prepare=prepare_fallback)
+            if fallback_plan is not None
+            else None
+        ),
     )
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
-    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
-    safe_set_request_parsed_body(request, {})
+    hook_body: Final = copy.deepcopy(dict(original_json)) if fallback_plan is not None else {}
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, hook_body)
+    safe_set_request_parsed_body(request, hook_body)
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
@@ -2851,16 +2980,29 @@ async def azure_proxy_route(
                     vector_store=vector_store,
                     user_api_key_dict=user_api_key_dict,
                 )
-                litellm_params = vector_store.get("litellm_params") or {}
-                auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
+                litellm_params = dict(with_named_credential(build_request_data_from_managed_vector_store(vector_store)))
+                auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)  # pyright: ignore[reportUnknownMemberType]  # legacy provider configuration boundary
 
-                extra_headers = auth_credentials.get("headers") or {}
+                extra_headers = auth_credentials.get("headers") or {}  # pyright: ignore[reportUnknownMemberType]  # legacy provider header boundary
 
                 base_target_url = _optional_str(litellm_params.get("api_base"))
                 if base_target_url is None:
                     raise Exception(f"API base not found for {part}")
+                physical_endpoint: str = (
+                    _azure_physical_index_endpoint(endpoint, index_object.litellm_params.vector_store_index)
+                    if _azure_vector_store_read(request.method, endpoint)
+                    else endpoint
+                )
+                vector_fallback: VectorStorePassthroughFallback | None = await _vector_store_passthrough_fallback(
+                    vector_store,
+                    user_api_key_dict,
+                    LlmProviders.AZURE_AI,
+                    index_object.litellm_params.vector_store_index,
+                    physical_endpoint,
+                    read=_azure_vector_store_read(request.method, endpoint),
+                )
                 return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
-                    endpoint=endpoint,
+                    endpoint=physical_endpoint if vector_fallback is not None else endpoint,
                     request=request,
                     fastapi_response=fastapi_response,
                     user_api_key_dict=user_api_key_dict,
@@ -2868,6 +3010,7 @@ async def azure_proxy_route(
                     api_key=None,
                     custom_llm_provider=litellm.LlmProviders.AZURE_AI,
                     extra_headers=extra_headers,
+                    vector_store_fallback=vector_fallback,
                 )
 
     body_model_group_relay: Final = await _relay_azure_body_model_group(
@@ -4117,6 +4260,7 @@ class BaseOpenAIPassThroughHandler:
         api_key: str | None,
         custom_llm_provider: litellm.LlmProviders,
         extra_headers: Mapping[str, str] | None = None,
+        vector_store_fallback: VectorStorePassthroughFallback | None = None,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
         # Ensure endpoint starts with '/' for proper URL construction
@@ -4148,6 +4292,7 @@ class BaseOpenAIPassThroughHandler:
                 extra_headers=extra_headers,
             ),
             is_streaming_request=is_streaming_request,
+            vector_store_fallback=vector_store_fallback,
             custom_llm_provider=(
                 custom_llm_provider.value
                 if hasattr(custom_llm_provider, "value")
