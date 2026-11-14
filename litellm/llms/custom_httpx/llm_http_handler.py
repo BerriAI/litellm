@@ -3,7 +3,7 @@ import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from itertools import chain
@@ -142,6 +142,7 @@ from litellm.llms.custom_httpx.http_handler import (
     header_value,
 )
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.llms.custom_httpx.stream_close import aiter_bytes_then_close
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -634,14 +635,6 @@ def _logged_file_content_request(
         additional_args={"api_base": url, "headers": request_headers, "file_id": file_content_request.get("file_id")},
     )
     return _PreparedFileContentRequest(url=url, params=params, headers=request_headers)
-
-
-async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) -> AsyncGenerator[bytes, None]:
-    try:
-        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-            yield chunk
-    finally:
-        await response.aclose()
 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
@@ -5911,7 +5904,7 @@ class BaseLLMHTTPHandler:
             )
 
         return await provider_config.transform_file_content_stream(
-            stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
+            stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
             headers=_decoded_body_headers(response),
             request_url=str(response.request.url),
             logging_obj=logging_obj,

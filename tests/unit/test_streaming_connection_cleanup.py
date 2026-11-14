@@ -70,6 +70,7 @@ async def test_aiohttp_response_stream_aclose_releases_connection():
     class MockResponse:
         status = 200
         headers = {}
+        connection = None
 
         @property
         def content(self):
