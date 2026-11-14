@@ -121,6 +121,15 @@ def _usd(field: str, value: object, rate: Decimal) -> float | PricingCurrencyErr
     return converted
 
 
+def _str_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _STR_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def _first_error(values: Sequence[object]) -> PricingCurrencyError | None:
     return next((value for value in values if isinstance(value, PricingCurrencyError)), None)
 
@@ -132,9 +141,9 @@ def _converted_rates(
     a price this schema does not name can never stay in the source currency while billed as USD."""
     if value is None:
         return None
-    if not isinstance(value, Mapping):
+    section: Final = _str_mapping(value)
+    if section is None:
         return PricingCurrencyError("invalid_price", f"{field} must be a mapping of prices, got {value!r}")
-    section: Final = _STR_MAPPING.validate_python(value)
     unknown: Final = sorted(key for key in section if key not in rate_keys and key not in kept_keys)
     if unknown:
         return PricingCurrencyError(
@@ -164,21 +173,19 @@ def _converted_tiers(field: str, value: object, rate: Decimal) -> object | Prici
 def _converted_video_clips(field: str, value: object, rate: Decimal) -> object | PricingCurrencyError:
     if value is None:
         return None
-    if not isinstance(value, Mapping):
+    clips: Final = _str_mapping(value)
+    if clips is None:
         return PricingCurrencyError("invalid_price", f"{field} must be a mapping of clip prices, got {value!r}")
     resolutions: Final = tuple(
-        (key, _converted_clip_prices(f"{field}.{key}", item, rate))
-        for key, item in _STR_MAPPING.validate_python(value).items()
+        (key, _converted_clip_prices(f"{field}.{key}", item, rate)) for key, item in clips.items()
     )
     error: Final = _first_error(tuple(item for _, item in resolutions))
     return error if error is not None else dict(resolutions)
 
 
 def _converted_clip_prices(field: str, value: object, rate: Decimal) -> object | PricingCurrencyError:
-    if not isinstance(value, Mapping):
-        return _converted_rates(field, value, rate, frozenset(), frozenset())
-    durations: Final = frozenset(_STR_MAPPING.validate_python(value))
-    return _converted_rates(field, value, rate, durations, frozenset())
+    durations: Final = _str_mapping(value)
+    return _converted_rates(field, value, rate, frozenset(durations or ()), frozenset())
 
 
 def _converted_price(field: str, value: object, rate: Decimal) -> object | PricingCurrencyError:
@@ -239,12 +246,20 @@ def _currency_setting(
 ) -> object | PricingCurrencyError:
     from_params: Final = litellm_params.get(setting)
     from_info: Final = model_info.get(setting)
-    if from_params is not None and from_info is not None and str(from_params) != str(from_info):
+    if from_params is not None and from_info is not None and not _same_setting(from_params, from_info):
         return PricingCurrencyError(
             "conflicting_currency",
             f"{setting} is set to {from_params!r} in litellm_params and {from_info!r} in model_info",
         )
     return from_params if from_params is not None else from_info
+
+
+def _same_setting(left: object, right: object) -> bool:
+    left_number: Final = _decimal(left)
+    right_number: Final = _decimal(right)
+    if left_number is not None and right_number is not None:
+        return left_number == right_number
+    return left == right
 
 
 def _currency(value: object) -> PricingCurrency | PricingCurrencyError:
@@ -288,6 +303,7 @@ def pricing_revision(
             "model_info": dict(model_info),
         },
         sort_keys=True,
+        default=str,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 

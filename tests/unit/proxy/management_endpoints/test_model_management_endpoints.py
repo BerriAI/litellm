@@ -11784,5 +11784,20 @@ def test_switching_a_model_back_to_usd_clears_the_rate():
     )
 
     assert "usd_per_currency_unit" not in params
-    rebuilt: Final = Deployment(model_name="huf-model", litellm_params=params)  # pyright: ignore[reportArgumentType]  # a stored row
-    assert rebuilt.litellm_params.input_cost_per_token == 2e-6
+    assert params["input_cost_per_token"] == 2e-6
+    assert params["pricing_currency"] != "HUF"
+
+
+def test_a_valid_currency_and_rate_edit_is_accepted_although_text_values_are_stored_encrypted():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    params, _ = _stored(
+        update_db_model(
+            db_model=_huf_db_model(),
+            updated_patch=updateDeployment.model_validate(
+                {"litellm_params": {"pricing_currency": "EUR", "usd_per_currency_unit": "1.10"}}
+            ),
+        )
+    )
+
+    assert params["input_cost_per_token"] == 0.0008

@@ -188,6 +188,21 @@ def test_invalid_currency_settings_and_prices_are_refused_with_a_reason(
     assert _error(litellm_params).kind == kind
 
 
+def test_the_same_rate_written_differently_in_both_sections_is_not_a_conflict() -> None:
+    result: Final = _normalized(
+        {"pricing_currency": "EUR", "usd_per_currency_unit": 1.2, "input_cost_per_token": 1e-06},
+        {"usd_per_currency_unit": "1.20"},
+    )
+    assert result.litellm_params["input_cost_per_token"] == pytest.approx(1.2e-06, rel=1e-15)
+
+
+def test_a_price_table_with_non_text_keys_is_refused_with_a_reason() -> None:
+    error: Final = _error(
+        {"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, {"output_cost_per_video_clip": {720: {5: 0.1}}}
+    )
+    assert error.kind == "invalid_price"
+
+
 def test_conflicting_currency_between_sections_is_refused() -> None:
     error: Final = _error({"pricing_currency": "EUR", "usd_per_currency_unit": 1.1}, {"pricing_currency": "HUF"})
     assert error.kind == "conflicting_currency"

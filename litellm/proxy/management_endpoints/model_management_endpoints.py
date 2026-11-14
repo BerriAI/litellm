@@ -1608,7 +1608,15 @@ def update_db_model(
             merged_model_info.pop(field, None)
 
     _validate_ptu_model_info(merged_model_info)
-    pricing_error: Final = pricing_configuration_error(merged_litellm_params, merged_model_info)
+    plain_patch: Final[Mapping[str, object]] = (
+        updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True)
+        if updated_patch.litellm_params
+        else MappingProxyType({})
+    )
+    pricing_error: Final = pricing_configuration_error(
+        {**merged_litellm_params, **{k: v for k, v in plain_patch.items() if k in merged_litellm_params}},
+        merged_model_info,
+    )
     if pricing_error is not None:
         raise HTTPException(status_code=400, detail={"error": pricing_error})
     ptu_pricing, ptu_released = _ptu_pricing_delta(
