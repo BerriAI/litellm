@@ -1,8 +1,8 @@
 """
 Characterization of /v1/messages streaming through a router core: lifecycle frames held back while a
-fallback can still take over and sent live while only a retry can, provider ``event: error`` frames, raised
-stream errors, safeguard refusals, same-group stream retries and their budget, and the hidden params the
-returned stream carries.
+retry or fallback can still take over, except ``message_start``, sent live while only a retry can,
+provider ``event: error`` frames, raised stream errors, safeguard refusals, same-group stream retries and
+their budget, and the hidden params the returned stream carries.
 
 Scripted streams are async iterators of raw SSE byte frames (``streaming_helpers.anthropic_stream``).
 """
@@ -13,6 +13,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.router_core import RouterCore
 from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream
 from litellm.types.router import RetryPolicy
@@ -21,6 +22,7 @@ from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     agentic_followup_failure,
     bad_request,
+    context_window,
     deployment,
     rate_limit,
     server_error,
@@ -58,11 +60,8 @@ SIGNATURE_DELTA: Final = sse(
     {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
 )
 BLOCK_STOP: Final = sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-REDACTED_THINKING_START: Final = sse(
-    "content_block_start",
-    {"type": "content_block_start", "index": 0, "content_block": {"type": "redacted_thinking", "data": "abc"}},
-)
 SSE_COMMENT: Final = b": upstream keepalive\n\n"
+DATA_ONLY_PING: Final = b'data: {"type": "ping"}\n\n'
 RETRY_MESSAGE_START: Final = sse(
     "message_start",
     {
@@ -80,6 +79,11 @@ RETRY_MESSAGE_START: Final = sse(
 
 def tool_use_start(tool_use_id: str) -> bytes:
     block: Final = {"type": "tool_use", "id": tool_use_id, "name": "lookup", "input": {}}
+    return sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block})
+
+
+def redacted_thinking_start(data: str) -> bytes:
+    block: Final = {"type": "redacted_thinking", "data": data}
     return sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block})
 
 
@@ -251,7 +255,7 @@ async def test_held_frames_are_flushed_in_order_when_content_arrives(make_core: 
 @pytest.mark.parametrize(
     "router_arguments",
     [{"fallbacks": [{"a": ["b"]}], "num_retries": 0}, {"num_retries": 2}],
-    ids=["held-for-a-fallback", "sent-live-for-a-retry"],
+    ids=["held-for-a-fallback", "message-start-live-for-a-retry"],
 )
 async def test_lifecycle_frames_reach_the_client_in_order_when_the_stream_ends_without_content(
     make_core: MakeCore, host: ScriptedHost, router_arguments: dict[str, object]
@@ -266,16 +270,16 @@ async def test_lifecycle_frames_reach_the_client_in_order_when_the_stream_ends_w
 @pytest.mark.parametrize(
     "router_arguments",
     [{"fallbacks": [{"a": ["b"]}], "num_retries": 0}, {"num_retries": 2}],
-    ids=["held-for-a-fallback", "sent-live-for-a-retry"],
+    ids=["held-for-a-fallback", "message-start-live-for-a-retry"],
 )
 async def test_two_hundred_frames_before_content_commit_the_stream_so_a_later_error_frame_is_forwarded(
     make_core: MakeCore, host: ScriptedHost, router_arguments: dict[str, object]
 ) -> None:
-    host.answer("openai/a", anthropic_stream(*([BLOCK_START] * 201), error_frame()))
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, *([BLOCK_START] * 200), error_frame()))
     host.answer("openai/b", fallback_ok())
     core = make_core(model_list=GROUPS_AB, **router_arguments)
     frames = await collect_bytes(await open_stream(core))
-    assert frames == [*([BLOCK_START] * 201), error_frame()]
+    assert frames == [MESSAGE_START, *([BLOCK_START] * 200), error_frame()]
     assert host.deployments_called() == ["a"]
 
 
@@ -438,20 +442,45 @@ async def test_a_superseded_attempt_and_every_later_stream_are_closed(make_core:
     assert all(stream.closed for stream in opened)
 
 
-# --- lifecycle frames sent live while only a retry can take over ------------------------------
+# --- message_start sent live while only a retry can take over --------------------------------
 
 
-async def test_with_only_a_retry_left_lifecycle_frames_reach_the_client_before_content(
-    make_core: MakeCore, host: ScriptedHost
+@pytest.mark.parametrize(
+    ("frames", "before_content"),
+    [
+        ((MESSAGE_START, THINKING_START, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP), (MESSAGE_START,)),
+        (
+            (SSE_COMMENT, MESSAGE_START, THINKING_START, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP),
+            (SSE_COMMENT, MESSAGE_START),
+        ),
+        (
+            (
+                MESSAGE_START[:20],
+                MESSAGE_START[20:] + THINKING_START[:15],
+                THINKING_START[15:],
+                SIGNATURE_DELTA,
+                BLOCK_STOP,
+                MESSAGE_STOP,
+            ),
+            (MESSAGE_START,),
+        ),
+        (
+            (SSE_COMMENT + MESSAGE_START + THINKING_START, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP),
+            (SSE_COMMENT + MESSAGE_START,),
+        ),
+    ],
+    ids=["whole-frames", "after-an-sse-comment", "split-across-chunks", "sharing-a-chunk-with-a-block-start"],
+)
+async def test_with_only_a_retry_left_message_start_reaches_the_client_before_content_and_block_starts_wait(
+    make_core: MakeCore, host: ScriptedHost, frames: tuple[bytes, ...], before_content: tuple[bytes, ...]
 ) -> None:
     received: list[bytes] = []
     reads: list[tuple[bytes, ...]] = []
-    frames: Final = (MESSAGE_START, THINKING_START, PING, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP)
     host.answer("openai/a", recording_stream(received, reads, *frames))
     core = make_core(model_list=[deployment("a", "a")], num_retries=2)
     await read_into(await open_stream(core), received)
-    assert reads[frames.index(SIGNATURE_DELTA)] == (MESSAGE_START, THINKING_START, PING)
-    assert received == list(frames)
+    assert reads[frames.index(SIGNATURE_DELTA)] == before_content
+    assert b"".join(received) == b"".join(frames)
 
 
 async def test_with_only_a_retry_left_decoded_event_chunks_reach_the_client_without_a_retry(
@@ -488,8 +517,9 @@ async def test_with_only_a_retry_left_decoded_event_chunks_reach_the_client_with
         ({"fallbacks": [{"a": ["b"]}]}, {}),
         ({"content_policy_fallbacks": [{"a": ["b"]}]}, {}),
         ({"default_fallbacks": ["b"]}, {"fallbacks": []}),
+        ({"enable_weighted_failover": True}, {}),
     ],
-    ids=["fallbacks", "content-policy-fallbacks", "refusal-fallback-only"],
+    ids=["fallbacks", "content-policy-fallbacks", "refusal-fallback-only", "weighted-failover"],
 )
 async def test_with_a_fallback_left_lifecycle_frames_are_held_until_content_even_with_retries(
     make_core: MakeCore, host: ScriptedHost, router_arguments: dict[str, object], request_kwargs: dict[str, object]
@@ -508,12 +538,13 @@ async def test_with_a_fallback_left_lifecycle_frames_are_held_until_content_even
     ("first_block", "retry_block", "delta"),
     [
         (THINKING_START, THINKING_START, SIGNATURE_DELTA),
+        (THINKING_START, BLOCK_START, text_delta("A")),
+        (redacted_thinking_start("abc") + BLOCK_STOP, redacted_thinking_start("xyz") + BLOCK_STOP, text_delta("A")),
         (tool_use_start("toolu_1"), tool_use_start("toolu_2"), input_json_delta("{}")),
-        (REDACTED_THINKING_START + BLOCK_STOP, REDACTED_THINKING_START + BLOCK_STOP, text_delta("A")),
     ],
-    ids=["thinking", "tool-use-with-a-new-id", "redacted-thinking-without-deltas"],
+    ids=["thinking", "text-after-thinking", "redacted-thinking-with-new-data", "tool-use-with-a-new-id"],
 )
-async def test_a_retry_after_live_lifecycle_frames_drops_its_repeat_of_them(
+async def test_a_retry_after_a_live_message_start_drops_its_own_and_sends_its_blocks_in_place_of_the_held_ones(
     make_core: MakeCore, host: ScriptedHost, first_block: bytes, retry_block: bytes, delta: bytes
 ) -> None:
     host.answer(
@@ -525,45 +556,64 @@ async def test_a_retry_after_live_lifecycle_frames_drops_its_repeat_of_them(
     )
     core = make_core(model_list=[deployment("a", "a")], num_retries=1)
     frames = await collect_bytes(await open_stream(core))
-    assert frames == [MESSAGE_START, first_block, PING, PING, delta, BLOCK_STOP, MESSAGE_STOP]
+    assert frames == [MESSAGE_START, PING, PING, retry_block, delta, BLOCK_STOP, MESSAGE_STOP]
     assert host.deployments_called() == ["a", "a"]
 
 
-async def test_sse_comments_before_content_pass_live_and_leave_the_retry_available(
+async def test_a_keepalive_sharing_a_chunk_with_the_retrys_message_start_still_reaches_the_client(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     host.answer(
         "openai/a",
-        anthropic_stream(MESSAGE_START, SSE_COMMENT, error_frame()),
-        anthropic_stream(SSE_COMMENT, RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP),
+        anthropic_stream(MESSAGE_START, error_frame()),
+        anthropic_stream(SSE_COMMENT + RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP),
     )
     core = make_core(model_list=[deployment("a", "a")], num_retries=1)
     frames = await collect_bytes(await open_stream(core))
-    assert frames == [MESSAGE_START, SSE_COMMENT, SSE_COMMENT, text_delta("A"), MESSAGE_STOP]
+    assert b"".join(frames) == MESSAGE_START + SSE_COMMENT + text_delta("A") + MESSAGE_STOP
+
+
+async def test_a_context_window_fallback_after_a_live_message_start_drops_the_fallbacks_message_start(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    bridged_cut: Final = MidStreamFallbackError(
+        message="too long",
+        model="a",
+        llm_provider="openai",
+        original_exception=context_window("a"),
+        is_pre_first_chunk=True,
+    )
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, error=bridged_cut))
+    host.answer("openai/b", fallback_ok())
+    core = make_core(model_list=GROUPS_AB, context_window_fallbacks=[{"a": ["b"]}], num_retries=2)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, text_delta("B"), MESSAGE_STOP]
+    assert host.deployments_called() == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    ("first_attempt", "expected"),
+    [
+        ((DATA_ONLY_PING, MESSAGE_START), [RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP]),
+        ((MESSAGE_START, DATA_ONLY_PING), [MESSAGE_START, text_delta("A"), MESSAGE_STOP]),
+    ],
+    ids=["before-message-start", "after-message-start"],
+)
+async def test_an_unrecognized_frame_before_content_is_held_and_leaves_the_retry_available(
+    make_core: MakeCore, host: ScriptedHost, first_attempt: tuple[bytes, ...], expected: list[bytes]
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(*first_attempt, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == expected
     assert host.deployments_called() == ["a", "a"]
 
 
-async def test_a_retry_whose_lifecycle_differs_raises_the_superseded_error_without_a_second_message_start(
-    make_core: MakeCore, host: ScriptedHost
-) -> None:
-    opened: list[ByteStream] = []
-    host.answer(
-        "openai/a",
-        anthropic_stream(MESSAGE_START, THINKING_START, error_frame(message="first overloaded"), opened=opened),
-        anthropic_stream(RETRY_MESSAGE_START, BLOCK_START, text_delta("A"), MESSAGE_STOP, opened=opened),
-    )
-    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
-    received: list[bytes] = []
-    with pytest.raises(litellm.InternalServerError, match="first overloaded"):
-        await read_into(await open_stream(core), received)
-    assert received == [MESSAGE_START, THINKING_START]
-    assert len(opened) == 2
-    assert all(stream.closed for stream in opened)
-
-
-async def test_a_split_error_frame_after_live_lifecycle_frames_is_retried(
-    make_core: MakeCore, host: ScriptedHost
-) -> None:
+async def test_a_split_error_frame_after_a_live_message_start_is_retried(make_core: MakeCore, host: ScriptedHost) -> None:
     frame = error_frame()
     host.answer("openai/a", anthropic_stream(MESSAGE_START, frame[:30], frame[30:]), answered_ok())
     core = make_core(model_list=[deployment("a", "a")], num_retries=2)
@@ -572,7 +622,7 @@ async def test_a_split_error_frame_after_live_lifecycle_frames_is_retried(
     assert host.deployments_called() == ["a", "a"]
 
 
-async def test_a_retry_that_errors_before_repeating_the_live_lifecycle_forwards_its_error_frame(
+async def test_a_retry_that_errors_before_its_message_start_forwards_its_error_frame(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     retry_error: Final = error_frame("api_error", "retry failed")
