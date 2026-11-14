@@ -28,7 +28,6 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_blocks,
     split_leading_system_run,
 )
-from litellm.litellm_core_utils.prompt_templates.reasoning_utils import is_unsignable_thinking_block
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -37,7 +36,7 @@ from litellm.llms.anthropic.common_utils import (
     context_management_with_edits,
     is_claude_model_target,
     merge_anthropic_beta_headers,
-    strip_unreplayable_blocks_from_anthropic_messages,
+    strip_unsigned_thinking_from_anthropic_messages,
     tools_without_custom_field,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
@@ -534,7 +533,7 @@ class AnthropicCountTokensConfig:
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
         sent_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
-            strip_unreplayable_blocks_from_anthropic_messages(messages, is_unsignable_thinking_block)
+            strip_unsigned_thinking_from_anthropic_messages(messages)
             if is_claude_model_target("anthropic", model)
             else messages
         )

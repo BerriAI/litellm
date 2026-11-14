@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     parts_of,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    is_unsignable_thinking_block,
     native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
@@ -2201,6 +2202,14 @@ def strip_unreplayable_blocks_from_anthropic_messages(
     """
     stripped: Final = (_replayable_message(m, unreplayable) for m in messages)
     return [m for m in stripped if m is not None]
+
+
+def strip_unsigned_thinking_from_anthropic_messages(
+    messages: Sequence[Mapping[str, JsonValue]],
+) -> Sequence[Mapping[str, JsonValue]]:
+    return strip_unreplayable_blocks_from_anthropic_messages(
+        tuple(dict(message) for message in messages), is_unsignable_thinking_block
+    )
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
