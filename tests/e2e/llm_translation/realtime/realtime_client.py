@@ -86,7 +86,7 @@ PROVIDERS = (
         "vertex_ai",
         "vertex-realtime",
         LiteLLMParamsBody(
-            model="vertex_ai/gemini-live-2.5-flash-native-audio",
+            model="vertex_ai/gemini-3.8-live",
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),

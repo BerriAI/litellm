@@ -70,8 +70,8 @@ RED_SQUARE_PNG: Final = base64.b64decode(
 )
 BOUNDED_OUTPUT_CHARS: Final = 1024
 PLACEHOLDER_INPUT: Final = "default-message-value"
-COMPLETION_BACKEND: Final = "openai/gpt-3.5-turbo-instruct"
-IMAGE_BACKEND: Final = "openai/gpt-image-1-mini"
+COMPLETION_BACKEND: Final = "openai/gpt-5.4-mini"
+IMAGE_BACKEND: Final = "openai/gpt-image-2.5-flare"
 SPEECH_BACKEND: Final = "openai/tts-1-1106"
 TRANSCRIPTION_BACKEND: Final = "openai/gpt-transcribe"
 MODERATION_BACKEND: Final = "openai/omni-moderation-latest"
@@ -235,7 +235,7 @@ class TestOtelV2LangfuseGenerationOutput:
         )
         assert response.data, f"/v1/images/generations returned no data: {response!r}"
         encoded: Final = response.data[0].b64_json or ""
-        assert encoded, f"expected a b64_json image from gpt-image-1-mini: {response.data[0].url!r}"
+        assert encoded, f"expected a b64_json image from {IMAGE_BACKEND}: {response.data[0].url!r}"
         image_bytes: Final = len(base64.b64decode(encoded))
 
         output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
