@@ -35,7 +35,8 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -1175,14 +1176,14 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
+        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
-        labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
+        labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
         drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model)
         if drops_top_k:
-            request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model,
                 param="top_k",
@@ -1241,6 +1242,10 @@ def transform_request_body(
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        if custom_llm_provider != LlmProviders.GEMINI and vertex_request_label_fields():
+            merged_labels: Final = pop_vertex_request_labels({"labels": data.pop("labels", None)}, litellm_params)
+            if merged_labels:
+                data["labels"] = merged_labels
         _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
