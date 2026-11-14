@@ -7907,6 +7907,11 @@ def _reauthorized_as(valid_token: UserAPIKeyAuth) -> Callable[[str], Awaitable[U
     return authorize_model
 
 
+_GEMINI_LIVE_DAILY_BUDGET: Final = MappingProxyType(
+    {"gemini-live-2.5-flash": MappingProxyType({"budget_limit": 1.0, "time_period": "1d"})}
+)
+
+
 def _customer_hierarchy_allowing(allowed_models: tuple[str, ...] | None) -> CustomerHierarchyAuth:
     return CustomerHierarchyAuth(
         customer_org_id="customer-org-1",
@@ -8193,8 +8198,30 @@ async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeat
             token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("gemini-live-2.5-flash",))
         ),
         UserAPIKeyAuth(token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("all-team-models",))),
+        UserAPIKeyAuth(token="hashed", models=[], model_max_budget=_GEMINI_LIVE_DAILY_BUDGET),
+        UserAPIKeyAuth(token="hashed", models=[], user_id="user-1", user_model_max_budget=_GEMINI_LIVE_DAILY_BUDGET),
+        UserAPIKeyAuth(token="hashed", models=[], team_id="team-1", team_model_max_budget=_GEMINI_LIVE_DAILY_BUDGET),
+        UserAPIKeyAuth(
+            token="hashed",
+            models=[],
+            user_id="user-1",
+            team_id="team-1",
+            team_member_model_max_budget=_GEMINI_LIVE_DAILY_BUDGET,
+        ),
     ],
-    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user", "customer", "customer-all-team-models"],
+    ids=[
+        "litellm-wildcard",
+        "vertex-wildcard",
+        "team",
+        "agent",
+        "end-user",
+        "customer",
+        "customer-all-team-models",
+        "key-model-budget",
+        "user-model-budget",
+        "team-model-budget",
+        "team-member-model-budget",
+    ],
 )
 async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token: UserAPIKeyAuth) -> None:
     """A wildcard can match any name the proxy might test the caller with, so only a caller with no model limit
@@ -8218,6 +8245,22 @@ async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_
 _LENIENT_FULL_PATH_SETUP: Final = (
     "{'setup': {'model': '" + VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live") + "',},}"
 )
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_while_unpriced_models_are_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pricing block can refuse any model for any caller, so no caller may send a frame the proxy cannot read"""
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": _LENIENT_FULL_PATH_SETUP}],
+        UserAPIKeyAuth(token="hashed", models=[]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
 
 
 @pytest.mark.asyncio

@@ -4755,6 +4755,31 @@ def _customer_model_allowlists(hierarchy: CustomerHierarchyAuth | None) -> tuple
     return () if hierarchy is None else tuple(scope.allowed_models or () for scope in hierarchy.scopes)
 
 
+class _ModelBudgets(Protocol):
+    @property
+    def model_max_budget(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def user_model_max_budget(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def team_model_max_budget(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def team_member_model_max_budget(self) -> Mapping[str, object] | None: ...
+
+
+def _has_model_budgets(budgets: _ModelBudgets) -> bool:
+    return any(
+        (
+            budgets.model_max_budget,
+            budgets.user_model_max_budget,
+            budgets.team_model_max_budget,
+            budgets.team_member_model_max_budget,
+        )
+    )
+
+
 async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
     from litellm.proxy.proxy_server import (
         general_settings_view,
@@ -4770,6 +4795,8 @@ async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
         or valid_token.agent_caller is not None
         or valid_token.end_user_id is not None
         or personal_key_team_model_access_applies(valid_token)
+        or litellm.block_requests_for_models_without_pricing
+        or _has_model_budgets(valid_token)
         or _has_model_restrictions(
             _customer_model_allowlists(valid_token.customer_hierarchy), _CUSTOMER_ALL_MODEL_ACCESS
         )
