@@ -183,6 +183,24 @@ def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
 
 
+_VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
+    {
+        "vertex_project": ("vertex_project", "vertex_ai_project"),
+        "vertex_location": ("vertex_location", "vertex_ai_location"),
+        "vertex_credentials": ("vertex_credentials", "vertex_ai_credentials"),
+    }
+)
+
+
+def _first_set(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+    return next((params[name] for name in names if params.get(name) is not None), None)
+
+
+def _vertex_credential_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    found: Final = {name: _first_set(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()}
+    return {name: value for name, value in found.items() if value is not None}
+
+
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     return custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -1229,6 +1247,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
+            **_vertex_credential_params(typed_optional_params),
             "client": client,
         }
 
