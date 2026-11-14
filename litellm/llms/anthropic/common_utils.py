@@ -757,7 +757,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             case _:
                 return False
 
-    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+    def thinking_betas(self, thinking: object) -> tuple[str, ...]:
         return (
             *(
                 (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)

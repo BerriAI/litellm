@@ -145,7 +145,7 @@ def test_drop_unsupported_tools_keeps_function_tools_only():
         "tool_choice": "auto",
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert [tool["function"]["name"] for tool in result["tools"]] == [
         "shell",
@@ -163,7 +163,7 @@ def test_drop_unsupported_tools_drops_dangling_tool_choice_when_none_survive():
         "temperature": 0.2,
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert "tools" not in result
     assert "tool_choice" not in result
@@ -177,7 +177,7 @@ def test_drop_unsupported_tools_is_noop_for_function_only():
         "tool_choice": "auto",
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert result is optional_params
 
@@ -185,7 +185,7 @@ def test_drop_unsupported_tools_is_noop_for_function_only():
 def test_drop_unsupported_tools_is_noop_without_tools():
     optional_params = {"temperature": 0.7}
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert result is optional_params
 
@@ -733,7 +733,7 @@ class TestDeepSeekThinkingParams:
             "parallel_tool_calls": True,
         }
 
-        result = self.config._drop_unsupported_tools(optional_params)
+        result = self.config.drop_unsupported_tools(optional_params)
 
         assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
