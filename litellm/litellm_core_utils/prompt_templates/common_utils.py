@@ -968,7 +968,7 @@ def _estimate_json_bytes(obj: object) -> int:
     serialised size, which is what a schema-bomb budget needs.
     """
     total = 0
-    stack: Final[list] = [obj]
+    stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
         if isinstance(x, dict):
@@ -997,6 +997,7 @@ def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
+    keep_ref_siblings: bool = False,
 ) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -1016,6 +1017,9 @@ def unpack_defs(
     (a target containing a large string, ``const``, or ``enum`` entry).
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
+
+    ``keep_ref_siblings`` keeps the keys next to a ``$ref`` (a field's
+    ``description``, say) over the inlined target, as the OpenAI SDK does.
     """
 
     import copy
@@ -1074,7 +1078,11 @@ def unpack_defs(
                 )
 
                 # Replace the reference with resolved copy
-                resolved = copy.deepcopy(target_schema)
+                resolved = copy.deepcopy(
+                    {**target_schema, **{k: v for k, v in node.items() if k != "$ref"}}
+                    if keep_ref_siblings
+                    else target_schema
+                )
                 if parent is not None and key is not None:
                     if (
                         isinstance(parent, dict)
@@ -1141,11 +1149,11 @@ def defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
     dollar_defs: Final = unpacked.pop("$defs", None)
     definitions: Final = unpacked.pop("definitions", None)
     defs: Final = {
-        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
         **(definitions if isinstance(definitions, dict) else {}),
+        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
     }
     if defs:
-        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=True)
     return unpacked
 
 
