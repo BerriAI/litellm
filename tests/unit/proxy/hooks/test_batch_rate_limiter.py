@@ -715,6 +715,37 @@ async def test_a_managed_batch_file_charges_only_the_project_cap_of_the_model_it
 
 
 @pytest.mark.asyncio
+async def test_a_project_cap_on_the_routed_model_lifts_per_minute_limits_off_a_managed_batch_file(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    priority_group: Final = f"{_BATCH_MODEL}-priority"
+    managed_file_id: Final = base64.urlsafe_b64encode(
+        f"litellm_proxy:application/octet-stream;unified_id,priority-minute;target_model_names,{priority_group}".encode()
+    ).decode()
+    await _install_managed_file_hook(
+        openai_files, monkeypatch, _batch_rows(("Hello",) * 3), file_id=managed_file_id, model_name=priority_group
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = {"input_file_id": managed_file_id}
+
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key-regression",
+            user_id="test-user-regression",
+            team_id="team-owner",
+            tpm_limit=1,
+            project_id="priority-project",
+            project_metadata={"model_batch_enqueued_token_limit": {priority_group: 1000000}},
+        ),
+        cache=DualCache(),
+        data=data,
+        call_type="acreate_batch",
+    )
+
+    assert result is data
+
+
+@pytest.mark.asyncio
 async def test_managed_file_is_read_through_the_managed_files_hook_with_user_context(
     openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):

@@ -191,6 +191,44 @@ describe("EditProjectModal submit payload", () => {
     });
   });
 
+  it("sends the per-model batch enqueued limit edited in its model limit row", async () => {
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: { ...project.metadata, model_batch_enqueued_token_limit: { "gpt-4": 1000 } },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    const batchLimit = await screen.findByLabelText("Batch Enqueued Token Limit");
+    expect(batchLimit).toHaveValue(1000);
+    fireEvent.change(batchLimit, { target: { value: "2500" } });
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.metadata).toStrictEqual({
+      owner: "platform",
+      model_batch_enqueued_token_limit: { "gpt-4": 2500 },
+    });
+  });
+
+  it("drops the per-model batch enqueued limit once its model limit row is removed", async () => {
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: { ...project.metadata, model_batch_enqueued_token_limit: { "gpt-4": 1000 } },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Model-Specific Limits");
+    await user.click(screen.getByRole("button", { name: "Remove model limit 1" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.metadata).toStrictEqual({ owner: "platform" });
+  });
+
   it("blocks the save when the project name is cleared", async () => {
     const user = setup();
     renderModal();

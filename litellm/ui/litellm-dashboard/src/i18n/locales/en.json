@@ -3267,6 +3267,7 @@
         "rpm": "RPM Limit",
         "itpm": "Input TPM Limit",
         "otpm": "Output TPM Limit",
+        "batchEnqueuedTokens": "Batch Enqueued Token Limit",
         "remove": "Remove model limit {{number}}",
         "add": "Add Model Limit"
       },

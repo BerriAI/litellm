@@ -1390,7 +1390,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 )
                 if not key_and_team_scopes:
                     project_covers_batch: Final = routing_model is not None and project_limits_every_model(
-                        user_api_key_dict, (routing_model, *batch_usage.per_model_usage), self._model_group_of
+                        user_api_key_dict, (routing_model, *row_tokens_by_model), self._model_group_of
                     )
                     remaining_descriptors: Final = [
                         descriptor

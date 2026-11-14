@@ -13,6 +13,7 @@ const modelLimitSchema = z.object({
   rpm: z.number().optional(),
   itpm: z.number().optional(),
   otpm: z.number().optional(),
+  batchEnqueuedTokens: z.number().optional(),
 });
 
 export const projectFormSchema = z

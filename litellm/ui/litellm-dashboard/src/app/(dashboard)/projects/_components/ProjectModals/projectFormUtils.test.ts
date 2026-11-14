@@ -152,6 +152,23 @@ describe("buildProjectCreateParams", () => {
   });
 });
 
+describe("per-model batch enqueued token limit", () => {
+  it("should send the limit inside metadata next to the key-value entries", () => {
+    const result = buildProjectCreateParams({
+      ...baseValues,
+      modelLimits: [{ model: "gpt-4", batchEnqueuedTokens: 5000 }],
+      metadata: [{ key: "owner", value: "platform" }],
+    });
+    expect(result.metadata).toEqual({ owner: "platform", model_batch_enqueued_token_limit: { "gpt-4": 5000 } });
+    expect(result).not.toHaveProperty("model_batch_enqueued_token_limit");
+  });
+
+  it("should leave the limit out of metadata when no row sets one", () => {
+    const result = buildProjectUpdateParams({ ...baseValues, modelLimits: [{ model: "gpt-4", rpm: 20 }] });
+    expect(result.metadata).toEqual({});
+  });
+});
+
 describe("buildProjectUpdateParams clearing", () => {
   it("should send empty limit maps when every model limit row has been removed", () => {
     const result = buildProjectUpdateParams({ ...baseValues, modelLimits: [] });

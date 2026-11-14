@@ -22,19 +22,14 @@ interface EditProjectModalProps {
   onSuccess?: () => void;
 }
 
-const ADMIN_ONLY_METADATA_KEYS = ["model_batch_enqueued_token_limit"];
-
 const INTERNAL_METADATA_KEYS = new Set([
   "model_rpm_limit",
   "model_tpm_limit",
   "model_itpm_limit",
   "model_otpm_limit",
+  "model_batch_enqueued_token_limit",
   "guardrails",
-  ...ADMIN_ONLY_METADATA_KEYS,
 ]);
-
-const adminOnlyMetadata = (project: ProjectResponse): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(project.metadata ?? {}).filter(([key]) => ADMIN_ONLY_METADATA_KEYS.includes(key)));
 
 export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
   const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
@@ -42,6 +37,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
   const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
   const itpmLimits = (metadataObj.model_itpm_limit ?? {}) as Record<string, number>;
   const otpmLimits = (metadataObj.model_otpm_limit ?? {}) as Record<string, number>;
+  const batchEnqueuedTokenLimits = (metadataObj.model_batch_enqueued_token_limit ?? {}) as Record<string, number>;
   const guardrails = (Array.isArray(metadataObj.guardrails) ? metadataObj.guardrails : []) as string[];
 
   const modelLimits = Array.from(
@@ -50,6 +46,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
       ...Object.keys(tpmLimits),
       ...Object.keys(itpmLimits),
       ...Object.keys(otpmLimits),
+      ...Object.keys(batchEnqueuedTokenLimits),
     ]),
   ).map((model) => ({
     model,
@@ -57,6 +54,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
     tpm: tpmLimits[model],
     itpm: itpmLimits[model],
     otpm: otpmLimits[model],
+    batchEnqueuedTokens: batchEnqueuedTokenLimits[model],
   }));
 
   const metadata = Object.entries(metadataObj)
@@ -93,12 +91,8 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       ? values
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
-    const updateParams = buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget);
     const params: ProjectUpdateParams = {
-      ...updateParams,
-      ...(updateParams.metadata !== undefined && {
-        metadata: { ...adminOnlyMetadata(project), ...updateParams.metadata },
-      }),
+      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
       team_id: submitted.team_id,
     };
 

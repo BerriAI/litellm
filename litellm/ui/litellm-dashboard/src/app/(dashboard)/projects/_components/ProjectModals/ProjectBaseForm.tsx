@@ -58,6 +58,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
     rpm: undefined,
     itpm: undefined,
     otpm: undefined,
+    batchEnqueuedTokens: undefined,
   };
 
   const teamIdValue = useWatch({ control: form.control, name: "team_id" });
@@ -292,7 +293,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
           {modelLimits.fields.map((field, index) => (
             <div
               key={field.id}
-              className="mb-2 grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]"
+              className="mb-2 grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(5,minmax(0,1fr))_auto]"
             >
               <FormField
                 control={form.control}
@@ -371,6 +372,23 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                     type="number"
                     min={0}
                     placeholder={t("projects.form.modelLimits.otpm")}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField
+                control={form.control}
+                name={`modelLimits.${index}.batchEnqueuedTokens`}
+                label={t("projects.form.modelLimits.batchEnqueuedTokens")}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder={t("projects.form.modelLimits.batchEnqueuedTokens")}
                     value={value ?? ""}
                     onChange={(event) => onChange(toOptionalNumber(event.target.value))}
                   />
