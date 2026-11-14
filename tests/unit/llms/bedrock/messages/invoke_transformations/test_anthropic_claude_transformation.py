@@ -42,6 +42,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_trans
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 
 REASONING_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -4898,25 +4899,18 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
 
 
 @pytest.mark.asyncio
-async def test_aws_event_stream_decoder_aiter_bytes_closes_source_iterator_on_aclose() -> None:
-    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
-
+async def test_promote_message_stop_usage_closes_its_source_on_aclose() -> None:
     source_closed: Final = asyncio.Event()
 
-    async def _byte_source() -> AsyncIterator[bytes]:
+    async def _source() -> AsyncIterator[dict[str, object]]:
         try:
-            yield _bedrock_event_frame({"type": "message_start", "message": {"id": "msg_1"}})
-            for _ in range(20):
-                await asyncio.sleep(0.01)
-                yield _bedrock_event_frame({"type": "ping"})
+            yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1}}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}
         finally:
             source_closed.set()
 
-    decoder: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6")
-    stream: Final = decoder.aiter_bytes(_byte_source())
-    await anext(stream)
-    await stream.aclose()
-    assert source_closed.is_set(), (
-        "Expected AWSEventStreamDecoder.aiter_bytes to close its source byte iterator on aclose()"
-    )
-
+    source: Final = _source()
+    promoted: Final = AmazonAnthropicClaudeMessagesConfig._promote_message_stop_usage(source)
+    await anext(promoted)
+    await aclose_if_supported(promoted)
+    assert source_closed.is_set()

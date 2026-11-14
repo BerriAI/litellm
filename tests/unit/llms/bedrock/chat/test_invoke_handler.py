@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import datetime
@@ -29,6 +30,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -2202,3 +2204,22 @@ async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
     assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
     assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
     assert getattr(non_streaming, "service_tier", None) is None
+
+
+@pytest.mark.asyncio
+async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _byte_source() -> AsyncIterator[bytes]:
+        try:
+            yield _bedrock_event_stream_frame({"type": "message_start", "message": {"id": "msg_1"}})
+            for _ in range(20):
+                yield _bedrock_event_stream_frame({"type": "ping"})
+        finally:
+            source_closed.set()
+
+    source: Final = _byte_source()
+    stream: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6").aiter_bytes(source)
+    await anext(stream)
+    await aclose_if_supported(stream)
+    assert source_closed.is_set()
