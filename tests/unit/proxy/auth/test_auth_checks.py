@@ -109,7 +109,7 @@ async def _run_team_trace_id_check(
 
 @pytest.mark.parametrize(
     "route",
-    ["/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
+    ["/chat/completions", "/queue/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
 )
 @pytest.mark.asyncio
 async def test_team_require_trace_id_rejects_llm_mcp_and_agent_requests(route: str) -> None:

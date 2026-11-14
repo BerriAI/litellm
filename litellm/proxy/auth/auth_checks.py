@@ -1321,7 +1321,7 @@ async def common_checks(
         team_object is not None
         and _team_metadata_requires_trace_id(team_object)
         and request.method not in ("GET", "HEAD", "OPTIONS")
-        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
+        and (RouteChecks.runs_inference_checks(route) or pass_through_route)
         and not RouteChecks.check_route_access(
             route=route,
             allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,

@@ -6,7 +6,8 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from queue import SimpleQueue
@@ -15,12 +16,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 import pytest
+from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyLogging
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -357,3 +363,54 @@ def test_queued_chat_carries_key_team_and_caller_tags_and_the_budget_reservation
     assert metadata["tags"] == ["sent", "key-tag", "team-tag", caller_tag]
     assert tuple(metadata["inherited_tags"]) == ("key-tag", "team-tag")
     assert metadata["user_api_key_budget_reservation"] == reservation
+
+
+class _QueueSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: Final = SimpleQueue[object]()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.responses.put(response_obj)
+
+
+async def test_a_queued_stream_the_client_abandons_bills_the_reply_it_already_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _queue_router(monkeypatch, default_priority=0, mock_response="queued partial reply")
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+    logger: Final = _QueueSuccessLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    body: Final = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True})
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body.encode(), "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/queue/chat/completions",
+            "root_path": "",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive,
+    )
+    response: Final = await proxy_server.async_queue_request(
+        request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-queue")
+    )
+    assert isinstance(response, StreamingResponse)
+    frames: Final = response.body_iterator
+    assert isinstance(frames, AsyncGenerator)
+    await anext(frames)
+    await anext(frames)
+    await frames.aclose()
+
+    billed: Final = logger.responses.get_nowait()
+    assert isinstance(billed, litellm.ModelResponse)
+    assert billed.choices[0].message.content == "queued"

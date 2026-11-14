@@ -521,6 +521,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
+    withheld_provider_output,
 )
 from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_error_json_response,
@@ -1004,6 +1005,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
     customer_window_counters,
     get_budget_window_start,
+    release_budget_reservation_on_cancel,
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -10999,6 +11001,7 @@ async def async_data_generator(
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    provider_output_started: bool = False  # rebind-ok: set on the first provider chunk, which partial billing settles
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -11062,6 +11065,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
+            provider_output_started = True
             chunk_received_at = time.perf_counter()
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
@@ -11203,6 +11207,8 @@ async def async_data_generator(
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
+        if not provider_output_started and not withheld_provider_output(_UNTYPED_VALUE.validate_python(response)):
+            await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
@@ -19581,10 +19587,12 @@ async def async_queue_request(
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_queue_stream() -> StreamingResponse:
+                queued_stream: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
+                data["litellm_logging_obj"] = getattr(queued_stream, "logging_obj", None)
                 return StreamingResponse(
                     async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
+                        response=queued_stream,
                         request_data=data,
                         request=request,
                     ),

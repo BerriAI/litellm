@@ -468,7 +468,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -491,7 +491,8 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    input_cost: Final = budget_reservation.get("input_cost")
+    incurred_cost: Final = float(input_cost) if isinstance(input_cost, (int, float)) else 0.0
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)

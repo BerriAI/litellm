@@ -1148,6 +1148,37 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"])
+async def test_async_data_generator_refunds_the_reservation_only_when_the_client_leaves_before_provider_output(
+    monkeypatch: pytest.MonkeyPatch, provider_chunks: int, released: bool
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    waiting_on_provider: Final = asyncio.Event()
+
+    async def provider() -> AsyncIterator[ModelResponseStream]:
+        for _ in range(provider_chunks):
+            yield _simple_chunk(content="partial")
+        waiting_on_provider.set()
+        await asyncio.Event().wait()
+        yield _simple_chunk(content="never sent")
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
+    )
+    generator: Final = async_data_generator(response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"})
+    for _ in range(provider_chunks):
+        await generator.__anext__()
+    next_frame: Final = asyncio.ensure_future(generator.__anext__())
+    await waiting_on_provider.wait()
+    next_frame.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_frame
+
+    assert auth.budget_reservation is not None
+    assert (auth.budget_reservation.get("finalized") is True) is released
+
+
 _AZURE_CONTENT_FILTER_RESULTS: Final = {
     "hate": {"filtered": False, "severity": "safe"},
     "protected_material_text": {"detected": False, "filtered": False},

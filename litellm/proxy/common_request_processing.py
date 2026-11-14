@@ -372,7 +372,7 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 }
 
 
-def _withheld_provider_output(response: object) -> bool:
+def withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
 
 
@@ -4637,7 +4637,7 @@ class ProxyBaseLLMRequestProcessing:
                     # No spend row settles a stream that returned nothing it could log, so release what the request
                     # holds, as chat completions does.
                     from litellm.proxy.spend_tracking.budget_reservation import (
-                        release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
+                        release_budget_reservation_on_cancel,
                     )
 
                     await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
@@ -5481,7 +5481,7 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
             await close_guarded_stream(guarded_stream)
-            if not delivered_chunk and not _withheld_provider_output(response):
+            if not delivered_chunk and not withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )
