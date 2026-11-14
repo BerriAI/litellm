@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
-from litellm.litellm_core_utils.hidden_params import stored_attribute
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
 
 if TYPE_CHECKING:
     import httpx
@@ -85,8 +85,12 @@ def convert_model_response_to_streaming(
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
         )
+        service_tier: Final = stored_attribute(model_response, "service_tier")
+        if service_tier is not None:
+            set_extra_attribute(processed_chunk, "service_tier", service_tier)
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
         usage: Final = getattr(model_response, "usage", None)
