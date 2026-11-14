@@ -627,16 +627,21 @@ class CheckBatchCost:
             return None
 
     @classmethod
-    def _get_input_file_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+    def _stored_batch(cls, job: "ManagedObjectRow") -> Optional["LiteLLMBatch"]:
         from litellm.types.utils import LiteLLMBatch
 
         parsed_file_object: Final = cls._parse_file_object(job)
         if parsed_file_object is None:
             return None
         try:
-            return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
+            return LiteLLMBatch.model_validate(parsed_file_object)
         except Exception:
             return None
+
+    @classmethod
+    def _get_input_file_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+        stored_batch: Final = cls._stored_batch(job)
+        return stored_batch.input_file_id if stored_batch is not None else None
 
     @classmethod
     def _get_stored_model_id(cls, job: "ManagedObjectRow") -> Optional[str]:
@@ -1105,6 +1110,8 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
+        from litellm.proxy.openai_files_endpoints.common_utils import created_batch_endpoint
+
         try:
             from litellm.integrations.prometheus import PrometheusLogger
 
@@ -1188,6 +1195,8 @@ class CheckBatchCost:
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
                 continue
+
+            response.endpoint = created_batch_endpoint(response, self._stored_batch(job))
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if response.status in PROVIDER_TERMINAL_BATCH_STATUSES and response.output_file_id is not None:

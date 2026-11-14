@@ -165,6 +165,24 @@ def test_handle_model_invocation_job_status_completed(patched_boto3):
     assert batch.metadata["output_s3_uri"] == OUTPUT_PREFIX
 
 
+@pytest.mark.parametrize(
+    "job_model_id,expected_endpoint",
+    [
+        ("amazon.titan-embed-text-v2:0", "/v1/embeddings"),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "/v1/chat/completions"),
+    ],
+)
+def test_job_status_endpoint_follows_the_job_models_mode(
+    patched_boto3: tuple[MagicMock, MagicMock], job_model_id: str, expected_endpoint: str
+) -> None:
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {**_fake_boto3_response(), "modelId": job_model_id}
+
+    batch: Final = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.endpoint == expected_endpoint
+
+
 @pytest.mark.parametrize("success_count,error_count", [(100, 0), (86, 14)])
 def test_completed_job_maps_provider_record_counts(patched_boto3, success_count, error_count):
     fake_client, _ = patched_boto3

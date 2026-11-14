@@ -14,11 +14,14 @@ URL/ARN handling, and the error class. AWS auth/sigv4 is the only external seam
 we mock; everything else runs for real.
 """
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.types.utils import LlmProviders
 
@@ -803,6 +806,49 @@ def test_retrieve_response_no_errors_when_no_message(config):
         litellm_params={},
     )
     assert out.errors is None
+
+
+@pytest.mark.parametrize(
+    "job_model_id,expected_endpoint",
+    [
+        ("amazon.titan-embed-text-v2:0", "/v1/embeddings"),
+        ("arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0", "/v1/embeddings"),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "/v1/chat/completions"),
+        ("a-model-the-cost-map-does-not-list", "/v1/chat/completions"),
+        (None, "/v1/chat/completions"),
+    ],
+)
+def test_retrieve_response_endpoint_follows_the_job_models_mode(
+    config: BedrockBatchesConfig, job_model_id: str | None, expected_endpoint: str
+) -> None:
+    out: Final = config.transform_retrieve_batch_response(
+        model=None,
+        raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
+        logging_obj=MagicMock(),
+        litellm_params={},
+    )
+    assert out.endpoint == expected_endpoint
+
+
+def _is_bedrock_embedding_model(cost_map_entry: Mapping[str, object]) -> bool:
+    return cost_map_entry.get("litellm_provider") == "bedrock" and cost_map_entry.get("mode") == "embedding"
+
+
+@pytest.mark.parametrize(
+    "job_model_id",
+    sorted(model_id for model_id, entry in litellm.model_cost.items() if _is_bedrock_embedding_model(entry)),
+)
+def test_retrieve_response_endpoint_survives_a_batch_deployment_overriding_the_models_mode(
+    config: BedrockBatchesConfig, monkeypatch: pytest.MonkeyPatch, job_model_id: str
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, job_model_id, {**litellm.model_cost[job_model_id], "mode": "batch"})
+    out: Final = config.transform_retrieve_batch_response(
+        model=None,
+        raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
+        logging_obj=MagicMock(),
+        litellm_params={},
+    )
+    assert out.endpoint == "/v1/embeddings"
 
 
 def test_retrieve_response_enriches_metadata(config):
