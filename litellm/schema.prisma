@@ -9,6 +9,54 @@ generator client {
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
+model LiteLLM_ExternalCloudAgentSource {
+  id                     String   @id @default(uuid())
+  vendor                 String   @default("grok_bot")
+  display_name           String   @default("GrokBot")
+  ingest_key             String
+  tenant_id              String?
+  admin_api_key          String?
+  last_event_at          DateTime?
+  last_spend_sync_at      DateTime?
+  last_spend_sync_error   String?
+  created_at             DateTime @default(now())
+  created_by             String
+  agents                 LiteLLM_ExternalCloudAgent[]
+  spend                  LiteLLM_ExternalCloudAgentSpend[]
+}
+
+model LiteLLM_ExternalCloudAgent {
+  source_id          String
+  external_id        String
+  first_seen_at      DateTime @default(now())
+  last_seen_at       DateTime @default(now())
+  request_count      BigInt   @default(1)
+  last_actor_id      String?
+  last_model         String?
+  tools              String[] @default([])
+  recent_request_ids String[] @default([])
+  source             LiteLLM_ExternalCloudAgentSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  @@id([source_id, external_id])
+  @@index([source_id, last_seen_at])
+}
+
+model LiteLLM_ExternalCloudAgentSpend {
+  source_id          String
+  vendor_user_id     String
+  email              String?
+  display_name       String?
+  day                DateTime @client.Date
+  cost_micros        BigInt
+  prompt_tokens      BigInt
+  completion_tokens  BigInt
+  requests           BigInt
+  source             LiteLLM_ExternalCloudAgentSource @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  @@id([source_id, vendor_user_id, day])
+  @@index([source_id, day])
+}
+
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
   customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")

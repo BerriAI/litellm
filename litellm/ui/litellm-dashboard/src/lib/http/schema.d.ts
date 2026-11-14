@@ -6963,6 +6963,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/grok_bot/inference_hook/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inference Hook
+         * @description Observe a vendor bot without proxying or enforcing its inference requests.
+         */
+        post: operations["inference_hook_grok_bot_inference_hook__source_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/guardrails": {
         parameters: {
             query?: never;
@@ -21666,6 +21686,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/external_cloud_agents/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agents
+         * @description List discovered bots, searching their vendor session identifiers.
+         */
+        get: operations["list_agents_v1_external_cloud_agents_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sources
+         * @description List connections and inventory/sync status without returning either credential.
+         */
+        get: operations["list_sources_v1_external_cloud_agents_sources_get"];
+        put?: never;
+        /**
+         * Create Source
+         * @description Generate a GrokBot inventory connection. The ingest key is returned here and on the connection endpoint.
+         */
+        post: operations["create_source_v1_external_cloud_agents_sources_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Source
+         * @description Delete a connection and its inventory and spend rows.
+         */
+        delete: operations["delete_source_v1_external_cloud_agents_sources__source_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/sources/{source_id}/admin_api_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Admin Key
+         * @description Validate and encrypt an optional vendor billing key, then sync its spend.
+         */
+        put: operations["save_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_put"];
+        post?: never;
+        /**
+         * Delete Admin Key
+         * @description Remove a billing credential without removing previously collected inventory or spend.
+         */
+        delete: operations["delete_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/sources/{source_id}/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Connection
+         * @description Re-show the hook path and ingest key to a proxy admin.
+         */
+        get: operations["connection_v1_external_cloud_agents_sources__source_id__connection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/sources/{source_id}/sync_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Spend
+         * @description Refresh the last 30 UTC days of vendor spend.
+         */
+        post: operations["sync_spend_v1_external_cloud_agents_sources__source_id__sync_spend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/external_cloud_agents/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend
+         * @description Report persisted member/team spend and asynchronously refresh stale vendor data when a key is configured.
+         */
+        get: operations["get_spend_v1_external_cloud_agents_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/extraction": {
         parameters: {
             query?: never;
@@ -27180,10 +27348,43 @@ export interface components {
              */
             source: "admin";
         };
+        /** AdminKey */
+        AdminKey: {
+            /**
+             * Api Key
+             * Format: password
+             */
+            api_key: string;
+        };
         /** AdminMCPPermissions */
         AdminMCPPermissions: {
             /** Action Allowed */
             action_allowed?: boolean | null;
+            /** Tools */
+            tools: string[];
+        };
+        /** Agent */
+        Agent: {
+            /** External Id */
+            external_id: string;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Last Actor Id */
+            last_actor_id: string | null;
+            /** Last Model */
+            last_model: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Request Count */
+            request_count: number;
+            /** Source Id */
+            source_id: string;
             /** Tools */
             tools: string[];
         };
@@ -27551,6 +27752,17 @@ export interface components {
             /** Models */
             models?: string[] | null;
         };
+        /** AgentPage */
+        AgentPage: {
+            /** Data */
+            data: components["schemas"]["Agent"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+        };
         /**
          * AgentProvider
          * @description Represents the service provider of an agent.
@@ -27901,6 +28113,15 @@ export interface components {
              * @description Cursor for the next page, or null at the end.
              */
             next_cursor?: string | null;
+        };
+        /** Allow */
+        Allow: {
+            /**
+             * Action
+             * @default allow
+             * @constant
+             */
+            action: "allow";
         };
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
@@ -32635,6 +32856,15 @@ export interface components {
         "ConfigurableClientsideParamsCustomAuth-Output": {
             /** Api Base */
             api_base: string;
+        };
+        /** Connection */
+        Connection: {
+            /** Hook Path */
+            hook_path: string;
+            /** Ingest Key */
+            ingest_key: string;
+            /** Source Id */
+            source_id: string;
         };
         /** ContainerAuto */
         ContainerAuto: {
@@ -40877,6 +41107,37 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+        };
+        /** MemberSpend */
+        MemberSpend: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email?: string | null;
+            /**
+             * Grok Cost Usd
+             * @default 0
+             */
+            grok_cost_usd: string;
+            /**
+             * Litellm Gateway Spend Usd
+             * @default 0
+             */
+            litellm_gateway_spend_usd: string;
+            /** Litellm User Id */
+            litellm_user_id?: string | null;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
+            /** Vendor User Id */
+            vendor_user_id: string;
         };
         /** MemberUpsert */
         MemberUpsert: {
@@ -49127,6 +49388,36 @@ export interface components {
              */
             use_llm: boolean;
         };
+        /** Source */
+        Source: {
+            /** Bot Count */
+            bot_count: number;
+            /** Connected */
+            connected: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Display Name */
+            display_name: string;
+            /** Has Admin Api Key */
+            has_admin_api_key: boolean;
+            /** Last Event At */
+            last_event_at: string | null;
+            /** Last Spend Sync At */
+            last_spend_sync_at: string | null;
+            /** Last Spend Sync Error */
+            last_spend_sync_error: string | null;
+            /** Source Id */
+            source_id: string;
+            /** Tenant Id */
+            tenant_id: string | null;
+            /** Vendor */
+            vendor: string;
+        };
         /** Span */
         Span: {
             /** Agent */
@@ -49353,6 +49644,61 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** SpendReport */
+        SpendReport: {
+            /** Days */
+            days: number;
+            /**
+             * End Day
+             * Format: date
+             */
+            end_day: string;
+            /** Members */
+            members: components["schemas"]["MemberSpend"][];
+            /** Source Id */
+            source_id: string;
+            /**
+             * Start Day
+             * Format: date
+             */
+            start_day: string;
+            /**
+             * Teams
+             * @description Members with exactly one team are attributed to that team. Multi-team members are grouped under Multiple teams with their memberships listed, without allocating spend across teams. Unmatched, ambiguous-email and teamless members are Unassigned. Gateway spend is counted once per LiteLLM user, on the lexicographically first vendor identity when several identities match that user.
+             */
+            teams: components["schemas"]["TeamSpend"][];
+            totals: components["schemas"]["SpendTotals"];
+        };
+        /** SpendTeam */
+        SpendTeam: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+        };
+        /** SpendTotals */
+        SpendTotals: {
+            /**
+             * Grok Cost Usd
+             * @default 0
+             */
+            grok_cost_usd: string;
+            /**
+             * Litellm Gateway Spend Usd
+             * @default 0
+             */
+            litellm_gateway_spend_usd: string;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
         };
         /** StandardLoggingHeuristicV2Forecast */
         StandardLoggingHeuristicV2Forecast: {
@@ -49705,6 +50051,20 @@ export interface components {
         SupportedEndpointsResponse: {
             /** Endpoints */
             endpoints: components["schemas"]["SupportedEndpoint"][];
+        };
+        /** SyncResult */
+        SyncResult: {
+            /**
+             * Rows
+             * @default 0
+             */
+            rows: number;
+            /**
+             * Status
+             * @default ok
+             * @enum {string}
+             */
+            status: "ok" | "already_running";
         };
         /**
          * TagActiveUsersResponse
@@ -50491,6 +50851,38 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+        };
+        /** TeamSpend */
+        TeamSpend: {
+            /**
+             * Grok Cost Usd
+             * @default 0
+             */
+            grok_cost_usd: string;
+            /**
+             * Litellm Gateway Spend Usd
+             * @default 0
+             */
+            litellm_gateway_spend_usd: string;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /** Team Id */
+            team_id: string | null;
+            /** Team Name */
+            team_name: string;
+            /**
+             * Teams
+             * @default []
+             */
+            teams: components["schemas"]["SpendTeam"][];
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
         };
         /** TeamUserSpendResponse */
         TeamUserSpendResponse: {
@@ -52859,6 +53251,15 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** Updated */
+        Updated: {
+            /**
+             * Status
+             * @default ok
+             * @constant
+             */
+            status: "ok";
         };
         /** UploadPluginRequest */
         UploadPluginRequest: {
@@ -65884,6 +66285,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    inference_hook_grok_bot_inference_hook__source_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "session_id": "bot",
+                 *       "tenant_id": "tenant",
+                 *       "type": "prompt"
+                 *     }
+                 */
+                "application/json": {
+                    actor?: {
+                        /** Id */
+                        id?: string | null;
+                    } | null;
+                    /**
+                     * Messages
+                     * @default []
+                     */
+                    messages?: {
+                        /**
+                         * Content
+                         * @default []
+                         */
+                        content?: {
+                            /** Name */
+                            name?: string | null;
+                            tool_info?: {
+                                /** Toolset Name */
+                                toolset_name?: string | null;
+                            } | null;
+                            /** Tool Name */
+                            tool_name?: string | null;
+                            /**
+                             * Type
+                             * @default
+                             */
+                            type?: string;
+                        }[] | string;
+                    }[];
+                    /** Model */
+                    model?: string | null;
+                    /** Request Id */
+                    request_id?: string | null;
+                    /**
+                     * Session Id
+                     * @default
+                     */
+                    session_id?: string;
+                    /**
+                     * Application
+                     * @default {
+                     *       "application": ""
+                     *     }
+                     */
+                    source?: {
+                        /**
+                         * Application
+                         * @default
+                         */
+                        application?: string;
+                    };
+                    /** Tenant Id */
+                    tenant_id?: string | null;
+                    /**
+                     * Type
+                     * @default
+                     */
+                    type?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Allow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -85950,6 +86452,279 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_v1_external_cloud_agents_agents_get: {
+        parameters: {
+            query: {
+                source_id: string;
+                search?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sources_v1_external_cloud_agents_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"][];
+                };
+            };
+        };
+    };
+    create_source_v1_external_cloud_agents_sources_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+        };
+    };
+    delete_source_v1_external_cloud_agents_sources__source_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Updated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminKey"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Updated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connection_v1_external_cloud_agents_sources__source_id__connection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_spend_v1_external_cloud_agents_sources__source_id__sync_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_v1_external_cloud_agents_spend_get: {
+        parameters: {
+            query: {
+                source_id: string;
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendReport"];
                 };
             };
             /** @description Validation Error */

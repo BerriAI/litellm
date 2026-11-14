@@ -15931,6 +15931,1258 @@
       }
     }
   },
+  "external_cloud_agents": {
+    "components": {
+      "schemas": {
+        "AdminKey": {
+          "properties": {
+            "api_key": {
+              "format": "password",
+              "title": "Api Key",
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          "required": [
+            "api_key"
+          ],
+          "title": "AdminKey",
+          "type": "object"
+        },
+        "Agent": {
+          "properties": {
+            "external_id": {
+              "title": "External Id",
+              "type": "string"
+            },
+            "first_seen_at": {
+              "format": "date-time",
+              "title": "First Seen At",
+              "type": "string"
+            },
+            "last_actor_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Actor Id"
+            },
+            "last_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Model"
+            },
+            "last_seen_at": {
+              "format": "date-time",
+              "title": "Last Seen At",
+              "type": "string"
+            },
+            "request_count": {
+              "title": "Request Count",
+              "type": "integer"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tools",
+              "type": "array"
+            }
+          },
+          "required": [
+            "source_id",
+            "external_id",
+            "first_seen_at",
+            "last_seen_at",
+            "request_count",
+            "last_actor_id",
+            "last_model",
+            "tools"
+          ],
+          "title": "Agent",
+          "type": "object"
+        },
+        "AgentPage": {
+          "properties": {
+            "data": {
+              "items": {
+                "$ref": "#/components/schemas/Agent"
+              },
+              "title": "Data",
+              "type": "array"
+            },
+            "page": {
+              "title": "Page",
+              "type": "integer"
+            },
+            "page_size": {
+              "title": "Page Size",
+              "type": "integer"
+            },
+            "total": {
+              "title": "Total",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "data",
+            "page",
+            "page_size",
+            "total"
+          ],
+          "title": "AgentPage",
+          "type": "object"
+        },
+        "Allow": {
+          "properties": {
+            "action": {
+              "const": "allow",
+              "default": "allow",
+              "title": "Action",
+              "type": "string"
+            }
+          },
+          "title": "Allow",
+          "type": "object"
+        },
+        "Connection": {
+          "properties": {
+            "hook_path": {
+              "title": "Hook Path",
+              "type": "string"
+            },
+            "ingest_key": {
+              "title": "Ingest Key",
+              "type": "string"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "hook_path",
+            "ingest_key"
+          ],
+          "title": "Connection",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "MemberSpend": {
+          "properties": {
+            "display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Display Name"
+            },
+            "email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Email"
+            },
+            "grok_cost_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Grok Cost Usd",
+              "type": "string"
+            },
+            "litellm_gateway_spend_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Litellm Gateway Spend Usd",
+              "type": "string"
+            },
+            "litellm_user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Litellm User Id"
+            },
+            "requests": {
+              "default": 0,
+              "title": "Requests",
+              "type": "integer"
+            },
+            "tokens": {
+              "default": 0,
+              "title": "Tokens",
+              "type": "integer"
+            },
+            "vendor_user_id": {
+              "title": "Vendor User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "vendor_user_id"
+          ],
+          "title": "MemberSpend",
+          "type": "object"
+        },
+        "Source": {
+          "properties": {
+            "bot_count": {
+              "title": "Bot Count",
+              "type": "integer"
+            },
+            "connected": {
+              "title": "Connected",
+              "type": "boolean"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "has_admin_api_key": {
+              "title": "Has Admin Api Key",
+              "type": "boolean"
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event At"
+            },
+            "last_spend_sync_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Spend Sync At"
+            },
+            "last_spend_sync_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Spend Sync Error"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            },
+            "vendor": {
+              "title": "Vendor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "vendor",
+            "display_name",
+            "tenant_id",
+            "bot_count",
+            "connected",
+            "has_admin_api_key",
+            "last_event_at",
+            "last_spend_sync_at",
+            "last_spend_sync_error",
+            "created_at",
+            "created_by"
+          ],
+          "title": "Source",
+          "type": "object"
+        },
+        "SpendReport": {
+          "properties": {
+            "days": {
+              "title": "Days",
+              "type": "integer"
+            },
+            "end_day": {
+              "format": "date",
+              "title": "End Day",
+              "type": "string"
+            },
+            "members": {
+              "items": {
+                "$ref": "#/components/schemas/MemberSpend"
+              },
+              "title": "Members",
+              "type": "array"
+            },
+            "source_id": {
+              "title": "Source Id",
+              "type": "string"
+            },
+            "start_day": {
+              "format": "date",
+              "title": "Start Day",
+              "type": "string"
+            },
+            "teams": {
+              "description": "Members with exactly one team are attributed to that team. Multi-team members are grouped under Multiple teams with their memberships listed, without allocating spend across teams. Unmatched, ambiguous-email and teamless members are Unassigned. Gateway spend is counted once per LiteLLM user, on the lexicographically first vendor identity when several identities match that user.",
+              "items": {
+                "$ref": "#/components/schemas/TeamSpend"
+              },
+              "title": "Teams",
+              "type": "array"
+            },
+            "totals": {
+              "$ref": "#/components/schemas/SpendTotals"
+            }
+          },
+          "required": [
+            "source_id",
+            "days",
+            "start_day",
+            "end_day",
+            "members",
+            "teams",
+            "totals"
+          ],
+          "title": "SpendReport",
+          "type": "object"
+        },
+        "SpendTeam": {
+          "properties": {
+            "team_id": {
+              "title": "Team Id",
+              "type": "string"
+            },
+            "team_name": {
+              "title": "Team Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "team_id",
+            "team_name"
+          ],
+          "title": "SpendTeam",
+          "type": "object"
+        },
+        "SpendTotals": {
+          "properties": {
+            "grok_cost_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Grok Cost Usd",
+              "type": "string"
+            },
+            "litellm_gateway_spend_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Litellm Gateway Spend Usd",
+              "type": "string"
+            },
+            "requests": {
+              "default": 0,
+              "title": "Requests",
+              "type": "integer"
+            },
+            "tokens": {
+              "default": 0,
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "SpendTotals",
+          "type": "object"
+        },
+        "SyncResult": {
+          "properties": {
+            "rows": {
+              "default": 0,
+              "title": "Rows",
+              "type": "integer"
+            },
+            "status": {
+              "default": "ok",
+              "enum": [
+                "ok",
+                "already_running"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "title": "SyncResult",
+          "type": "object"
+        },
+        "TeamSpend": {
+          "properties": {
+            "grok_cost_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Grok Cost Usd",
+              "type": "string"
+            },
+            "litellm_gateway_spend_usd": {
+              "default": "0",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "title": "Litellm Gateway Spend Usd",
+              "type": "string"
+            },
+            "requests": {
+              "default": 0,
+              "title": "Requests",
+              "type": "integer"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "team_name": {
+              "title": "Team Name",
+              "type": "string"
+            },
+            "teams": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/SpendTeam"
+              },
+              "title": "Teams",
+              "type": "array"
+            },
+            "tokens": {
+              "default": 0,
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "team_name"
+          ],
+          "title": "TeamSpend",
+          "type": "object"
+        },
+        "Updated": {
+          "properties": {
+            "status": {
+              "const": "ok",
+              "default": "ok",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "title": "Updated",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/grok_bot/inference_hook/{source_id}": {
+        "post": {
+          "description": "Observe a vendor bot without proxying or enforcing its inference requests.",
+          "operationId": "inference_hook_grok_bot_inference_hook__source_id__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "session_id": "bot",
+                  "tenant_id": "tenant",
+                  "type": "prompt"
+                },
+                "schema": {
+                  "properties": {
+                    "actor": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Id"
+                            }
+                          },
+                          "title": "Actor",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "messages": {
+                      "default": [],
+                      "items": {
+                        "properties": {
+                          "content": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "properties": {
+                                    "name": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Name"
+                                    },
+                                    "tool_info": {
+                                      "anyOf": [
+                                        {
+                                          "properties": {
+                                            "toolset_name": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Toolset Name"
+                                            }
+                                          },
+                                          "title": "ToolInfo",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "tool_name": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Tool Name"
+                                    },
+                                    "type": {
+                                      "default": "",
+                                      "title": "Type",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "title": "Block",
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ],
+                            "default": [],
+                            "title": "Content"
+                          }
+                        },
+                        "title": "Message",
+                        "type": "object"
+                      },
+                      "title": "Messages",
+                      "type": "array"
+                    },
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Model"
+                    },
+                    "request_id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 256,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Request Id"
+                    },
+                    "session_id": {
+                      "default": "",
+                      "title": "Session Id",
+                      "type": "string"
+                    },
+                    "source": {
+                      "default": {
+                        "application": ""
+                      },
+                      "properties": {
+                        "application": {
+                          "default": "",
+                          "title": "Application",
+                          "type": "string"
+                        }
+                      },
+                      "title": "Application",
+                      "type": "object"
+                    },
+                    "tenant_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Tenant Id"
+                    },
+                    "type": {
+                      "default": "",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "title": "Frame",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Allow"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Inference Hook",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/agents": {
+        "get": {
+          "description": "List discovered bots, searching their vendor session identifiers.",
+          "operationId": "list_agents_v1_external_cloud_agents_agents_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "search",
+              "required": false,
+              "schema": {
+                "default": "",
+                "maxLength": 200,
+                "title": "Search",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page",
+              "required": false,
+              "schema": {
+                "default": 1,
+                "maximum": 1000000,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page_size",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AgentPage"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Agents",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/sources": {
+        "get": {
+          "description": "List connections and inventory/sync status without returning either credential.",
+          "operationId": "list_sources_v1_external_cloud_agents_sources_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/Source"
+                    },
+                    "title": "Response List Sources V1 External Cloud Agents Sources Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Sources",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        },
+        "post": {
+          "description": "Generate a GrokBot inventory connection. The ingest key is returned here and on the connection endpoint.",
+          "operationId": "create_source_v1_external_cloud_agents_sources_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "maxProperties": 0,
+                  "type": "object"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Connection"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Source",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/sources/{source_id}": {
+        "delete": {
+          "description": "Delete a connection and its inventory and spend rows.",
+          "operationId": "delete_source_v1_external_cloud_agents_sources__source_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Updated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Source",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/sources/{source_id}/admin_api_key": {
+        "delete": {
+          "description": "Remove a billing credential without removing previously collected inventory or spend.",
+          "operationId": "delete_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Updated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Admin Key",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        },
+        "put": {
+          "description": "Validate and encrypt an optional vendor billing key, then sync its spend.",
+          "operationId": "save_admin_key_v1_external_cloud_agents_sources__source_id__admin_api_key_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminKey"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SyncResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Save Admin Key",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/sources/{source_id}/connection": {
+        "get": {
+          "description": "Re-show the hook path and ingest key to a proxy admin.",
+          "operationId": "connection_v1_external_cloud_agents_sources__source_id__connection_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Connection"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Connection",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/sources/{source_id}/sync_spend": {
+        "post": {
+          "description": "Refresh the last 30 UTC days of vendor spend.",
+          "operationId": "sync_spend_v1_external_cloud_agents_sources__source_id__sync_spend_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "maxProperties": 0,
+                  "type": "object"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SyncResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Sync Spend",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      },
+      "/v1/external_cloud_agents/spend": {
+        "get": {
+          "description": "Report persisted member/team spend and asynchronously refresh stale vendor data when a key is configured.",
+          "operationId": "get_spend_v1_external_cloud_agents_spend_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "days",
+              "required": false,
+              "schema": {
+                "default": 30,
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Days",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendReport"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Spend",
+          "tags": [
+            "external_cloud_agents"
+          ]
+        }
+      }
+    }
+  },
   "gemini_agents": {
     "components": {
       "schemas": {

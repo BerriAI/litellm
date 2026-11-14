@@ -260,6 +260,9 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 )
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
+        "LiteLLM_ExternalCloudAgentSource",
+        "LiteLLM_ExternalCloudAgent",
+        "LiteLLM_ExternalCloudAgentSpend",
         "LiteLLM_Alert",
         "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
