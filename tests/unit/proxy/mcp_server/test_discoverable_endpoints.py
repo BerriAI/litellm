@@ -5,6 +5,7 @@ import json
 import time
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +17,7 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 from litellm.types.mcp import MCPAuth
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
@@ -12210,6 +12211,90 @@ def test_gateway_connect_rechecks_session_after_authorize(
         assert parse_qs(urlparse(response.headers["location"]).query)["code"]
 
 
+@pytest.mark.parametrize(
+    ("resource", "sealed_ids", "selectable"),
+    [
+        (None, ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver", ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver/mcp", ("alpha-id", "beta-id"), "absent"),
+        ("http://testserver/mcp/alpha,beta", None, False),
+    ],
+)
+def test_gateway_connect_complete_reads_each_picked_server(
+    monkeypatch: pytest.MonkeyPatch,
+    browser_session_database: _BrowserSessionDatabase,
+    resource: str | None,
+    sealed_ids: tuple[str, ...] | None,
+    selectable: Literal["absent", False],
+) -> None:
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+    from litellm.proxy.mcp_server.gateway_dcr_flow import GATEWAY_AUTH_CODE_PREFIX
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    monkeypatch.setattr(global_mcp_server_manager, "registry", global_mcp_server_manager.registry.copy())
+    client, _, _ = _native_client_app(monkeypatch)
+    user_api_key_cache.set_cache(
+        "u1",
+        LiteLLM_UserTable(
+            user_id="u1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="u1-mcp", mcp_servers=["alpha-id", "beta-id"]
+            ),
+        ),
+    )
+    for name in ("alpha", "beta"):
+        server = _create_oauth2_server(server_id=f"{name}-id", name=name, server_name=name, alias=name)
+        monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    client.cookies.set("token", _browser_session_cookie(monkeypatch, "u1", session_key="sk-browser-session"))
+    registered: Final = client.post("/register", json={"redirect_uris": ["http://127.0.0.1/callback"]})
+    client_id: Final = registered.json()["client_id"]
+    resource_param: Final = {"resource": resource} if resource else {}
+    authorized: Final = client.get(
+        "/authorize/mcp-session",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "response_type": "code",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            **resource_param,
+        },
+        follow_redirects=False,
+    )
+    flow: Final = parse_qs(urlparse(authorized.headers["location"]).query)["connect_flow"][0]
+    described: Final = client.get("/authorize/flow", params={"flow": flow})
+    assert described.json().get("selectable", "absent") == selectable
+    response: Final = client.post(
+        "/authorize/complete", data={"flow": flow, "server": ["alpha-id", "beta-id"]}, follow_redirects=False
+    )
+    assert response.status_code == 303, response.text
+    code: Final = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+    sealed: Final = decrypt_value_helper(
+        code.removeprefix(GATEWAY_AUTH_CODE_PREFIX), "gateway_authorization_code", return_original_value=False
+    )
+    assert isinstance(sealed, str)
+    granted: Final = json.loads(sealed).get("resource_server_ids")
+    assert (None if granted is None else tuple(granted)) == sealed_ids
+    token: Final = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": "http://127.0.0.1/callback",
+            "code_verifier": "v" * 43,
+            **resource_param,
+        },
+    )
+    assert token.status_code == 200, token.text
+
+
 @pytest.mark.parametrize("authorize_path", ["/authorize/mcp-session", "/authorize"])
 def test_gateway_authorize_routes_forward_server_scope(monkeypatch: pytest.MonkeyPatch, authorize_path: str) -> None:
     from http.cookies import SimpleCookie
@@ -14998,11 +15083,23 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")]
+    "prior_scopes, scope, expected",
+    [
+        (["tools.read"], "tools.write", "tools.read tools.write"),
+        (None, "tools.write", "tools.write"),
+        ([], "tools.write", "tools.write"),
+        (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
+        (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
+        (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+    ],
 )
-async def test_managed_authorize_retains_the_callers_previous_grant(
-    jwt_oauth_identity, monkeypatch, prior_scopes, expected
-):
+async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_scopes: list[str] | None,
+    scope: str,
+    expected: str,
+) -> None:
     from types import SimpleNamespace
     from urllib.parse import parse_qs, urlsplit
 
@@ -15028,7 +15125,7 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
         server,
         "scope-client",
         "http://127.0.0.1:9/cb",
-        scope="tools.write",
+        scope=scope,
         code_challenge="challenge",
         code_challenge_method="S256",
     )
@@ -15278,6 +15375,9 @@ async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch
         (["tools.read", "tools.write"], ("tools.write",), "present"),
         (None, ("tools.write",), "absent"),
         (["tools.read"], (), "present"),
+        (["channels:read,chat:write"], ("channels:read", "chat:write"), "present"),
+        (["channels:read,chat:write"], ("channels:read", "files:write"), "absent"),
+        (["channels:read"], ("channels:read", "chat:write"), "absent"),
     ],
 )
 async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
@@ -15291,6 +15391,136 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
     monkeypatch.setattr(db, "get_user_oauth_credential", read)
     assert await endpoints._vendor_credential_state("owner", "server", required) == expected
     read.assert_awaited_once_with(prisma, "owner", "server")
+
+
+_SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
+_DATADOG_EXPANSION: Final = ("logs_read_index_data", "dashboards_read", "mcp_read", "mcp_write")
+_COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "known", "expected"),
+    [
+        (("channels:read,chat:write",), ("channels:read", "chat:write"), _SLACK_SCOPES, True),
+        (("channels:read,chat:write",), ("channels:read", "files:write"), _SLACK_SCOPES, False),
+        (("channels:read,chat:write,files:read",), ("channels:read",), _SLACK_SCOPES, False),
+        (("x:unknown,chat:write",), ("chat:write",), _SLACK_SCOPES, False),
+        (("files:read,write",), ("files:read",), _COMMA_NAMED_SCOPES, False),
+        (("files:read,write",), ("files:read,write",), _COMMA_NAMED_SCOPES, True),
+        (("channels:read,chat:write",), ("read",), _SLACK_SCOPES | {"read"}, False),
+        (("read", "write,admin"), ("admin",), frozenset(("read", "write", "admin")), False),
+        (("write,admin", "read"), ("admin",), frozenset(("read", "write", "admin")), False),
+        (("read", "write"), ("read", "write"), frozenset[str](), True),
+        ((), ("read",), frozenset(("read",)), False),
+        ((), (), frozenset[str](), True),
+        (_DATADOG_EXPANSION, ("mcp_all",), frozenset[str](), True),
+        (("channels:read,chat:write",), ("mcp_all", "channels:read"), _SLACK_SCOPES, True),
+        ((), ("mcp_all",), frozenset[str](), False),
+        (_DATADOG_EXPANSION, ("mcp_all", "admin"), frozenset[str](), False),
+    ],
+)
+def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(
+    granted: tuple[str, ...], requested: tuple[str, ...], known: frozenset[str], expected: bool
+) -> None:
+    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
+
+    assert grant_covers_scopes(granted, requested, lambda: known) is expected
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "expected"),
+    [
+        (("channels:read",), ("channels:read",), True),
+        (("read", "write"), ("read", "write"), True),
+        (("read", "write"), ("admin",), False),
+        (("read",), ("admin",), False),
+        ((), (), True),
+    ],
+)
+def test_grant_covers_scopes_answers_like_a_subset_check_without_reading_server_scopes(
+    granted: tuple[str, ...], requested: tuple[str, ...], expected: bool
+) -> None:
+    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
+
+    def unreachable_server_scopes() -> frozenset[str]:
+        raise AssertionError("server scopes read for a grant with no comma token")
+
+    assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
+
+
+def test_server_scope_names_joins_configured_and_published_scopes() -> None:
+    from litellm.proxy.mcp_server.oauth_utils import server_scope_names
+
+    server: Final = _cimd_oauth_server().model_copy(
+        update={
+            "scopes": ["channels:read"],
+            "authorization_server_metadata": {
+                "issuer": "https://idp.example.com",
+                "authorization_endpoint": "https://idp.example.com/authorize",
+                "token_endpoint": "https://idp.example.com/token",
+                "response_types_supported": ["code"],
+                "scopes_supported": ["chat:write", "files:write"],
+            },
+        }
+    )
+    assert server_scope_names(server) == frozenset(("channels:read", "chat:write", "files:write"))
+    assert server_scope_names(_cimd_oauth_server()) == frozenset[str]()
+    assert server_scope_names(None) == frozenset[str]()
+
+
+_PUBLISHED_SLACK_METADATA: Final = {
+    "issuer": "https://idp.example.com",
+    "authorization_endpoint": "https://idp.example.com/authorize",
+    "token_endpoint": "https://idp.example.com/token",
+    "response_types_supported": ["code"],
+    "scopes_supported": ["channels:read", "chat:write", "files:read"],
+}
+
+
+def _in_memory_credentials_table(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "connect-check-test-salt")
+    prisma: Final = MagicMock()
+    rows: Final = prisma.db.litellm_mcpusercredentials
+
+    async def upsert(where: "Mapping[str, Mapping[str, str]]", data: "Mapping[str, Mapping[str, str]]") -> None:
+        key: Final = where["user_id_server_id"]
+        rows.find_unique.return_value = SimpleNamespace(
+            credential_b64=data["create"]["credential_b64"], user_id=key["user_id"], server_id=key["server_id"]
+        )
+
+    rows.find_unique = AsyncMock(return_value=None)
+    rows.upsert = AsyncMock(side_effect=upsert)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    return prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_update",
+    [
+        {"scopes": ["channels:read", "chat:write", "files:read"]},
+        {"authorization_server_metadata": _PUBLISHED_SLACK_METADATA},
+    ],
+)
+async def test_connect_reads_a_comma_grant_against_the_server_scopes(
+    monkeypatch: pytest.MonkeyPatch, server_update: "Mapping[str, object]"
+) -> None:
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _cimd_oauth_server().model_copy(update=server_update)
+    prisma: Final = _in_memory_credentials_table(monkeypatch)
+    await db.store_user_oauth_credential(
+        prisma, "owner", server.server_id, "vendor-token", scopes=["channels:read,chat:write,files:read"]
+    )
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "absent"
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "present"
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ("files:write",)) == "absent"
+    assert await endpoints._vendor_credential_state("owner", server.server_id, ()) == "present"
 
 
 @pytest.mark.parametrize(

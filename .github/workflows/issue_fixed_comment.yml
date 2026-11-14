@@ -15,9 +15,9 @@ on:
   pull_request:
     paths:
       - .github/workflows/issue_fixed_comment.yml
-      - scripts/comment-fixed-issue.ts
-      - scripts/comment-fixed-issue.test.ts
-      - scripts/auto-close-duplicates.ts
+      - litellm/scripts/comment-fixed-issue.ts
+      - litellm/scripts/comment-fixed-issue.test.ts
+      - litellm/scripts/auto-close-duplicates.ts
 
 permissions: {}
 
@@ -44,7 +44,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Test the closer lookup, the release placement, the comment and the superseded pull request close
-        run: bun test scripts/comment-fixed-issue.test.ts
+        run: bun test litellm/scripts/comment-fixed-issue.test.ts
 
   comment-fixed-issue:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
@@ -58,7 +58,7 @@ jobs:
       - name: Checkout scripts
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          sparse-checkout: scripts
+          sparse-checkout: litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -69,7 +69,7 @@ jobs:
 
       - name: Name the release that carries the fix and close the pull requests it supersedes
         shell: bash
-        run: bun run scripts/comment-fixed-issue.ts | tee -a "${GITHUB_STEP_SUMMARY}"
+        run: bun run litellm/scripts/comment-fixed-issue.ts | tee -a "${GITHUB_STEP_SUMMARY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}

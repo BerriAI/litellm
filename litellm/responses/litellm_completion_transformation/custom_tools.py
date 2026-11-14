@@ -34,7 +34,7 @@ _MAX_ARGUMENTS_LEN: Final = 1_000_000
 _DECODED_JSON: Final = TypeAdapter(object)
 
 TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType(
-    {"function_call": "fc", "custom_tool_call": "ctc", "tool_search_call": "tsc"}
+    {"function_call": "fc", "custom_tool_call": "ctc", "tool_search_call": "tsc", "tool_search_output": "tso"}
 )
 
 

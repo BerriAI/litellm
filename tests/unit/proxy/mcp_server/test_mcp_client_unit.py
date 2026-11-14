@@ -186,9 +186,7 @@ class TestMCPClientUnitTests:
                 },
             )
         ]
-        mock_result = MagicMock()
-        mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+        mock_session_instance.list_tools.return_value = ListToolsResult(tools=mock_tools)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()

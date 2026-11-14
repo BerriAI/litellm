@@ -180,7 +180,13 @@ class PngUpload(BaseModel):
     kind: Literal["png"]
 
 
-Upload: TypeAlias = Annotated[WavUpload | PngUpload, Field(discriminator="kind")]
+class UnsizedFlacUpload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["unsized_flac"]
+
+
+Upload: TypeAlias = Annotated[WavUpload | PngUpload | UnsizedFlacUpload, Field(discriminator="kind")]
 
 
 class JsonResponse(BaseModel):

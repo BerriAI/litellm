@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
@@ -98,9 +99,9 @@ async def test_non_streaming_request_is_served_from_cache(local_cache, request_k
     fake_handler = _CountingHandler([_anthropic_response("msg_1", "ALPHA"), _anthropic_response("msg_2", "BETA")])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    first = await litellm.anthropic_messages(**request_kwargs)
+    first = await handler.anthropic_messages(**request_kwargs)
     await asyncio.sleep(0)
-    second = await litellm.anthropic_messages(**request_kwargs)
+    second = await handler.anthropic_messages(**request_kwargs)
 
     assert len(fake_handler.calls) == 1
     assert first == second
@@ -114,9 +115,9 @@ async def test_cache_key_separates_different_system_prompts(local_cache, request
     fake_handler = _CountingHandler([_anthropic_response("msg_1", "ALPHA"), _anthropic_response("msg_2", "BETA")])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    first = await litellm.anthropic_messages(**request_kwargs, system="Always answer ALPHA")
+    first = await handler.anthropic_messages(**request_kwargs, system="Always answer ALPHA")
     await asyncio.sleep(0)
-    second = await litellm.anthropic_messages(**request_kwargs, system="Always answer BETA")
+    second = await handler.anthropic_messages(**request_kwargs, system="Always answer BETA")
 
     assert len(fake_handler.calls) == 2
     assert first["content"][0]["text"] == "ALPHA"
@@ -129,26 +130,65 @@ async def test_cache_key_separates_anthropic_native_params(local_cache, request_
     fake_handler = _CountingHandler([_anthropic_response("msg_1", "ALPHA"), _anthropic_response("msg_2", "BETA")])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    await litellm.anthropic_messages(**request_kwargs)
+    await handler.anthropic_messages(**request_kwargs)
     await asyncio.sleep(0)
-    await litellm.anthropic_messages(**request_kwargs, **anthropic_param)
+    await handler.anthropic_messages(**request_kwargs, **anthropic_param)
 
     assert len(fake_handler.calls) == 2
 
 
+TOOL_USE_WITHOUT_ARGUMENTS_EVENTS: Final[List[bytes]] = [
+    STREAM_EVENTS[0],
+    b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+    b'"content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_time", "input": {}}}\n\n',
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+    b'"delta": {"type": "input_json_delta", "partial_json": ""}}\n\n',
+    STREAM_EVENTS[3],
+    b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, '
+    b'"usage": {"output_tokens": 3}}\n\n',
+    STREAM_EVENTS[5],
+]
+
+CRLF_STREAM_IN_ONE_CHUNK: Final[List[bytes]] = [b"".join(STREAM_EVENTS).replace(b"\n", b"\r\n")]
+
+LINE_SEPARATOR_TEXT_EVENTS: Final[List[bytes]] = [
+    *STREAM_EVENTS[:2],
+    b"event: content_block_delta\ndata: "
+    + json.dumps(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "A B"}},
+        ensure_ascii=False,
+    ).encode()
+    + b"\n\n",
+    *STREAM_EVENTS[3:],
+]
+
+NON_JSON_DATA_LINE_EVENTS: Final[List[bytes]] = [STREAM_EVENTS[0], b"data: [DONE]\n\n", *STREAM_EVENTS[1:]]
+
+
 @pytest.mark.asyncio
-async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwargs, monkeypatch):
-    fake_handler = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])])
+@pytest.mark.parametrize(
+    "events",
+    [
+        STREAM_EVENTS,
+        TOOL_USE_WITHOUT_ARGUMENTS_EVENTS,
+        CRLF_STREAM_IN_ONE_CHUNK,
+        LINE_SEPARATOR_TEXT_EVENTS,
+        NON_JSON_DATA_LINE_EVENTS,
+    ],
+    ids=["text", "tool-use-without-arguments", "crlf-in-one-chunk", "line-separator-in-text", "non-json-data-line"],
+)
+async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwargs, monkeypatch, events):
+    fake_handler = _CountingHandler([_byte_stream(events), _byte_stream([b"event: never_used\n\n"])])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    first = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
     await asyncio.sleep(0)
-    second_stream = await litellm.anthropic_messages(**request_kwargs, stream=True)
+    second_stream = await handler.anthropic_messages(**request_kwargs, stream=True)
     second = await _collect(second_stream)
 
     assert len(fake_handler.calls) == 1
-    assert first == STREAM_EVENTS
-    assert second == STREAM_EVENTS
+    assert first == events
+    assert second == events
     assert second_stream._hidden_params["cache_hit"] is True
 
 
@@ -157,26 +197,33 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
     fake_handler = _CountingHandler([_byte_stream(STREAM_EVENTS), _anthropic_response("msg_2", "ALPHA")])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
-    non_streaming = await litellm.anthropic_messages(**request_kwargs)
+    await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
+    non_streaming = await handler.anthropic_messages(**request_kwargs)
 
     assert len(fake_handler.calls) == 2
     assert non_streaming["content"][0]["text"] == "ALPHA"
 
 
 @pytest.mark.asyncio
-async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
-    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+@pytest.mark.parametrize(
+    "empty_events",
+    [
+        [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+        [STREAM_EVENTS[0], STREAM_EVENTS[1], STREAM_EVENTS[3], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+    ],
+    ids=["no-blocks", "only-an-empty-text-block"],
+)
+async def test_stream_without_output_is_not_cached(local_cache, request_kwargs, monkeypatch, empty_events):
     fake_handler = _CountingHandler(
         [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
     )
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    empty = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    empty = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
     await asyncio.sleep(0)
-    refilled = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    refilled = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
     await asyncio.sleep(0)
-    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    replayed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert empty == empty_events
     assert refilled == STREAM_EVENTS
@@ -192,8 +239,8 @@ async def test_failed_stream_is_not_cached(local_cache, request_kwargs, monkeypa
     fake_handler = _CountingHandler([_byte_stream(error_events), _byte_stream(STREAM_EVENTS)])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    failed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
-    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    failed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
+    replayed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert failed == error_events
     assert len(fake_handler.calls) == 2
@@ -213,9 +260,9 @@ async def test_multibyte_utf8_split_across_chunks_streams_and_caches(local_cache
     fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream([b"event: never_used\n\n"])])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    first = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
     await asyncio.sleep(0)
-    second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    second = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 1
     assert first == chunks
@@ -231,9 +278,9 @@ async def test_message_stop_split_across_chunks_still_caches(local_cache, reques
     fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream([b"event: never_used\n\n"])])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    first = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
     await asyncio.sleep(0)
-    second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    second = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 1
     assert first == chunks
@@ -249,8 +296,8 @@ async def test_error_event_split_across_chunks_is_not_cached(local_cache, reques
     fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream(STREAM_EVENTS)])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    failed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
-    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    failed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
+    replayed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert failed == chunks
     assert len(fake_handler.calls) == 2
@@ -262,11 +309,11 @@ async def test_abandoned_stream_is_not_cached(local_cache, request_kwargs, monke
     fake_handler = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream(STREAM_EVENTS)])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
-    partial_stream = await litellm.anthropic_messages(**request_kwargs, stream=True)
+    partial_stream = await handler.anthropic_messages(**request_kwargs, stream=True)
     await partial_stream.__anext__()
     await partial_stream.aclose()
 
-    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    replayed = await _collect(await handler.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 2
     assert replayed == STREAM_EVENTS
@@ -441,7 +488,5 @@ def test_cache_writer_forwards_has_buffered_provider_output(request_kwargs):
     )
     held_back = AnthropicMessagesStreamCacheWriter(stream=_HeldBackStream(), caching_handler=caching_handler)
     assert held_back.has_buffered_provider_output is True
-    replayable = AnthropicMessagesStreamCacheWriter(
-        stream=_byte_stream(STREAM_EVENTS), caching_handler=caching_handler
-    )
+    replayable = AnthropicMessagesStreamCacheWriter(stream=_byte_stream(STREAM_EVENTS), caching_handler=caching_handler)
     assert replayable.has_buffered_provider_output is False

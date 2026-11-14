@@ -2,6 +2,7 @@
 Type definitions for Anthropic Skills API
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from typing_extensions import TypedDict
@@ -16,7 +17,7 @@ class CreateSkillRequest(TypedDict, total=False):
     display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: list[Any] | None
+    files: Sequence[object] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
