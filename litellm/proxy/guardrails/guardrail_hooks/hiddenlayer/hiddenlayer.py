@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
-import requests
 from fastapi import HTTPException
 from httpx import HTTPStatusError
-from requests.auth import HTTPBasicAuth
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -20,12 +19,16 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
     HiddenlayerAction,
     HiddenlayerMessages,
@@ -88,10 +91,6 @@ class _LoggedCallLitellmParams(TypedDict, total=False):
     metadata: ReadOnly[_LoggedCallMetadata]
 
 
-class _HiddenlayerOutputMessage(TypedDict, total=False):
-    content: ReadOnly[str | list[Mapping[str, str]]]
-
-
 class _HiddenlayerChoiceMessage(TypedDict, total=False):
     content: ReadOnly[str]
 
@@ -101,7 +100,7 @@ class _HiddenlayerChoice(TypedDict, total=False):
 
 
 class _HiddenlayerV2Output(TypedDict, total=False):
-    messages: ReadOnly[Sequence[_HiddenlayerOutputMessage]]
+    messages: ReadOnly[list[AllMessageValues]]
     choices: ReadOnly[Sequence[_HiddenlayerChoice]]
 
 
@@ -193,22 +192,61 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(auth_url, api_id, api_key, timeout: float = _AUTH_TIMEOUT_SECONDS) -> str:
-    token_url: Final = f"{auth_url}/oauth2/token?grant_type=client_credentials"
-
-    resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key), timeout=timeout)
-
-    if not resp.ok:
+def _get_jwt(
+    client: HTTPHandler, auth_url: str, api_id: str, api_key: str, timeout: float = _AUTH_TIMEOUT_SECONDS
+) -> str:
+    credentials: Final = base64.b64encode(f"{api_id}:{api_key}".encode()).decode()
+    try:
+        resp: Final = client.post(
+            f"{auth_url}/oauth2/token?grant_type=client_credentials",
+            headers={"Authorization": f"Basic {credentials}"},
+            timeout=timeout,
+        )
+    except HTTPStatusError as e:
         raise RuntimeError(
-            f"Unable to get authentication credentials for the HiddenLayer API: {resp.status_code}: {resp.text}"
+            f"Unable to get authentication credentials for the HiddenLayer API: {e.response.status_code}: {e}"
+        ) from e
+
+    payload: Final = _token_payload(resp)
+    if "access_token" not in payload:
+        raise RuntimeError(
+            f"Unable to get authentication credentials for the HiddenLayer API - invalid response: {payload}"
         )
 
-    if "access_token" not in resp.json():
-        raise RuntimeError(
-            f"Unable to get authentication credentials for the HiddenLayer API - invalid response: {resp.json()}"
-        )
+    return payload["access_token"]
 
-    return _token_payload(resp)["access_token"]
+
+def _jwt_refresher(
+    api_base: str,
+    api_id: str | None,
+    api_key: str | None,
+    auth_url: str,
+    timeout: object,
+    ssl_verify: bool | str | None,
+) -> Callable[[], str] | None:
+    saas: Final = is_saas(api_base)
+    if saas and not api_id:
+        raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
+    if saas and not api_key:
+        raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
+
+    if api_id and api_key:
+        auth_client: Final = get_httpx_client(params={"ssl_verify": ssl_verify} if ssl_verify is not None else None)
+        auth_timeout: Final = timeout if isinstance(timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
+        return lambda: _get_jwt(auth_client, auth_url, api_id, api_key, auth_timeout)
+
+    if api_id or api_key:
+        verbose_proxy_logger.warning(
+            "HiddenLayer needs both `api_id` and `api_key` to authenticate. Sending requests without a token."
+        )
+    return None
+
+
+def _guardrail_http_client(ssl_verify: bool | str | None) -> AsyncHTTPHandler:
+    return get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.GuardrailCallback,
+        params={"ssl_verify": ssl_verify} if ssl_verify is not None else None,
+    )
 
 
 class HiddenlayerGuardrail(CustomGuardrail):
@@ -227,39 +265,23 @@ class HiddenlayerGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         auth_url: str | None = None,
+        ssl_verify: bool | str | None = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
         self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
         self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"
-        self.jwt_token = None
-
-        auth_url = auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai"
-
-        if is_saas(self.api_base):
-            if not self.hiddenlayer_client_id:
-                raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
-
-            if not self.hiddenlayer_client_secret:
-                raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
-
-            ctor_timeout: Final = kwargs.get("timeout")
-            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
-            self.jwt_token = _get_jwt(
-                auth_url=auth_url,
-                api_id=self.hiddenlayer_client_id,
-                api_key=self.hiddenlayer_client_secret,
-                timeout=auth_timeout,
-            )
-            self.refresh_jwt_func = lambda: _get_jwt(
-                auth_url=auth_url,
-                api_id=self.hiddenlayer_client_id,
-                api_key=self.hiddenlayer_client_secret,
-                timeout=auth_timeout,
-            )
-
-        self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.refresh_jwt_func = _jwt_refresher(
+            api_base=self.api_base,
+            api_id=self.hiddenlayer_client_id,
+            api_key=self.hiddenlayer_client_secret,
+            auth_url=auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai",
+            timeout=kwargs.get("timeout"),
+            ssl_verify=ssl_verify,
+        )
+        self.jwt_token = self.refresh_jwt_func() if self.refresh_jwt_func else None
+        self._http_client = _guardrail_http_client(ssl_verify)
         super().__init__(**kwargs)
 
     def supports_structured_messages(self) -> bool:
@@ -402,7 +424,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             # Try the request again by refreshing the jwt if we get 401
             # since the Hiddenlayer jwt timeout is an hour and this is
             # a long lived session application
-            if e.response.status_code == 401 and self.jwt_token is not None:
+            if e.response.status_code == 401 and self.refresh_jwt_func is not None:
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
@@ -441,38 +463,22 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         auth_url: str | None = None,
+        ssl_verify: bool | str | None = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
         self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
         self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"
-        self.jwt_token = None
-
-        auth_url = auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai"
-
-        if is_saas(self.api_base):
-            if not self.hiddenlayer_client_id:
-                raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
-
-            if not self.hiddenlayer_client_secret:
-                raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
-
-            ctor_timeout: Final = kwargs.get("timeout")
-            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
-            self.jwt_token = _get_jwt(
-                auth_url=auth_url,
-                api_id=self.hiddenlayer_client_id,
-                api_key=self.hiddenlayer_client_secret,
-                timeout=auth_timeout,
-            )
-            self.refresh_jwt_func = lambda: _get_jwt(
-                auth_url=auth_url,
-                api_id=self.hiddenlayer_client_id,
-                api_key=self.hiddenlayer_client_secret,
-                timeout=auth_timeout,
-            )
-
-        self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.refresh_jwt_func = _jwt_refresher(
+            api_base=self.api_base,
+            api_id=self.hiddenlayer_client_id,
+            api_key=self.hiddenlayer_client_secret,
+            auth_url=auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai",
+            timeout=kwargs.get("timeout"),
+            ssl_verify=ssl_verify,
+        )
+        self.jwt_token = self.refresh_jwt_func() if self.refresh_jwt_func else None
+        self._http_client = _guardrail_http_client(ssl_verify)
         super().__init__(**kwargs)
 
     def supports_structured_messages(self) -> bool:
@@ -549,23 +555,15 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 },
             )
 
-        new_texts: Final[list[str]] = []
         if input_type == "request":
-            inputs["structured_messages"] = output
+            evaluated_messages: Final = evaluated_output.get("messages")
+            if not isinstance(evaluated_messages, list):
+                return inputs
 
-            modified_messages: Final[Sequence[_HiddenlayerOutputMessage]] = evaluated_output.get("messages", [])
-            for message in modified_messages:
-                content = message.get("content", "")
-                if isinstance(content, list):
-                    text_parts = [
-                        item["text"] for item in content if isinstance(item, dict) and item.get("type") == "text"
-                    ]
-                    if text_parts:
-                        new_texts.append(" ".join(text_parts))
-                elif content:
-                    new_texts.append(content)
-
-            inputs["texts"] = new_texts
+            inputs["structured_messages"] = evaluated_messages
+            inputs["texts"] = [
+                text for message in evaluated_messages if (text := " ".join(message_slot_texts(message)))
+            ]
 
         elif input_type == "response" and inputs.get("texts"):
             redacted_choices: Final[Sequence[_HiddenlayerChoice]] = evaluated_output.get("choices", [{}])
@@ -612,7 +610,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             # Try the request again by refreshing the jwt if we get 401
             # since the Hiddenlayer jwt timeout is an hour and this is
             # a long lived session application
-            if e.response.status_code == 401 and self.jwt_token is not None:
+            if e.response.status_code == 401 and self.refresh_jwt_func is not None:
                 verbose_proxy_logger.debug(
                     "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
                 )
