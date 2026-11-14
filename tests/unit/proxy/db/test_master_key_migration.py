@@ -211,6 +211,21 @@ async def test_search_tool_litellm_params_are_moved_to_the_new_key():
 
 
 @pytest.mark.asyncio
+async def test_per_user_provider_connections_are_moved_to_the_new_key():
+    connection = '{"access_token": "gho-user-token", "github_login": "octocat"}'
+    tables: Tables = {
+        "LiteLLM_UserProviderCredentials": [{"id": "connection-1", "credential_b64": _encrypted(connection)}]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 1
+    stored = str(tables["LiteLLM_UserProviderCredentials"][0]["credential_b64"])
+    assert decrypt_if_encrypted_with(stored, NEW_KEY) == connection
+    assert decrypt_if_encrypted_with(stored, PREVIOUS_KEY) is None
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 
