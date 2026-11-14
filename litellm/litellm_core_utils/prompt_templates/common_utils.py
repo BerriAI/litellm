@@ -10,7 +10,7 @@ from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
@@ -930,7 +930,13 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
-_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+class DefsLookup(Protocol):
+    def __contains__(self, name: object, /) -> bool: ...
+
+    def __getitem__(self, name: str, /) -> object: ...
+
+
+_DefsScope: TypeAlias = tuple[DefsLookup, ...]
 _DEFS_KEYS: Final = ("$defs", "definitions")
 _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "dependentSchemas", *_DEFS_KEYS})
 _INSTANCE_KEYWORDS: Final = frozenset({"const", "default", "enum", "example", "examples"})
@@ -985,7 +991,7 @@ class DefsInliningBudgetExceededError(ValueError):
 
 def unpack_defs(
     schema: dict,
-    defs: dict,
+    defs: DefsLookup,
     max_inlined_bytes: int | None = None,
 ) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
@@ -1015,7 +1021,7 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema)},)
+    root_defs: Final[_DefsScope] = _scope_with_local_defs((defs,), _local_defs(schema))
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
