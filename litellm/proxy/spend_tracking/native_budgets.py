@@ -497,12 +497,6 @@ async def settle_native_reservation(
             entry["applied_adjustment"] = target
 
 
-async def admitted_native_reservation(reservation: object) -> Mapping[str, object] | None:
-    await await_native_admission(reservation)
-    record: Final = mapping(reservation)
-    return record if isinstance(reservation, dict) and record is not None and NATIVE_CALL_ID_KEY in record else None
-
-
 def is_native_reservation(reservation: Mapping[str, object] | None) -> bool:
     return reservation is not None and NATIVE_CALL_ID_KEY in reservation
 
