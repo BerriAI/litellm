@@ -499,3 +499,17 @@ def test_muse_refuses_automatic_truncation_unless_dropped(surface: str, respx_mo
     assert "truncation" not in FIELDS.validate_json(route.calls.last.request.content)
     call(vertex_project="unit-project", truncation="disabled", num_retries=0)
     assert FIELDS.validate_json(route.calls.last.request.content)["truncation"] == "disabled"
+
+
+def test_muse_keeps_the_routed_model_when_extra_body_names_another(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-spark-1.3")))
+    _ = litellm.responses(
+        model="vertex_ai/meta/muse-spark-1.3",
+        input="Say hello",
+        vertex_project="unit-project",
+        extra_body={"model": "muse-wonder-1.0", "metadata": {"k": "v"}},
+        num_retries=0,
+    )
+    body: Final = FIELDS.validate_json(route.calls.last.request.content)
+    assert body["model"] == "muse-spark-1.3"
+    assert body["metadata"] == {"k": "v"}
