@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -1423,27 +1423,92 @@ def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_cli
     ]
 
 
-def test_customer_block_success_serializes_db_model_instance(mock_prisma_client, mock_user_api_key_auth):
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (
+            {"user_id": "c1", "blocked": False, "spend": None},
+            {
+                "user_id": "c1",
+                "blocked": True,
+                "alias": None,
+                "spend": 0.0,
+                "allowed_model_region": None,
+                "default_model": None,
+                "models": [],
+                "budget_id": None,
+                "litellm_budget_table": None,
+                "object_permission_id": None,
+                "object_permission": None,
+            },
+        ),
+        (
+            _FULL_DB_ROW,
+            {
+                **_EXPECTED_CUSTOMER,
+                "blocked": True,
+                "litellm_budget_table": {
+                    "budget_id": "b1",
+                    "soft_budget": None,
+                    "max_budget": 10.0,
+                    "max_parallel_requests": None,
+                    "tpm_limit": None,
+                    "rpm_limit": None,
+                    "tpd_limit": None,
+                    "model_max_budget": None,
+                    "budget_duration": "30d",
+                    "allowed_models": [],
+                    "temp_budget_increase": None,
+                    "temp_budget_expiry": None,
+                },
+            },
+        ),
+    ],
+    ids=["null-spend-without-relations", "populated-relations"],
+)
+def test_customer_block_success_serializes_db_model_instance(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    row: Mapping[str, object],
+    expected: Mapping[str, object],
+) -> None:
     class MockPrismaEndUser(BaseModel):
         user_id: str
         blocked: bool
         spend: float | None = None
 
-    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
-        return_value=MockPrismaEndUser(user_id="c1", blocked=True, spend=None)
-    )
+        model_config = ConfigDict(extra="allow", frozen=True)
 
-    response = client.post(
+    async def upsert(
+        *,
+        where: Mapping[str, str],
+        data: Mapping[str, Mapping[str, object]],
+        include: Mapping[str, bool] | None = None,
+    ) -> MockPrismaEndUser:
+        return MockPrismaEndUser.model_validate(
+            {
+                **row,
+                "user_id": where["user_id"],
+                **data["update"],
+                "litellm_budget_table": row.get("litellm_budget_table")
+                if include and include.get("litellm_budget_table")
+                else None,
+                "object_permission": row.get("object_permission")
+                if include and include.get("object_permission")
+                else None,
+            }
+        )
+
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(side_effect=upsert)
+
+    response: Final = client.post(
         "/customer/block",
         json={"user_ids": ["c1"]},
         headers={"Authorization": "Bearer k"},
     )
 
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["blocked_users"][0]["user_id"] == "c1"
-    assert body["blocked_users"][0]["blocked"] is True
-    assert body["blocked_users"][0]["spend"] == 0.0
+    assert response.json() == {"blocked_users": [expected]}
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
