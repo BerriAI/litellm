@@ -590,7 +590,9 @@ def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_bac
     ["/files", "/openai/v1/files"],
     ids=["files-alias", "openai-v1-files-alias"],
 )
-def test_model_routed_upload_through_a_route_alias_reaches_one_deployment(gateway: Gateway, route: str) -> None:
+def test_model_routed_upload_through_a_route_alias_reaches_one_deployment(
+    gateway: Gateway, route: str
+) -> None:
     sdk_base_url: Final = str(gateway.client.base_url).rstrip("/") + route.removesuffix("/files")
     _assert_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
         gateway, "sdk_extra_body", sdk_base_url
@@ -647,7 +649,9 @@ def _content_request(
             assert_never(route)
 
 
-def _open_and_read_head(client: httpx.Client, request: httpx.Request) -> tuple[httpx.Response, Iterator[bytes], bytes]:
+def _open_and_read_head(
+    client: httpx.Client, request: httpx.Request
+) -> tuple[httpx.Response, Iterator[bytes], bytes]:
     response: Final = client.send(request, stream=True)
     chunks: Final = response.iter_bytes()
     return response, chunks, next(chunks, b"")
@@ -827,7 +831,9 @@ def _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
         encoded_input: Final = _encoded_batch_input(gateway, spelling, alias, wire, raw_input, key)
-        created_batch_payload: Final = _created_batch(gateway, spelling, encoded_input, raw_input, alias, sdk_base_url)
+        created_batch_payload: Final = _created_batch(
+            gateway, spelling, encoded_input, raw_input, alias, sdk_base_url
+        )
 
         expected_raw_input: Final = f"file-{key}" if spelling == "encoded_input" else raw_input
         expected_input: Final = (
@@ -865,7 +871,9 @@ def _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
 def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
     gateway: Gateway, spelling: _BatchCreateSpelling
 ) -> None:
-    _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(gateway, spelling, _sdk_base_url(gateway))
+    _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
+        gateway, spelling, _sdk_base_url(gateway)
+    )
 
 
 @pytest.mark.parametrize("route", ["/batches", "/openai/v1/batches"], ids=["batches-alias", "openai-v1-batches-alias"])

@@ -214,9 +214,7 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                     "user": None,
                     "store": None,
                 }, response.text
-        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses/compact"] * (
-            len(_ALIASES) * len(sent_bodies)
-        )
+        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses/compact"] * (len(_ALIASES) * len(sent_bodies))
 
 
 @pytest.mark.parametrize("prefix", ("/v1", "", "/openai/v1"))

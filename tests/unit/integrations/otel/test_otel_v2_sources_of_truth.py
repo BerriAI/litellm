@@ -821,8 +821,8 @@ def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_fi
 
 
 def test_responses_claude_web_calls_lead_the_tool_calls_without_ending_the_turn_on_tool_calls():
-    claude_fetch: Final = build_web_search_call(
-        "srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch"
+    claude_fetch: Final = (
+        build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
     )
     openai_search: Final = {
         "type": "web_search_call",

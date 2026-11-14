@@ -29,7 +29,12 @@ def _function_has_on_operations(all_lines, func_name, visited=None):
             func_start = i
         elif func_start is not None:
             # Function ends when we hit next def at module level
-            if line.strip() and not line.startswith(" ") and not line.startswith("\t") and line.startswith("def "):
+            if (
+                line.strip()
+                and not line.startswith(" ")
+                and not line.startswith("\t")
+                and line.startswith("def ")
+            ):
                 func_end = i
                 break
 
@@ -42,7 +47,11 @@ def _function_has_on_operations(all_lines, func_name, visited=None):
     for line in func_lines:
         # Skip comments and docstrings
         line_stripped = line.strip()
-        if line_stripped.startswith("#") or line_stripped.startswith('"""') or line_stripped.startswith("'''"):
+        if (
+            line_stripped.startswith("#")
+            or line_stripped.startswith('"""')
+            or line_stripped.startswith("'''")
+        ):
             continue
 
         # Check for for loops
@@ -52,7 +61,9 @@ def _function_has_on_operations(all_lines, func_name, visited=None):
         if re.search(r"\bwhile\s+", line):
             return True
         # Check for comprehensions
-        if re.search(r"\[.*\s+for\s+.*\s+in\s+", line) or re.search(r"\{.*\s+for\s+.*\s+in\s+", line):
+        if re.search(r"\[.*\s+for\s+.*\s+in\s+", line) or re.search(
+            r"\{.*\s+for\s+.*\s+in\s+", line
+        ):
             return True
 
         # Recursively check called functions (check all, don't skip any in recursive checks)
@@ -88,7 +99,12 @@ def check_get_model_cost_key_performance():
             func_start = i
         elif func_start is not None:
             # Function ends when we hit next def at module level (no indentation)
-            if line.strip() and not line.startswith(" ") and not line.startswith("\t") and line.startswith("def "):
+            if (
+                line.strip()
+                and not line.startswith(" ")
+                and not line.startswith("\t")
+                and line.startswith("def ")
+            ):
                 func_end = i
                 break
 
@@ -142,7 +158,9 @@ def check_get_model_cost_key_performance():
             problematic_lines.append((i, "while loop", line_stripped))
 
         # Check for comprehensions
-        if re.search(r"\[.*\s+for\s+.*\s+in\s+", line) or re.search(r"\{.*\s+for\s+.*\s+in\s+", line):
+        if re.search(r"\[.*\s+for\s+.*\s+in\s+", line) or re.search(
+            r"\{.*\s+for\s+.*\s+in\s+", line
+        ):
             problematic_lines.append((i, "comprehension", line_stripped))
 
         # Check for problematic function calls
@@ -196,7 +214,9 @@ def main():
         for line_num, operation, context in problematic_lines:
             print(f"  Line {line_num}: {operation} - {context}")
 
-        print("\nWARNING: Only O(1) lookup operations are acceptable in _get_model_cost_key.")
+        print(
+            "\nWARNING: Only O(1) lookup operations are acceptable in _get_model_cost_key."
+        )
         print("Any O(n) operations will cause severe CPU overhead.")
 
         raise Exception(
@@ -204,7 +224,9 @@ def main():
             f"This violates the performance requirement."
         )
     else:
-        print("OK: No O(n) operations found in _get_model_cost_key. Performance requirement satisfied.")
+        print(
+            "OK: No O(n) operations found in _get_model_cost_key. Performance requirement satisfied."
+        )
 
 
 if __name__ == "__main__":

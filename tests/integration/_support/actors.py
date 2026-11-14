@@ -139,16 +139,16 @@ class ManagementDatabase:
 
 
 def _replace_text(value: str, replacements: Mapping[str, str]) -> str:
-    return (
-        value.replace(TEAM_ALPHA, replacements[TEAM_ALPHA])
-        .replace(TEAM_BETA, replacements[TEAM_BETA])
-        .replace(TEAM_GAMMA, replacements[TEAM_GAMMA])
-        .replace(ORG_A, replacements[ORG_A])
-        .replace(ORG_B, replacements[ORG_B])
+    return value.replace(TEAM_ALPHA, replacements[TEAM_ALPHA]).replace(
+        TEAM_BETA, replacements[TEAM_BETA]
+    ).replace(TEAM_GAMMA, replacements[TEAM_GAMMA]).replace(ORG_A, replacements[ORG_A]).replace(
+        ORG_B, replacements[ORG_B]
     )
 
 
-def _replace_body(value: JsonValue, replacements: Mapping[str, str]) -> JsonValue:
+def _replace_body(
+    value: JsonValue, replacements: Mapping[str, str]
+) -> JsonValue:
     if isinstance(value, str):
         return _replace_text(value, replacements)
     if isinstance(value, list):
@@ -175,15 +175,21 @@ def _seeded_key(
     return SeededKey(user_id=user_id, cleartext=token, hashed=hash_token(token))
 
 
-async def create_actor_set(gateway: Gateway, scenario: Scenario, db: ManagementDatabase) -> ActorSet:
+async def create_actor_set(
+    gateway: Gateway, scenario: Scenario, db: ManagementDatabase
+) -> ActorSet:
     run_id: Final = uuid.uuid4().hex
     org_a_id: Final = scenario.organization(organization_alias=f"alpha-{run_id}")
     org_b_id: Final = scenario.organization(organization_alias=f"beta-{run_id}")
     proxy_admin_id: Final = scenario.user(user_role="proxy_admin")
     org_admin_a_id: Final = scenario.org_member(org_a_id, "org_admin")
     org_admin_b_id: Final = scenario.org_member(org_b_id, "org_admin")
-    await db.db.litellm_usertable.update(where={"user_id": org_admin_a_id}, data={"user_role": "org_admin"})
-    await db.db.litellm_usertable.update(where={"user_id": org_admin_b_id}, data={"user_role": "org_admin"})
+    await db.db.litellm_usertable.update(
+        where={"user_id": org_admin_a_id}, data={"user_role": "org_admin"}
+    )
+    await db.db.litellm_usertable.update(
+        where={"user_id": org_admin_b_id}, data={"user_role": "org_admin"}
+    )
     team_alpha_id: Final = scenario.team(
         team_id=f"integration-{run_id}-alpha",
         team_alias=f"alpha-{run_id}",
@@ -211,14 +217,18 @@ async def create_actor_set(gateway: Gateway, scenario: Scenario, db: ManagementD
     keys: Final[Mapping[Actor, SeededKey]] = MappingProxyType(
         {
             Actor.PROXY_ADMIN: _seeded_key(scenario, Actor.PROXY_ADMIN, proxy_admin_id),
-            Actor.ORG_ADMIN: _seeded_key(scenario, Actor.ORG_ADMIN, org_admin_a_id, organization_id=org_a_id),
+            Actor.ORG_ADMIN: _seeded_key(
+                scenario, Actor.ORG_ADMIN, org_admin_a_id, organization_id=org_a_id
+            ),
             Actor.TEAM_ADMIN: _seeded_key(
                 scenario, Actor.TEAM_ADMIN, team_admin_id, team_id=team_alpha_id, organization_id=org_a_id
             ),
             Actor.INTERNAL_USER: _seeded_key(
                 scenario, Actor.INTERNAL_USER, internal_user_id, team_id=team_alpha_id, organization_id=org_a_id
             ),
-            Actor.OWNER: _seeded_key(scenario, Actor.OWNER, owner_id, team_id=team_alpha_id, organization_id=org_a_id),
+            Actor.OWNER: _seeded_key(
+                scenario, Actor.OWNER, owner_id, team_id=team_alpha_id, organization_id=org_a_id
+            ),
             Actor.UNRELATED_SAME_ORG: _seeded_key(
                 scenario, Actor.UNRELATED_SAME_ORG, unrelated_id, team_id=team_alpha_id, organization_id=org_a_id
             ),
@@ -228,7 +238,9 @@ async def create_actor_set(gateway: Gateway, scenario: Scenario, db: ManagementD
             Actor.SERVICE_ACCOUNT: _seeded_key(
                 scenario, Actor.SERVICE_ACCOUNT, service_account_id, team_id=team_alpha_id, organization_id=org_a_id
             ),
-            Actor.ORG_B_ADMIN: _seeded_key(scenario, Actor.ORG_B_ADMIN, org_admin_b_id, organization_id=org_b_id),
+            Actor.ORG_B_ADMIN: _seeded_key(
+                scenario, Actor.ORG_B_ADMIN, org_admin_b_id, organization_id=org_b_id
+            ),
         }
     )
     return ActorSet(org_a_id, org_b_id, team_alpha_id, team_beta_id, team_gamma_id, keys)
@@ -263,7 +275,9 @@ async def create_scratch_key(
         **({"team_id": team_id} if team_id is not None else {}),
         **({"organization_id": organization_id} if organization_id is not None else {}),
     }
-    created: Final = gateway_client.gateway.post("/key/generate", body, key=seeder_cleartext)
+    created: Final = gateway_client.gateway.post(
+        "/key/generate", body, key=seeder_cleartext
+    )
     return string_value(created["key"])
 
 
@@ -283,9 +297,9 @@ async def create_scratch_team(
 ) -> str:
     admins: Final = list(admin_user_ids)
     members: Final = list(member_user_ids)
-    members_with_roles: Final = [{"user_id": identity, "role": "admin"} for identity in admins] + [
-        {"user_id": identity, "role": "user"} for identity in members
-    ]
+    members_with_roles: Final = [
+        {"user_id": identity, "role": "admin"} for identity in admins
+    ] + [{"user_id": identity, "role": "user"} for identity in members]
     fields: Final[dict[str, JsonValue]] = {
         "team_id": team_id,
         "team_alias": team_id,
@@ -293,7 +307,11 @@ async def create_scratch_team(
         "members": admins + members,
         "members_with_roles": members_with_roles,
         **({"organization_id": organization_id} if organization_id is not None else {}),
-        **({"team_member_permissions": list(team_member_permissions)} if team_member_permissions is not None else {}),
+        **(
+            {"team_member_permissions": list(team_member_permissions)}
+            if team_member_permissions is not None
+            else {}
+        ),
         **({"models": list(models)} if models is not None else {}),
         **({"max_budget": max_budget} if max_budget is not None else {}),
         **({"tpm_limit": tpm_limit} if tpm_limit is not None else {}),

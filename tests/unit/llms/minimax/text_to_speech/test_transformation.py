@@ -130,7 +130,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -139,7 +138,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -174,7 +172,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -188,7 +185,6 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestMinimaxTextToSpeechConfig:
@@ -386,7 +382,6 @@ class TestMinimaxTextToSpeechConfig:
 
         assert url == "https://custom.api.com/v1/t2a_v2"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestMinimaxSpeechIntegration:
     """Integration tests for MiniMax TTS via litellm.speech()"""
@@ -429,7 +424,6 @@ class TestMinimaxSpeechIntegration:
             # Verify the mock was called
             assert mock_tts.called
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestMinimaxProviderRegistration:
     """Test that MiniMax is properly registered as a provider"""
@@ -465,7 +459,6 @@ class TestMinimaxProviderRegistration:
 
         assert model == "speech-2.6-hd"
         assert provider == "minimax"
-
 
 if __name__ == "__main__":
     # Run basic tests

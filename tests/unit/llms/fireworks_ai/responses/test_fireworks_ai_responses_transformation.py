@@ -338,16 +338,10 @@ def test_responses_call_folds_instructions_and_developer_item_into_instructions_
             input=[
                 {
                     "role": "developer",
-                    "content": [
-                        {"type": "input_text", "text": "<permissions instructions>read-only</permissions instructions>"}
-                    ],
+                    "content": [{"type": "input_text", "text": "<permissions instructions>read-only</permissions instructions>"}],
                 },
                 {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
-                {
-                    "id": "rs_1",
-                    "type": "reasoning",
-                    "summary": [{"type": "summary_text", "text": "A trivial question."}],
-                },
+                {"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "A trivial question."}]},
                 {
                     "id": "msg_1",
                     "type": "message",
@@ -525,9 +519,7 @@ CODEX_ADDITIONAL_TOOLS_ITEM: Final = {
 }
 
 
-@pytest.mark.parametrize(
-    "instructions", [None, "Answer with exactly one word."], ids=["no-instructions", "instructions"]
-)
+@pytest.mark.parametrize("instructions", [None, "Answer with exactly one word."], ids=["no-instructions", "instructions"])
 def test_transform_request_moves_codex_additional_tools_item_into_tools(instructions: str | None) -> None:
     user_item: Final = {"role": "user", "content": "Sleep for two seconds."}
     request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(

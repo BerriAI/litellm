@@ -347,7 +347,9 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
 
 def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
     return tuple(
-        span for span in spans if _db_systems((span,)) and span["attributes"].get("litellm.team.id") is not None
+        span
+        for span in spans
+        if _db_systems((span,)) and span["attributes"].get("litellm.team.id") is not None
     )
 
 

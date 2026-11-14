@@ -421,10 +421,7 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "ran:     Python lint (make lint)" in proc.stdout
     assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
     assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
-    assert (
-        "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)"
-        in proc.stdout
-    )
+    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
     assert TEST_TREE_SKIPPED in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "check: FAIL" not in proc.stdout
@@ -660,6 +657,7 @@ def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:
     assert "check: PASS" not in proc.stdout
 
 
+
 def test_explicit_base_scopes_offline_without_a_remote(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
@@ -677,12 +675,8 @@ def test_symlinked_hook_can_resolve_default_branch(tmp_path: Path) -> None:
     hook = repo / ".git" / "hooks" / "pre-commit"
     hook.symlink_to(SCRIPT)
     proc = subprocess.run(
-        [str(hook)],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        env=_env(repo, bin_dir, {}),
-        timeout=120,
+        [str(hook)], cwd=repo, capture_output=True, text=True,
+        env=_env(repo, bin_dir, {}), timeout=120,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no branch changes vs origin/main" in proc.stdout

@@ -60,7 +60,9 @@ class TestDeepSeekReasoningDisable:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_reasoner_returns_reasoning_by_default(self, client: PassthroughClient, resources: ResourceManager) -> None:
+    def test_reasoner_returns_reasoning_by_default(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
         model = _register_reasoner(client, resources)
         key = resources.key()
 
@@ -108,7 +110,8 @@ class TestDeepSeekReasoningDisable:
             )
         )
         assert not _reasoning_content(response), (
-            f"reasoning_effort='none' must disable reasoning, but reasoning_content is still present: {response}"
+            "reasoning_effort='none' must disable reasoning, but reasoning_content "
+            f"is still present: {response}"
         )
 
     @meta(
@@ -121,7 +124,9 @@ class TestDeepSeekReasoningDisable:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_thinking_disabled_disables_reasoning(self, client: PassthroughClient, resources: ResourceManager) -> None:
+    def test_thinking_disabled_disables_reasoning(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
         model = _register_reasoner(client, resources)
         key = resources.key()
 

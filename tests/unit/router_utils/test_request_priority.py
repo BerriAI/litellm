@@ -96,16 +96,7 @@ def test_a_request_it_cannot_queue_is_told_why() -> None:
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [(None, None), (3, 3), (0, 0), ("3", 3), (" 12 ", 12), ("0", 0), ("-1", -1), (2.0, 2)],
-    ids=[
-        "unset",
-        "int",
-        "zero",
-        "digit-string",
-        "padded-digit-string",
-        "zero-string",
-        "negative-string",
-        "whole-float",
-    ],
+    ids=["unset", "int", "zero", "digit-string", "padded-digit-string", "zero-string", "negative-string", "whole-float"],
 )
 def test_the_default_priority_is_taken_as_an_integer_or_an_integer_like_value(
     configured: object, expected: int | None

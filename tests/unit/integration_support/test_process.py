@@ -89,7 +89,9 @@ def test_worker_configuration_preserves_sibling_auth_modules(
     auth_state: Final = tmp_path / "sibling_auth.json"
     auth_state.write_text("authenticated")
     (tmp_path / "sibling_auth.py").write_text(
-        "from pathlib import Path\ndef authenticate():\n    return Path(__file__).with_suffix('.json').read_text()\n"
+        "from pathlib import Path\n"
+        "def authenticate():\n"
+        "    return Path(__file__).with_suffix('.json').read_text()\n"
     )
 
     configured: Final = worker_configuration(source, tmp_path / "worker")
@@ -254,11 +256,7 @@ def test_an_unreadable_member_does_not_hide_another_owned_listener(
     ),
 )
 def test_only_live_readable_workers_can_satisfy_readiness(
-    process_module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    status: str | type[psutil.Error],
-    ready: bool,
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str | type[psutil.Error], ready: bool
 ) -> None:
     member: Final = MagicMock(spec=psutil.Process)
     member.pid = os.getpid()

@@ -85,30 +85,17 @@ def test_attribution_survives_actor_deletion_and_name_reuse_starts_empty(gateway
             recorded: Final = _history(gateway, name)
             assert (recorded.total_downloads, recorded.anonymous_downloads) == (4, 2)
             assert SkillHubList.model_validate(gateway.get(SKILLS, {"query": name})).skills[0].download_count == 4
-            assert (
-                tuple(
-                    (
-                        row.version,
-                        row.authenticated,
-                        row.user_id,
-                        row.user_email,
-                        row.key_alias,
-                        row.team_id,
-                        row.team_alias,
-                    )
-                    for row in recorded.downloads
-                )
-                == (("1.2.3", True, user, email, name, team, name),) * 2
-            )
+            assert tuple((row.version, row.authenticated, row.user_id, row.user_email, row.key_alias,
+                          row.team_id, row.team_alias) for row in recorded.downloads) == (
+                ("1.2.3", True, user, email, name, team, name),
+            ) * 2
             assert tuple(row.digest for row in recorded.downloads) == digests[::-1]
             for prefix in (PLUGINS, SKILLS):
                 assert gateway.request("GET", f"{prefix}/{name}/downloads", key=key).status_code == 403
                 assert gateway.client.get(f"{prefix}/{name}/downloads").status_code == 401
         assert _history(gateway, name) == recorded
         _delete(gateway, name)
-        assert (
-            gateway.rows('SELECT id FROM "LiteLLM_ClaudeCodePluginDownload" WHERE plugin_id = %s', (original_id,)) == []
-        )
+        assert gateway.rows('SELECT id FROM "LiteLLM_ClaudeCodePluginDownload" WHERE plugin_id = %s', (original_id,)) == []
         _upload(skills, name)
         assert gateway.get(f"{SKILLS}/{name}")["id"] != original_id
         assert _history(gateway, name) == PluginDownloadsResponse(0, 0, (), None)
@@ -139,8 +126,7 @@ def test_concurrent_counts_and_keyset_pages_preserve_scope_and_deleted_cursors(g
         _download(gateway, key, _upload(scenario, other))
         write_rows(
             'DELETE FROM "LiteLLM_ClaudeCodePluginDownload" WHERE id IN (%s::bigint, %s::bigint)',
-            (ordered[2], ordered[4]),
-            database_url=gateway.database_url,
+            (ordered[2], ordered[4]), database_url=gateway.database_url,
         )
         assert first.next_cursor is not None
         second: Final = _history(gateway, name, limit="3", cursor=first.next_cursor)
@@ -156,9 +142,8 @@ def test_concurrent_counts_and_keyset_pages_preserve_scope_and_deleted_cursors(g
 
 
 def test_repeat_migration_is_catalog_only_while_download_tables_are_locked(gateway: Gateway) -> None:
-    migration: Final = (
-        Path(__file__).resolve().parents[3]
-        / "litellm/proxy-extras/litellm_proxy_extras/migrations/20261105094500_add_skill_download_history/migration.sql"
+    migration: Final = (Path(__file__).resolve().parents[3] /
+        "litellm/proxy-extras/litellm_proxy_extras/migrations/20261105094500_add_skill_download_history/migration.sql"
     ).read_bytes()
     with gateway.scenario() as scenario:
         name: Final = f"download-{uuid.uuid4().hex}"

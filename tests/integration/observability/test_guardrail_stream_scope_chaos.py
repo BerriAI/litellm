@@ -986,7 +986,9 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
             with _owned_proxy(h6_rig, tmp_path, ()) as registrar:
                 _create_stored_rail(registrar.gateway, name, sink.url, stream_scope=None)
             with _owned_proxy(h6_rig, tmp_path, ()) as owned, ThreadPoolExecutor(max_workers=len(plans)) as pool:
-                futures: Final = tuple(pool.submit(_request, owned.gateway, plan, (name,)) for plan in plans)
+                futures: Final = tuple(
+                    pool.submit(_request, owned.gateway, plan, (name,)) for plan in plans
+                )
                 try:
                     arrivals.wait(timeout=70)
                     stopped: Final = subprocess.run(
@@ -1011,10 +1013,8 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
                     assert postgres_ready
                     readiness: Final = eventually(
                         lambda: owned.gateway.client.get("/health/readiness"),
-                        lambda response: (
-                            response.status_code == 200
-                            and JSON_OBJECT.validate_python(cast(object, response.json())).get("db") == "connected"
-                        ),
+                        lambda response: response.status_code == 200
+                        and JSON_OBJECT.validate_python(cast(object, response.json())).get("db") == "connected",
                         seconds=70,
                     )
                     readiness_body: Final = JSON_OBJECT.validate_python(cast(object, readiness.json()))
@@ -1047,8 +1047,12 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
                     return_last_on_timeout=True,
                 )
                 counts: Final = tuple(len(rows) for rows in spend_rows)
-                missing_ids: Final = tuple(plan.call_id for plan, rows in zip(plans, spend_rows) if not rows)
-                duplicate_ids: Final = tuple(plan.call_id for plan, rows in zip(plans, spend_rows) if len(rows) > 1)
+                missing_ids: Final = tuple(
+                    plan.call_id for plan, rows in zip(plans, spend_rows) if not rows
+                )
+                duplicate_ids: Final = tuple(
+                    plan.call_id for plan, rows in zip(plans, spend_rows) if len(rows) > 1
+                )
                 assert counts == (1,) * len(plans), {
                     "missing_ids": missing_ids,
                     "duplicate_ids": duplicate_ids,

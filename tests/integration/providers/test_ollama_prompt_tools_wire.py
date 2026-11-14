@@ -830,7 +830,9 @@ def _ndjson_line(**fields: JsonValue) -> bytes:
 
 
 def _ndjson_reply(lines: Sequence[bytes]) -> Reply:
-    final: Final = _ndjson_line(response="", done=True, done_reason="stop", prompt_eval_count=30, eval_count=12)
+    final: Final = _ndjson_line(
+        response="", done=True, done_reason="stop", prompt_eval_count=30, eval_count=12
+    )
     return Reply(content_type="application/x-ndjson", chunks=(*lines, final))
 
 
@@ -1043,8 +1045,7 @@ def test_a_tool_result_followed_by_user_text_is_joined_by_a_newline(gateway: Gat
         prompt: Final = _prompt_of(_only_generate(wire))
         _assert_instructed_once(prompt, "get_weather")
         assert (
-            f"### User:\n{_QUESTION}\n\n### Assistant:\n{_CALL_JSON}\n\n### User:\n{_RESULT}\n{_FOLLOW_UP}\n\n"
-            in prompt
+            f"### User:\n{_QUESTION}\n\n### Assistant:\n{_CALL_JSON}\n\n### User:\n{_RESULT}\n{_FOLLOW_UP}\n\n" in prompt
         ), prompt
         assert prompt.count("### User:") == 2, prompt
 
@@ -1091,8 +1092,7 @@ async def test_async_anthropic_sdk_stream_separates_a_tool_result_from_user_text
         prompt: Final = _prompt_of(body)
         _assert_instructed_once(prompt, "get_weather")
         assert (
-            f"### User:\n{_QUESTION}\n\n### Assistant:\n{_CALL_JSON}\n\n### User:\n{_RESULT}\n{_FOLLOW_UP}\n\n"
-            in prompt
+            f"### User:\n{_QUESTION}\n\n### Assistant:\n{_CALL_JSON}\n\n### User:\n{_RESULT}\n{_FOLLOW_UP}\n\n" in prompt
         ), prompt
         assert _spend_row(final.id) == _billed(model)
 
@@ -1172,12 +1172,7 @@ def test_openai_sdk_responses_int_function_output_reaches_the_prompt_as_text(gat
             id="tool-text-part-without-text",
         ),
         pytest.param(
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": _QUESTION}, {"type": "image_url", "image_url": 22}],
-                }
-            ],
+            [{"role": "user", "content": [{"type": "text", "text": _QUESTION}, {"type": "image_url", "image_url": 22}]}],
             "user message at index 0",
             "has a int image_url",
             id="user-int-image-url",
@@ -1201,9 +1196,7 @@ def test_malformed_content_is_a_400_naming_the_message_and_field(
 ) -> None:
     with _ollama_server(lambda _: _generate_reply(_ANSWER)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        code, text = _post(
-            gateway, "/v1/chat/completions", {"model": model, "messages": messages, "tools": [_WEATHER_TOOL]}
-        )
+        code, text = _post(gateway, "/v1/chat/completions", {"model": model, "messages": messages, "tools": [_WEATHER_TOOL]})
         assert code == 400, text
         assert f"the {message_ref} {detail}" in _error_message(text), text
         assert _generate_calls(wire) == ()
@@ -1669,7 +1662,9 @@ def _config_storing_prompts(directory: Path) -> Path:
     settings: Final = config["general_settings"]
     assert isinstance(settings, dict), config
     path: Final = directory / "store-prompts.yaml"
-    path.write_text(yaml.safe_dump({**config, "general_settings": {**settings, "store_prompts_in_spend_logs": True}}))
+    path.write_text(
+        yaml.safe_dump({**config, "general_settings": {**settings, "store_prompts_in_spend_logs": True}})
+    )
     return path
 
 

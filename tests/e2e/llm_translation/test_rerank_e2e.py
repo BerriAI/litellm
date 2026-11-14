@@ -35,11 +35,15 @@ QUERY = "What is the capital of the United States?"
 def _assert_top_n_scored(response: RerankResponse) -> None:
     assert response.results, f"/rerank returned no results: {response!r}"
     assert len(response.results) <= 3, f"top_n=3 not honored: {response!r}"
-    assert response.results[0].relevance_score is not None, f"top rerank result has no relevance_score: {response!r}"
+    assert response.results[0].relevance_score is not None, (
+        f"top rerank result has no relevance_score: {response!r}"
+    )
 
 
 def _rerank_top_3(proxy: ProxyClient, key: str, model: str) -> RerankResponse:
-    return unwrap(proxy.rerank(key, RerankBody(model=model, query=QUERY, documents=DOCUMENTS, top_n=3)))
+    return unwrap(
+        proxy.rerank(key, RerankBody(model=model, query=QUERY, documents=DOCUMENTS, top_n=3))
+    )
 
 
 class TestRerank:
@@ -74,7 +78,9 @@ class TestRerank:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_bedrock_rerank_scores_top_n(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+    def test_bedrock_rerank_scores_top_n(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
         model = f"e2e-bedrock-rerank-{unique_marker()}"
         model_id = proxy.create_model(
             model,

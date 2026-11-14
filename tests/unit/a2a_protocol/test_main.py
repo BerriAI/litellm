@@ -1217,12 +1217,10 @@ class MockA2AResponse:
     def model_dump(self, mode="json", exclude_none=True):
         return self._payload
 
-
 class MockA2AStreamingChunk(MockA2AResponse):
     def __init__(self, text: str, state: str):
         super().__init__(text=text)
         self._payload["result"]["status"] = {"state": state}
-
 
 class MockA2AClient:
     def __init__(self):
@@ -1239,7 +1237,6 @@ class MockA2AClient:
             message.parts.add().text = text
             yield event
 
-
 @pytest.fixture
 def mock_a2a_client(monkeypatch):
     import litellm.a2a_protocol.main as a2a_main
@@ -1250,7 +1247,6 @@ def mock_a2a_client(monkeypatch):
         return MockA2AClient()
 
     monkeypatch.setattr(a2a_main, "create_a2a_client", _fake_create_a2a_client)
-
 
 @pytest.mark.asyncio
 async def test_a2a_non_streaming(mock_a2a_client):
@@ -1277,7 +1273,6 @@ async def test_a2a_non_streaming(mock_a2a_client):
 
     assert response is not None
     print(f"\nNon-streaming response: {response}")
-
 
 @pytest.mark.asyncio
 async def test_a2a_streaming(mock_a2a_client):

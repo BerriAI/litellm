@@ -39,7 +39,9 @@ class _AsyncTx:
         return False
 
 
-def _make_invite(*, is_accepted: bool, expired: bool = False, claimed: bool = False) -> MagicMock:
+def _make_invite(
+    *, is_accepted: bool, expired: bool = False, claimed: bool = False
+) -> MagicMock:
     now = litellm.utils.get_utc_datetime()
     invite = MagicMock()
     invite.id = "invite-abc"
@@ -327,7 +329,9 @@ async def test_claim_token_rejects_wrong_onboarding_session():
         user_id="user-123",
         password="NewP@ssw0rd123",
     )
-    request = _make_claim_request(_make_onboarding_token(invitation_link="other-invite"))
+    request = _make_claim_request(
+        _make_onboarding_token(invitation_link="other-invite")
+    )
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
@@ -580,7 +584,9 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     assert exc_info.value.status_code == 500
     assert "Failed to create onboarding session" in exc_info.value.detail["error"]
     assert prisma.db.litellm_invitationlink.update_many.call_count == 2
-    rollback_kwargs = prisma.db.litellm_invitationlink.update_many.call_args_list[1].kwargs
+    rollback_kwargs = prisma.db.litellm_invitationlink.update_many.call_args_list[
+        1
+    ].kwargs
     assert rollback_kwargs["where"] == {
         "id": "invite-abc",
         "is_accepted": True,
@@ -618,9 +624,7 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
     )
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", prisma
-        ),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
     ):
@@ -640,7 +644,9 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite(htt
     from litellm.proxy.proxy_server import claim_onboarding_link
 
     password = "P@ssword123456"
-    respx.get(_hibp_url_for(password)).mock(return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387"))
+    respx.get(_hibp_url_for(password)).mock(
+        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387")
+    )
 
     invite = _make_invite(is_accepted=False)
     prisma = _make_prisma(invite, _make_user())
@@ -652,9 +658,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite(htt
     )
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", prisma
-        ),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
     ):
@@ -687,9 +691,7 @@ async def test_claim_token_fails_open_when_hibp_unreachable(httpx_transport):
     )
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", prisma
-        ),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: same as above

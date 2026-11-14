@@ -131,7 +131,13 @@ async def test_latency_routing_avoids_timed_out_deployment() -> None:
         )
         requests: Final = wire.drain()
 
-    assert tuple(response._hidden_params["model_id"] for response in responses) == ("fast",) * 10
+    assert tuple(response._hidden_params["model_id"] for response in responses) == (
+        "fast",
+    ) * 10
     assert sum("/slow/" in request.target for request in requests) == 1
     assert sum("/fast/" in request.target for request in requests) == 10
-    assert all(json.loads(request.body)["model"] == _MODEL for request in requests if "/fast/" in request.target)
+    assert all(
+        json.loads(request.body)["model"] == _MODEL
+        for request in requests
+        if "/fast/" in request.target
+    )

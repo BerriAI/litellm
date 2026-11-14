@@ -117,7 +117,9 @@ def test_evaluation_and_decisions_rows_with_zero_or_missing_output_price_pass(mo
 
 
 def test_chat_rows_with_output_price_pass() -> None:
-    head: Final = _snapshot({**BASE_MAP, "openrouter/chat-with-output": _entry(output_cost_per_token=4.2e-08)})
+    head: Final = _snapshot(
+        {**BASE_MAP, "openrouter/chat-with-output": _entry(output_cost_per_token=4.2e-08)}
+    )
     assert _failures(head) == ()
 
 
@@ -384,7 +386,9 @@ def test_relocated_pins_cannot_be_changed_by_bots(pins_path: str) -> None:
 
 @pytest.mark.parametrize("cost_map_path", guard.COST_MAP_PATHS)
 @pytest.mark.parametrize("content", (_serialize(BASE_MAP) + "\n", "", "not json"))
-def test_main_reads_cost_maps_in_both_repository_layouts(tmp_path: Path, cost_map_path: str, content: str) -> None:
+def test_main_reads_cost_maps_in_both_repository_layouts(
+    tmp_path: Path, cost_map_path: str, content: str
+) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     base: Final = _commit(tmp_path, BASE_MAP, "base")
     destination: Final = tmp_path / cost_map_path
@@ -565,9 +569,7 @@ def test_main_tells_a_conflicting_pr_to_merge_the_base_branch_in(tmp_path: Path)
     head: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/b": _entry(4e-06)}, "pr reprices b differently")
     result: Final = _run_guard(tmp_path, merge_base, head, "litellm_fix_pricing", target=target)
     assert result.returncode == 1, result.stdout + result.stderr
-    conflict_line: Final = (
-        "- the pull request does not merge cleanly into its base branch; merge the base branch in first"
-    )
+    conflict_line: Final = "- the pull request does not merge cleanly into its base branch; merge the base branch in first"
     assert conflict_line in result.stdout.splitlines()
 
 
@@ -585,6 +587,8 @@ def test_main_lets_only_a_human_opened_pr_change_the_pins(tmp_path: Path, author
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
     head: Final = _commit(tmp_path, NO_VISION_MAP, "lower the flag and drop its pin", pins=NO_PINS)
-    result: Final = _run_guard(tmp_path, base, head, "litellm_azure_ai_mai_image_2_5_pro", author_type=author_type)
+    result: Final = _run_guard(
+        tmp_path, base, head, "litellm_azure_ai_mai_image_2_5_pro", author_type=author_type
+    )
     assert result.returncode == expected_code, result.stdout + result.stderr
     assert (f"- {BOT_AUTHOR_PIN_FAILURE}" in result.stdout.splitlines()) == (author_type == "Bot")

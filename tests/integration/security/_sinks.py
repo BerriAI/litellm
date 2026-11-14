@@ -240,7 +240,9 @@ def canary_rig(
             "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {token}",
             **(environment or {}),
         }
-        with owned_proxy_process(gateway, root, overrides, config=config, state=OwnedState.SHARED_WITH_WORKER) as owned:
+        with owned_proxy_process(
+            gateway, root, overrides, config=config, state=OwnedState.SHARED_WITH_WORKER
+        ) as owned:
             admin = Gateway(
                 owned.gateway.client, overrides.get("LITELLM_MASTER_KEY", owned.gateway.key), owned.gateway.upstream_url
             )

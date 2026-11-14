@@ -475,7 +475,7 @@ async def test_update_spend_logs_retries_and_requeues_batch_on_db_outage(
 
 def _deadlock_error() -> Exception:
     return _data_error(
-        "Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, "
+        'Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, '
         'kind: QueryError(PostgresError { code: "40P01", message: "deadlock detected", severity: "ERROR" }) })'
     )
 
@@ -508,7 +508,9 @@ async def test_update_spend_logs_retries_deadlock_and_keeps_every_row(
         logs_to_process=[make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")],
     )
 
-    attempts = tuple(tuple(row["request_id"] for row in call.kwargs["data"]) for call in create_many.await_args_list)
+    attempts = tuple(
+        tuple(row["request_id"] for row in call.kwargs["data"]) for call in create_many.await_args_list
+    )
     assert attempts == (("a", "b"), ("a", "b"), ("a", "b"))
     assert mock_prisma_client.spend_log_transactions == []
 

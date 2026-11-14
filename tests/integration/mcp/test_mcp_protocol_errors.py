@@ -114,26 +114,14 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
         with owned_proxy(gateway, tmp_path, {"DISABLE_SCHEMA_UPDATE": "true"}, config=config_path) as restricted:
             endpoint: Final = str(restricted.client.base_url).rstrip("/") + ("/mcp/sse" if ingress == "sse" else "/mcp")
             headers: Final = {"Authorization": f"Bearer {key}", "x-mcp-servers": identity}
-            denied: Final = MCPClient(
-                server_url=endpoint,
-                transport_type=MCPTransport(ingress),
-                protocol_version="2025-11-25",
-                extra_headers=headers,
-            )
-            allowed: Final = MCPClient(
-                server_url=endpoint,
-                transport_type=MCPTransport(ingress),
-                protocol_version="2024-11-05",
-                extra_headers=headers,
-            )
+            denied: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2025-11-25", extra_headers=headers)
+            allowed: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2024-11-05", extra_headers=headers)
 
             async def exercise() -> None:
                 with pytest.raises(MCPError, match="Unsupported MCP protocol version"):
                     await denied.list_tools(raise_on_error=True)
                 assert f"{alias}-add" in tuple(tool.name for tool in await allowed.list_tools(raise_on_error=True))
-                result: Final = await allowed.call_tool(
-                    CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 5})
-                )
+                result: Final = await allowed.call_tool(CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 5}))
                 assert result.is_error is False and result.content[0].text == "7"
 
             asyncio.run(exercise())

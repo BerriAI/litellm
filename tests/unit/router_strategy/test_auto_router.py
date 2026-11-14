@@ -10,7 +10,9 @@ from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-pytestmark_skip_beta = pytest.mark.skip(reason="Skipping auto router tests - beta feature")
+pytestmark_skip_beta = pytest.mark.skip(
+    reason="Skipping auto router tests - beta feature"
+)
 
 
 class TestExtractTextFromMessages:
@@ -242,7 +244,9 @@ class TestAutoRouter:
         messages = [{"role": "user", "content": "test message"}]
 
         # Act
-        result = await auto_router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        result = await auto_router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=messages
+        )
 
         # Assert
         assert result is not None
@@ -281,7 +285,9 @@ class TestAutoRouter:
         messages = [{"role": "user", "content": "test message"}]
 
         # Act
-        result = await auto_router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        result = await auto_router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=messages
+        )
 
         # Assert
         assert result is not None
@@ -302,7 +308,9 @@ class TestAutoRouter:
             )
 
         # Act
-        result = await auto_router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=None)
+        result = await auto_router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=None
+        )
 
         # Assert
         assert result is None
@@ -508,14 +516,11 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "error",
-        (
-            TimeoutError("private request content"),
-            asyncio.TimeoutError("private request content"),
-            LiteLLMTimeout(message="private request content", model="embedding", llm_provider="openai"),
-        ),
-    )
+    @pytest.mark.parametrize("error", (
+        TimeoutError("private request content"),
+        asyncio.TimeoutError("private request content"),
+        LiteLLMTimeout(message="private request content", model="embedding", llm_provider="openai"),
+    ))
     @pytest.mark.parametrize("wrapped", [False, True])
     async def test_should_record_timeout_without_exception_message(self, error: Exception, wrapped: bool) -> None:
         auto_router: Final = _auto_router(

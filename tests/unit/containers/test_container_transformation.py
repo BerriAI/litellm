@@ -53,7 +53,9 @@ class TestOpenAIContainerTransformation:
             }
         )
 
-        mapped_params = self.config.map_openai_params(optional_params, drop_params=False)
+        mapped_params = self.config.map_openai_params(
+            optional_params, drop_params=False
+        )
 
         assert mapped_params["expires_after"]["minutes"] == 30
         assert mapped_params["file_ids"] == ["file_1", "file_2"]
@@ -63,7 +65,9 @@ class TestOpenAIContainerTransformation:
         headers = {}
         api_key = "sk-test123"
 
-        validated_headers = self.config.validate_environment(headers=headers, api_key=api_key)
+        validated_headers = self.config.validate_environment(
+            headers=headers, api_key=api_key
+        )
 
         assert "Authorization" in validated_headers
         assert validated_headers["Authorization"] == f"Bearer {api_key}"
@@ -74,7 +78,9 @@ class TestOpenAIContainerTransformation:
         api_base = "https://api.openai.com/v1"
         litellm_params = {}
 
-        url = self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        url = self.config.get_complete_url(
+            api_base=api_base, litellm_params=litellm_params
+        )
 
         assert url == "https://api.openai.com/v1/containers"
 
@@ -83,7 +89,9 @@ class TestOpenAIContainerTransformation:
         api_base = "https://custom.openai.com/v1"
         litellm_params = {}
 
-        url = self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        url = self.config.get_complete_url(
+            api_base=api_base, litellm_params=litellm_params
+        )
 
         assert url == "https://custom.openai.com/v1/containers"
 
@@ -107,7 +115,10 @@ class TestOpenAIContainerTransformation:
         )
 
         assert data["name"] == name
-        assert data["expires_after"] == container_create_optional_request_params["expires_after"]
+        assert (
+            data["expires_after"]
+            == container_create_optional_request_params["expires_after"]
+        )
         assert data["file_ids"] == container_create_optional_request_params["file_ids"]
 
     def test_transform_container_create_response(self):
@@ -226,7 +237,10 @@ class TestOpenAIContainerTransformation:
             headers={},
         )
 
-        assert url == "https://api.openai.com/v1/containers/..%2F..%2Fvector_stores%3Fx%3D1%23frag"
+        assert (
+            url
+            == "https://api.openai.com/v1/containers/..%2F..%2Fvector_stores%3Fx%3D1%23frag"
+        )
         assert params == {}
 
     def test_transform_container_retrieve_response(self):
@@ -293,7 +307,9 @@ class TestOpenAIContainerTransformation:
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         with pytest.raises(BaseLLMException) as exc_info:
-            self.config.get_error_class(error_message="Test error", status_code=400, headers={})
+            self.config.get_error_class(
+                error_message="Test error", status_code=400, headers={}
+            )
 
         assert "Test error" in str(exc_info.value)
 
@@ -356,9 +372,16 @@ class TestOpenAIContainerTransformation:
         assert hasattr(container, "_hidden_params")
         assert container._hidden_params is not None
         assert "additional_headers" in container._hidden_params
-        assert "llm_provider-x-litellm-response-cost" in container._hidden_params["additional_headers"]
+        assert (
+            "llm_provider-x-litellm-response-cost"
+            in container._hidden_params["additional_headers"]
+        )
 
-        expected_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(sessions=1, provider="openai")
-        actual_cost = container._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        expected_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
+            sessions=1, provider="openai"
+        )
+        actual_cost = container._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ]
 
         assert actual_cost == expected_cost

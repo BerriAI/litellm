@@ -101,9 +101,7 @@ class TestReliabilityCache:
             second: Final = client.proxy.transport.send(
                 "/chat/completions", headers=client.proxy.transport.bearer(scoped_key), json=body
             )
-            assert second.status_code == 200, (
-                f"second call should succeed, got {second.status_code}: {second.body[:300]}"
-            )
+            assert second.status_code == 200, f"second call should succeed, got {second.status_code}: {second.body[:300]}"
             assert second.headers.get("x-litellm-cache-key"), "identical request must hit the response cache"
             assert _CachedAnswer.model_validate_json(second.body) == _CachedAnswer.model_validate_json(first.body), (
                 "cache hit changed the answer, finish reason or usage"

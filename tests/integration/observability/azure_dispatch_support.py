@@ -149,7 +149,9 @@ def provider_text(request: Request) -> str:
             return "\n".join(
                 message_text(message["content"])
                 for message in messages
-                if isinstance(message, dict) and message.get("role") == "user" and "content" in message
+                if isinstance(message, dict)
+                and message.get("role") == "user"
+                and "content" in message
             )
         case "/v1/responses":
             value: Final = body["input"]
@@ -158,7 +160,9 @@ def provider_text(request: Request) -> str:
             return "\n".join(
                 message_text(message["content"])
                 for message in value
-                if isinstance(message, dict) and message.get("role") == "user" and "content" in message
+                if isinstance(message, dict)
+                and message.get("role") == "user"
+                and "content" in message
             )
         case "/v1/embeddings":
             return message_text(body["input"])
@@ -173,7 +177,9 @@ def message_text(value: JsonValue) -> str:
         return value
     if isinstance(value, list):
         return "".join(
-            str(part["text"]) for part in value if isinstance(part, dict) and isinstance(part.get("text"), str)
+            str(part["text"])
+            for part in value
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
         )
     return ""
 
@@ -202,11 +208,15 @@ def azure_handler(behavior: AzureBehavior = AzureBehavior()) -> Callable[[Reques
     def respond(request: Request) -> Reply:
         assert request.method == "POST", request.method
         text: Final = azure_text(request)
-        if behavior.entered is not None and (behavior.barrier_marker is None or behavior.barrier_marker in text):
+        if behavior.entered is not None and (
+            behavior.barrier_marker is None or behavior.barrier_marker in text
+        ):
             behavior.entered.set()
             if behavior.arrived is not None:
                 behavior.arrived.release()
-        if behavior.release is not None and (behavior.barrier_marker is None or behavior.barrier_marker in text):
+        if behavior.release is not None and (
+            behavior.barrier_marker is None or behavior.barrier_marker in text
+        ):
             assert behavior.release.wait(timeout=30), "Azure barrier was not released"
         if behavior.down is not None and behavior.down.is_set():
             return Reply(status=503, body=b'{"error":"synthetic Azure outage"}')
@@ -270,18 +280,18 @@ def provider_handler(request: Request) -> Reply:
             return Reply(
                 body=json.dumps(
                     {
-                        "id": "chatcmpl-" + identity,
-                        "object": "chat.completion",
-                        "created": 1700000000,
-                        "model": "gpt-4o-mini",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "message": {"role": "assistant", "content": "permitted response"},
-                                "finish_reason": "stop",
-                            }
-                        ],
-                        "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+                "id": "chatcmpl-" + identity,
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "permitted response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
                     }
                 ).encode()
             )
@@ -291,14 +301,14 @@ def provider_handler(request: Request) -> Reply:
             return Reply(
                 body=json.dumps(
                     {
-                        "id": "msg_" + identity,
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-4-5-20250929",
-                        "content": [{"type": "text", "text": "permitted response"}],
-                        "stop_reason": "end_turn",
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 2, "output_tokens": 2},
+                "id": "msg_" + identity,
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "content": [{"type": "text", "text": "permitted response"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 2, "output_tokens": 2},
                     }
                 ).encode()
             )
@@ -308,21 +318,21 @@ def provider_handler(request: Request) -> Reply:
             return Reply(
                 body=json.dumps(
                     {
-                        "id": "resp_" + identity,
-                        "object": "response",
-                        "created_at": 1700000000,
+                "id": "resp_" + identity,
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "gpt-4o-mini",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_" + identity,
                         "status": "completed",
-                        "model": "gpt-4o-mini",
-                        "output": [
-                            {
-                                "type": "message",
-                                "id": "msg_" + identity,
-                                "status": "completed",
-                                "role": "assistant",
-                                "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
-                            }
-                        ],
-                        "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
                     }
                 ).encode()
             )
@@ -330,10 +340,10 @@ def provider_handler(request: Request) -> Reply:
             return Reply(
                 body=json.dumps(
                     {
-                        "object": "list",
-                        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
-                        "model": "text-embedding-3-small",
-                        "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
                     }
                 ).encode()
             )
@@ -341,12 +351,12 @@ def provider_handler(request: Request) -> Reply:
             return Reply(
                 body=json.dumps(
                     {
-                        "id": "cmpl-" + identity,
-                        "object": "text_completion",
-                        "created": 1700000000,
-                        "model": "gpt-4o-mini",
-                        "choices": [{"text": "permitted response", "index": 0, "finish_reason": "stop"}],
-                        "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                "id": "cmpl-" + identity,
+                "object": "text_completion",
+                "created": 1700000000,
+                "model": "gpt-4o-mini",
+                "choices": [{"text": "permitted response", "index": 0, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
                     }
                 ).encode()
             )
@@ -356,68 +366,20 @@ def provider_handler(request: Request) -> Reply:
 
 def _chat_chunks(identity: str) -> tuple[bytes, ...]:
     return (
-        _sse(
-            {
-                "id": "chatcmpl-" + identity,
-                "object": "chat.completion.chunk",
-                "choices": [
-                    {"index": 0, "delta": {"role": "assistant", "content": "permitted "}, "finish_reason": None}
-                ],
-            }
-        ),
-        _sse(
-            {
-                "id": "chatcmpl-" + identity,
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"content": "response"}, "finish_reason": None}],
-            }
-        ),
-        _sse(
-            {
-                "id": "chatcmpl-" + identity,
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-        ),
+        _sse({"id": "chatcmpl-" + identity, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "permitted "}, "finish_reason": None}]}),
+        _sse({"id": "chatcmpl-" + identity, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "response"}, "finish_reason": None}]}),
+        _sse({"id": "chatcmpl-" + identity, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
         b"data: [DONE]\n\n",
     )
 
 
 def _messages_chunks(identity: str) -> tuple[bytes, ...]:
     return (
-        _event(
-            "message_start",
-            {
-                "type": "message_start",
-                "message": {
-                    "id": "msg_" + identity,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": "claude-sonnet-4-5-20250929",
-                    "content": [],
-                    "stop_reason": None,
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 2, "output_tokens": 0},
-                },
-            },
-        ),
-        _event(
-            "content_block_start",
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        ),
-        _event(
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "permitted response"}},
-        ),
+        _event("message_start", {"type": "message_start", "message": {"id": "msg_" + identity, "type": "message", "role": "assistant", "model": "claude-sonnet-4-5-20250929", "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 2, "output_tokens": 0}}}),
+        _event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        _event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "permitted response"}}),
         _event("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        _event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"output_tokens": 2},
-            },
-        ),
+        _event("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
         _event("message_stop", {"type": "message_stop"}),
     )
 

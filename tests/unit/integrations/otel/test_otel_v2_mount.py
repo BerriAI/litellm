@@ -4,6 +4,7 @@
 surface and the server-span + shared-provider behavior it produces.
 """
 
+
 import asyncio
 import contextvars
 from contextlib import nullcontext
@@ -138,7 +139,9 @@ def test_instrumented_app_emits_server_span():
 
     TestClient(app).get("/ping")
 
-    server_spans = [s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER]
+    server_spans = [
+        s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
+    ]
     assert server_spans, "FastAPI instrumentor should emit a SERVER span per request"
     attrs = server_spans[0].attributes or {}
     assert any("route" in k or "method" in k for k in attrs)
@@ -153,7 +156,9 @@ def test_logger_and_instrumentor_share_provider():
 def test_passthrough_hook_renames_catch_all_span():
     """A passthrough route gets its span renamed to the real request path."""
     span = _FakeSpan()
-    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
+    _passthrough_span_name_hook(
+        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
+    )
     assert span.name == "POST /openai/v1/chat/completions"
     assert span.attributes["http.route"] == "/openai/v1/chat/completions"
 
@@ -168,7 +173,9 @@ def test_passthrough_hook_leaves_non_passthrough_route_unchanged():
 
 def test_passthrough_hook_ignores_non_recording_span():
     span = _FakeSpan(recording=False)
-    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
+    _passthrough_span_name_hook(
+        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
+    )
     assert span.name is None
 
 
@@ -210,7 +217,9 @@ def test_llm_span_route_is_read_off_the_server_span(monkeypatch):
     client.post("/engines/gpt-4o-mini/chat/completions")
     client.post("/openai/v1/responses/resp_abc123")
 
-    routes = {(s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
+    routes = {
+        (s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
+    }
     # a parameterized route keeps its template; the passthrough hook rewrote the
     # catch-all to the literal path, and both spans have to follow their own span
     assert routes == {"/engines/{model:path}/chat/completions", "/openai/v1/responses/resp_abc123"}
@@ -498,9 +507,7 @@ def test_browsers_can_read_traceresponse_through_cors(monkeypatch):
     provider, _ = _exporting_provider()
     app = _traced_app(monkeypatch, provider)
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        expose_headers=[*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()],
+        CORSMiddleware, allow_origins=["*"], expose_headers=[*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()]
     )
 
     response = TestClient(app).get("/success", headers={"origin": "https://ui.example.com"})
@@ -563,13 +570,8 @@ def test_the_unhandled_error_helper_names_the_span_it_is_given_in_any_context(mo
 )
 @pytest.mark.parametrize("active_parent", [False, True])
 def test_url_exclusions_cover_auth_and_service_spans(
-    monkeypatch: pytest.MonkeyPatch,
-    excluded_urls: str | None,
-    path: str,
-    root_path: str,
-    status: int,
-    excluded: bool,
-    active_parent: bool,
+    monkeypatch: pytest.MonkeyPatch, excluded_urls: str | None, path: str,
+    root_path: str, status: int, excluded: bool, active_parent: bool,
 ) -> None:
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     if excluded_urls is None:
@@ -586,14 +588,10 @@ def test_url_exclusions_cover_auth_and_service_spans(
         with logger.start_phase_span(f"auth {path}"), logger.tracer.start_as_current_span("direct SDK span"):
             await logger.async_service_success_hook(
                 payload=ServiceLoggerPayload(
-                    is_error=False,
-                    service=ServiceTypes.DB,
-                    duration=1,
-                    call_type="get_data",
-                    event_metadata=None,
+                    is_error=False, service=ServiceTypes.DB, duration=1,
+                    call_type="get_data", event_metadata=None,
                 ),
-                start_time=1,
-                end_time=2,
+                start_time=1, end_time=2,
             )
             if status == 401:
                 raise HTTPException(status_code=status)
@@ -607,15 +605,8 @@ def test_url_exclusions_cover_auth_and_service_spans(
         response: Final = client.get(f"{root_path}{path}?poll=1")
 
     names: Final = tuple(span.name for span in exporter.get_finished_spans())
-    expected_request: Final = (
-        ()
-        if excluded
-        else (
-            "postgres get_data",
-            "direct SDK span",
-            f"auth {path}",
-            f"GET {path}",
-        )
+    expected_request: Final = () if excluded else (
+        "postgres get_data", "direct SDK span", f"auth {path}", f"GET {path}",
     )
     assert response.status_code == status
     assert names == expected_request + (("caller",) if active_parent else ())
@@ -662,17 +653,13 @@ async def test_exclusion_survives_deferred_work_without_suppressing_other_reques
         pass
 
     assert sorted(span.name for span in exporter.get_finished_spans()) == [
-        "GET /{path:path}",
-        "auth v1/models",
-        "deferred v1/models",
-        "independent SDK work",
+        "GET /{path:path}", "auth v1/models", "deferred v1/models", "independent SDK work",
     ]
 
 
 @pytest.mark.parametrize("path", ["/excluded", "/included"])
 def test_url_exclusions_cover_unhandled_error_handlers_after_repeated_mount(
-    monkeypatch: pytest.MonkeyPatch,
-    path: str,
+    monkeypatch: pytest.MonkeyPatch, path: str,
 ) -> None:
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     monkeypatch.setenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "/excluded")

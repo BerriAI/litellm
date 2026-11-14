@@ -1721,19 +1721,17 @@ class TestRouterComplexityDeploymentMethods:
     def test_custom_default_resolution_preserves_explicit_precedence(self, tier_models, explicit, expected):
         from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
-        config: Final = ComplexityRouterConfig.model_validate(
-            {
-                "tiers": {"CUSTOM": tier_models, "OTHER": "other-model"},
-                "tier_definitions": [
-                    {"name": "CUSTOM", "description": "Custom work"},
-                    {"name": "OTHER", "description": "Other work"},
-                ],
-                "fallback_tier": " CUSTOM ",
-                "classifier_type": "llm",
-                "classifier_llm_config": {"model": "classifier"},
-                "default_model": "configured-model",
-            }
-        )
+        config: Final = ComplexityRouterConfig.model_validate({
+            "tiers": {"CUSTOM": tier_models, "OTHER": "other-model"},
+            "tier_definitions": [
+                {"name": "CUSTOM", "description": "Custom work"},
+                {"name": "OTHER", "description": "Other work"},
+            ],
+            "fallback_tier": " CUSTOM ",
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "classifier"},
+            "default_model": "configured-model",
+        })
         assert config.resolve_default_model(explicit) == expected
         inferred: Final = config.model_copy(update={"default_model": None})
         assert inferred.resolve_default_model() == "custom-model"
@@ -2169,7 +2167,9 @@ class TestRouterComplexityDeploymentMethods:
 
     @pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
     @pytest.mark.parametrize("held_capability", ("heuristic_v2", "custom_prompt"))
-    def test_v2_chain_registration_enforces_each_claimed_allowance(self, classifier: str, held_capability: str) -> None:
+    def test_v2_chain_registration_enforces_each_claimed_allowance(
+        self, classifier: str, held_capability: str
+    ) -> None:
         held: Final = (
             self._router_row("existing", "existing-id", "heuristic_v2")
             if held_capability == "heuristic_v2"
@@ -2185,8 +2185,7 @@ class TestRouterComplexityDeploymentMethods:
                     "local_heuristic": "heuristic_v2",
                     **(
                         {"heuristic_first_max_tier": "MEDIUM"}
-                        if classifier == "heuristic_first"
-                        else {"hybrid_boundary_margin": 0.1}
+                        if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
                     ),
                     "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "Grade by difficulty"},
                     "tiers": {"SIMPLE": "gpt-4o-mini"},
@@ -5529,7 +5528,6 @@ class TestRouterPreRoutingSharedAliasName:
 
         assert not any(key.startswith("_alias_marker") for key in sent)
 
-
 _PROMPT_TIER_API_BASE: Final = "https://prompt-tier.test/v1"
 _PROMPT_TIER_SETTINGS: Final = MappingProxyType(
     {
@@ -7515,7 +7513,9 @@ class TestSessionAffinity:
         )
         assert replay.model == first.model
         clock.return_value = 200.0
-        assert cache.get_local(key) == ("o1-preview" if preexisting else {"model": "gpt-4o-mini", "tier": "SIMPLE"})
+        assert cache.get_local(key) == (
+            "o1-preview" if preexisting else {"model": "gpt-4o-mini", "tier": "SIMPLE"}
+        )
         clock.return_value = 271.0
         assert cache.get_local(key) is None
 
@@ -7638,12 +7638,8 @@ class TestChildSessionTierPins:
                         "model_info": {"id": f"{group}-{index}"},
                     }
                     for group, index in (
-                        ("simple", 0),
-                        ("simple", 1),
-                        ("reasoning", 0),
-                        ("reasoning", 1),
-                        ("reasoning-peer", 0),
-                        ("reasoning-peer", 1),
+                        ("simple", 0), ("simple", 1), ("reasoning", 0),
+                        ("reasoning", 1), ("reasoning-peer", 0), ("reasoning-peer", 1),
                     )
                 ],
             ],
@@ -7659,9 +7655,9 @@ class TestChildSessionTierPins:
             metadata_variable_name_for_route,
         )
 
-        route: Final = {"chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}[
-            surface
-        ]
+        route: Final = {
+            "chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"
+        }[surface]
         bucket: Final = metadata_variable_name_for_route(route)
         data: Final[dict[str, object]] = {bucket: {"user_api_key_hash": caller, "user_api_key_request_route": route}}
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -7675,74 +7671,54 @@ class TestChildSessionTierPins:
         return data, bucket
 
     async def _route(
-        self,
-        router: Router,
-        surface: str,
-        session_id: str | None,
-        prompt: str | None,
-        expected_tier: str,
-        expected_cause: str,
-        caller: str = "caller-a",
-        child: bool = True,
+        self, router: Router, surface: str, session_id: str | None, prompt: str | None,
+        expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
         expected_deployment: str | None = None,
     ) -> str:
         from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 
         data, bucket = self._normalized_request(surface, session_id, caller, child)
         turn: Final[dict[str, object]] = (
-            {"role": "user", "content": prompt}
-            if prompt is not None
-            else {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
-            if surface == "messages"
-            else {"type": "function_call_output", "call_id": "call_1", "output": "done"}
-            if surface == "responses"
-            else {"role": "tool", "tool_call_id": "call_1", "content": "done"}
+            {"role": "user", "content": prompt} if prompt is not None else
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
+            if surface == "messages" else
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"}
+            if surface == "responses" else
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"}
         )
         tool_call: Final = (
             {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"}
-            if surface == "responses"
-            else {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "call_1", "name": "read_file", "input": {}}],
-            }
-            if surface == "messages"
-            else TestClassificationMode.TOOL_CALL_1
+            if surface == "responses" else
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read_file", "input": {}}]}
+            if surface == "messages" else TestClassificationMode.TOOL_CALL_1
         )
         turns: Final = [turn] if prompt is not None else [TestClassificationMode.SIMPLE_ASK, tool_call, turn]
         if surface == "responses":
             data["input"] = turns
         selected: Final = await router.async_get_available_deployment(
-            model="child-tier-router",
-            request_kwargs=data,
+            model="child-tier-router", request_kwargs=data,
             messages=None if surface == "responses" else turns,
             input=turns if surface == "responses" else None,
         )
         metadata: Final = data[bucket]
         assert isinstance(metadata, dict)
         assert (metadata["session_id"], metadata["trace_id"], data["litellm_session_id"], data["litellm_trace_id"]) == (
-            "parent-session",
-            "parent-session",
-            "parent-session",
-            "parent-session",
+            "parent-session", "parent-session", "parent-session", "parent-session"
         )
         assert (metadata["routing_decision"]["tier"], metadata["routing_decision"]["cause"]) == (
-            expected_tier,
-            expected_cause,
+            expected_tier, expected_cause
         )
         affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
         if expected_deployment is not None:
             filtered: Final = await affinity.async_filter_deployments(
-                model=selected["model_name"],
-                healthy_deployments=router.get_model_list(selected["model_name"]) or [],
-                messages=None,
-                request_kwargs=data,
+                model=selected["model_name"], healthy_deployments=router.get_model_list(selected["model_name"]) or [],
+                messages=None, request_kwargs=data,
             )
             assert [deployment["model_info"]["id"] for deployment in filtered] == [expected_deployment]
             assert selected["model_info"]["id"] == expected_deployment
         await affinity.async_pre_call_deployment_hook(
             kwargs={
-                **data,
-                "model_info": selected["model_info"],
+                **data, "model_info": selected["model_info"],
                 bucket: {**metadata, "deployment_model_name": selected["model_name"]},
             },
             call_type=None,
@@ -7770,29 +7746,13 @@ class TestChildSessionTierPins:
                 (None, None, "SIMPLE", "heuristic_scorer", "caller-a", True),
             ):
                 await self._route(
-                    router,
-                    surface,
-                    session,
-                    prompt,
-                    tier,
-                    cause,
-                    caller,
-                    child,
+                    router, surface, session, prompt, tier, cause, caller, child,
                     expected_deployment=parent if tier == "REASONING" and caller == "caller-a" else None,
                 )
-            assert (
-                await self._route(
-                    router,
-                    surface,
-                    "parent-session",
-                    None,
-                    "REASONING",
-                    "user_turn_continuation",
-                    child=False,
-                    expected_deployment=parent,
-                )
-                == parent
-            )
+            assert await self._route(
+                router, surface, "parent-session", None, "REASONING", "user_turn_continuation",
+                child=False, expected_deployment=parent,
+            ) == parent
         finally:
             router.discard()
 
@@ -7803,18 +7763,10 @@ class TestChildSessionTierPins:
             parent: Final = await self._route(
                 router, "chat", "parent-session", "reason carefully", "REASONING", "literal_keyword_match", child=False
             )
-            assert (
-                await self._route(
-                    router,
-                    "chat",
-                    "child-session-a",
-                    "Hello!",
-                    "REASONING",
-                    "session_affinity_pin",
-                    expected_deployment=parent,
-                )
-                == parent
-            )
+            assert await self._route(
+                router, "chat", "child-session-a", "Hello!", "REASONING", "session_affinity_pin",
+                expected_deployment=parent,
+            ) == parent
         finally:
             router.discard()
 
@@ -8405,9 +8357,7 @@ class TestUserTurnClassifierFailureHoldsTheDefaultModel:
     @pytest.mark.asyncio
     async def test_a_failed_ask_keeps_the_default_model_for_its_continuations(self):
         router, router_instance = self._router(
-            _llm_response('{"tier": "SIMPLE"}'),
-            TimeoutError("classifier timed out"),
-            _llm_response('{"tier": "SIMPLE"}'),
+            _llm_response('{"tier": "SIMPLE"}'), TimeoutError("classifier timed out"), _llm_response('{"tier": "SIMPLE"}')
         )
         fix_ask: Final = [self.HELLO, self.HELLO_REPLY, self.FIX]
         fix_loop: Final = [*fix_ask, self.TOOL_CALL, self.TOOL_RESULT]
@@ -9940,15 +9890,11 @@ class TestRoutingDecisionSurvivesToSpendLogOnEveryMetadataShape:
         assert persisted is not None, f"routing_decision dropped for {expected_bucket}"
         assert persisted["router_model_name"] == "smart-router"
         if classifier_type == "heuristic_v2":
-            assert (
-                persisted["heuristic_v2_forecast"]
-                == request_kwargs[expected_bucket]["routing_decision"]["heuristic_v2_forecast"]
-            )
+            assert persisted["heuristic_v2_forecast"] == request_kwargs[expected_bucket]["routing_decision"][
+                "heuristic_v2_forecast"
+            ]
             assert set(persisted["heuristic_v2_forecast"]["probabilities"]) == {
-                "SIMPLE",
-                "MEDIUM",
-                "COMPLEX",
-                "REASONING",
+                "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"
             }
         else:
             assert "heuristic_v2_forecast" not in persisted
@@ -10195,10 +10141,8 @@ class TestRedactedLoggingDropsPromptText:
             {
                 "classifier_type": "capability",
                 "capability_classifier_config": {
-                    "efficient_tier": "SIMPLE",
-                    "capable_tier": "REASONING",
-                    "base_threshold": 0.5,
-                    "threshold_step": 0.1,
+                    "efficient_tier": "SIMPLE", "capable_tier": "REASONING",
+                    "base_threshold": 0.5, "threshold_step": 0.1,
                 },
             },
             "capability_classifier_fallback",
@@ -10207,10 +10151,8 @@ class TestRedactedLoggingDropsPromptText:
             {
                 "classifier_type": "llm_v2",
                 "llm_v2_config": {
-                    "efficient_profile": "Routine tasks",
-                    "capable_profile": "Complex tasks",
-                    "harness": "Read files and run checks",
-                    "max_quality_gap": 0.05,
+                    "efficient_profile": "Routine tasks", "capable_profile": "Complex tasks",
+                    "harness": "Read files and run checks", "max_quality_gap": 0.05,
                 },
             },
             "llm_v2_fallback",
@@ -10221,46 +10163,36 @@ async def test_classifier_failure_survives_real_router_decision_and_redaction(
     overrides: Mapping[str, object], expected_cause: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "auto",
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": {
-                        "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
-                        "default_model": "cheap",
-                        "classifier_llm_config": {"model": "classifier", "timeout_ms": 2000},
-                        **overrides,
-                    },
+    router: Final = Router(model_list=[
+        {
+            "model_name": "auto",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                    "default_model": "cheap",
+                    "classifier_llm_config": {"model": "classifier", "timeout_ms": 2000},
+                    **overrides,
                 },
             },
-            {
-                "model_name": "classifier",
-                "litellm_params": {
-                    "model": "openai/test-classifier",
-                    "api_key": "test-key",
-                    "api_base": "https://classifier.test/v1",
-                },
+        },
+        {
+            "model_name": "classifier",
+            "litellm_params": {
+                "model": "openai/test-classifier", "api_key": "test-key",
+                "api_base": "https://classifier.test/v1",
             },
-            {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
-            {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
-        ]
-    )
+        },
+        {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
+        {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
+    ])
     with respx.mock:
         upstream: Final = respx.post("https://classifier.test/v1/chat/completions").respond(
             200,
             json={
-                "id": "classifier-result",
-                "object": "chat.completion",
-                "model": "test-classifier",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "PRIVATE_INVALID_REPLY"},
-                        "finish_reason": "stop",
-                    }
-                ],
+                "id": "classifier-result", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "PRIVATE_INVALID_REPLY"},
+                             "finish_reason": "stop"}],
             },
         )
         metadata: Final[dict[str, object]] = {"headers": {"x-litellm-enable-message-redaction": True}}
@@ -10277,21 +10209,11 @@ async def test_classifier_failure_survives_real_router_decision_and_redaction(
         assert "PRIVATE_INVALID_REPLY" not in json.dumps(decision)
         assert "signals" not in decision
         if overrides["classifier_type"] == "llm":
-            upstream.respond(
-                200,
-                json={
-                    "id": "classifier-recovered",
-                    "object": "chat.completion",
-                    "model": "test-classifier",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
+            upstream.respond(200, json={
+                "id": "classifier-recovered", "object": "chat.completion", "model": "test-classifier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
+                             "finish_reason": "stop"}],
+            })
             recovered: Final = await router.async_pre_routing_hook(
                 model="auto", request_kwargs=request, messages=[{"role": "user", "content": "hi"}]
             )
@@ -15109,9 +15031,7 @@ class TestContextWindowEscalation:
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(_windowed_router(_SMALL, ("mid-model", "openai/gpt-4o-mini", 200000), _BIG)),
-            complexity_router_config=_tier_config(
-                tiers={"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}
-            ),
+            complexity_router_config=_tier_config(tiers={"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -15220,7 +15140,9 @@ class TestContextWindowEscalation:
             else MappingProxyType({})
         )
         raw_config: Final = RequestComplexityRouterConfig.model_validate(
-            MappingProxyType({"tiers": MappingProxyType({"SIMPLE": "small-model", "COMPLEX": "big-model"}), **setting})
+            MappingProxyType(
+                {"tiers": MappingProxyType({"SIMPLE": "small-model", "COMPLEX": "big-model"}), **setting}
+            )
         )
         config: Final = (
             RequestComplexityRouterConfig.model_validate_json(raw_config.model_dump_json())
@@ -15470,7 +15392,9 @@ class TestModalityRouting:
             self.BASE_VISION,
         )
         original: Final = await router.aclassify("What color is this?")
-        result: Final = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE)
+        result: Final = await router.async_pre_routing_hook(
+            model="m", request_kwargs={}, messages=self.IMAGE_MESSAGE
+        )
 
         assert original.heuristic_v2_forecast is not None
         assert result is not None and result.routing_decision is not None
@@ -17094,7 +17018,8 @@ class TestTierHealthFailover:
         )
         assert result.model == "live-b"
         assert any(
-            probed_input == "summarize this document for me" for _, probed_input in mock_router_instance.probed_prompts
+            probed_input == "summarize this document for me"
+            for _, probed_input in mock_router_instance.probed_prompts
         ), "the eligibility probe must forward `input` to the owner"
 
     @pytest.mark.asyncio
@@ -17656,18 +17581,16 @@ class TestMaxTokensFromTierModel:
             tier_litellm_params={tier_carrier: 4321},
             max_tokens_from_tier_model="clamp",
             marker_params={marker_carrier: 2000},
-            simple_deployments=[
-                {
-                    "model_name": "small",
-                    "litellm_params": {
-                        "model": "openai/gpt-5.6",
-                        "api_key": "test-only",
-                        "api_base": "https://tier.test/v1",
-                        surface_key: 9000,
-                    },
-                    "model_info": {"max_output_tokens": 16384},
-                }
-            ],
+            simple_deployments=[{
+                "model_name": "small",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "test-only",
+                    "api_base": "https://tier.test/v1",
+                    surface_key: 9000,
+                },
+                "model_info": {"max_output_tokens": 16384},
+            }],
         )
 
         with respx.mock(assert_all_mocked=True) as upstream:
@@ -17717,14 +17640,10 @@ class TestMaxTokensFromTierModel:
             max_tokens_from_tier_model="clamp",
             marker_params={marker_carrier: 2000},
             tier_litellm_params={"max_tokens": tier_cap} if tier_cap else None,
-            simple_deployments=None
-            if known_ceiling
-            else [
-                {
-                    "model_name": "small",
-                    "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"},
-                }
-            ],
+            simple_deployments=None if known_ceiling else [{
+                "model_name": "small",
+                "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"},
+            }],
         )
         request: Final[dict[str, object]] = {} if caller_cap is None else {"max_output_tokens": caller_cap}
         await router.async_get_available_deployment(
@@ -17732,15 +17651,14 @@ class TestMaxTokensFromTierModel:
         )
         first: Final = {key: request[key] for key in OUTPUT_TOKEN_CEILING_PARAMS if key in request}
         await router.async_get_available_deployment(
-            model="smart-router",
-            request_kwargs=request,
+            model="smart-router", request_kwargs=request,
             messages=[{"role": "user", "content": self.COMPLEX_PROMPT}],
         )
 
         expected_first: Final = (
             {"max_tokens": tier_cap or caller_cap or 8192}
-            if known_ceiling or tier_cap
-            else {marker_carrier: 2000, **({"max_output_tokens": caller_cap} if caller_cap else {})}
+            if known_ceiling or tier_cap else
+            {marker_carrier: 2000, **({"max_output_tokens": caller_cap} if caller_cap else {})}
         )
         assert first == expected_first
         assert request["max_tokens"] == (caller_cap or 64000)
@@ -17760,12 +17678,10 @@ class TestMaxTokensFromTierModel:
         router: Final = self._router(
             max_tokens_from_tier_model=mode,
             marker_params={marker_carrier: 2000},
-            simple_deployments=[
-                {
-                    "model_name": "small",
-                    "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"},
-                }
-            ],
+            simple_deployments=[{
+                "model_name": "small",
+                "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"},
+            }],
         )
         sent: Final = await self._routed(router)
 
@@ -17976,11 +17892,7 @@ class TestMaxTokensFromTierModel:
             ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {}}}, {}),
             ({"litellm_metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_tokens": "2000"}}}, {"max_tokens": 2000}),
             (
-                {
-                    "metadata": {
-                        CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_output_tokens": 5, "api_key": "x", "max_tokens": True}
-                    }
-                },
+                {"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_output_tokens": 5, "api_key": "x", "max_tokens": True}}},
                 {"max_output_tokens": 5},
             ),
             ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: "not-a-dict"}}, None),
@@ -17993,7 +17905,6 @@ class TestMaxTokensFromTierModel:
         stamped: Final = stamped_client_ceiling(request_kwargs)
 
         assert (None if stamped is None else dict(stamped)) == expected
-
 
 class _OutputCeilingRecorder(CustomLogger):
     def __init__(self) -> None:

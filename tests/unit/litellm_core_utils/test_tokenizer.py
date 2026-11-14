@@ -494,7 +494,9 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
         assert result["type"] == "openai_tokenizer"
         assert result["tokenizer"].encode("hello")
         message = next(
-            record.getMessage() for record in caplog.records if "token counts may be approximate" in record.getMessage()
+            record.getMessage()
+            for record in caplog.records
+            if "token counts may be approximate" in record.getMessage()
         )
         assert "llama-2" in message
         assert "download failed" in message
@@ -517,7 +519,9 @@ def test_native_added_token_decoder_preserves_fields_without_python_dependency(m
         monkeypatch.setitem(sys.modules, "tokenizers", None)
     actual = native.get_added_tokens_decoder()
     attributes = ("content", "single_word", "lstrip", "rstrip", "normalized", "special")
-    assert {token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()} == {
+    assert {
+        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()
+    } == {
         token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in expected.items()
     }
     assert {token_id: str(token) for token_id, token in actual.items()} == {

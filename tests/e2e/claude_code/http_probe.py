@@ -90,7 +90,8 @@ _TOOL_SEARCH_TOOLS: tuple[AnthropicTool, ...] = (
 )
 
 _TOOL_SEARCH_PROMPT = (
-    "If you have a tool to discover other tools, use it to find one. Otherwise reply with the word 'done'."
+    "If you have a tool to discover other tools, use it to "
+    "find one. Otherwise reply with the word 'done'."
 )
 
 
@@ -212,7 +213,8 @@ def _replay_history(answer: AnthropicMessagesResponse) -> tuple[AnthropicMessage
     reply: AnthropicMessage = (
         AnthropicToolResultTurn(
             content=[
-                AnthropicToolResultBlock(tool_use_id=tool_use_id, content=_TOOL_RESULT_STUB) for tool_use_id in pending
+                AnthropicToolResultBlock(tool_use_id=tool_use_id, content=_TOOL_RESULT_STUB)
+                for tool_use_id in pending
             ]
         )
         if pending

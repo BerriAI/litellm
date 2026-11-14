@@ -12,6 +12,9 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 class TestVertexAIFilesIntegration:
     """Test integration of Vertex AI files with main litellm API"""
 
+
+
+
     def test_litellm_file_content_vertex_ai_error_cases(self):
         """Test error handling in vertex_ai file_content"""
         # Test missing file_id - the VertexAI provider config's

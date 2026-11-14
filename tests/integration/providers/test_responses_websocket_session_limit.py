@@ -1015,7 +1015,8 @@ async def _kill_workload(owned: OwnedProxy, key: str, model: str) -> KillResults
             asyncio.gather(*tuple(_wait_for_close(connection, 30) for connection in victims)),
             asyncio.gather(
                 *tuple(
-                    _turn_result(connection, _create(model, f"survivor-{uuid.uuid4().hex}")) for connection in survivors
+                    _turn_result(connection, _create(model, f"survivor-{uuid.uuid4().hex}"))
+                    for connection in survivors
                 )
             ),
         )

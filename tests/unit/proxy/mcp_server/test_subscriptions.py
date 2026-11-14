@@ -377,9 +377,7 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
 
     from litellm.proxy.mcp_server import server
 
-    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(
-        uri="test://value"
-    )
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(uri="test://value")
     token = server._mcp_proxy_mode.set(True)
     try:
         with pytest.raises(MCPError, match="/mcp/proxy"):
@@ -508,13 +506,17 @@ async def test_all_failed_tools_listing_keeps_empty_catalog_digest(monkeypatch: 
 
     listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
-    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway
+    )
     empty_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     failed_gateway: Final = _ListingGateway(
         error=ToolListingFailedOutright(code=-32603, message="Every MCP server in scope failed")
     )
-    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway)
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway
+    )
     failed_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert failed_digest == empty_digest

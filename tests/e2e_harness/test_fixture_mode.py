@@ -30,7 +30,9 @@ NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 def write_manifest(root: Path, recorded_at: datetime) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    manifest = Manifest(format_version=BUNDLE_FORMAT_VERSION, recorded_at=recorded_at, harness_version="abc1234")
+    manifest = Manifest(
+        format_version=BUNDLE_FORMAT_VERSION, recorded_at=recorded_at, harness_version="abc1234"
+    )
     (root / MANIFEST_FILENAME).write_text(manifest.model_dump_json(), encoding="utf-8")
 
 
@@ -103,7 +105,9 @@ class TestReportHeader:
         root = tmp_path / "bundle"
         recorded_at = NOW - timedelta(days=1)
         write_manifest(root, recorded_at)
-        assert fixture_report_lines("record", root, now=NOW) == [f"e2e fixture mode: record -> {root}"]
+        assert fixture_report_lines("record", root, now=NOW) == [
+            f"e2e fixture mode: record -> {root}"
+        ]
         replay_lines = fixture_report_lines("replay", root, now=NOW)
         assert len(replay_lines) == 1
         assert "replay" in replay_lines[0]

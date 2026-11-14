@@ -23,9 +23,13 @@ class TestUIPathEnvironmentVariable:
         """Test that LITELLM_UI_PATH overrides default."""
         custom_path = "/custom/ui/path"
 
-        with mock.patch.dict(os.environ, {"LITELLM_UI_PATH": custom_path, "LITELLM_NON_ROOT": "true"}):
+        with mock.patch.dict(
+            os.environ, {"LITELLM_UI_PATH": custom_path, "LITELLM_NON_ROOT": "true"}
+        ):
             is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-            default_runtime_ui_path = "/var/lib/litellm/ui" if is_non_root else "/default/packaged/path"
+            default_runtime_ui_path = (
+                "/var/lib/litellm/ui" if is_non_root else "/default/packaged/path"
+            )
             runtime_ui_path = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
 
             assert runtime_ui_path == custom_path
@@ -40,7 +44,9 @@ class TestUIPathEnvironmentVariable:
 
             with mock.patch.dict(os.environ, env_copy, clear=True):
                 is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-                default_runtime_ui_path = "/var/lib/litellm/ui" if is_non_root else "/default/packaged/path"
+                default_runtime_ui_path = (
+                    "/var/lib/litellm/ui" if is_non_root else "/default/packaged/path"
+                )
                 runtime_ui_path = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
 
                 assert runtime_ui_path == "/var/lib/litellm/ui"
@@ -58,7 +64,9 @@ class TestAssetsPathEnvironmentVariable:
             {"LITELLM_ASSETS_PATH": custom_path, "LITELLM_NON_ROOT": "true"},
         ):
             is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-            default_assets_dir = "/var/lib/litellm/assets" if is_non_root else "/default/current/dir"
+            default_assets_dir = (
+                "/var/lib/litellm/assets" if is_non_root else "/default/current/dir"
+            )
             assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
             assert assets_dir == custom_path
@@ -72,7 +80,9 @@ class TestAssetsPathEnvironmentVariable:
 
         with mock.patch.dict(os.environ, env_copy, clear=True):
             is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-            default_assets_dir = "/var/lib/litellm/assets" if is_non_root else "/default/current/dir"
+            default_assets_dir = (
+                "/var/lib/litellm/assets" if is_non_root else "/default/current/dir"
+            )
             assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
             assert assets_dir == "/var/lib/litellm/assets"

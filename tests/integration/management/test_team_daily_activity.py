@@ -82,6 +82,8 @@ async def test_team_daily_activity_matrix(
         f"{endpoint}?{query}",
         headers={"Authorization": f"Bearer {actors.keys[actor].cleartext}"},
     )
-    assert resp.status_code == expected_status, f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
     if actor == Actor.PROXY_ADMIN and team in _SEEDED_SPEND:
         assert resp.json()["metadata"]["total_spend"] == _SEEDED_SPEND[team], resp.text

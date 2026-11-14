@@ -85,7 +85,8 @@ def canonical_string(value: str) -> str:
 
 def _canonical_flat(fields: dict[str, str]) -> dict[str, JsonValue]:
     return {
-        key: SECRET_PLACEHOLDER if is_secret_field(key) else canonical_string(value) for key, value in fields.items()
+        key: SECRET_PLACEHOLDER if is_secret_field(key) else canonical_string(value)
+        for key, value in fields.items()
     }
 
 
@@ -95,7 +96,9 @@ def _canonical_value(value: JsonValue) -> JsonValue:
             return canonical_string(value)
         case dict():
             return {
-                key: SECRET_PLACEHOLDER if is_secret_field(key) and item is not None else _canonical_value(item)
+                key: SECRET_PLACEHOLDER
+                if is_secret_field(key) and item is not None
+                else _canonical_value(item)
                 for key, item in value.items()
             }
         case list():
@@ -112,7 +115,9 @@ class CanonicalRequest:
 
     @property
     def key(self) -> str:
-        digest: Final = hashlib.sha256(f"{self.method} {self.path}\n{self.content}".encode()).hexdigest()[:16]
+        digest: Final = hashlib.sha256(
+            f"{self.method} {self.path}\n{self.content}".encode()
+        ).hexdigest()[:16]
         return f"{self.method} {self.path} #{digest}"
 
     def pretty_content(self) -> str:

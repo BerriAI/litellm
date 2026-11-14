@@ -83,10 +83,7 @@ def _has_block_type(
         route=Route.MESSAGES,
         providers=(Provider.VERTEX_AI,),
         models=tuple(VERTEX_AI_MODELS),
-        capabilities=(
-            Capability.REASONING,
-            Capability.FUNCTION_CALLING,
-        ),
+        capabilities=(Capability.REASONING, Capability.FUNCTION_CALLING,),
         mode=Mode.NONSTREAM,
     )
 )

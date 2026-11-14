@@ -55,6 +55,8 @@ def test_moderations_forwards_the_selected_model_and_input(gateway: Gateway) -> 
             for result in body["results"]
         ] == [(True, {"violence": True}, {"violence": 0.99})]
 
-        requests: Final = tuple(request for request in wire.drain() if request.target == "/v1/moderations")
+        requests: Final = tuple(
+            request for request in wire.drain() if request.target == "/v1/moderations"
+        )
         assert len(requests) == 1
         assert json.loads(requests[0].body) == {"input": text, "model": "omni-moderation-latest"}

@@ -44,7 +44,9 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
         mode=Mode.NONSTREAM,
     )
 )
-def test_tag_budget_blocks_tagged_requests(client: BudgetClient, scoped_key: str, resources: ResourceManager) -> None:
+def test_tag_budget_blocks_tagged_requests(
+    client: BudgetClient, scoped_key: str, resources: ResourceManager
+) -> None:
     budgeted_tag = f"e2e-budget-tag-{unique_marker()}"
     client.create_tag(budgeted_tag, max_budget=TINY_BUDGET)
     resources.defer(lambda: client.delete_tag(budgeted_tag))
@@ -65,5 +67,7 @@ def test_tag_budget_blocks_tagged_requests(client: BudgetClient, scoped_key: str
 
     free_tag = f"e2e-free-tag-{unique_marker()}"
     other = _tagged_call(client, scoped_key, free_tag)
-    assert not is_budget_block(other), f"unbudgeted tag {free_tag!r} was blocked by {budgeted_tag!r}'s budget"
+    assert not is_budget_block(other), (
+        f"unbudgeted tag {free_tag!r} was blocked by {budgeted_tag!r}'s budget"
+    )
     require_successful_call(other)

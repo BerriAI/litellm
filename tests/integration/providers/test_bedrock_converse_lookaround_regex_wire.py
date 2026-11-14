@@ -794,7 +794,9 @@ def test_the_worst_case_lookaround_input_scans_in_linear_time(gateway: Gateway) 
         _assert_tool_call_relayed("chat", worst.value)
         assert_within_factor_of_control(worst.seconds, control=control.seconds, factor=10)
         assert liveliness, liveliness
-        assert_within_factor_of_control(max(latency for latency, _ in liveliness), control=control.seconds, factor=10)
+        assert_within_factor_of_control(
+            max(latency for latency, _ in liveliness), control=control.seconds, factor=10
+        )
         assert {status for _, status in liveliness} == {200}, liveliness
         assert len(wire.drain()) == 1
 

@@ -195,18 +195,7 @@ def test_only_documentation_pages_are_scanned_for_mentions(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     "directory",
-    (
-        "cli",
-        "deploy",
-        "enterprise",
-        "packaging",
-        "proxy-extras",
-        "runtime",
-        "rust",
-        "scripts",
-        "ui",
-        "vscode-extension",
-    ),
+    ("cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"),
 )
 def test_relocated_sources_are_excluded_without_hiding_nested_sdk_sources(tmp_path: Path, directory: str) -> None:
     source_dir, docs_dir = _write_tree(tmp_path, 'os.getenv("SDK_DOCUMENTED_KEY")', "SDK_DOCUMENTED_KEY")

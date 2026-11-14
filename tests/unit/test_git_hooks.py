@@ -66,19 +66,22 @@ def _run_commit_msg(subject: str, tmp_path: Path) -> subprocess.CompletedProcess
 )
 def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
-    assert result.returncode == 0, f"hook rejected a valid subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
+    assert result.returncode == 0, (
+        f"hook rejected a valid subject:\n  subject: {subject!r}\n"
+        f"  stderr: {result.stderr}"
+    )
 
 
 @pytest.mark.parametrize(
     "subject",
     [
-        "add stuff",  # no type
-        "feat add router strategy",  # missing colon
-        "feat:add router strategy",  # missing space after colon
-        "feat():",  # empty description
-        "ux: thing",  # unknown type
-        "Feat(router): capital type",  # types are lowercase
-        "feat(router):",  # empty description
+        "add stuff",                          # no type
+        "feat add router strategy",           # missing colon
+        "feat:add router strategy",           # missing space after colon
+        "feat():",                            # empty description
+        "ux: thing",                          # unknown type
+        "Feat(router): capital type",         # types are lowercase
+        "feat(router):",                      # empty description
         # Description must start with a lowercase letter — kept in sync with
         # the CI workflow's subjectPattern so the local hook never accepts a
         # subject that CI will later reject.
@@ -91,7 +94,8 @@ def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
 def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 1, (
-        f"hook accepted an invalid subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
+        f"hook accepted an invalid subject:\n  subject: {subject!r}\n"
+        f"  stderr: {result.stderr}"
     )
     assert "Conventional Commits" in result.stderr
 
@@ -110,7 +114,8 @@ def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
 def test_commit_msg_accepts_non_uppercase_starts(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 0, (
-        f"hook rejected a valid non-uppercase-start subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
+        f"hook rejected a valid non-uppercase-start subject:\n"
+        f"  subject: {subject!r}\n  stderr: {result.stderr}"
     )
 
 
@@ -127,7 +132,8 @@ def test_commit_msg_accepts_non_uppercase_starts(tmp_path, subject):
 def test_commit_msg_passes_git_generated_messages(tmp_path, subject):
     result = _run_commit_msg(subject, tmp_path)
     assert result.returncode == 0, (
-        f"hook should pass git-generated subject:\n  subject: {subject!r}\n  stderr: {result.stderr}"
+        f"hook should pass git-generated subject:\n  subject: {subject!r}\n"
+        f"  stderr: {result.stderr}"
     )
 
 
@@ -156,7 +162,11 @@ def test_commit_msg_uses_first_non_comment_line(tmp_path):
     # below the subject. Make sure leading comment lines are skipped too.
     msg_file = tmp_path / "COMMIT_EDITMSG"
     msg_file.write_text(
-        "# On branch feature/foo\n\nfeat(router): add weighted round-robin\n\n# Please enter the commit message...\n",
+        "# On branch feature/foo\n"
+        "\n"
+        "feat(router): add weighted round-robin\n"
+        "\n"
+        "# Please enter the commit message...\n",
         encoding="utf-8",
     )
     result = subprocess.run(

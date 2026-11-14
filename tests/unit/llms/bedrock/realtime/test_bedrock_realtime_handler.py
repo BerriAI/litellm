@@ -1994,7 +1994,9 @@ class TestBedrockRealtimeGuardrails:
         assert any("audioInput" in event for event in events[clean_text_index:]), "the client's response.create runs"
 
     @pytest.mark.asyncio
-    async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(self, stub_aws_models: None) -> None:
+    async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(
+        self, stub_aws_models: None
+    ) -> None:
         lone_surrogate_text: Final = self._user_text(f"{self.BLOCKED_TEXT} \ud800")
 
         stream, _ = await self._forward_client(

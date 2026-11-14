@@ -1230,9 +1230,7 @@ def _logging_obj(*, log_parked: bool, call_type: str = "acompletion") -> LiteLLM
     [("allow", (1, 0), ["first"]), ("next", (1, 1), ["first", "second"])],
 )
 async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     first_on_pass: str,
     expected_calls: tuple[int, int],
     expected_header: list[str],
@@ -1253,9 +1251,7 @@ async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_names_a_skipped_step_whose_guardrail_also_runs_outside_the_pipeline(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
     second: Final = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
@@ -1292,9 +1288,7 @@ _PIPELINE_STEP_ERRORS: Final = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", _PIPELINE_STEP_ERRORS)
 async def test_pre_call_hook_names_a_step_that_raised_before_the_pipeline_moved_on(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
     first: Final = _RaisingPipelineStepGuardrail("first", error)
@@ -1314,9 +1308,7 @@ async def test_pre_call_hook_names_a_step_that_raised_before_the_pipeline_moved_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", _PIPELINE_STEP_ERRORS)
 async def test_deployment_hook_still_runs_a_pipeline_step_that_raised(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
     first: Final = _RaisingPipelineStepGuardrail("first", error)
@@ -1351,9 +1343,7 @@ class _OpensLitellmMetadataGuardrail(_PipelineStepGuardrail):
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_later_step_opened(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
     second: Final = _OpensLitellmMetadataGuardrail("second", "pre_call")
@@ -1451,9 +1441,7 @@ def _three_step_two_pipeline_data() -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_keeps_a_step_an_earlier_pipeline_ran_that_a_later_one_never_reached(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second", "third")]
     monkeypatch.setattr(litellm, "callbacks", guardrails)
@@ -1574,9 +1562,7 @@ def _blocks_before_a_later_request_pipeline_data() -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_that_blocks_keeps_a_later_request_step_whose_guardrail_runs_outside_pipelines(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "post_call")
     gate: Final = _PipelineStepGuardrail("gate", "pre_call")
@@ -1637,9 +1623,7 @@ async def test_held_stream_pipeline_that_ends_the_stream_drops_the_steps_of_a_la
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_keeps_a_step_that_never_ran_whose_guardrail_ran_outside_the_pipeline(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "post_call")
     second: Final = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
@@ -1712,9 +1696,7 @@ class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_step_opens_litellm_metadata(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
     second: Final = _PipelineStepGuardrail("second", "post_call")
@@ -1736,9 +1718,7 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_keeps_a_step_a_later_pipeline_runs_after_an_earlier_one_opens_litellm_metadata(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _OpensLitellmMetadataOnResponseGuardrail("first", "post_call")
     second: Final = _PipelineStepGuardrail("second", "post_call")
@@ -1780,9 +1760,7 @@ async def test_post_call_pipeline_keeps_a_step_a_later_pipeline_runs_after_an_ea
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_names_every_pipeline_step_when_the_pipelines_run_on_another_request(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
     second: Final = _PipelineStepGuardrail("second", "pre_call")
@@ -1801,9 +1779,7 @@ async def test_pre_call_hook_names_every_pipeline_step_when_the_pipelines_run_on
 
 @pytest.mark.asyncio
 async def test_deployment_hook_names_a_skipped_pre_call_step_it_ran(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
     second: Final = _PipelineStepGuardrail("second", "pre_call")
@@ -1827,9 +1803,7 @@ async def test_deployment_hook_names_a_skipped_pre_call_step_it_ran(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", _PIPELINE_STEP_ERRORS)
 async def test_deployment_hook_names_a_skipped_pre_call_step_that_raised(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
@@ -1852,9 +1826,7 @@ async def test_deployment_hook_names_a_skipped_pre_call_step_that_raised(
 
 @pytest.mark.asyncio
 async def test_post_call_pipeline_keeps_a_skipped_step_a_deployment_hook_ran(
-    proxy_logging: ProxyLogging,
-    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
-    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "post_call")
     second: Final = _PipelineStepGuardrail("second", "post_call")
@@ -2694,9 +2666,7 @@ def _iterator_and_legacy_hook_guardrail(name: str, seen: Dict[str, Any]) -> Cust
                 item.choices[0].delta.content = f"[governed] {item.choices[0].delta.content}"
                 yield item
 
-    return IteratorAndLegacyHookGuardrail(
-        guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True
-    )
+    return IteratorAndLegacyHookGuardrail(guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True)
 
 
 def _rewritten_model_response(response: Any) -> litellm.ModelResponse:
@@ -2735,10 +2705,7 @@ def test_streamable_post_call_pipelines_keeps_hook_guardrails_and_drops_iterator
     )
     ungoverned = GuardrailPipeline(
         mode="post_call",
-        steps=[
-            PipelineStep(guardrail="gr-post", on_fail="next"),
-            PipelineStep(guardrail="gr-iterator", on_fail="block"),
-        ],
+        steps=[PipelineStep(guardrail="gr-post", on_fail="next"), PipelineStep(guardrail="gr-iterator", on_fail="block")],
     )
     pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-iterator", on_fail="block")])
     data = {
@@ -2840,9 +2807,7 @@ async def test_streaming_iterator_hook_runs_legacy_hook_and_delivers_its_rewrite
     proxy_logging, make_user_api_key_auth, monkeypatch, native_lifecycle, caplog
 ):
     seen: Dict[str, Any] = {}
-    guardrail = _legacy_hook_stream_guardrail(
-        seen, rewrite=_rewritten_model_response, native_lifecycle=native_lifecycle
-    )
+    guardrail = _legacy_hook_stream_guardrail(seen, rewrite=_rewritten_model_response, native_lifecycle=native_lifecycle)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
@@ -2887,9 +2852,7 @@ async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_every_cho
     auth = make_user_api_key_auth(request_route="/v1/chat/completions")
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await proxy_logging.pre_call_hook(
-            user_api_key_dict=auth, data=data, call_type="completion", guardrails_only=True
-        )
+        await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion", guardrails_only=True)
         delivered = [
             item
             async for item in proxy_logging.async_post_call_streaming_iterator_hook(
@@ -2981,9 +2944,7 @@ async def test_streaming_iterator_hook_delivers_a_flat_guardrail_block_on_a_text
     ]
     auth: Final = make_user_api_key_auth(request_route="/v1/completions")
 
-    await proxy_logging.pre_call_hook(
-        user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True
-    )
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
     delivered: Final = [
         item
         async for item in proxy_logging.async_post_call_streaming_iterator_hook(
@@ -3013,9 +2974,7 @@ async def test_streaming_iterator_hook_live_pipeline_scans_what_a_disconnected_t
     ]
     auth: Final = make_user_api_key_auth(request_route="/v1/completions")
 
-    await proxy_logging.pre_call_hook(
-        user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True
-    )
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
     stream: Final = proxy_logging.async_post_call_streaming_iterator_hook(
         user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
     )
@@ -3106,13 +3065,7 @@ async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_anthropic
     raw = b"".join(delivered).decode()
     assert "[REWRITTEN] hello world" in raw
     assert raw.count("event: content_block_delta") == 1
-    for expected_event in (
-        "message_start",
-        "content_block_start",
-        "content_block_stop",
-        "message_delta",
-        "message_stop",
-    ):
+    for expected_event in ("message_start", "content_block_start", "content_block_stop", "message_delta", "message_stop"):
         assert f"event: {expected_event}" in raw
 
 
@@ -3520,11 +3473,7 @@ async def test_per_chunk_streaming_hook_runs_pipeline_managed_guardrail_without_
     monkeypatch.setattr(
         litellm,
         "callbacks",
-        [
-            UnifiedRecordingGuardrail(
-                guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True
-            )
-        ],
+        [UnifiedRecordingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
@@ -3636,16 +3585,10 @@ async def test_streaming_iterator_hook_pipeline_modify_response_replaces_a_text_
     )
     data: Final = {**_post_call_pipeline_data(stream=True), "prompt": "hi"}
     data["metadata"]["_guardrail_pipelines"] = [("response-governance", pipeline)]
-    chunks: Final = [
-        _text_completion_chunk("hello "),
-        _text_completion_chunk("world"),
-        _text_completion_chunk("", "stop"),
-    ]
+    chunks: Final = [_text_completion_chunk("hello "), _text_completion_chunk("world"), _text_completion_chunk("", "stop")]
     auth: Final = make_user_api_key_auth(request_route="/v1/completions")
 
-    await proxy_logging.pre_call_hook(
-        user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True
-    )
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
     delivered: Final = [
         item
         async for item in proxy_logging.async_post_call_streaming_iterator_hook(
@@ -3828,50 +3771,12 @@ def _mask_tool_call_arguments(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def _anthropic_tool_use_sse_chunks() -> List[bytes]:
     events = [
-        (
-            "message_start",
-            {
-                "type": "message_start",
-                "message": {
-                    "id": "msg_1",
-                    "type": "message",
-                    "role": "assistant",
-                    "model": "m",
-                    "content": [],
-                    "stop_reason": None,
-                    "usage": {"input_tokens": 1, "output_tokens": 0},
-                },
-            },
-        ),
-        (
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}},
-            },
-        ),
-        (
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'},
-            },
-        ),
-        (
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}},
-        ),
+        ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "m", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        (
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                "usage": {"output_tokens": 2},
-            },
-        ),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
         ("message_stop", {"type": "message_stop"}),
     ]
     return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
@@ -3916,28 +3821,12 @@ def _responses_function_call_events() -> List[Dict[str, Any]]:
     return [
         {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
         {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 0, "delta": '{"fruit":'},
-        {
-            "type": "response.function_call_arguments.delta",
-            "item_id": "fc_1",
-            "output_index": 0,
-            "delta": ' "persimmon"}',
-        },
-        {
-            "type": "response.function_call_arguments.done",
-            "item_id": "fc_1",
-            "output_index": 0,
-            "arguments": '{"fruit": "persimmon"}',
-        },
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 0, "delta": ' "persimmon"}'},
+        {"type": "response.function_call_arguments.done", "item_id": "fc_1", "output_index": 0, "arguments": '{"fruit": "persimmon"}'},
         {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
         {
             "type": "response.completed",
-            "response": {
-                "id": "resp_1",
-                "created_at": 1,
-                "model": "m",
-                "output": [item('{"fruit": "persimmon"}', "completed")],
-                "status": "completed",
-            },
+            "response": {"id": "resp_1", "created_at": 1, "model": "m", "output": [item('{"fruit": "persimmon"}', "completed")], "status": "completed"},
         },
     ]
 
@@ -3960,10 +3849,7 @@ async def test_streaming_iterator_hook_pipeline_delivers_function_call_rewrite_o
     ]
 
     assert [event["type"] for event in delivered] == [event["type"] for event in _responses_function_call_events()]
-    assert [event["delta"] for event in delivered if event["type"] == "response.function_call_arguments.delta"] == [
-        '{"fruit": "[MASKED]"}',
-        "",
-    ]
+    assert [event["delta"] for event in delivered if event["type"] == "response.function_call_arguments.delta"] == ['{"fruit": "[MASKED]"}', ""]
     assert delivered[3]["arguments"] == '{"fruit": "[MASKED]"}'
     assert delivered[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
     assert delivered[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
@@ -4076,7 +3962,9 @@ async def test_streaming_iterator_hook_pipeline_releases_buffered_content_when_a
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(lambda inputs: {}), RaisingAcloseCallback()])
+    monkeypatch.setattr(
+        litellm, "callbacks", [_rewriting_stream_guardrail(lambda inputs: {}), RaisingAcloseCallback()]
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
     chunks = _tool_call_stream_chunks()
@@ -4368,3 +4256,4 @@ async def test_live_pipeline_disconnect_scan_that_cannot_run_records_every_step_
     assert seen.get("count") is None
     assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
     assert any("cut short" in message and "RuntimeError" in message for message in _warnings(caplog))
+

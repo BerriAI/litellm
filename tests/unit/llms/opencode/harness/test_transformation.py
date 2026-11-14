@@ -47,7 +47,9 @@ CONFIG = OpenCodeHarnessConfig()
 
 
 def load_fixture(name: str) -> list[dict]:
-    return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
+    return [
+        json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line
+    ]
 
 
 def parse(obj: dict, state: OpenCodeStreamState) -> list:
@@ -411,7 +413,9 @@ def test_validate_environment_rejects_wrong_options_and_managed_config():
     with pytest.raises(OptionsMismatch):
         CONFIG.validate_environment(make_ctx(options=CodexOptions()))
     with pytest.raises(OptionsMismatch):
-        CONFIG.validate_environment(make_ctx(options=OpenCodeOptions(config={"model": "openai/x"})))
+        CONFIG.validate_environment(
+            make_ctx(options=OpenCodeOptions(config={"model": "openai/x"}))
+        )
 
 
 def test_session_setup_token_only_in_private_file():
@@ -514,7 +518,9 @@ def test_turn_response_paths():
     plain = CONFIG.transform_turn_response(make_ctx(), state, 0, [])
     assert plain.output_json is None and plain.final_text == state.final_text
     with pytest.raises(HarnessTurnError, match="boom"):
-        CONFIG.transform_turn_response(make_ctx(), OpenCodeStreamState(error="boom"), 0, [])
+        CONFIG.transform_turn_response(
+            make_ctx(), OpenCodeStreamState(error="boom"), 0, []
+        )
     with pytest.raises(HarnessTurnError, match="code 3: no output"):
         CONFIG.transform_turn_response(make_ctx(), OpenCodeStreamState(), 3, [])
 
@@ -540,7 +546,9 @@ async def test_start_writes_token_only_in_private_file():
 
 async def test_start_persists_xdg_dir():
     _, _, sandbox = await started()
-    assert sandbox.runs == [["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/oc-1/xdg", "opencode"]]
+    assert sandbox.runs == [
+        ["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/oc-1/xdg", "opencode"]
+    ]
 
 
 async def test_persist_failure_still_uses_private_xdg():
@@ -551,7 +559,9 @@ async def test_persist_failure_still_uses_private_xdg():
 
 
 async def test_turn_argv_env_and_session_continuation():
-    handler, ctx, sandbox = await started(options=OpenCodeOptions(agent="build", env={"FOO": "1"}))
+    handler, ctx, sandbox = await started(
+        options=OpenCodeOptions(agent="build", env={"FOO": "1"})
+    )
     sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     events = await collect(handler, ctx, "create hello.txt containing hi then read it")
     first = sandbox.execs[0]
@@ -684,13 +694,7 @@ def test_resume_copy_keeps_saved_text_that_reads_like_an_id() -> None:
         "type": "tool",
         "state": {"input": {"command": SAVED_REPLY_MSG}, "output": SAVED_USER_MSG},
     }
-    text_part: Final = {
-        "id": SAVED_PARTS[0],
-        "sessionID": SAVED,
-        "messageID": SAVED_USER_MSG,
-        "type": "text",
-        "text": SAVED,
-    }
+    text_part: Final = {"id": SAVED_PARTS[0], "sessionID": SAVED, "messageID": SAVED_USER_MSG, "type": "text", "text": SAVED}
     message: Final = {"info": {"id": SAVED_USER_MSG, "sessionID": SAVED}, "parts": [text_part, tool_part]}
     exported: Final = json.dumps({"info": {"id": SAVED, "directory": "/other"}, "messages": [message]})
 
@@ -788,7 +792,9 @@ async def test_restart_resumes_its_own_session_without_exporting_it() -> None:
 
 
 async def test_read_only_and_disable_tools_config():
-    handler, ctx, sandbox = await started(permissions="read-only", disable_tools=["grep"])
+    handler, ctx, sandbox = await started(
+        permissions="read-only", disable_tools=["grep"]
+    )
     sandbox.outputs.append(fixture_proc("readonly_denied_bash.jsonl"))
     await collect(handler, ctx, "x")
     assert exec_config(sandbox)["permission"] == {
@@ -860,7 +866,9 @@ async def test_api_error_event_raises_even_on_exit_zero():
 
 async def test_nonzero_exit_raises_with_stderr_tail():
     handler, ctx, sandbox = await started()
-    sandbox.outputs.append(FakeProcess(b"", stderr=b"line1\nfatal: bad config\n", exit_code=2))
+    sandbox.outputs.append(
+        FakeProcess(b"", stderr=b"line1\nfatal: bad config\n", exit_code=2)
+    )
     with pytest.raises(HarnessTurnError, match="code 2: line1\nfatal: bad config"):
         await collect(handler, ctx, "x")
 
@@ -878,7 +886,9 @@ async def test_early_close_kills_process_and_stop_is_idempotent():
 
 
 async def test_model_falls_back_to_endpoint_model():
-    handler, ctx, sandbox = await started(model=None, endpoint=FakeEndpoint(model="gw-model"))
+    handler, ctx, sandbox = await started(
+        model=None, endpoint=FakeEndpoint(model="gw-model")
+    )
     sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     await collect(handler, ctx, "x")
     assert "litellm/gw-model" in sandbox.execs[0]["cmd"]

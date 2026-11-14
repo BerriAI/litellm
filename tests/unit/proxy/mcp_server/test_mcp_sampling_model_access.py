@@ -105,7 +105,9 @@ class TestCheckModelAccess:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            result = await _check_model_access("claude-3-opus-20240229", user_api_key_auth=auth)
+            result = await _check_model_access(
+                "claude-3-opus-20240229", user_api_key_auth=auth
+            )
 
         assert result is None
 
@@ -128,7 +130,9 @@ class TestCheckModelAccess:
                 code=401,
             ),
         ):
-            result = await _check_model_access("claude-3-opus-20240229", user_api_key_auth=auth)
+            result = await _check_model_access(
+                "claude-3-opus-20240229", user_api_key_auth=auth
+            )
 
         assert result is not None
         assert result.code == -1
@@ -200,6 +204,7 @@ class TestCheckModelAccess:
 
 
 class TestSamplingAuthAndBudgetGating:
+
     @pytest.mark.asyncio
     async def test_should_deny_when_no_auth_context(self):
         """Sampling must reject calls with no user_api_key_auth."""

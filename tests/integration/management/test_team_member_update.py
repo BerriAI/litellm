@@ -83,9 +83,13 @@ async def test_team_member_update_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": resources.prefix, "user_id": member_id, "role": "admin"},
     )
-    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    row = await db.db.litellm_teamtable.find_unique(
+        where={"team_id": resources.prefix}
+    )
     assert row is not None
     if expected_status == 200:
         assert _role_of(row, member_id) == "admin"

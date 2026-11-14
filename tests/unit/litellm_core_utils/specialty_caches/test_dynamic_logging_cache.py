@@ -29,7 +29,9 @@ class TestLangfuseInMemoryCache:
         mock_logger = MockLangFuseLogger()
 
         # Patch the LangFuseLogger import to return our mock class
-        with patch("litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger):
+        with patch(
+            "litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger
+        ):
             # Add the mock logger to cache with expired TTL
             expired_time = time.time() - 1  # Already expired
             self.cache.cache_dict["test_key"] = mock_logger

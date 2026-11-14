@@ -76,7 +76,9 @@ async def test_process_pre_call_hook_response_string_other_call_type_raises_http
 async def test_process_pre_call_hook_response_exception_reraises(proxy_logging):
     err = RuntimeError("hook said no")
     with pytest.raises(RuntimeError, match="hook said no"):
-        await proxy_logging.process_pre_call_hook_response(response=err, data={}, call_type="completion")
+        await proxy_logging.process_pre_call_hook_response(
+            response=err, data={}, call_type="completion"
+        )
 
 
 @pytest.mark.asyncio
@@ -93,9 +95,7 @@ async def test_process_pre_call_hook_response_other_type_returns_data(proxy_logg
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_returns_data_when_no_callbacks(
-    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
-):
+async def test_pre_call_hook_returns_data_when_no_callbacks(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
     data = {"messages": [{"role": "user", "content": "hi"}], "model": "m", "temperature": 0.7}
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     out = await proxy_logging.pre_call_hook(
@@ -164,9 +164,7 @@ async def test_pre_call_hook_propagates_callback_error_raises(proxy_logging, mak
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(
-    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
-):
+async def test_pre_call_hook_processes_guardrail_metadata_when_no_overrides(proxy_logging, make_user_api_key_auth, mock_callbacks_disabled):
     """Even when no callback overrides exist, ``_process_guardrail_metadata`` runs."""
     data = {"messages": [{"role": "user"}], "model": "m", "metadata": {"guardrails": ["g1"]}}
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
@@ -307,9 +305,7 @@ async def test_default_path_still_applies_prompt_templates(proxy_logging, make_u
 
 
 @pytest.mark.asyncio
-async def test_aresponses_call_type_applies_prompt_templates_before_routing(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
+async def test_aresponses_call_type_applies_prompt_templates_before_routing(proxy_logging, make_user_api_key_auth, monkeypatch):
     """The responses surface must process registry prompts pre-routing so credentials follow the swapped model."""
     monkeypatch.setattr(litellm, "callbacks", [])
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
@@ -469,14 +465,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
     registered = dict(PROXY_HOOKS)
     for name, cls in (
         ("banned_keywords", _load("litellm.enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
-        (
-            "blocked_user_check",
-            _load("litellm.enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList"),
-        ),
-        (
-            "detect_prompt_injection",
-            _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection"),
-        ),
+        ("blocked_user_check", _load("litellm.enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
+        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection")),
         ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "PROXY_AzureContentSafety")),
     ):
         if cls is not None:
@@ -593,7 +583,9 @@ async def test_scan_raw_request_makes_blocking_order_independent(proxy_logging, 
     on the blocker, declaring the redactor first no longer lets the request
     through -- the blocker evaluates the pre-loop snapshot regardless of its
     position in the guardrails list."""
-    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)])
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     with pytest.raises(HTTPException, match="blocked"):
         await proxy_logging.pre_call_hook(
@@ -627,7 +619,9 @@ async def test_scan_raw_request_guardrail_does_not_undo_later_masking(
                     msg["content"] = msg["content"].replace("PII_TOKEN", "[REDACTED]")
             return None
 
-    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True), _PiiRedactor()])
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True), _PiiRedactor()]
+    )
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     out = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
@@ -688,7 +682,9 @@ async def test_scan_raw_request_isolation_survives_unpicklable_top_level_field(
     (blocking order-independence) must hold even when such a field is
     present.
     """
-    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)])
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     data = _secret_request()
     data["litellm_logging_obj"] = _Unpicklable()
@@ -701,7 +697,9 @@ async def test_scan_raw_request_isolation_survives_unpicklable_top_level_field(
 
 
 @pytest.mark.asyncio
-async def test_scan_raw_request_snapshot_taken_before_pipelines(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_scan_raw_request_snapshot_taken_before_pipelines(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     """
     veria-ai finding on BerriAI/litellm#34940: the raw snapshot was taken
     after _maybe_execute_pipelines ran, so a pipeline that masks content

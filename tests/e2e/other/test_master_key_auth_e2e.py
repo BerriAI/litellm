@@ -30,7 +30,8 @@ class TestMasterKeyAuth:
     def test_master_key_authenticates_and_grants_admin_route(self, client: OtherClient) -> None:
         listing = unwrap(client.list_users_as(MASTER_KEY))
         assert listing.total >= 0, (
-            f"master key reached the admin /user/list handler but the response did not carry a user count: {listing}"
+            "master key reached the admin /user/list handler but the response did not "
+            f"carry a user count: {listing}"
         )
 
     @pytest.mark.covers("other.auth.master_key.invalid_denied")

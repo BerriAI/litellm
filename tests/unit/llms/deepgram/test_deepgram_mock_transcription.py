@@ -164,6 +164,7 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
+
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_bytes,
@@ -189,7 +190,9 @@ class TestDeepgramMockTranscription:
                 # Ensure language is not included even if it was in optional_params for other tests
                 assert "language=" not in actual_url
             else:
-                assert actual_url == expected_url, f"Expected {expected_url}, got {actual_url}"
+                assert (
+                    actual_url == expected_url
+                ), f"Expected {expected_url}, got {actual_url}"
 
             # Verify headers
             assert "Authorization" in call_kwargs["headers"]
@@ -199,7 +202,9 @@ class TestDeepgramMockTranscription:
             assert response.text == "Hello, this is a test transcription."
             assert hasattr(response, "_hidden_params")
 
-    def test_transcription_with_custom_api_base(self, mock_deepgram_response, test_audio_bytes):
+    def test_transcription_with_custom_api_base(
+        self, mock_deepgram_response, test_audio_bytes
+    ):
         """Test transcription with custom API base URL"""
 
         mock_response = MagicMock()
@@ -211,6 +216,7 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
+
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_bytes,
@@ -224,13 +230,17 @@ class TestDeepgramMockTranscription:
             call_kwargs = mock_post.call_args.kwargs
 
             # Verify custom API base is used
-            expected_url = "https://custom.deepgram.com/v2/listen?model=nova-2&punctuate=true"
+            expected_url = (
+                "https://custom.deepgram.com/v2/listen?model=nova-2&punctuate=true"
+            )
             assert call_kwargs["url"] == expected_url
 
             # Verify response
             assert response.text == "Hello, this is a test transcription."
 
-    def test_transcription_with_file_object(self, mock_deepgram_response, test_audio_file):
+    def test_transcription_with_file_object(
+        self, mock_deepgram_response, test_audio_file
+    ):
         """Test transcription with file-like object"""
 
         mock_response = MagicMock()
@@ -242,6 +252,7 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
+
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_file,
@@ -254,7 +265,9 @@ class TestDeepgramMockTranscription:
             call_kwargs = mock_post.call_args.kwargs
 
             # Verify URL contains punctuate parameter
-            expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
+            expected_url = (
+                "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
+            )
             assert call_kwargs["url"] == expected_url
 
             # Verify response
@@ -379,7 +392,9 @@ class TestDeepgramMockTranscription:
             assert response["task"] == "transcribe"
             assert response["duration"] == 0.8
 
-    def test_transcription_response_with_empty_detected_language(self, test_audio_bytes):
+    def test_transcription_response_with_empty_detected_language(
+        self, test_audio_bytes
+    ):
         """Test response transformation when detected_language is present but None"""
         # Mock response with None detected_language
         mock_response_data = {

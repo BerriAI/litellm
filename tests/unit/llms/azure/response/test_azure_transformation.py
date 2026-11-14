@@ -32,7 +32,9 @@ def test_validate_environment_api_key_within_litellm_params():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
     litellm_params = GenericLiteLLMParams(api_key="test-api-key")
 
-    result = azure_openai_responses_apiconfig.validate_environment(headers={}, model="", litellm_params=litellm_params)
+    result = azure_openai_responses_apiconfig.validate_environment(
+        headers={}, model="", litellm_params=litellm_params
+    )
 
     expected = {"api-key": "test-api-key"}
 
@@ -93,7 +95,9 @@ def test_get_complete_url():
     api_base = "https://litellm8397336933.openai.azure.com"
     litellm_params = {"api_version": "2025-04-01-preview"}
 
-    result = azure_openai_responses_apiconfig.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+    result = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base, litellm_params=litellm_params
+    )
 
     expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
 
@@ -204,7 +208,10 @@ def test_compact_reaches_the_v1_route_and_drops_only_a_dated_api_version(
 
 def test_response_id_path_requests_encode_response_id():
     config = AzureOpenAIResponsesAPIConfig()
-    api_base = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+    api_base = (
+        "https://litellm8397336933.openai.azure.com/openai/responses"
+        "?api-version=2024-05-01-preview"
+    )
 
     url, params = config.transform_cancel_response_api_request(
         response_id="../../responses/other?x=1#frag",
@@ -242,7 +249,9 @@ def test_azure_o_series_responses_api_drop_temperature_param():
     config = AzureOpenAIOSeriesResponsesAPIConfig()
 
     # Create request params with temperature
-    request_params = ResponsesAPIOptionalRequestParams(temperature=0.7, max_output_tokens=1000, stream=False, top_p=0.9)
+    request_params = ResponsesAPIOptionalRequestParams(
+        temperature=0.7, max_output_tokens=1000, stream=False, top_p=0.9
+    )
 
     # Test with drop_params=True
     mapped_params_with_drop = config.map_openai_params(
@@ -276,7 +285,9 @@ def test_azure_o_series_responses_api_drop_params_no_temperature():
     config = AzureOpenAIOSeriesResponsesAPIConfig()
 
     # Create request params without temperature
-    request_params = ResponsesAPIOptionalRequestParams(max_output_tokens=1000, stream=False, top_p=0.9)
+    request_params = ResponsesAPIOptionalRequestParams(
+        max_output_tokens=1000, stream=False, top_p=0.9
+    )
 
     # Should work fine even with drop_params=True
     mapped_params = config.map_openai_params(
@@ -365,14 +376,20 @@ class TestAzureResponsesAPIConfig:
             api_base=base_url,
             litellm_params={"api_version": "preview"},
         )
-        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
+        assert (
+            result_preview
+            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
+        )
 
         # Test with latest version - should use openai/v1/responses
         result_latest = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "latest"},
         )
-        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
+        assert (
+            result_latest
+            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
+        )
 
         result_dated_preview = self.config.get_complete_url(
             api_base=base_url,
@@ -500,9 +517,7 @@ class TestAzureResponsesAPIConfig:
             headers=headers,
         )
 
-        expected_url = (
-            "https://test.openai.azure.com/openai/responses/resp_test123/cancel?api-version=2024-05-01-preview"
-        )
+        expected_url = "https://test.openai.azure.com/openai/responses/resp_test123/cancel?api-version=2024-05-01-preview"
         assert url == expected_url
         assert data == {}
 
@@ -1035,7 +1050,9 @@ def test_supported_responses_api_versions_are_preserved(api_version: str, source
 def test_responses_override_wins_over_query_and_chat_version(api_version: str) -> None:
     config: Final = AzureOpenAIResponsesAPIConfig()
     params: Final = {"api_version": api_version, "responses_api_version": "2025-03-01-preview"}
-    url: Final = config.get_complete_url(api_base=f"{_AZURE_RESOURCE}?api-version={api_version}", litellm_params=params)
+    url: Final = config.get_complete_url(
+        api_base=f"{_AZURE_RESOURCE}?api-version={api_version}", litellm_params=params
+    )
 
     assert url == f"{_AZURE_RESOURCE}/openai/responses?api-version=2025-03-01-preview"
 
@@ -1097,9 +1114,9 @@ _COMPLETED_RESPONSE_SSE: Final = "".join(
 def gateway_responses(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
     body: Final = _COMPLETED_RESPONSE_SSE if stream else json.dumps(_COMPLETED_RESPONSE)
     content_type: Final = "text/event-stream" if stream else "application/json"
-    return respx_mock.post("https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1").mock(
-        return_value=httpx.Response(200, text=body, headers={"content-type": content_type})
-    )
+    return respx_mock.post(
+        "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1"
+    ).mock(return_value=httpx.Response(200, text=body, headers={"content-type": content_type}))
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1248,9 +1265,7 @@ def test_chat_completion_keeps_the_dated_ga_api_version(respx_mock: respx.MockRo
                 "object": "chat.completion",
                 "created": 1734366691,
                 "model": "gpt-5.4-nano",
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}
-                ],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
         )
@@ -1408,7 +1423,9 @@ async def test_azure_responses_api_status_error():
                 "role": "assistant",
                 "type": "message",
                 "status": "completed",
-                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
+                "content": [
+                    {"type": "output_text", "text": "Here's an interesting fact."}
+                ],
             }
         ],
     }
@@ -1449,7 +1466,9 @@ async def test_azure_responses_api_status_error():
         )
 
     # Verify that 'status' field is not present in any of the input messages
-    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
+    print(
+        "Final request body:", json.dumps(captured_request_body, indent=4, default=str)
+    )
     assert "input" in captured_request_body, "Request body should contain 'input' field"
 
     expected_input = [
@@ -1546,23 +1565,30 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
 
     # Check that the response has the expected headers structure
     assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
-    assert "additional_headers" in response._hidden_params, (
-        "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
-    )
+    assert (
+        "additional_headers" in response._hidden_params
+    ), "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
 
     headers = response._hidden_params["additional_headers"]
 
     # Verify that Azure-specific headers are present with llm_provider- prefix
     assert "llm_provider-x-request-id" in headers, (
-        f"Response should contain 'llm_provider-x-request-id' header. Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-x-request-id' header. "
+        f"Headers: {list(headers.keys())}"
     )
     assert "llm_provider-apim-request-id" in headers, (
-        f"Response should contain 'llm_provider-apim-request-id' header. Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-apim-request-id' header. "
+        f"Headers: {list(headers.keys())}"
     )
 
     # Verify the header values match
-    assert headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
-    assert headers["llm_provider-apim-request-id"] == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    assert (
+        headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
+    )
+    assert (
+        headers["llm_provider-apim-request-id"]
+        == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    )
     assert headers["llm_provider-x-ms-region"] == "Sweden Central"
 
     # Also verify openai-compatible headers are included

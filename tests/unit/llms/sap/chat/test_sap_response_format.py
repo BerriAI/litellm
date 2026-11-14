@@ -269,7 +269,9 @@ class TestNestedSchema:
         # Verify the nested schema is preserved
         prompt_config = request["config"]["modules"]["prompt_templating"]["prompt"]
         assert "response_format" in prompt_config
-        assert prompt_config["response_format"]["json_schema"]["schema"] == nested_schema
+        assert (
+            prompt_config["response_format"]["json_schema"]["schema"] == nested_schema
+        )
 
 
 class TestTransformResponseWithResponseFormat:
@@ -466,7 +468,9 @@ class TestMarkdownStripping:
             choices=[
                 Choices(
                     index=0,
-                    message=Message(role="assistant", content='```json\n{"answer": 4}\n```'),
+                    message=Message(
+                        role="assistant", content='```json\n{"answer": 4}\n```'
+                    ),
                     finish_reason="stop",
                 )
             ],
@@ -486,7 +490,9 @@ class TestMarkdownStripping:
             choices=[
                 Choices(
                     index=0,
-                    message=Message(role="assistant", content='```\n{"answer": 4}\n```'),
+                    message=Message(
+                        role="assistant", content='```\n{"answer": 4}\n```'
+                    ),
                     finish_reason="stop",
                 )
             ],
@@ -534,17 +540,23 @@ class TestMarkdownStripping:
             choices=[
                 Choices(
                     index=0,
-                    message=Message(role="assistant", content='```json\n{"choice": 0}\n```'),
+                    message=Message(
+                        role="assistant", content='```json\n{"choice": 0}\n```'
+                    ),
                     finish_reason="stop",
                 ),
                 Choices(
                     index=1,
-                    message=Message(role="assistant", content='```json\n{"choice": 1}\n```'),
+                    message=Message(
+                        role="assistant", content='```json\n{"choice": 1}\n```'
+                    ),
                     finish_reason="stop",
                 ),
                 Choices(
                     index=2,
-                    message=Message(role="assistant", content='```\n{"choice": 2}\n```'),
+                    message=Message(
+                        role="assistant", content='```\n{"choice": 2}\n```'
+                    ),
                     finish_reason="stop",
                 ),
             ],
@@ -587,7 +599,9 @@ class TestMarkdownStripping:
             )
 
             result = config._strip_markdown_json(response)
-            assert result.choices[0].message.content == expected, f"Failed for input: {repr(input_content)}"
+            assert (
+                result.choices[0].message.content == expected
+            ), f"Failed for input: {repr(input_content)}"
 
     def test_no_strip_partial_markdown(self):
         """Should not corrupt content with incomplete markdown (only opening ```)."""
@@ -601,7 +615,9 @@ class TestMarkdownStripping:
             choices=[
                 Choices(
                     index=0,
-                    message=Message(role="assistant", content='```json\n{"incomplete": true}'),
+                    message=Message(
+                        role="assistant", content='```json\n{"incomplete": true}'
+                    ),
                     finish_reason="stop",
                 )
             ],
@@ -634,7 +650,10 @@ class TestMarkdownStripping:
 
         result = config._strip_markdown_json(response)
         # Only the outer wrapper should be stripped, inner markdown preserved
-        assert result.choices[0].message.content == '{"code": "```python\\nprint(1)\\n```"}'
+        assert (
+            result.choices[0].message.content
+            == '{"code": "```python\\nprint(1)\\n```"}'
+        )
 
 
 class TestResponseFormatErrorHandling:
@@ -737,7 +756,9 @@ class TestStrictParameterFiltering:
         )
 
         # strict should NOT be in model.params
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         # Other params should still be there
         assert model_params.get("temperature") == 0.7
@@ -801,7 +822,9 @@ class TestStrictParameterFiltering:
         )
 
         # Top-level strict should NOT be in model.params
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         assert model_params.get("temperature") == 0.5
 
@@ -821,7 +844,9 @@ class TestStrictParameterFiltering:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         # Anthropic models CAN have strict in model.params (SAP API accepts it)
         assert model_params.get("strict") is True
         assert model_params.get("max_tokens") == 1000
@@ -898,7 +923,9 @@ class TestMarkdownStrippingModelGating:
         )
 
         # Markdown should NOT be stripped for GPT models
-        assert result.choices[0].message.content == '```json\n{"result": "success"}\n```'
+        assert (
+            result.choices[0].message.content == '```json\n{"result": "success"}\n```'
+        )
 
     def test_gpt_model_no_markdown_strip_json_object(self):
         """GPT models should NOT have markdown stripped for json_object response_format."""

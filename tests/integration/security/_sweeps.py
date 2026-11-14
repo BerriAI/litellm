@@ -134,7 +134,9 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     {
         "/models/{model_id}": {"model_id": "model"},
         "/v1/models/{model_id}": {"model_id": "model"},
-        "/management/v1/customer_budget_increase_requests/{request_id}": {"request_id": "budget_increase_request_id"},
+        "/management/v1/customer_budget_increase_requests/{request_id}": {
+            "request_id": "budget_increase_request_id"
+        },
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(

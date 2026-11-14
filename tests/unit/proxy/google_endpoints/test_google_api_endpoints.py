@@ -244,9 +244,7 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         assert body["litellm_count_model"] == "us.anthropic.claude-opus-5-5"
 
 
-@pytest.mark.parametrize(
-    "path", ["/v1beta/models/count-log-claude:countTokens", "/models/count-log-claude:countTokens"]
-)
+@pytest.mark.parametrize("path", ["/v1beta/models/count-log-claude:countTokens", "/models/count-log-claude:countTokens"])
 def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
     monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], path: str
 ) -> None:

@@ -45,7 +45,9 @@ async def _seed_target(db, actors, shape: str, team_id: str, member_id: str) -> 
         await create_scratch_team(db, team_id, organization_id=actors.org_b_id)
     else:  # pragma: no cover - guard
         pytest.fail(f"unknown shape={shape}")
-    await db.db.litellm_teammembership.create(data={"user_id": member_id, "team_id": team_id, "spend": _SEED_SPEND})
+    await db.db.litellm_teammembership.create(
+        data={"user_id": member_id, "team_id": team_id, "spend": _SEED_SPEND}
+    )
 
 
 @pytest.mark.parametrize(
@@ -71,7 +73,9 @@ async def test_team_member_reset_spend_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"reset_to": _RESET_TO},
     )
-    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
     row = await db.db.litellm_teammembership.find_unique(
         where={"user_id_team_id": {"user_id": member_id, "team_id": resources.prefix}}
@@ -92,7 +96,9 @@ async def test_team_member_reset_spend_missing_team_is_404(gateway_client, actor
     assert resp.status_code == 404, resp.text
 
 
-async def test_team_member_reset_spend_missing_membership_is_404(gateway_client, db, resources, actors):
+async def test_team_member_reset_spend_missing_membership_is_404(
+    gateway_client, db, resources, actors
+):
     """A well-formed team but a user_id with no LiteLLM_TeamMembership row is 404."""
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
     resp = await gateway_client.post(
@@ -103,10 +109,14 @@ async def test_team_member_reset_spend_missing_membership_is_404(gateway_client,
     assert resp.status_code == 404, resp.text
 
 
-async def test_team_member_reset_spend_above_current_spend_is_400(gateway_client, db, resources, actors):
+async def test_team_member_reset_spend_above_current_spend_is_400(
+    gateway_client, db, resources, actors
+):
     member_id = resources.tag("member")
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
-    await db.db.litellm_teammembership.create(data={"user_id": member_id, "team_id": resources.prefix, "spend": 1.0})
+    await db.db.litellm_teammembership.create(
+        data={"user_id": member_id, "team_id": resources.prefix, "spend": 1.0}
+    )
     resp = await gateway_client.post(
         f"/team/{resources.prefix}/member/{member_id}/reset_spend",
         headers={"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"},
@@ -115,7 +125,9 @@ async def test_team_member_reset_spend_above_current_spend_is_400(gateway_client
     assert resp.status_code == 400, resp.text
 
 
-async def test_team_member_reset_spend_team_admin_cannot_reset_own_spend(gateway_client, db, resources, actors):
+async def test_team_member_reset_spend_team_admin_cannot_reset_own_spend(
+    gateway_client, db, resources, actors
+):
     """A team admin targeting their own LiteLLM_TeamMembership row is 403: unchecked, an
     admin could repeatedly zero their own spend right before it crosses their per-member
     cap, consuming the shared team budget without the configured limit ever binding."""

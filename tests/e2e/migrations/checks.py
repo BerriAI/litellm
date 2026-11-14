@@ -17,7 +17,9 @@ NEXT: Final = Migration(
     "CREATE TABLE migration_next (id int PRIMARY KEY); INSERT INTO migration_next VALUES (2);",
 )
 FATAL: Final = Migration(COMPLETE.name, "DO $$ BEGIN RAISE EXCEPTION 'MIGRATION_TEST_FATAL'; END $$;")
-_GATED_SQL: Final = f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
+_GATED_SQL: Final = (
+    f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
+)
 GATED: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '10s';\n{_GATED_SQL}")
 GATED_WITH_SHORT_LOCK_TIMEOUT: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '2s';\n{_GATED_SQL}")
 
@@ -32,8 +34,8 @@ def start_replicas(
 @step("Check that the migration {migration.name} ran exactly once")
 def assert_completed(database: Database, migration: Migration = COMPLETE) -> None:
     assert database.query(
-        "SELECT finished_at IS NOT NULL, rolled_back_at IS NULL, applied_steps_count FROM "
-        "_prisma_migrations WHERE migration_name = %s",
+        'SELECT finished_at IS NOT NULL, rolled_back_at IS NULL, applied_steps_count FROM '
+        '_prisma_migrations WHERE migration_name = %s',
         (migration.name,),
     ) == ((True, True, 1),), "Expected exactly one successful SQL execution"
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
@@ -69,13 +71,11 @@ def confirmed_history(database: Database) -> str:
     return row_id
 
 
-@step(
-    "Check that the original _prisma_migrations row and its effect survived, with the row marked finished: {finished}"
-)
+@step("Check that the original _prisma_migrations row and its effect survived, with the row marked finished: {finished}")
 def assert_original_proof(database: Database, row_id: str, finished: bool) -> None:
     assert database.query(
-        "SELECT id, applied_steps_count, finished_at IS NOT NULL, rolled_back_at IS NULL FROM "
-        "_prisma_migrations WHERE migration_name = %s",
+        'SELECT id, applied_steps_count, finished_at IS NOT NULL, rolled_back_at IS NULL FROM '
+        '_prisma_migrations WHERE migration_name = %s',
         (COMPLETE.name,),
     ) == ((row_id, 1, finished, True),), "Recovery lost or replaced the original durable SQL proof"
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
@@ -88,8 +88,8 @@ def pause_completion(database: Database) -> None:
             "CREATE FUNCTION migration_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
             "IF NEW.migration_name = {name} AND NEW.finished_at IS NOT NULL THEN "
             "PERFORM pg_advisory_lock({gate}); PERFORM pg_advisory_unlock({gate}); END IF; RETURN NEW; END $$; "
-            "CREATE TRIGGER migration_pause BEFORE UPDATE ON _prisma_migrations FOR EACH ROW "
-            "EXECUTE FUNCTION migration_pause()"
+            'CREATE TRIGGER migration_pause BEFORE UPDATE ON _prisma_migrations FOR EACH ROW '
+            'EXECUTE FUNCTION migration_pause()'
         ).format(name=sql.Literal(COMPLETE.name), gate=sql.Literal(GATE_KEY))
     )
 
@@ -141,7 +141,7 @@ def unconfirmed(replicas: tuple[Replica, ...], database: Database) -> None:
     started: Final = str(
         database.query(
             "SELECT to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') FROM "
-            "_prisma_migrations WHERE migration_name = %s",
+            '_prisma_migrations WHERE migration_name = %s',
             (COMPLETE.name,),
         )[0][0]
     )

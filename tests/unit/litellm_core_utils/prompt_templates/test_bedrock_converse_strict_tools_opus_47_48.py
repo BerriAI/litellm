@@ -75,10 +75,12 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
-    assert "strict" not in tool_spec, f"strict leaked into toolSpec for {model_id}: {tool_spec}"
-    assert "additionalProperties" not in tool_spec["inputSchema"]["json"], (
-        f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
-    )
+    assert (
+        "strict" not in tool_spec
+    ), f"strict leaked into toolSpec for {model_id}: {tool_spec}"
+    assert (
+        "additionalProperties" not in tool_spec["inputSchema"]["json"]
+    ), f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
 
 
 @pytest.mark.parametrize(
@@ -93,7 +95,9 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
     """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
-    assert result[0]["toolSpec"]["strict"] is True, f"strict missing for {model_id}: {result[0]['toolSpec']}"
+    assert (
+        result[0]["toolSpec"]["strict"] is True
+    ), f"strict missing for {model_id}: {result[0]['toolSpec']}"
 
 
 @pytest.mark.parametrize(
@@ -113,7 +117,9 @@ def test_bedrock_tools_pt_falsy_strict_always_dropped(model_id: str) -> None:
     ones whose cost-map entry still allows ``strict: true`` through."""
     result = _bedrock_tools_pt(_NON_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
-    assert "strict" not in tool_spec, f"no-op strict: false leaked into toolSpec for {model_id}: {tool_spec}"
+    assert (
+        "strict" not in tool_spec
+    ), f"no-op strict: false leaked into toolSpec for {model_id}: {tool_spec}"
 
 
 def test_responses_bridge_function_tool_does_not_reach_bedrock_with_strict() -> None:
@@ -134,8 +140,10 @@ def test_responses_bridge_function_tool_does_not_reach_bedrock_with_strict() -> 
             "required": ["city"],
         },
     }
-    chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-        [responses_tool]
+    chat_tools, _ = (
+        LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [responses_tool]
+        )
     )
     result = _bedrock_tools_pt(chat_tools, model="bedrock/us.anthropic.claude-sonnet-5")
     assert "strict" not in result[0]["toolSpec"]
@@ -152,3 +160,5 @@ def test_bedrock_tools_pt_strict_dropped_for_non_anthropic(model_id: str) -> Non
     """Non-Anthropic Bedrock families reject toolSpec.strict — must be dropped."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     assert "strict" not in result[0]["toolSpec"]
+
+

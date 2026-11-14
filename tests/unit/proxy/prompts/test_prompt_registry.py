@@ -133,15 +133,9 @@ def test_default_resolution_serves_the_only_environment_present(isolated_callbac
 
 def test_resolution_picks_exact_version_and_latest_within_an_environment(isolated_callbacks: list) -> None:
     registry = InMemoryPromptRegistry()
-    registry.sync_prompt_from_db(
-        prompt=_db_prompt_spec("begin every reply with AHOY", environment="development", version=1)
-    )
-    registry.sync_prompt_from_db(
-        prompt=_db_prompt_spec("begin every reply with YO", environment="development", version=2)
-    )
-    registry.sync_prompt_from_db(
-        prompt=_db_prompt_spec("begin every reply with HOWDY", environment="production", version=1)
-    )
+    registry.sync_prompt_from_db(prompt=_db_prompt_spec("begin every reply with AHOY", environment="development", version=1))
+    registry.sync_prompt_from_db(prompt=_db_prompt_spec("begin every reply with YO", environment="development", version=2))
+    registry.sync_prompt_from_db(prompt=_db_prompt_spec("begin every reply with HOWDY", environment="production", version=1))
 
     exact = registry.resolve_prompt_spec("greeting", version=1, environment="development")
     assert exact is not None

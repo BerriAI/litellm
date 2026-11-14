@@ -21,7 +21,9 @@ class TestGetFileContentsFromS3:
 
     @patch("boto3.client")
     @patch("yaml.safe_load")
-    def test_get_file_contents_from_s3_no_temp_file_creation(self, mock_yaml_load, mock_boto3_client, monkeypatch):
+    def test_get_file_contents_from_s3_no_temp_file_creation(
+        self, mock_yaml_load, mock_boto3_client, monkeypatch
+    ):
         """
         Test that get_file_contents_from_s3 doesn't create temporary files
         and uses yaml.safe_load directly on the S3 response content.
@@ -78,7 +80,9 @@ class TestGetFileContentsFromS3:
         )
 
         # Verify S3 get_object was called with correct parameters
-        mock_s3_client.get_object.assert_called_once_with(Bucket=bucket_name, Key=object_key)
+        mock_s3_client.get_object.assert_called_once_with(
+            Bucket=bucket_name, Key=object_key
+        )
 
         # Verify the response body was read and decoded
         mock_response_body.read.assert_called_once()
@@ -88,6 +92,7 @@ class TestGetFileContentsFromS3:
 
 
 class TestBucketConfigIncludes:
+
     @staticmethod
     def _bucket(objects):
         async def fetch(object_key):
@@ -100,7 +105,9 @@ class TestBucketConfigIncludes:
         merged = await resolve_bucket_includes(
             config={"include": ["model_config.yaml"], "general_settings": {"master_key": MASTER_KEY}},
             object_key="configs/prod/config.yaml",
-            fetch=self._bucket({"configs/prod/model_config.yaml": {"model_list": [{"model_name": "gpt-4o-mini"}]}}),
+            fetch=self._bucket(
+                {"configs/prod/model_config.yaml": {"model_list": [{"model_name": "gpt-4o-mini"}]}}
+            ),
         )
 
         assert merged == {
@@ -304,7 +311,9 @@ class TestBucketConfigIncludes:
 
         monkeypatch.setattr("litellm.proxy.common_utils.load_config_utils.s3_object_reader", build_reader)
 
-        await get_config_from_bucket(bucket_type="s3", bucket_name="litellm-configs", object_key="lit6982/config.yaml")
+        await get_config_from_bucket(
+            bucket_type="s3", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
 
         assert readers == [["lit6982/config.yaml", "lit6982/model_config.yaml"]]
 
@@ -364,17 +373,21 @@ class TestBucketConfigIncludes:
             "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "included-model"}],
         }
-        assert [bucket.requested for bucket in buckets] == [["lit6982/config.yaml", "lit6982/model_config.yaml"]]
+        assert [bucket.requested for bucket in buckets] == [
+            ["lit6982/config.yaml", "lit6982/model_config.yaml"]
+        ]
 
     @pytest.mark.asyncio
     async def test_get_config_from_bucket_returns_none_when_the_root_object_is_missing(self, monkeypatch):
         monkeypatch.setattr(
             "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
-            lambda bucket_name: lambda object_key: None,
+            lambda bucket_name: (lambda object_key: None),
         )
 
         assert (
-            await get_config_from_bucket(bucket_type="s3", bucket_name="litellm-configs", object_key="missing.yaml")
+            await get_config_from_bucket(
+                bucket_type="s3", bucket_name="litellm-configs", object_key="missing.yaml"
+            )
             is None
         )
 

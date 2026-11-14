@@ -77,7 +77,9 @@ def test_vertex_passthrough_failure_stamps_server_span(
     register_otel_callback,
 ):
     _otel, exporter = otel_with_exporter
-    server_span = server_span_factory(VERTEX_PATH, http_route="/vertex_ai/{endpoint:path}")
+    server_span = server_span_factory(
+        VERTEX_PATH, http_route="/vertex_ai/{endpoint:path}"
+    )
     uakd = _real_user_api_key_dict(server_span)
 
     _drive_passthrough_failure(exception=exception, user_api_key_dict=uakd)

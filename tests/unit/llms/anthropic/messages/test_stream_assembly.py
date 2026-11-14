@@ -193,11 +193,7 @@ CUT_OFF_TOOL_USE: Final = (
     ),
     _frame(
         "content_block_delta",
-        {
-            "type": "content_block_delta",
-            "index": 1,
-            "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'},
-        },
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
     ),
 )
 
@@ -208,9 +204,7 @@ CUT_OFF_TOOL_USE: Final = (
     ids=["text-cut-off", "tool-input-cut-off"],
 )
 def test_stream_cut_off_by_an_upstream_error_assembles_its_text_only_through_the_error(chunks: tuple[bytes, ...]):
-    assert assemble_anthropic_sse_stream(chunks) is None, (
-        "a caller recording what was served must not log a reply the upstream never finished"
-    )
+    assert assemble_anthropic_sse_stream(chunks) is None, "a caller recording what was served must not log a reply the upstream never finished"
 
     assembled: Final = assemble_anthropic_sse_stream(chunks, through_upstream_error=True)
 
@@ -218,9 +212,7 @@ def test_stream_cut_off_by_an_upstream_error_assembles_its_text_only_through_the
     choice: Final = assembled.choices[0]
     assert isinstance(choice, Choices)
     assert choice.message.content == "Hello there"
-    assert not choice.message.tool_calls, (
-        "a tool call whose input the upstream cut off is not a call the client can run"
-    )
+    assert not choice.message.tool_calls, "a tool call whose input the upstream cut off is not a call the client can run"
 
 
 @pytest.mark.parametrize(

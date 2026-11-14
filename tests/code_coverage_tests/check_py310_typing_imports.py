@@ -64,7 +64,11 @@ def _is_sys_version_info(node: ast.AST) -> bool:
 
 def _is_version_guarded(ancestors: tuple[tuple[ast.AST, str], ...]) -> bool:
     nearest_if: Final[tuple[ast.If, str] | None] = next(
-        ((ancestor, field_name) for ancestor, field_name in reversed(ancestors) if isinstance(ancestor, ast.If)),
+        (
+            (ancestor, field_name)
+            for ancestor, field_name in reversed(ancestors)
+            if isinstance(ancestor, ast.If)
+        ),
         None,
     )
     if nearest_if is None:
@@ -90,7 +94,9 @@ def scan_file(file_path: str | os.PathLike[str]) -> tuple[TypingImportViolation,
     )
 
 
-def _violations_for_node(node: ast.AST, path: Path) -> tuple[TypingImportViolation, ...]:
+def _violations_for_node(
+    node: ast.AST, path: Path
+) -> tuple[TypingImportViolation, ...]:
     if isinstance(node, ast.ImportFrom) and node.module == "typing":
         return tuple(
             TypingImportViolation(file=str(path), line=node.lineno, name=alias.name)

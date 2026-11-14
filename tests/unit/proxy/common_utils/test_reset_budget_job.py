@@ -3944,7 +3944,6 @@ def ticking_reset_clock(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespac
     monkeypatch.setattr(timezone_utils, "datetime", _TickingClock)
     return clock
 
-
 _Cell = float | str | datetime | dict[str, "_Cell"] | None
 
 
@@ -4321,9 +4320,7 @@ def test_a_reset_forced_on_the_default_end_user_tier_resets_end_users_without_a_
     ledger.add_spend("unlinked", 17.0)
 
     asyncio.run(
-        _post_budget_update(
-            monkeypatch, ledger, BudgetNewRequest(budget_id="default-tier", budget_reset_at=_CLOSED_WINDOW)
-        )
+        _post_budget_update(monkeypatch, ledger, BudgetNewRequest(budget_id="default-tier", budget_reset_at=_CLOSED_WINDOW))
     )
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 

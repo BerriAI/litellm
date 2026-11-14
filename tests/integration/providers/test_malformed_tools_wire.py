@@ -1418,7 +1418,9 @@ def test_count_tokens_rejects_malformed_tools_when_a_request_list_replaces_the_d
     assert _delivered(rig, marker) == ()
 
 
-def test_responses_input_tokens_drops_the_tools_a_deployment_list_names(rig: _Rig, field_groups: _FieldGroups) -> None:
+def test_responses_input_tokens_drops_the_tools_a_deployment_list_names(
+    rig: _Rig, field_groups: _FieldGroups
+) -> None:
     marker: Final = _marker()
     response: Final = rig.gateway.request(
         "POST",

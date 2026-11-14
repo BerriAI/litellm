@@ -4426,7 +4426,9 @@ async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop(
     router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
     caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
 
-    deployment, took, lags = await timed_with_loop_lags(lambda: router.select("embedder", {}, input=caption_and_images))
+    deployment, took, lags = await timed_with_loop_lags(
+        lambda: router.select("embedder", {}, input=caption_and_images)
+    )
 
     assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
     assert_loop_stayed_free(took, lags)
@@ -8079,9 +8081,9 @@ async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_a
         chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
             return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
         )
-        chat_completions: Final = respx_mock.post(
-            host="chat-sku.openai.azure.com", path__regex=r"/chat/completions"
-        ).mock(return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION))
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
         with pytest.raises(raised, match="upload refused"):
             await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
         await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))

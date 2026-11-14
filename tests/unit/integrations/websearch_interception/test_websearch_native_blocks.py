@@ -67,16 +67,24 @@ class TestIsAnthropicNativeWebSearchTool:
     """The detector must match native tools without catching look-alikes."""
 
     def test_matches_web_search_20250305(self):
-        assert is_anthropic_native_web_search_tool({"type": "web_search_20250305", "name": "web_search", "max_uses": 5})
+        assert is_anthropic_native_web_search_tool(
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+        )
 
     def test_matches_future_dated_variant(self):
-        assert is_anthropic_native_web_search_tool({"type": "web_search_20260101", "name": "web_search"})
+        assert is_anthropic_native_web_search_tool(
+            {"type": "web_search_20260101", "name": "web_search"}
+        )
 
     def test_rejects_litellm_standard(self):
-        assert not is_anthropic_native_web_search_tool({"name": "litellm_web_search", "input_schema": {}})
+        assert not is_anthropic_native_web_search_tool(
+            {"name": "litellm_web_search", "input_schema": {}}
+        )
 
     def test_rejects_openai_function_shape(self):
-        assert not is_anthropic_native_web_search_tool({"type": "function", "function": {"name": "litellm_web_search"}})
+        assert not is_anthropic_native_web_search_tool(
+            {"type": "function", "function": {"name": "litellm_web_search"}}
+        )
 
     def test_rejects_claude_desktop_builtin(self):
         # Claude Desktop's builtin client-side ``WebSearch`` tool must not be
@@ -84,7 +92,9 @@ class TestIsAnthropicNativeWebSearchTool:
         assert not is_anthropic_native_web_search_tool({"name": "WebSearch"})
 
     def test_rejects_unrelated_tool(self):
-        assert not is_anthropic_native_web_search_tool({"type": "function", "function": {"name": "calculator"}})
+        assert not is_anthropic_native_web_search_tool(
+            {"type": "function", "function": {"name": "calculator"}}
+        )
 
     def test_handles_missing_type(self):
         assert not is_anthropic_native_web_search_tool({"name": "web_search"})
@@ -155,7 +165,9 @@ class TestBuildWebSearchToolResultBlock:
         ]
 
     def test_missing_snippet_degrades_to_empty_string(self):
-        response = SearchResponse(results=[SearchResult(title="T", url="https://x/", snippet="")])
+        response = SearchResponse(
+            results=[SearchResult(title="T", url="https://x/", snippet="")]
+        )
         block = WebSearchTransformation.build_web_search_tool_result_block(
             tool_use_id="toolu_abc",
             search_response=response,
@@ -186,10 +198,14 @@ class TestPreRequestHookFlagsNativeTools:
     async def test_native_tool_sets_flag(self):
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
         kwargs = {
-            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+            "tools": [
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+            ],
             "litellm_params": {"custom_llm_provider": "bedrock"},
         }
-        out = await logger.async_pre_request_hook(model="bedrock/claude", messages=[], kwargs=kwargs)
+        out = await logger.async_pre_request_hook(
+            model="bedrock/claude", messages=[], kwargs=kwargs
+        )
         assert out is not None
         assert out.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY) is True
 
@@ -200,7 +216,9 @@ class TestPreRequestHookFlagsNativeTools:
             "tools": [{"name": "litellm_web_search", "input_schema": {}}],
             "litellm_params": {"custom_llm_provider": "bedrock"},
         }
-        out = await logger.async_pre_request_hook(model="bedrock/claude", messages=[], kwargs=kwargs)
+        out = await logger.async_pre_request_hook(
+            model="bedrock/claude", messages=[], kwargs=kwargs
+        )
         assert out is not None
         assert WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY not in out
 
@@ -450,7 +468,9 @@ class TestPostHookInjectsBlocks:
             "stop_reason": "end_turn",
         }
 
-        out = await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
+        out = await logger.async_post_agentic_loop_response_hook(
+            response=response, plan=plan, kwargs={}
+        )
 
         # Native block must be first so the client can pair it with the
         # tool_use before reading the assistant text.
@@ -466,7 +486,9 @@ class TestPostHookInjectsBlocks:
             "id": "msg_1",
             "content": [{"type": "text", "text": "answer"}],
         }
-        out = await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
+        out = await logger.async_post_agentic_loop_response_hook(
+            response=response, plan=plan, kwargs={}
+        )
         assert out == response
 
     @pytest.mark.asyncio
@@ -486,7 +508,9 @@ class TestPostHookInjectsBlocks:
                 self.content = [{"type": "text", "text": "ok"}]
 
         resp = _Resp()
-        out = await logger.async_post_agentic_loop_response_hook(response=resp, plan=plan, kwargs={})
+        out = await logger.async_post_agentic_loop_response_hook(
+            response=resp, plan=plan, kwargs={}
+        )
         assert out.content[0]["type"] == "web_search_tool_result"
         assert out.content[1]["type"] == "text"
 

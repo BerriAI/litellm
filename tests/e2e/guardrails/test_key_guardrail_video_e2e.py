@@ -42,14 +42,8 @@ class TestKeyAttachedGuardrailOnVideos:
     @meta(
         Subject(
             domain=Domain.GUARDRAILS,
-            providers=(
-                Provider.GEMINI,
-                Provider.VERTEX_AI,
-            ),
-            models=(
-                CHAT_MODEL,
-                VIDEO_BACKEND,
-            ),
+            providers=(Provider.GEMINI, Provider.VERTEX_AI,),
+            models=(CHAT_MODEL, VIDEO_BACKEND,),
             mode=Mode.NONSTREAM,
         )
     )

@@ -26,7 +26,12 @@ _EDITED_IMAGE_B64: Final = "aW50ZWdyYXRpb24tZWRpdGVkLWltYWdl"
 
 def _png_chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
     checksum: Final = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
-    return struct.pack(">I", len(chunk_data)) + chunk_type + chunk_data + struct.pack(">I", checksum)
+    return (
+        struct.pack(">I", len(chunk_data))
+        + chunk_type
+        + chunk_data
+        + struct.pack(">I", checksum)
+    )
 
 
 def _png_from_rgba_pixel(pixel: tuple[int, int, int, int]) -> bytes:
@@ -139,7 +144,9 @@ def test_openai_compatible_image_edit_forwards_seed_form_field_to_backend(gatewa
     ("/v1/images/edits", "/images/edits", "/openai/deployments/{model}/images/edits"),
     ids=("v1", "unversioned", "azure_deployment"),
 )
-def test_image_edit_bracketed_image_field_reaches_openai_as_one_file_part(gateway: Gateway, path_template: str) -> None:
+def test_image_edit_bracketed_image_field_reaches_openai_as_one_file_part(
+    gateway: Gateway, path_template: str
+) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/images/edits"

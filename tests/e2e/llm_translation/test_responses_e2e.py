@@ -210,10 +210,12 @@ class TestResponses:
         moderation: Final = TypeAdapter(dict[str, object]).validate_python(moderation_value)
         moderation_input: Final = TypeAdapter(dict[str, object]).validate_python(moderation["input"])
         moderation_output: Final = TypeAdapter(dict[str, object]).validate_python(moderation["output"])
-        assert moderation_input.get("type") == "moderation_result", f"unexpected input moderation: {moderation_input!r}"
-        assert moderation_output.get("type") == "moderation_result", (
-            f"unexpected output moderation: {moderation_output!r}"
+        assert moderation_input.get("type") == "moderation_result", (
+            f"unexpected input moderation: {moderation_input!r}"
         )
+        assert (
+            moderation_output.get("type") == "moderation_result"
+        ), f"unexpected output moderation: {moderation_output!r}"
 
         with pytest.raises(openai.BadRequestError) as exc_info:
             client.responses.create(

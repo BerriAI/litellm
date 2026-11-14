@@ -694,6 +694,7 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         assert not session.is_closed
 
 
+
 def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCaptureFixture) -> None:
     error: Final = httpx.HTTPStatusError(
         message="422",

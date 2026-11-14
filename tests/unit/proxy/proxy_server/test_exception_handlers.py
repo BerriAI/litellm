@@ -37,15 +37,10 @@ from .conftest import normalize
 
 
 def _make_request(parent_otel_span=None, path="/chat/completions", headers=()):
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": path,
-            "headers": list(headers),
-            "state": {"parent_otel_span": parent_otel_span},
-        }
-    )
+    return Request({
+        "type": "http", "method": "POST", "path": path, "headers": list(headers),
+        "state": {"parent_otel_span": parent_otel_span},
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +240,9 @@ async def test_openai_exception_handler_maps_messages_failures_to_anthropic_erro
 async def test_openai_exception_handler_keeps_the_status_of_a_budget_failure_on_messages() -> None:
     exc: Final = ProxyException(message="Budget exceeded", type="budget_exceeded", param=None, code=422)
 
-    response: Final = await openai_exception_handler(request=_make_request(path="/v1/messages/count_tokens"), exc=exc)
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/messages/count_tokens"), exc=exc
+    )
     body: Final = json.loads(response.body)
 
     assert response.status_code == 422
@@ -683,31 +680,21 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
 @pytest.mark.parametrize("root_path", ["", "/tenant-a"])
-@pytest.mark.parametrize(
-    "error",
-    [
-        ProxyException("database credentials: secret", "auth_error", None, 401),
-        HTTPException(403, "database credentials: secret"),
-    ],
-)
+@pytest.mark.parametrize("error", [
+    ProxyException("database credentials: secret", "auth_error", None, 401),
+    HTTPException(403, "database credentials: secret"),
+])
 async def test_otlp_auth_errors_hide_internal_details(
-    media_type: str,
-    root_path: str,
-    error: ProxyException | HTTPException,
+    media_type: str, root_path: str, error: ProxyException | HTTPException,
 ) -> None:
     from google.rpc.status_pb2 import Status
 
     from litellm.proxy.proxy_server import otlp_http_exception_handler
 
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": root_path + "/v1/traces",
-            "root_path": root_path,
-            "headers": [(b"content-type", media_type.encode())],
-        }
-    )
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": root_path + "/v1/traces", "root_path": root_path,
+        "headers": [(b"content-type", media_type.encode())],
+    })
     response: Final = (
         await openai_exception_handler(request, error)
         if isinstance(error, ProxyException)

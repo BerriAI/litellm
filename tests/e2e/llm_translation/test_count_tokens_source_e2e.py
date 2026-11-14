@@ -273,9 +273,7 @@ class TestBedrockKimiCountsWithFramedLocalEstimate:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_text_estimate_matches_billed_input(
-        self, bedrock_kimi: Served, sdk: SdkClients, shape: PromptShape
-    ) -> None:
+    def test_text_estimate_matches_billed_input(self, bedrock_kimi: Served, sdk: SdkClients, shape: PromptShape) -> None:
         counted, billed = _count_and_bill(sdk.anthropic(bedrock_kimi.key), bedrock_kimi.model, shape)
 
         assert counted.litellm_count_source == "local_estimate", counted

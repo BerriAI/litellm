@@ -110,7 +110,10 @@ def assert_total_is_sum_of_components(row: CostRow) -> None:
     """The row's total is input + output + tool usage. The cache components are
     already inside the gross input cost, so adding them again would double-bill."""
     breakdown = row.breakdown
-    components = sum(cost or 0.0 for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost))
+    components = sum(
+        cost or 0.0
+        for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
+    )
     assert breakdown.total_cost is not None and approx_equal(breakdown.total_cost, components), (
         f"total_cost {breakdown.total_cost} != input + output + tool usage ({components}): {breakdown}"
     )
@@ -125,7 +128,9 @@ def assert_fresh_tokens_billed_at(row: CostRow, input_rate: float) -> None:
     breakdown = row.breakdown
     fresh_tokens = (row.prompt_tokens or 0) - row.cache_read_tokens - row.cache_creation_tokens
     fresh_cost = (
-        (breakdown.input_cost or 0.0) - (breakdown.cache_read_cost or 0.0) - (breakdown.cache_creation_cost or 0.0)
+        (breakdown.input_cost or 0.0)
+        - (breakdown.cache_read_cost or 0.0)
+        - (breakdown.cache_creation_cost or 0.0)
     )
     assert breakdown.input_cost is not None and approx_equal(fresh_cost, fresh_tokens * input_rate), (
         f"input_cost {breakdown.input_cost} less cache read {breakdown.cache_read_cost} and "
@@ -161,7 +166,9 @@ def poll_cost_row(proxy: ProxyClient, request_id: str) -> CostRow | None:
 
 
 @step("Wait for a matching cost breakdown in the key's /spend/logs")
-def poll_cost_row_where(proxy: ProxyClient, api_key: str, predicate: Callable[[CostRow], bool]) -> CostRow | None:
+def poll_cost_row_where(
+    proxy: ProxyClient, api_key: str, predicate: Callable[[CostRow], bool]
+) -> CostRow | None:
     """Poll the key's own /spend/logs until one of its rows carries a cost breakdown
     the predicate accepts; None on timeout. For calls whose response id is not the
     id the bill is filed under, which is how a user finds the row in the UI anyway."""

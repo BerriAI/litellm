@@ -1,3 +1,4 @@
+
 import logging
 from typing import Final
 
@@ -100,7 +101,9 @@ def test_map_extra_body_params_top_level_thinking_moves_into_extra_body():
         _REASONING_MODEL,
     )
     assert result == {"max_tokens": 300, "extra_body": {"thinking": thinking}}
-    assert "reasoning_effort" not in {k for k in result if k != "extra_body"}
+    assert "reasoning_effort" not in {
+        k for k in result if k != "extra_body"
+    }
 
 
 def test_map_extra_body_params_top_level_response_format_moves_into_extra_body():
@@ -119,7 +122,9 @@ def test_map_extra_body_params_top_level_response_format_moves_into_extra_body()
 def test_map_extra_body_params_guided_params():
     config = FireworksAITextCompletionConfig()
     schema = {"type": "object", "properties": {"x": {"type": "string"}}}
-    guided_json = config.map_extra_body_params({"extra_body": {"guided_json": schema}}, _REASONING_MODEL)
+    guided_json = config.map_extra_body_params(
+        {"extra_body": {"guided_json": schema}}, _REASONING_MODEL
+    )
     assert guided_json == {
         "extra_body": {
             "response_format": {
@@ -129,7 +134,9 @@ def test_map_extra_body_params_guided_params():
         }
     }
 
-    guided_choice = config.map_extra_body_params({"extra_body": {"guided_choice": ["yes", "no"]}}, _REASONING_MODEL)
+    guided_choice = config.map_extra_body_params(
+        {"extra_body": {"guided_choice": ["yes", "no"]}}, _REASONING_MODEL
+    )
     assert guided_choice == {
         "extra_body": {
             "response_format": {
@@ -205,9 +212,7 @@ def test_transform_text_completion_request_keeps_sdk_rejected_keys_in_extra_body
 
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
-        r.getMessage()
-        for r in caplog.records
-        if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
     )
 
 

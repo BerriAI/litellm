@@ -16,7 +16,6 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
 
-
 class TestFlattenTopLevelSchemaCombinators:
     def _customer_anyof_schema(self):
         return {
@@ -758,66 +757,23 @@ def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object])
     ("schema", "unresolvable"),
     [
         (_object_with({"a": {"type": "string"}}), False),
-        (
-            _object_with(
-                {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}
-            ),
-            False,
-        ),
-        (
-            _object_with(
-                {"a": {"$ref": "#/definitions/A"}},
-                definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}},
-            ),
-            False,
-        ),
-        (
-            _object_with(
-                {"a": {"$ref": "/$defs/A"}},
-                **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}},
-            ),
-            False,
-        ),
+        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
         (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
         (_object_with({"a": {"$ref": "other.json#/A"}}), True),
         (_object_with({"parent": {"$ref": "#"}}), True),
-        (
-            _object_with(
-                {"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}
-            ),
-            True,
-        ),
-        (
-            _object_with(
-                {"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}
-            ),
-            True,
-        ),
+        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
         (
             _object_with(
                 {"a": {"$ref": "#/$defs/A"}},
-                **{
-                    "$defs": {
-                        "A": {"properties": {"b": {"$ref": "#/$defs/B"}}},
-                        "B": {"properties": {"a": {"$ref": "#/$defs/A"}}},
-                    }
-                },
+                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
             ),
             True,
         ),
     ],
-    ids=[
-        "no-refs",
-        "shared-def",
-        "chained-definitions",
-        "root-path-defs",
-        "missing-def",
-        "external",
-        "root",
-        "self-cycle",
-        "root-path-self-cycle",
-        "mutual-cycle",
-    ],
+    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
 )
 def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
     assert schema_has_unresolvable_ref(schema) is unresolvable
@@ -826,11 +782,7 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 @pytest.mark.parametrize(
     ("schema", "properties", "branches"),
     [
-        (
-            _object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]),
-            3,
-            8,
-        ),
+        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
         (
             _object_with(
                 {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},

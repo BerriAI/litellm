@@ -99,7 +99,9 @@ async def _fire_counts(url: str, key: str) -> tuple[_Counted, ...]:
         return tuple(await asyncio.gather(*(one(client, index) for index in range(_COUNT_BURST))))
 
 
-async def _fire_messages(url: str, key: str, *, tolerate_transport_errors: bool = False) -> tuple[_Sent, ...]:
+async def _fire_messages(
+    url: str, key: str, *, tolerate_transport_errors: bool = False
+) -> tuple[_Sent, ...]:
     async def one(client: httpx.AsyncClient) -> _Sent:
         marker: Final = uuid.uuid4().hex
         body: Final = messages_body(_MODEL, [pdf_document((LETTER,))], f"{_ASK} marker-{marker}")
@@ -116,7 +118,9 @@ async def _fire_messages(url: str, key: str, *, tolerate_transport_errors: bool 
 
 
 def _baseline(gateway: Gateway) -> int:
-    response: Final = gateway.request("POST", "/utils/token_counter", _count_body(0), params={"call_endpoint": "false"})
+    response: Final = gateway.request(
+        "POST", "/utils/token_counter", _count_body(0), params={"call_endpoint": "false"}
+    )
     assert response.status_code == 200, response.text
     counted: Final = _total_tokens(response)
     assert counted is not None, response.text
@@ -200,7 +204,9 @@ async def test_worker_sigkill_mid_pdf_message_burst_preserves_local_page_pricing
             )
             owned_url: Final = str(owned.gateway.client.base_url)
             async with asyncio.TaskGroup() as tasks:
-                burst = tasks.create_task(_fire_messages(owned_url, owned.gateway.key, tolerate_transport_errors=True))
+                burst = tasks.create_task(
+                    _fire_messages(owned_url, owned.gateway.key, tolerate_transport_errors=True)
+                )
                 try:
                     await asyncio.to_thread(
                         eventually, lambda: wire.received.qsize(), lambda size: size >= _MESSAGE_BURST, 90

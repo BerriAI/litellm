@@ -718,9 +718,7 @@ async def test_user_deletes_drop_the_committed_spend_of_the_users_they_deleted(
     spend: Final = FakeSpendCounters(
         redis=None, memory={"spend:committed:user:u1": 7.0, "spend:committed:user:keep": 3.0}
     )
-    mocker.patch(
-        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
-    )  # test-quality-ok: substitute the spend counter dependency
+    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
     prisma: Final = _FakePrisma(users=[_user("u1"), _user("keep")])
 
     _ = await delete(prisma, ["u1"])

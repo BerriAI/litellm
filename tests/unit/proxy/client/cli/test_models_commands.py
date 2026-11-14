@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 
+
 # local imports
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.models import (
@@ -119,7 +120,9 @@ def test_models_list_json_format(mock_models_list, cli_runner):
     assert output_data == mock_models_list.return_value.models.list.return_value
 
     # Verify the client was called correctly
-    mock_models_list.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_models_list.assert_called_once_with(
+        base_url="http://localhost:4000", api_key="sk-test"
+    )
     mock_models_list.return_value.models.list.assert_called_once()
 
 
@@ -141,7 +144,9 @@ def test_models_list_table_format(mock_models_list, cli_runner):
     assert format_timestamp(1699848889) in result.output
 
     # Verify the client was called correctly
-    mock_models_list.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_models_list.assert_called_once_with(
+        base_url="http://localhost:4000", api_key="sk-test"
+    )
     mock_models_list.return_value.models.list.assert_called_once()
 
 
@@ -192,7 +197,9 @@ def test_models_list_error_handling(mock_client, cli_runner):
     assert "API Error" in str(result.exception)
 
     # Verify the client was created with env var values
-    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.assert_called_once_with(
+        base_url="http://localhost:4000", api_key="sk-test"
+    )
 
 
 def test_models_info_json_format(mock_models_info, cli_runner):
@@ -208,7 +215,9 @@ def test_models_info_json_format(mock_models_info, cli_runner):
     assert output_data == mock_models_info.return_value.models.info.return_value
 
     # Verify the client was called correctly with env var values
-    mock_models_info.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_models_info.assert_called_once_with(
+        base_url="http://localhost:4000", api_key="sk-test"
+    )
     mock_models_info.return_value.models.info.assert_called_once()
 
 
@@ -232,7 +241,9 @@ def test_models_info_table_format(mock_models_info, cli_runner):
     assert "843000" not in result.output
 
     # Verify the client was called correctly with env var values
-    mock_models_info.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_models_info.assert_called_once_with(
+        base_url="http://localhost:4000", api_key="sk-test"
+    )
     mock_models_info.return_value.models.info.assert_called_once()
 
 
@@ -273,7 +284,9 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     mock_new = mock_client.return_value.models.new
 
     # Only match models containing 'gpt' in their litellm_params.model
-    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file), "--only-models-matching-regex", "gpt"])
+    result = cli_runner.invoke(
+        cli, ["models", "import", str(yaml_file), "--only-models-matching-regex", "gpt"]
+    )
 
     # Should succeed
     assert result.exit_code == 0
@@ -287,7 +300,9 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
 
 
-def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, cli_runner):
+def test_models_import_only_access_groups_matching_regex(
+    tmp_path, mock_client, cli_runner
+):
     """Test the --only-access-groups-matching-regex option for models import command"""
     # Prepare a YAML file with a mix of models
     yaml_content = {

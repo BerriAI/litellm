@@ -551,9 +551,13 @@ def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config()
         ("gemini-3.1-flash-image", "1024x256", {"aspectRatio": "4:1", "imageSize": "512"}),
     ),
 )
-def test_size_mapping_respects_model_image_limits(prefix: str, model: str, size: str, expected: dict[str, str]) -> None:
+def test_size_mapping_respects_model_image_limits(
+    prefix: str, model: str, size: str, expected: dict[str, str]
+) -> None:
     """Limits as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
-    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {"imageConfig": expected}
+    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {
+        "imageConfig": expected
+    }
 
 
 @pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])

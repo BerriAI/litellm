@@ -95,7 +95,9 @@ def _provision(
     return model_name
 
 
-def _provision_custom_priced(proxy: ProxyClient, resources: ResourceManager) -> str:
+def _provision_custom_priced(
+    proxy: ProxyClient, resources: ResourceManager
+) -> str:
     return _provision(
         proxy,
         resources,
@@ -131,7 +133,9 @@ def _poll_breakdown_row(proxy: ProxyClient, key: str, response_id: str | None) -
         priced = [
             row
             for row in rows
-            if row.metadata and row.metadata.cost_breakdown and row.metadata.cost_breakdown.input_cost is not None
+            if row.metadata
+            and row.metadata.cost_breakdown
+            and row.metadata.cost_breakdown.input_cost is not None
         ]
         for row in priced:
             if response_id and row.request_id == response_id:
@@ -165,7 +169,11 @@ class TestCustomPricing:
                 scoped_key,
                 ChatBody(
                     model=model,
-                    messages=[ChatMessage(role="user", content=f"reply with one word {unique_marker()}")],
+                    messages=[
+                        ChatMessage(
+                            role="user", content=f"reply with one word {unique_marker()}"
+                        )
+                    ],
                     max_tokens=16,
                 ),
             )
@@ -185,7 +193,8 @@ class TestCustomPricing:
             f"row cost breakdown missing input/output cost: {breakdown}"
         )
         assert _approx_equal(input_cost, prompt * CUSTOM_INPUT_RATE), (
-            f"input_cost {input_cost} != {prompt} tokens * {CUSTOM_INPUT_RATE} = {prompt * CUSTOM_INPUT_RATE}"
+            f"input_cost {input_cost} != {prompt} tokens * {CUSTOM_INPUT_RATE} "
+            f"= {prompt * CUSTOM_INPUT_RATE}"
         )
         assert _approx_equal(output_cost, completion * CUSTOM_OUTPUT_RATE), (
             f"output_cost {output_cost} != {completion} tokens * {CUSTOM_OUTPUT_RATE} "
@@ -198,7 +207,9 @@ class TestCustomPricing:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_model_info_reports_custom_pricing(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+    def test_model_info_reports_custom_pricing(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
         model = _provision_custom_priced(proxy, resources)
         entry = _model_info_entry(proxy.model_info(), model)
 
@@ -240,7 +251,10 @@ class TestCustomPricing:
         # custom-priced-flash overrides pricing; the sibling shares the same
         # gemini/gemini-3.8-flash backend but sets no override, so it must keep its
         # own price. Equal rates mean the override leaked into the shared cost map.
-        assert sibling_entry.model_info.input_cost_per_token != custom_entry.model_info.input_cost_per_token, (
+        assert (
+            sibling_entry.model_info.input_cost_per_token
+            != custom_entry.model_info.input_cost_per_token
+        ), (
             f"{sibling} input rate {sibling_entry.model_info.input_cost_per_token} matches "
             f"{custom}'s override {custom_entry.model_info.input_cost_per_token}; "
             f"per-deployment custom pricing is not isolated"

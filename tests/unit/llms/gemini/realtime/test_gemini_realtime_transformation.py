@@ -1510,10 +1510,7 @@ def test_gemini_manual_vad_activity_markers_are_empty_messages():
     ("session", "expected_keys"),
     [
         ({"turn_detection": None}, [["activityStart", "audio"], ["activityEnd"]]),
-        (
-            {"type": "realtime", "audio": {"input": {"turn_detection": None}}},
-            [["activityStart", "audio"], ["activityEnd"]],
-        ),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, [["activityStart", "audio"], ["activityEnd"]]),
         ({"type": "realtime", "audio": {"input": {}}}, [["audio"], ["audioStreamEnd"]]),
     ],
 )
@@ -2031,9 +2028,7 @@ def test_google_ai_studio_forwards_a_documented_voice(drop_params):
 
     speech_config: Final = mapped["generationConfig"]["speechConfig"]
     assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == _DOCUMENTED_VOICE
-    assert (
-        config.setup_session_update_rejection("gemini-3.8-live", {"voice": _DOCUMENTED_VOICE}, setup_sent=False) is None
-    )
+    assert config.setup_session_update_rejection("gemini-3.8-live", {"voice": _DOCUMENTED_VOICE}, setup_sent=False) is None
 
 
 @pytest.mark.parametrize(

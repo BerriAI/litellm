@@ -446,9 +446,7 @@ async def test_router_skips_the_paid_fallback_target_when_over_budget():
     under_attempted: Final = AttemptedFallbackTargets()
 
     assert (
-        await _is_fallback_target_within_budget(
-            router._core_ctx, "paid-model", "free-model", over, attempted=over_attempted
-        )
+        await _is_fallback_target_within_budget(router._core_ctx, "paid-model", "free-model", over, attempted=over_attempted)
         is False
     )
     assert (

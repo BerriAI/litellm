@@ -1428,9 +1428,7 @@ async def test_empty_owner_team_id_does_not_restrict_agent_access(
 
     assert owner_teams.unreadable is False
     assert tuple(team.team_id for team in owner_teams.teams) == ("team-open",)
-    assert (
-        await AgentRequestHandler.resolve_key_team_agent_access(personal_key_owner_teams) == UnrestrictedAgentAccess()
-    )
+    assert await AgentRequestHandler.resolve_key_team_agent_access(personal_key_owner_teams) == UnrestrictedAgentAccess()
     assert all(call.kwargs["team_id"] == "team-open" for call in team_loader.await_args_list)
 
 
@@ -1763,7 +1761,9 @@ async def test_personal_key_agent_billing_uses_fresh_membership_for_strict_polic
             ),
         )
 
-    async def _get_team_membership(user_id: str, team_id: str, **kwargs: object) -> LiteLLM_TeamMembership:
+    async def _get_team_membership(
+        user_id: str, team_id: str, **kwargs: object
+    ) -> LiteLLM_TeamMembership:
         database_value: Final = bool(kwargs.get("check_db_only"))
         return LiteLLM_TeamMembership(
             user_id=user_id,
@@ -2135,7 +2135,9 @@ async def test_strict_personal_key_agent_access_reads_owner_teams_from_the_datab
         return LiteLLM_TeamTable(
             team_id=team_id,
             object_permission_id=f"perm-{team_id}",
-            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id=f"perm-{team_id}", agents=["agent-a"]),
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"perm-{team_id}", agents=["agent-a"]
+            ),
         )
 
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)

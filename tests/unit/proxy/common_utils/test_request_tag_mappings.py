@@ -189,7 +189,9 @@ async def test_budgeted_mapper_requires_a_database():
     request = Request({"type": "http", "headers": [(b"baggage", b"service=a")]})
     config = {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:", "require_budgeted_tag": True}]}
     with pytest.raises(ProxyException) as error:
-        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(request, {}, config, None, MagicMock())
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            request, {}, config, None, MagicMock()
+        )
     assert error.value.code == "503"
 
 
@@ -237,7 +239,9 @@ async def test_budgeted_mapper_rejects_a_tag_without_a_max_budget(budget_table):
     cache = await _cache_with_tag(LiteLLM_TagTable(tag_name="app:a", litellm_budget_table=budget_table))
     config = {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:", "require_budgeted_tag": True}]}
     with pytest.raises(ProxyException, match="app:a requires an existing tag budget") as error:
-        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(request, data, config, MagicMock(), cache)
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            request, data, config, MagicMock(), cache
+        )
     assert error.value.code == "400"
     assert data == {"metadata": {}}
 
@@ -257,7 +261,9 @@ async def test_budgeted_mapper_admits_a_tag_with_a_max_budget_and_unbudgeted_rul
             {"key": "region", "tag_prefix": "region:"},
         ]
     }
-    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(request, data, config, MagicMock(), cache)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request, data, config, MagicMock(), cache
+    )
     assert data["metadata"]["tags"] == ["app:a", "region:sg"]
 
 

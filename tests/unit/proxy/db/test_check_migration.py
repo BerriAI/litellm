@@ -57,15 +57,8 @@ def test_migrate_diff_stops_at_its_budget_and_takes_its_process_tree_with_it(fak
 
     assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
     assert fake_prisma_cli.calls == [
-        [
-            "migrate",
-            "diff",
-            "--from-url",
-            "postgresql://u:p@localhost:9/x",
-            "--to-schema-datamodel",
-            "./schema.prisma",
-            "--script",
-        ]
+        ["migrate", "diff", "--from-url", "postgresql://u:p@localhost:9/x",
+         "--to-schema-datamodel", "./schema.prisma", "--script"]
     ]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
 

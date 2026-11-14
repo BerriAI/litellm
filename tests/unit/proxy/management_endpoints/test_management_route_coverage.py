@@ -16,7 +16,9 @@ TEST_DIRS: Final = (
 )
 SELF: Final = Path(__file__).resolve()
 
-_ROUTE_DECORATOR = re.compile(r"@router\.(?:get|post|put|delete|patch)\(\s*[\"']([^\"']+)[\"']")
+_ROUTE_DECORATOR = re.compile(
+    r"@router\.(?:get|post|put|delete|patch)\(\s*[\"']([^\"']+)[\"']"
+)
 
 
 def _source_routes() -> frozenset[str]:
@@ -54,15 +56,25 @@ def _urls(path: Path) -> Iterator[str]:
 
 
 def _directory_urls(directory: Path) -> Iterator[str]:
-    return chain.from_iterable(_urls(path) for path in sorted(directory.glob("test_*.py")) if path.resolve() != SELF)
+    return chain.from_iterable(
+        _urls(path)
+        for path in sorted(directory.glob("test_*.py"))
+        if path.resolve() != SELF
+    )
 
 
 def _test_urls() -> frozenset[str]:
-    return frozenset(chain.from_iterable(_directory_urls(directory) for directory in TEST_DIRS))
+    return frozenset(
+        chain.from_iterable(_directory_urls(directory) for directory in TEST_DIRS)
+    )
 
 
 def _uncovered_routes(routes: frozenset[str], urls: frozenset[str]) -> Iterator[str]:
-    return (route for route in routes if not any(_route_to_regex(route).match(url) for url in urls))
+    return (
+        route
+        for route in routes
+        if not any(_route_to_regex(route).match(url) for url in urls)
+    )
 
 
 def test_every_management_route_has_a_behavior_scenario() -> None:
@@ -71,4 +83,6 @@ def test_every_management_route_has_a_behavior_scenario() -> None:
 
     urls: Final = _test_urls()
     uncovered: Final = tuple(sorted(_uncovered_routes(routes, urls)))
-    assert not uncovered, "management routes with no behavior-suite scenario:\n  " + "\n  ".join(uncovered)
+    assert (
+        not uncovered
+    ), "management routes with no behavior-suite scenario:\n  " + "\n  ".join(uncovered)

@@ -127,7 +127,9 @@ async def test_write_and_read_json_secret():
                 assert response["Name"] == test_secret_name
 
                 # Read and parse JSON secret
-                read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
+                read_value = await secret_manager.async_read_secret(
+                    secret_name=test_secret_name
+                )
                 assert read_value is not None
                 parsed_value = json.loads(read_value)
 
@@ -136,7 +138,9 @@ async def test_write_and_read_json_secret():
                 assert parsed_value["metadata"]["team"] == "ml"
 
                 # Cleanup
-                delete_resp = await secret_manager.async_delete_secret(secret_name=test_secret_name)
+                delete_resp = await secret_manager.async_delete_secret(
+                    secret_name=test_secret_name
+                )
                 assert delete_resp is not None
 
 
@@ -182,7 +186,9 @@ def test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins(monk
 
 
 def test_prepare_request_env_bedrock_runtime_endpoint_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://bedrock-runtime.eu-west-1.amazonaws.com")
+    monkeypatch.setenv(
+        "AWS_BEDROCK_RUNTIME_ENDPOINT", "https://bedrock-runtime.eu-west-1.amazonaws.com"
+    )
     secret_manager = AWSSecretsManagerV2(aws_region_name="cn-north-1")
     endpoint_url, _headers, _body = secret_manager._prepare_request(
         action="GetSecretValue",
@@ -201,7 +207,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -214,11 +219,9 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
-
 print("Python Path:", sys.path)
 
 print("Current Working Directory:", os.getcwd())
-
 
 def skip_on_throttling(func):
     """Skip async test on AWS ThrottlingException instead of failing."""
@@ -234,7 +237,6 @@ def skip_on_throttling(func):
 
     return wrapper
 
-
 def check_aws_credentials():
     """Helper function to check if AWS credentials are set"""
     if os.getenv("LITELLM_RUN_LIVE_AWS_SECRET_MANAGER_TESTS") != "1":
@@ -246,7 +248,6 @@ def check_aws_credentials():
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
         pytest.skip(f"Missing required AWS credentials: {', '.join(missing_vars)}")
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -285,7 +286,6 @@ async def test_write_and_read_simple_secret():
         delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -328,7 +328,6 @@ async def test_write_and_read_json_secret_aws_secret():
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 @skip_on_throttling
@@ -342,7 +341,6 @@ async def test_read_nonexistent_secret():
     response = await secret_manager.async_read_secret(secret_name=nonexistent_secret)
 
     assert response is None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -396,7 +394,6 @@ async def test_primary_secret_functionality():
         delete_response = await secret_manager.async_delete_secret(secret_name=primary_secret_name)
         print("Delete Response:", delete_response)
         assert delete_response is not None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -460,7 +457,6 @@ async def test_write_secret_with_description_and_tags():
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_secret_manager_with_iam_role_settings():
     """
@@ -482,7 +478,6 @@ def test_secret_manager_with_iam_role_settings():
     assert secret_manager.aws_role_name == settings.aws_role_name
     assert secret_manager.aws_region_name == settings.aws_region_name
     assert secret_manager.aws_session_name == settings.aws_session_name
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_secret_manager_with_cross_account_settings():
@@ -508,7 +503,6 @@ def test_secret_manager_with_cross_account_settings():
     assert secret_manager.aws_region_name == settings.aws_region_name
     assert secret_manager.aws_external_id == settings.aws_external_id
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_secret_manager_with_irsa_settings():
     """
@@ -531,7 +525,6 @@ def test_secret_manager_with_irsa_settings():
     # Verify settings are stored
     assert secret_manager.aws_role_name == settings.aws_role_name
     assert secret_manager.aws_web_identity_token == settings.aws_web_identity_token
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_secret_manager_with_custom_sts_endpoint():
@@ -556,7 +549,6 @@ def test_secret_manager_with_custom_sts_endpoint():
     assert secret_manager.aws_role_name == settings.aws_role_name
     assert secret_manager.aws_sts_endpoint == settings.aws_sts_endpoint
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_secret_manager_with_aws_profile():
     """
@@ -574,7 +566,6 @@ def test_secret_manager_with_aws_profile():
 
     # Verify settings are stored
     assert secret_manager.aws_profile_name == settings.aws_profile_name
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_load_aws_secret_manager_with_settings(monkeypatch: pytest.MonkeyPatch):
@@ -608,7 +599,6 @@ def test_load_aws_secret_manager_with_settings(monkeypatch: pytest.MonkeyPatch):
     finally:
         # Cleanup
         litellm.secret_manager_client = None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio

@@ -1682,11 +1682,7 @@ AZURE_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
                             },
                         },
                     },
-                    {
-                        "type": "content_block_start",
-                        "index": 0,
-                        "content_block": {"type": "thinking", "thinking": "", "signature": ""},
-                    },
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
                     {"type": "ping"},
                     {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": ""}},
                     {
@@ -1908,9 +1904,7 @@ AZURE_AI_CLAUDE_FABLE_5_1_CACHE_READ: Final = _azure_ai_claude_shape_case(
     CLAUDE_FABLE_5_1_CACHE_READ,
     "azure_ai/claude-fable-5-1-cache_read",
     "azure_ai/claude-fable-5-1",
-    _azure_ai_claude_usage(
-        input_tokens=14, output_tokens=6, inference_geo="not_available", cache_read_input_tokens=27003
-    ),
+    _azure_ai_claude_usage(input_tokens=14, output_tokens=6, inference_geo="not_available", cache_read_input_tokens=27003),
     ExactExpected(
         spend=0.012224275,
         input_cost=0.011714275,
@@ -1962,11 +1956,13 @@ AZURE_AI_CLAUDE_FABLE_5_1_THINKING: Final = _azure_ai_claude_shape_case(
     "azure_ai/claude-fable-5-1-thinking",
     "azure_ai/claude-fable-5-1",
     _azure_ai_claude_usage(input_tokens=18, output_tokens=99, inference_geo="not_available", thinking_tokens=33),
-    ExactExpected(spend=0.008721, input_cost=0.000306, output_cost=0.008415, prompt_tokens=18, completion_tokens=99),
-    [
-        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
-        {"type": "text", "text": "scripted answer for cost fixtures"},
-    ],
+    ExactExpected(
+        spend=0.008721, input_cost=0.000306, output_cost=0.008415, prompt_tokens=18, completion_tokens=99
+    ),
+        [
+            {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+            {"type": "text", "text": "scripted answer for cost fixtures"},
+        ],
     adaptive_thinking=True,
 )
 AZURE_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _azure_ai_claude_shape_case(
@@ -1974,7 +1970,9 @@ AZURE_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _azure_ai_claude_shape_case(
     "azure_ai/claude-fable-5-1-tool_call",
     "azure_ai/claude-fable-5-1",
     _azure_ai_claude_usage(input_tokens=385, output_tokens=50, inference_geo="not_available"),
-    ExactExpected(spend=0.010795, input_cost=0.006545, output_cost=0.00425, prompt_tokens=385, completion_tokens=50),
+    ExactExpected(
+        spend=0.010795, input_cost=0.006545, output_cost=0.00425, prompt_tokens=385, completion_tokens=50
+    ),
 )
 AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _azure_ai_claude_shape_case(
     CLAUDE_HAIKU_5_5_CACHE_READ,
@@ -2035,10 +2033,10 @@ AZURE_AI_CLAUDE_HAIKU_5_5_THINKING: Final = _azure_ai_claude_shape_case(
     ExactExpected(
         spend=0.00009367, input_cost=0.00000342, output_cost=0.00009025, prompt_tokens=18, completion_tokens=95
     ),
-    [
-        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
-        {"type": "text", "text": "scripted answer for cost fixtures"},
-    ],
+        [
+            {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+            {"type": "text", "text": "scripted answer for cost fixtures"},
+        ],
     adaptive_thinking=True,
 )
 AZURE_AI_CLAUDE_HAIKU_5_5_TOOL_CALL: Final = _azure_ai_claude_shape_case(
@@ -2093,7 +2091,9 @@ AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
         "cache_creation_input_tokens": 0,
         "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
     },
-    ExactExpected(spend=0.14478, input_cost=0.1425, output_cost=0.00228, prompt_tokens=150000, completion_tokens=480),
+    ExactExpected(
+        spend=0.14478, input_cost=0.1425, output_cost=0.00228, prompt_tokens=150000, completion_tokens=480
+    ),
 )
 AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
@@ -2188,8 +2188,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=TEXT_COMPLETIONS_OPENAI_BASIC, streamed=TEXT_COMPLETIONS_OPENAI_STREAM_USAGE),
-    StreamParityTestCase(plain=AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_FABLE_5_1_STREAM),
-    StreamParityTestCase(plain=AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_HAIKU_5_5_STREAM),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_FABLE_5_1_STREAM
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_HAIKU_5_5_STREAM
+    ),
     StreamParityTestCase(
         plain=AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
         streamed=AZURE_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,

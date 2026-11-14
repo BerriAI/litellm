@@ -32,11 +32,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import (
-    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
-    ANTHROPIC_MAX_USER_ID_LENGTH,
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
-)
+from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -6803,9 +6799,7 @@ async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_mes
     relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
 
     assert relayed == (
-        body_without_metadata
-        if forwarded_metadata is None
-        else {**body_without_metadata, "metadata": forwarded_metadata}
+        body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
     )
 
 
@@ -6897,9 +6891,7 @@ async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
         guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook, stream_scope=stream_scope
     )
     client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}, **client_fields})
-    body_without_client_fields: Final = {
-        k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")
-    }
+    body_without_client_fields: Final = {k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")}
 
     with patch.object(litellm, "callbacks", [guardrail]):
         relayed: Final = await _relay_through_pass_through(
@@ -8488,7 +8480,9 @@ class ScriptedUpstreamWebSocket:
         return frame
 
 
-def _turn_taking_client(frames: Sequence[str], answered_by: str, answers_due: Sequence[int] | None = None) -> MagicMock:
+def _turn_taking_client(
+    frames: Sequence[str], answered_by: str, answers_due: Sequence[int] | None = None
+) -> MagicMock:
     """A client that sends each frame, and then leaves, once the answers due by then reached it (by default the
     answer to every earlier frame), and that Starlette refuses to send to once it is closed"""
     from starlette.websockets import WebSocketState
@@ -8557,11 +8551,14 @@ def _responses_turn_started(model: str) -> str:
 
 
 def _responses_turn_ended(model: str) -> str:
-    return json.dumps(
-        {
-            "type": "response.completed",
-            "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
-        }
+    return (
+
+        json.dumps(
+            {
+                "type": "response.completed",
+                "response": {"model": model, "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12}},
+            }
+        )
     )
 
 
@@ -8583,9 +8580,7 @@ async def test_websocket_passthrough_logs_each_turn_on_its_own_row_charged_to_th
         ],
         answered_by='"response.completed"',
     )
-    upstream_ws: Final = ScriptedUpstreamWebSocket(
-        replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")]
-    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini"), _responses_turn("gpt-5.4")])
 
     relayed: Final = await _relay_turns(client, upstream_ws, gate)
 
@@ -8980,9 +8975,7 @@ async def test_websocket_passthrough_charges_realtime_turns_to_the_session_the_k
 async def test_websocket_passthrough_logs_no_spend_row_for_a_session_refused_before_any_answer():
     """A session refused at its first frame ran nothing, so its only record is the refusal, not an extra $0 row"""
     gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
-    client: Final = _turn_taking_client(
-        [json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"error"'
-    )
+    client: Final = _turn_taking_client([json.dumps({"type": "response.create", "model": "gpt-5.4"})], answered_by='"error"')
 
     relayed: Final = await _relay_turns(client, ScriptedUpstreamWebSocket(), gate)
 
@@ -9009,10 +9002,7 @@ async def test_websocket_passthrough_logs_the_unfinished_turn_a_client_walked_ou
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate())
 
     assert [
-        [
-            json.loads(frame)["type"] if isinstance(frame, str) else frame["type"]
-            for frame in logged.kwargs["response_body"]
-        ]
+        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
         for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.completed"], ["response.created"]]
 
@@ -9129,10 +9119,7 @@ async def test_websocket_passthrough_bills_the_turn_a_client_walked_out_of_once_
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), walkout_turn_drain_seconds=5)
 
     assert [
-        [
-            json.loads(frame)["type"] if isinstance(frame, str) else frame["type"]
-            for frame in logged.kwargs["response_body"]
-        ]
+        [json.loads(frame)["type"] if isinstance(frame, str) else frame["type"] for frame in logged.kwargs["response_body"]]
         for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.output_text.delta", "response.completed"]]
     upstream_ws.close.assert_awaited()
@@ -9317,7 +9304,8 @@ async def test_websocket_passthrough_logs_no_extra_row_for_what_the_provider_sen
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
 
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
     ] == [["session.created", "response.done"]]
 
 
@@ -9339,7 +9327,8 @@ async def test_websocket_passthrough_carries_the_session_the_provider_opened_int
     relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
 
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
     ] == [["session.created", "response.done"], ["session.created", "response.done"]]
 
 
@@ -9360,7 +9349,8 @@ def _transcription_session_update(frame_type: str, model: str) -> str:
 
 def _logged_frame_types(relayed: SimpleNamespace) -> list[list[str]]:
     return [
-        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
     ]
 
 
@@ -9523,7 +9513,8 @@ async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_lat
         "error",
     ]
     assert [
-        [frame["type"] for frame in logged.kwargs["response_body"]] for logged in relayed.success_handler.call_args_list
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
     ] == [["response.created", "response.completed"]]
     relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
 
@@ -9638,9 +9629,7 @@ class _LengthMeter:
         return len(client_text)
 
     def price(self, total: int) -> WebSocketSessionUsage:
-        return WebSocketSessionUsage(
-            model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate
-        )
+        return WebSocketSessionUsage(model="voice-1", custom_llm_provider="tts-provider", response_cost=total * self.rate)
 
 
 @pytest.mark.asyncio
@@ -10658,9 +10647,7 @@ async def _billed_metadata(gate: WebsocketFrameModelGate) -> Mapping[str, object
 async def test_websocket_session_is_charged_to_the_group_its_frames_were_authorized_through():
     """A websocket names its model in a frame, long after the relay built its logging metadata, so the
     groups the gate matched have to be picked up at the end or the group pays for nothing it allowed."""
-    metadata: Final = await _billed_metadata(
-        RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)}))
-    )
+    metadata: Final = await _billed_metadata(RecordingFrameModelGate(groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",)})))
 
     assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
     assert metadata["user_api_key"] == "hashed-key"
@@ -11332,7 +11319,9 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
         ' "generationConfig": {"temperature": 0}, "litellm_trace_id": "trace-a"}'
     )
 
-    assert frozenset(split.litellm_params) == frozenset(("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS))
+    assert frozenset(split.litellm_params) == frozenset(
+        ("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS)
+    )
     assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -13410,23 +13399,13 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
-        request: Final = Request(
-            {
-                "type": "http",
-                "method": "GET",
-                "path": "/passthrough-relay/results",
-                "headers": [],
-                "query_string": b"",
-                "scheme": "http",
-                "server": ("test", 80),
-            }
-        )
+        request: Final = Request({
+            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
+            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
+        })
         result: Final = await pass_through_request(
-            request=request,
-            target="http://cost-upstream.invalid/results",
-            custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"),
-            cost_per_request=flat_cost,
+            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
         )
         payload: Final = await asyncio.wait_for(observed, timeout=10)
         await GLOBAL_LOGGING_WORKER.flush()

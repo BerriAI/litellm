@@ -40,7 +40,9 @@ def _matrix(
 
 def test_find_regressions_flags_pass_to_fail() -> None:
     old = _matrix({("vision", "anthropic"): "pass"})
-    new = _matrix({("vision", "anthropic"): {"status": "fail", "error": "credit balance too low"}})
+    new = _matrix(
+        {("vision", "anthropic"): {"status": "fail", "error": "credit balance too low"}}
+    )
     regressions = find_regressions(old, new)
     assert len(regressions) == 1
     r = regressions[0]
@@ -111,7 +113,9 @@ def test_find_regressions_matches_by_id_not_name() -> None:
     """Renaming a feature's display name must not hide a regression: cells
     are matched on the stable id."""
     old = _matrix({("thinking", "anthropic"): "pass"}, names={"thinking": "Old Name"})
-    new = _matrix({("thinking", "anthropic"): "fail"}, names={"thinking": "Totally New Name"})
+    new = _matrix(
+        {("thinking", "anthropic"): "fail"}, names={"thinking": "Totally New Name"}
+    )
     regressions = find_regressions(old, new)
     assert len(regressions) == 1
     assert regressions[0]["feature_id"] == "thinking"

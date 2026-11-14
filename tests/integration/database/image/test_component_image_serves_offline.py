@@ -49,7 +49,9 @@ pytestmark = [
 
 
 def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=check
+    )
 
 
 @pytest.fixture()
@@ -80,39 +82,20 @@ def offline_stack():
     _docker("network", "create", "--internal", network)
     try:
         _docker(
-            "run",
-            "-d",
-            "--name",
-            pg,
-            "--network",
-            network,
-            "-e",
-            "POSTGRES_PASSWORD=pw",
-            "-e",
-            "POSTGRES_DB=litellm",
+            "run", "-d", "--name", pg, "--network", network,
+            "-e", "POSTGRES_PASSWORD=pw", "-e", "POSTGRES_DB=litellm",
             POSTGRES_IMAGE,
         )
         _wait_until_postgres_ready(pg)
         assert IMAGE is not None
         _docker(
-            "run",
-            "-d",
-            "--name",
-            component,
-            "--network",
-            network,
-            "--user",
-            NON_ROOT_UID,
-            "-e",
-            f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
-            "-e",
-            f"LITELLM_MASTER_KEY={MASTER_KEY}",
-            "-e",
-            "DISABLE_SCHEMA_UPDATE=true",
-            "-e",
-            "LITELLM_LOCAL_MODEL_COST_MAP=True",
-            IMAGE,
-            COMPONENT,
+            "run", "-d", "--name", component, "--network", network,
+            "--user", NON_ROOT_UID,
+            "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
+            "-e", f"LITELLM_MASTER_KEY={MASTER_KEY}",
+            "-e", "DISABLE_SCHEMA_UPDATE=true",
+            "-e", "LITELLM_LOCAL_MODEL_COST_MAP=True",
+            IMAGE, COMPONENT,
         )
         yield network, component
     finally:
@@ -125,19 +108,15 @@ def offline_stack():
 def _wait_until_postgres_ready(pg: str, attempts: int = 60) -> None:
     for _ in range(attempts):
         running = _docker(
-            "ps",
-            "--filter",
-            f"name={pg}",
-            "--filter",
-            "status=running",
-            "--format",
-            "{{.Names}}",
-            check=False,
+            "ps", "--filter", f"name={pg}", "--filter", "status=running",
+            "--format", "{{.Names}}", check=False,
         ).stdout
         if pg not in running:
             logs = _docker("logs", pg, check=False)
             pytest.fail(f"postgres container is not running:\n{logs.stdout}\n{logs.stderr}")
-        ready = _docker("exec", pg, "pg_isready", "-U", "postgres", "-d", "litellm", check=False)
+        ready = _docker(
+            "exec", pg, "pg_isready", "-U", "postgres", "-d", "litellm", check=False
+        )
         if ready.returncode == 0:
             return
         time.sleep(1)
@@ -152,14 +131,8 @@ def _container_logs(container: str) -> str:
 def _is_running(container: str) -> bool:
     return bool(
         _docker(
-            "ps",
-            "--filter",
-            f"name={container}",
-            "--filter",
-            "status=running",
-            "--format",
-            "{{.Names}}",
-            check=False,
+            "ps", "--filter", f"name={container}", "--filter", "status=running",
+            "--format", "{{.Names}}", check=False,
         ).stdout.strip()
     )
 
@@ -167,14 +140,8 @@ def _is_running(container: str) -> bool:
 def _readiness(network: str, component: str) -> subprocess.CompletedProcess:
     """Ask the component for its readiness, from a peer on the same egress-less network."""
     return _docker(
-        "run",
-        "--rm",
-        "--network",
-        network,
-        CURL_IMAGE,
-        "--silent",
-        "--max-time",
-        "10",
+        "run", "--rm", "--network", network, CURL_IMAGE,
+        "--silent", "--max-time", "10",
         f"http://{component}:{COMPONENT_PORT}/health/readiness",
         check=False,
     )

@@ -214,7 +214,9 @@ def chunked_provider(
     content_type: str = "text/event-stream",
     abort_after: int | None = None,
 ) -> Generator[_ChunkedProvider]:
-    server = _ChunkedProvider(("127.0.0.1", 0), chunks=chunks, content_type=content_type, abort_after=abort_after)
+    server = _ChunkedProvider(
+        ("127.0.0.1", 0), chunks=chunks, content_type=content_type, abort_after=abort_after
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -298,7 +300,9 @@ def raw_stream_post(port: int, path: str, body: bytes) -> tuple[str, list[bytes]
         if (response_header(head, "transfer-encoding") or "").lower() == "chunked":
             chunks, ending = _read_chunked(sock, rest)
         else:
-            chunks, ending = _read_fixed(sock, rest, int(response_header(head, "content-length") or 0))
+            chunks, ending = _read_fixed(
+                sock, rest, int(response_header(head, "content-length") or 0)
+            )
         return head, chunks, ending
     finally:
         sock.close()
@@ -361,7 +365,8 @@ def multipart_body(
     """One multipart/form-data body on the wire, exactly as ``requests`` writes it, with
     the boundary under the caller's control instead of randomly generated."""
     parts = [
-        f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode() + value.encode()
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        + value.encode()
         for name, value in fields
     ] + [
         (
@@ -435,7 +440,9 @@ class TestRecordMode:
                 reply = call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
         assert reply.headers.get("x-upstream") == "fake"
         assert "set-cookie" not in reply.headers
-        interaction = Interaction.model_validate_json(this_tests_files(root)[0].read_text(encoding="utf-8"))
+        interaction = Interaction.model_validate_json(
+            this_tests_files(root)[0].read_text(encoding="utf-8")
+        )
         assert interaction.response.headers.get("x-upstream") == "fake"
         assert "set-cookie" not in interaction.response.headers
         assert "content-length" not in interaction.response.headers
@@ -446,7 +453,9 @@ class TestRecordMode:
             reply = call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
         assert reply.status_code == 502
         assert b"could not reach the provider" in reply.body
-        interaction = Interaction.model_validate_json(this_tests_files(root)[0].read_text(encoding="utf-8"))
+        interaction = Interaction.model_validate_json(
+            this_tests_files(root)[0].read_text(encoding="utf-8")
+        )
         assert interaction.response.status_code == 502
 
 
@@ -457,7 +466,9 @@ class TestReplayMode:
             with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
                 recorded = call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
             hits_after_record = list(provider.hits)
-            with running_edge(ReplayEdge(source=replay_source(root)), {"openai": provider_url(provider)}) as edge:
+            with running_edge(
+                ReplayEdge(source=replay_source(root)), {"openai": provider_url(provider)}
+            ) as edge:
                 replayed = call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
             assert provider.hits == hits_after_record
         assert replayed.status_code == recorded.status_code
@@ -471,18 +482,12 @@ class TestReplayMode:
         with fake_provider() as provider:
             with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
                 call_edge(
-                    edge,
-                    "POST",
-                    CHAT_PATH,
-                    body=chat_body("hi"),
+                    edge, "POST", CHAT_PATH, body=chat_body("hi"),
                     headers={"authorization": "Bearer sk-first-run"},
                 )
         with running_edge(ReplayEdge(source=replay_source(root)), REPLAY_MOUNTS) as edge:
             replayed = call_edge(
-                edge,
-                "POST",
-                CHAT_PATH,
-                body=chat_body("hi"),
+                edge, "POST", CHAT_PATH, body=chat_body("hi"),
                 headers={"authorization": "Bearer sk-second-run"},
             )
         assert replayed.status_code == 200
@@ -580,7 +585,9 @@ class TestMultipartIdentity:
         replayed = replay_upload(root, rerun, "ffffeeeeddddccccbbbbaaaa99998888")
         assert replayed.status_code == 200, replayed.body[:400]
 
-    def test_the_stored_request_carries_fields_and_file_identity_but_no_secrets(self, tmp_path: Path) -> None:
+    def test_the_stored_request_carries_fields_and_file_identity_but_no_secrets(
+        self, tmp_path: Path
+    ) -> None:
         root = tmp_path / "bundle"
         boundary = "0123456789abcdef0123456789abcdef"
         record_upload(
@@ -697,7 +704,9 @@ class TestMultipartIdentity:
         )
         assert same.status_code == 200, same.body[:400]
 
-    def test_a_body_that_does_not_match_its_declared_boundary_stays_opaque(self, tmp_path: Path) -> None:
+    def test_a_body_that_does_not_match_its_declared_boundary_stays_opaque(
+        self, tmp_path: Path
+    ) -> None:
         root = tmp_path / "bundle"
         opaque = b"custom_id one\ncustom_id two\n"
         absent = "boundary-that-is-absent-from-the-body"
@@ -717,7 +726,10 @@ def raw_multipart(boundary: str, *parts: tuple[str, bytes]) -> bytes:
     well-formed helper cannot: a file part with no filename, a declared per-part content
     type, a repeated or bracketed field name, or a non-UTF-8 value."""
     return (
-        b"".join(f"--{boundary}\r\n{head}\r\n\r\n".encode() + content + b"\r\n" for head, content in parts)
+        b"".join(
+            f"--{boundary}\r\n{head}\r\n\r\n".encode() + content + b"\r\n"
+            for head, content in parts
+        )
         + f"--{boundary}--\r\n".encode()
     )
 
@@ -757,7 +769,9 @@ class TestMultipartIdentityEdges:
         )
         plain_field = raw_multipart(boundary, (DISPOSITION.format(name="file"), b"CONTENT"))
 
-        request = edge_request("POST", UPLOAD_PATH, "", upload, f"multipart/form-data; boundary={boundary}")
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", upload, f"multipart/form-data; boundary={boundary}"
+        )
 
         assert upload_key(upload, boundary) != upload_key(plain_field, boundary)
         assert request.form == {}
@@ -781,7 +795,9 @@ class TestMultipartIdentityEdges:
         colon_in_filename = raw_multipart(
             boundary, (FILE_DISPOSITION.format(name="file", filename="a:b.jsonl"), b"same")
         )
-        colon_in_field = raw_multipart(boundary, (FILE_DISPOSITION.format(name="file:a", filename="b.jsonl"), b"same"))
+        colon_in_field = raw_multipart(
+            boundary, (FILE_DISPOSITION.format(name="file:a", filename="b.jsonl"), b"same")
+        )
 
         assert upload_key(colon_in_filename, boundary) != upload_key(colon_in_field, boundary)
 
@@ -815,7 +831,9 @@ class TestMultipartIdentityEdges:
             (DISPOSITION.format(name="purpose"), b"batch"),
         )
 
-        request = edge_request("POST", UPLOAD_PATH, "", body, f"multipart/form-data; boundary={boundary}")
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, f"multipart/form-data; boundary={boundary}"
+        )
 
         assert "sk-live-DEADBEEF-0123456789abcd" not in request.model_dump_json()
         assert request.form == {"openai_api_key": "<secret>", "purpose": "batch"}
@@ -857,11 +875,17 @@ class TestMultipartIdentityEdges:
             pytest.param("multipart/form-data; BOUNDARY={boundary}", id="uppercase-parameter"),
         ],
     )
-    def test_the_boundary_parameter_is_read_the_way_the_client_meant_it(self, content_type: str) -> None:
+    def test_the_boundary_parameter_is_read_the_way_the_client_meant_it(
+        self, content_type: str
+    ) -> None:
         boundary = "0123456789abcdef0123456789abcdef"
-        body = raw_multipart(boundary, (FILE_DISPOSITION.format(name="file", filename="batch.jsonl"), BATCH_JSONL))
+        body = raw_multipart(
+            boundary, (FILE_DISPOSITION.format(name="file", filename="batch.jsonl"), BATCH_JSONL)
+        )
 
-        request = edge_request("POST", UPLOAD_PATH, "", body, content_type.format(boundary=boundary))
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, content_type.format(boundary=boundary)
+        )
 
         assert request.form == {}
         assert request.file_name is not None
@@ -870,7 +894,9 @@ class TestMultipartIdentityEdges:
     def test_an_empty_declared_boundary_falls_back_instead_of_splitting_on_dashes(self) -> None:
         body = b'--\r\nContent-Disposition: form-data; name="a"\r\n\r\nvalue\r\n----\r\n'
 
-        request = edge_request("POST", UPLOAD_PATH, "", body, 'multipart/form-data; boundary=""')
+        request = edge_request(
+            "POST", UPLOAD_PATH, "", body, 'multipart/form-data; boundary=""'
+        )
 
         assert request.form is None
         assert request.file_sha256 is not None
@@ -939,7 +965,8 @@ class TestConcurrentReplay:
             def consume(_: int) -> tuple[str, ...]:
                 barrier.wait()
                 return tuple(
-                    str(json_object(call_edge(edge, "POST", CHAT_PATH, body=body).body)["value"]) for _call in range(4)
+                    str(json_object(call_edge(edge, "POST", CHAT_PATH, body=body).body)["value"])
+                    for _call in range(4)
                 )
 
             with ThreadPoolExecutor(max_workers=8) as executor:
@@ -1066,8 +1093,12 @@ class TestStreamingFidelity:
         recorded = stream_chunks(recorded_stream(root))
 
         _, replayed, _ = replay_stream(root)
-        usage_positions = [index for index, chunk in enumerate(recorded) if b"output_tokens" in chunk]
-        assert usage_positions == [index for index, chunk in enumerate(replayed) if b"output_tokens" in chunk]
+        usage_positions = [
+            index for index, chunk in enumerate(recorded) if b"output_tokens" in chunk
+        ]
+        assert usage_positions == [
+            index for index, chunk in enumerate(replayed) if b"output_tokens" in chunk
+        ]
         assert usage_positions == [len(replayed) - 2]
         assert replayed[-1] == SSE_CHUNKS[-1]
 
@@ -1089,7 +1120,9 @@ class TestStreamingFidelity:
         assert recorded.truncated is not None
         assert recorded.truncated.startswith("upstream: ")
 
-    def test_a_downstream_disconnect_mid_relay_records_only_the_delivered_chunks(self, tmp_path: Path) -> None:
+    def test_a_downstream_disconnect_mid_relay_records_only_the_delivered_chunks(
+        self, tmp_path: Path
+    ) -> None:
         """The provider keeps sending, but the proxy the edge relays to hangs up after
         two chunks. The chunk whose downstream write never landed must stay out of the
         recording, or replay would hand back a byte the record run never delivered.
@@ -1168,7 +1201,9 @@ class TestStreamingFidelity:
             with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
                 raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
             hits_after_record = list(provider.hits)
-            with running_edge(ReplayEdge(source=replay_source(root)), {"openai": provider_url(provider)}) as edge:
+            with running_edge(
+                ReplayEdge(source=replay_source(root)), {"openai": provider_url(provider)}
+            ) as edge:
                 _, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
             assert provider.hits == hits_after_record == ["POST /v1/messages"]
         assert chunks == list(SSE_CHUNKS)
@@ -1179,7 +1214,10 @@ class TestStreamingFidelity:
         recorder lock once, at the end, so neither recording loses or borrows a chunk
         from the other."""
         root = tmp_path / "bundle"
-        bodies = [json.dumps({"model": "claude", "stream": True, "n": index}).encode() for index in range(2)]
+        bodies = [
+            json.dumps({"model": "claude", "stream": True, "n": index}).encode()
+            for index in range(2)
+        ]
         barrier = threading.Barrier(len(bodies))
         with chunked_provider() as provider:
             with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
@@ -1196,7 +1234,9 @@ class TestStreamingFidelity:
         files = this_tests_files(root)
         assert len(files) == len(bodies)
         for file in files:
-            response = Interaction.model_validate_json(file.read_text(encoding="utf-8")).response
+            response = Interaction.model_validate_json(
+                file.read_text(encoding="utf-8")
+            ).response
             assert isinstance(response, RecordedStreamedResponse), response
             assert stream_chunks(response) == list(SSE_CHUNKS)
 
@@ -1285,41 +1325,28 @@ class TestApiBaseSeam:
 
     @pytest.mark.parametrize("mode_raw", ["record", "replay"])
     def test_bedrock_never_wires_a_bundle_because_the_edge_cannot_sign_into_one(
-        self,
-        tmp_path: Path,
-        mode_raw: str,
+        self, tmp_path: Path, mode_raw: str,
     ) -> None:
         """Record and replay serve from a bundle without re-signing, so a Bedrock
         deployment pointed at that edge would send the proxy's signature over a
         rewritten Host. It keeps its direct route in both modes."""
-        assert (
-            provider_edge_api_base(
-                "bedrock/us-east-1",
-                mode_raw=mode_raw,
-                bundle_dir=tmp_path / "bundle",
-                bind_host="127.0.0.1",
-                advertise_host="127.0.0.1",
-                test_key="tests/e2e/synthetic_suite.py::test_case",
-            )
-            is None
-        )
+        assert provider_edge_api_base(
+            "bedrock/us-east-1",
+            mode_raw=mode_raw,
+            bundle_dir=tmp_path / "bundle",
+            bind_host="127.0.0.1",
+            advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
+        ) is None
 
     def test_record_mode_boots_one_shared_edge_and_prepares_the_bundle(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
         first = provider_edge_api_base(
-            "openai",
-            mode_raw="record",
-            bundle_dir=root,
-            bind_host="127.0.0.1",
-            advertise_host="127.0.0.1",
+            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
             test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         second = provider_edge_api_base(
-            "anthropic",
-            mode_raw="record",
-            bundle_dir=root,
-            bind_host="127.0.0.1",
-            advertise_host="127.0.0.1",
+            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
             test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         assert first is not None and second is not None
@@ -1334,11 +1361,8 @@ class TestProviderRequestObservation:
         observation: Final = ProviderRequestObservation("observed-lantern")
         with fake_provider() as provider:
             with observed_provider_edge(
-                observation,
-                mode_raw="live",
-                bundle_dir=tmp_path / "unused",
-                bind_host="127.0.0.1",
-                advertise_host="127.0.0.1",
+                observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+                bind_host="127.0.0.1", advertise_host="127.0.0.1",
                 mounts={"openai": provider_url(provider)},
             ) as edge:
                 assert observation.count == 0
@@ -1362,11 +1386,8 @@ class TestProviderRequestObservation:
                 ("replay", ProviderRequestObservation("observed-lantern")),
             ):
                 with observed_provider_edge(
-                    observation,
-                    mode_raw=mode,
-                    bundle_dir=tmp_path / "bundle",
-                    bind_host="127.0.0.1",
-                    advertise_host="127.0.0.1",
+                    observation, mode_raw=mode, bundle_dir=tmp_path / "bundle",
+                    bind_host="127.0.0.1", advertise_host="127.0.0.1",
                     mounts={"openai": provider_url(provider)},
                 ) as edge:
                     assert observation.count == 0
@@ -1378,19 +1399,15 @@ class TestProviderRequestObservation:
                         assert json_object(response.body)["hit"] == expected
                         assert observation.count == expected
                 assert len(provider.hits) == 2
-        assert (
-            replay_leftover_error(mode_raw="replay", bundle_dir=tmp_path / "bundle", test_key=current_test_key())
-            is None
-        )
+        assert replay_leftover_error(
+            mode_raw="replay", bundle_dir=tmp_path / "bundle", test_key=current_test_key()
+        ) is None
 
     def test_failed_provider_attempt_is_counted(self, tmp_path: Path) -> None:
         observation: Final = ProviderRequestObservation("observed-lantern")
         with observed_provider_edge(
-            observation,
-            mode_raw="live",
-            bundle_dir=tmp_path / "unused",
-            bind_host="127.0.0.1",
-            advertise_host="127.0.0.1",
+            observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+            bind_host="127.0.0.1", advertise_host="127.0.0.1",
             mounts={"openai": "http://127.0.0.1:9"},
         ) as edge:
             response: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))

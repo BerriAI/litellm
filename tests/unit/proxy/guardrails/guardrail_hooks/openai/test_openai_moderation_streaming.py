@@ -54,13 +54,17 @@ async def test_openai_moderation_guardrail_streaming_latency():
 
         # Patch the network call in the specific guardrail
         with (
-            patch.object(openai_guardrail, "async_make_request", return_value=mock_mod_response),
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ),
             patch(
                 "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
             request_data = {
                 "messages": [{"role": "user", "content": "hi"}],
                 "guardrail_to_apply": openai_guardrail,
@@ -71,7 +75,9 @@ async def test_openai_moderation_guardrail_streaming_latency():
             first_chunk_yielded = False
 
             # Call the hook on UnifiedLLMGuardrails
-            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=mock_stream(),
                 request_data=request_data,
@@ -101,7 +107,11 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
         # Mock harmful moderation response
         mock_mod_response = MagicMock()
-        mock_mod_response.results = [MagicMock(flagged=True, categories={"hate": True}, category_scores={"hate": 0.99})]
+        mock_mod_response.results = [
+            MagicMock(
+                flagged=True, categories={"hate": True}, category_scores={"hate": 0.99}
+            )
+        ]
 
         async def mock_stream():
             chunks_data = ["This ", "is ", "harmful ", "content"]
@@ -136,13 +146,17 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
         )
 
         with (
-            patch.object(openai_guardrail, "async_make_request", return_value=mock_mod_response),
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ),
             patch(
                 "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
             request_data = {
                 "messages": [{"role": "user", "content": "generate hate"}],
                 "guardrail_to_apply": openai_guardrail,
@@ -154,7 +168,9 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             import json as _json
 
             collected = []
-            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=mock_stream(),
                 request_data=request_data,
@@ -235,13 +251,17 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
         }
 
         with (
-            patch.object(openai_guardrail, "async_make_request", return_value=mock_mod_response),
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ),
             patch(
                 "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
 
             async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -259,15 +279,17 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
 
         bucket = request_data[get_metadata_variable_name_from_kwargs(request_data)]
         guardrail_info_list = bucket.get("standard_logging_guardrail_information")
-        assert guardrail_info_list is not None, "Guardrail info should be in request_data after streaming"
+        assert (
+            guardrail_info_list is not None
+        ), "Guardrail info should be in request_data after streaming"
         info = guardrail_info_list[0]
         assert info["guardrail_status"] == "success"
 
         # Full moderation response dict, NOT the simplified "allow" string
         guardrail_resp = info["guardrail_response"]
-        assert isinstance(guardrail_resp, dict), (
-            f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
-        )
+        assert isinstance(
+            guardrail_resp, dict
+        ), f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
         assert "results" in guardrail_resp
 
 
@@ -335,7 +357,9 @@ async def test_openai_moderation_streaming_default_uses_sampled_cadence():
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
             request_data = {
                 "messages": [{"role": "user", "content": "hi"}],
                 "guardrail_to_apply": openai_guardrail,
@@ -403,7 +427,9 @@ async def test_openai_moderation_streaming_end_of_stream_only_opt_in_calls_moder
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
             request_data = {
                 "messages": [{"role": "user", "content": "hi"}],
                 "guardrail_to_apply": openai_guardrail,
@@ -418,7 +444,8 @@ async def test_openai_moderation_streaming_end_of_stream_only_opt_in_calls_moder
                 pass
 
         assert patched_make_request.await_count == 1, (
-            f"Expected exactly one moderation call at end of stream, got {patched_make_request.await_count}"
+            f"Expected exactly one moderation call at end of stream, "
+            f"got {patched_make_request.await_count}"
         )
 
 
@@ -471,7 +498,9 @@ async def test_openai_moderation_streaming_sampled_when_end_of_stream_only_disab
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
             request_data = {
                 "messages": [{"role": "user", "content": "hi"}],
                 "guardrail_to_apply": openai_guardrail,

@@ -38,7 +38,6 @@ _API_KEY: Final = "synthetic-responses-bridge-key"
 
 _STARTED_WORKER: Final[re.Pattern[str]] = re.compile(r"Started server process \[(\d+)\]")
 
-
 def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
     base_config: Final = _JSON_OBJECT.validate_python(
         yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -60,14 +59,12 @@ def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
     path.write_text(yaml.safe_dump(config))
     return path
 
-
 def _open_upstream_connections(pid: int, port: int) -> int:
     return sum(
         1
         for connection in psutil.Process(pid).net_connections(kind="tcp")
         if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
     )
-
 
 @pytest.mark.timeout(180)
 async def test_worker_and_peer_outages_preserve_markers_and_recover(

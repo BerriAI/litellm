@@ -205,9 +205,7 @@ def _keyholder(*models: str) -> UserAPIKeyAuth:
 async def test_team_alias_to_a_model_the_team_does_not_list_reports_that_model_at_list_and_retrieval(
     router: Router,
 ) -> None:
-    caller = _team_member(
-        models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "gpt-4.1"}
-    )
+    caller = _team_member(models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "gpt-4.1"})
     target_holder = _keyholder("gpt-4.1")
 
     rows = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=caller, request=None))["data"]}
@@ -263,7 +261,9 @@ async def test_listed_alias_keeps_its_own_display_name_in_the_anthropic_and_code
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_group_alias", [{"fast": "gpt-4.1"}, {"fast": {"model": "gpt-4.1", "hidden": True}}])
+@pytest.mark.parametrize(
+    "model_group_alias", [{"fast": "gpt-4.1"}, {"fast": {"model": "gpt-4.1", "hidden": True}}]
+)
 async def test_key_router_settings_alias_the_key_lists_reports_its_target_at_list_and_retrieval(
     router: Router, model_group_alias: dict[str, object]
 ) -> None:

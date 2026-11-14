@@ -212,3 +212,4 @@ class TestBaseSdkImport:
         monkeypatch.setitem(sys.modules, "jwt", None)
         with pytest.raises(ImportError, match="litellm\\[proxy\\]"):
             sign_es256_jwt(pem_of(fixed_private_key()), {"sub": "x"})
+

@@ -36,10 +36,9 @@ def test_agents_rejects_api_base_without_caller_key(
         return Reply(body=b"{}")
 
     with wire_server(respond) as wire:
-        with (
-            owned_proxy_process(gateway, tmp_path, {"GEMINI_API_KEY": _ENV_GEMINI_KEY}) as owned,
-            owned.gateway.scenario() as scenario,
-        ):
+        with owned_proxy_process(
+            gateway, tmp_path, {"GEMINI_API_KEY": _ENV_GEMINI_KEY}
+        ) as owned, owned.gateway.scenario() as scenario:
             virtual_key: Final = None if caller == "admin" else scenario.key()
             if method == "POST":
                 response: Final = owned.gateway.request(

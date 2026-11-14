@@ -5083,9 +5083,7 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 ) -> None:
     _framed_kimi(monkeypatch)
 
-    from_prompt: Final = await count_request_tokens(
-        request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True
-    )
+    from_prompt: Final = await count_request_tokens(request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True)
     from_message: Final = await count_request_tokens(
         request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": _FOX}]), call_endpoint=True
     )
@@ -6006,10 +6004,7 @@ async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_rout
     sent_request: Final = route.calls.last.request
     sent: Final = json.loads(sent_request.content)
     inference: Final = _messages_inference_fields(
-        DeepSeekAnthropicMessagesConfig(),
-        "deepseek-v4-pro",
-        body,
-        ("tool_choice", "output_config", "tools", "thinking"),
+        DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", body, ("tool_choice", "output_config", "tools", "thinking")
     )
     assert response == {"input_tokens": 91, "litellm_count_source": "provider"}
     assert sent_request.headers["x-api-key"] == "sk-deepseek-test"
@@ -6068,9 +6063,7 @@ async def _count_deepseek_responses(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock:
-        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(
-            return_value=httpx.Response(200, json={"input_tokens": 91})
-        )
+        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
         result: Final = await count_request_tokens(
             request=TokenCountRequest.model_validate(
                 {"model": "deepseek-counted", "messages": [{"role": "user", "content": "Say hi."}], **request_options}

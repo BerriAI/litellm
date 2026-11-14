@@ -80,7 +80,9 @@ def test_resolve_session_key_honors_litellm_session_id_on_litellm_params():
 
 
 def test_resolve_session_key_honors_metadata_session_id():
-    key = _resolve_session_key({"litellm_params": {"metadata": {"session_id": "sess-B"}}})
+    key = _resolve_session_key(
+        {"litellm_params": {"metadata": {"session_id": "sess-B"}}}
+    )
     assert key == "sess-B"
 
 
@@ -166,7 +168,9 @@ async def test_hook_tracks_short_conversation_with_explicit_session_id():
         0.0,
         1.0,
     )
-    assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == ("explicit-short")
+    assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == (
+        "explicit-short"
+    )
 
 
 @pytest.mark.asyncio
@@ -197,7 +201,9 @@ async def test_hook_records_when_model_changes():
 async def test_hook_records_turn():
     hook = _make_hook()
     kwargs = _kwargs(chosen="smart", messages=_long_messages("ask"))
-    await hook.async_log_success_event(kwargs, _resp_with_content("answer here"), 0.0, 1.0)
+    await hook.async_log_success_event(
+        kwargs, _resp_with_content("answer here"), 0.0, 1.0
+    )
     call = hook.adaptive_router.record_turn.await_args
     assert call.kwargs["model_name"] == "smart"
     turn: Turn = call.kwargs["turn"]
@@ -215,7 +221,9 @@ async def test_hook_uses_explicit_session_id_when_provided():
         extra_litellm_params={"litellm_session_id": "explicit-sess"},
     )
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
-    assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == ("explicit-sess")
+    assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == (
+        "explicit-sess"
+    )
 
 
 @pytest.mark.asyncio
@@ -223,7 +231,9 @@ async def test_hook_passes_tool_calls_through():
     hook = _make_hook()
     tc = {"name": "search", "arguments": '{"q":"x"}'}
     kwargs = _kwargs(chosen="fast")
-    await hook.async_log_success_event(kwargs, _resp_with_content("calling tool", tool_calls=[tc]), 0.0, 1.0)
+    await hook.async_log_success_event(
+        kwargs, _resp_with_content("calling tool", tool_calls=[tc]), 0.0, 1.0
+    )
     turn: Turn = hook.adaptive_router.record_turn.await_args.kwargs["turn"]
     assert turn.tool_calls == [tc]
 
@@ -326,8 +336,12 @@ async def test_hook_passes_tool_results_to_turn_for_failure_detection():
     so the failure-signal path fires."""
     hook = _make_hook()
     messages = _long_messages()
-    messages.append({"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]})
-    messages.append({"role": "tool", "tool_call_id": "t1", "content": "500", "is_error": True})
+    messages.append(
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]}
+    )
+    messages.append(
+        {"role": "tool", "tool_call_id": "t1", "content": "500", "is_error": True}
+    )
     kwargs = _kwargs(chosen="fast", messages=messages)
 
     await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)

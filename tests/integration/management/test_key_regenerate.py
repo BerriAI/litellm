@@ -35,7 +35,9 @@ _SCENARIOS = [
 
 
 async def _info(gateway_client, cleartext: str):
-    return await gateway_client.get("/key/info", headers={"Authorization": f"Bearer {cleartext}"})
+    return await gateway_client.get(
+        "/key/info", headers={"Authorization": f"Bearer {cleartext}"}
+    )
 
 
 @pytest.mark.parametrize(
@@ -55,7 +57,9 @@ async def test_key_regenerate_authz_matrix(
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
 
     if target_shape == "self":
-        target_cleartext = await create_scratch_key(gateway_client, seeder, resources.prefix, user_id=caller.user_id)
+        target_cleartext = await create_scratch_key(
+            gateway_client, seeder, resources.prefix, user_id=caller.user_id
+        )
     elif target_shape == "owner":
         target_cleartext = await create_scratch_key(
             gateway_client,
@@ -80,7 +84,9 @@ async def test_key_regenerate_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"key": target_cleartext},
     )
-    assert resp.status_code == expected_status, f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} {target_shape}: {resp.status_code} {resp.text}"
 
     if expected_status == 200:
         new_cleartext = resp.json()["key"]
@@ -111,7 +117,9 @@ async def test_key_path_regenerate_smoke(gateway_client, resources, actors):
     assert (await _info(gateway_client, new_cleartext)).status_code == 200
 
 
-async def test_key_regenerate_enforces_upperbound_key_params(gateway_client, resources, actors, tmp_path):
+async def test_key_regenerate_enforces_upperbound_key_params(
+    gateway_client, resources, actors, tmp_path
+):
     admin = actors.keys[Actor.PROXY_ADMIN]
     over_key = await create_scratch_key(
         gateway_client,
@@ -132,7 +140,9 @@ async def test_key_regenerate_enforces_upperbound_key_params(gateway_client, res
     with owned_settings_client(
         gateway_client, tmp_path, {"upperbound_key_generate_params": {"max_budget": 100.0}}
     ) as client:
-        over = await client.post("/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0})
+        over = await client.post(
+            "/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0}
+        )
         within = await client.post(
             "/key/regenerate",
             headers=headers,

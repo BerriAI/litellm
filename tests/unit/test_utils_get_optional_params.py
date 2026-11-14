@@ -556,30 +556,28 @@ def test_bedrock_optional_params_embeddings_provider_specific_params():
     ],
 )
 def test_vertex_safety_settings(provider, monkeypatch):
-    monkeypatch.setattr(
-        litellm,
-        "vertex_ai_safety_settings",
-        [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE",
-            },
-        ],
-    )
+    monkeypatch.setattr(litellm, "vertex_ai_safety_settings", [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ])
 
-    optional_params = get_optional_params(model="gemini-1.5-pro", custom_llm_provider=provider)
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider=provider
+    )
     assert len(optional_params) == 1
 
 
@@ -2124,9 +2122,7 @@ def test_dropping_thinking_for_an_unmapped_local_model_sends_no_request(
 ) -> None:
     outbound: Final = respx.MockRouter(assert_all_mocked=False)
     monkeypatch.setattr(
-        litellm,
-        "module_level_client",
-        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(outbound.handler))),
+        litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(outbound.handler)))
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):

@@ -155,7 +155,8 @@ def test_slow_bucket_holds_good_uploads_without_delaying_bad_rows_400s(gateway: 
             held: Final = _submit(pool, gateway, client, model, good_items)
             eventually(wire.received.qsize, lambda size: size == len(good_items), seconds=60)
             bad: Final = tuple(
-                future.result(timeout=60) for future in _submit(pool, gateway, client, model, _uploads(6, bad=True))
+                future.result(timeout=60)
+                for future in _submit(pool, gateway, client, model, _uploads(6, bad=True))
             )
             _assert_each_bad_file_names_its_own_line(bad)
             assert not any(future.done() for future in held)

@@ -258,9 +258,7 @@ def test_without_the_package_building_the_guardrail_names_what_to_install() -> N
     [
         ModuleNotFoundError("No module named 'litellm.gone'", name="litellm.gone"),
         ImportError("cannot import name 'Moved' from 'litellm.types'", name="litellm.types"),
-        ImportError(
-            "cannot import name 'Observer' from 'collieai_guardrail.observer'", name="collieai_guardrail.observer"
-        ),
+        ImportError("cannot import name 'Observer' from 'collieai_guardrail.observer'", name="collieai_guardrail.observer"),
         AttributeError("module 'litellm' has no attribute 'moved'"),
     ],
 )

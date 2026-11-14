@@ -329,6 +329,7 @@ class TestMinimaxVideoCreateRequest:
 
         assert raised.value.status_code == 400
 
+
     def test_text_inside_content_is_rejected_so_guardrails_cannot_be_bypassed(self):
         """Guardrails scan prompt; a text item smuggled into content would reach
         MiniMax unscanned while a harmless prompt passed the check."""
@@ -1322,32 +1323,19 @@ class TestMinimaxVideoInputBilling:
 
 @pytest.mark.parametrize("role", ["first_frame", "last_frame", "reference_image"])
 def test_openrouter_video_images_become_provider_content(role: str) -> None:
-    params: Final = cast(
-        VideoCreateOptionalRequestParams,
-        {
-            "duration": 8,
-            "aspect_ratio": "9:16",
-            "resolution": "768P",
-            **(
-                {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]}
-                if role == "reference_image"
-                else {
-                    "frame_images": [
-                        {"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "frame_type": role}
-                    ]
-                }
-            ),
-        },
-    )
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "duration": 8, "aspect_ratio": "9:16", "resolution": "768P",
+        **(
+            {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]}
+            if role == "reference_image"
+            else {"frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "frame_type": role}]}
+        ),
+    })
     config: Final = MinimaxVideoConfig()
     mapped: Final = config.map_openai_params(params, "MiniMax-H3", False)
     body, _, _ = config.transform_video_create_request(
-        model="MiniMax-H3",
-        prompt="a cat",
-        api_base=API_BASE,
-        video_create_optional_request_params=mapped,
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
+        model="MiniMax-H3", prompt="a cat", api_base=API_BASE,
+        video_create_optional_request_params=mapped, litellm_params=GenericLiteLLMParams(), headers={},
     )
     assert body["content"] == [
         {"type": "text", "text": "a cat"},
@@ -1357,53 +1345,25 @@ def test_openrouter_video_images_become_provider_content(role: str) -> None:
     assert not ({"frame_images", "input_references", "aspect_ratio"} & body.keys())
 
 
-@pytest.mark.parametrize(
-    "other",
-    [
-        {
-            "content": [
-                {"type": "image_url", "image_url": {"url": "https://example.com/raw.png"}, "role": "reference_image"}
-            ]
-        },
-        {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]},
-        {"input_reference": "https://example.com/old.png"},
-        {
-            "frame_images": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "https://example.com/first.png"},
-                    "frame_type": "first_frame",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "https://example.com/duplicate.png"},
-                    "frame_type": "first_frame",
-                },
-            ]
-        },
-    ],
-)
+@pytest.mark.parametrize("other", [
+    {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/raw.png"}, "role": "reference_image"}]},
+    {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]},
+    {"input_reference": "https://example.com/old.png"},
+    {"frame_images": [
+        {"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/duplicate.png"}, "frame_type": "first_frame"},
+    ]},
+])
 def test_openrouter_image_conflicts_raise_or_keep_first_frame(other: object) -> None:
-    params: Final = cast(
-        VideoCreateOptionalRequestParams,
-        {
-            "frame_images": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "https://example.com/first.png"},
-                    "frame_type": "first_frame",
-                }
-            ],
-            **cast(Mapping[str, object], other),
-        },
-    )
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        **cast(Mapping[str, object], other),
+    })
     config: Final = MinimaxVideoConfig()
     with pytest.raises(UnsupportedParamsError, match="drop_params"):
         config.map_openai_params(params, "MiniMax-H3", False)
     assert config.map_openai_params(params, "MiniMax-H3", True) == {
-        "content": [
-            {"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}
-        ],
+        "content": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}],
     }
 
 
@@ -1434,46 +1394,31 @@ def test_openrouter_empty_and_invalid_frames(images: object) -> None:
     else:
         assert config.map_openai_params(params, "MiniMax-H3", False) == {"content": []}
 
-
-@pytest.mark.parametrize(
-    "references", [[], [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]]
-)
+@pytest.mark.parametrize("references", [[], [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]])
 def test_plural_and_singular_reference_conflict_raises_or_prefers_plural(references: object) -> None:
     config: Final = MinimaxVideoConfig()
-    params: Final = cast(
-        VideoCreateOptionalRequestParams,
-        {
-            "input_references": references,
-            "input_reference": "https://example.com/first.png",
-        },
-    )
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "input_references": references, "input_reference": "https://example.com/first.png",
+    })
     with pytest.raises(UnsupportedParamsError, match="input_references cannot be combined"):
         config.map_openai_params(params, "MiniMax-H3", False)
     assert config.map_openai_params(params, "MiniMax-H3", True) == {
         "content": [
             {"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}
-        ]
-        if references
-        else [],
+        ] if references else [],
     }
 
 
 def test_dropping_seconds_does_not_parse_the_discarded_value() -> None:
-    assert MinimaxVideoConfig().map_openai_params({"duration": 8, "seconds": "abc"}, "MiniMax-H3", True) == {
-        "duration": 8
-    }
+    assert MinimaxVideoConfig().map_openai_params({"duration": 8, "seconds": "abc"}, "MiniMax-H3", True) == {"duration": 8}
 
 
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_aspect_ratio_preserves_native_ratio_precedence_over_size(drop_params: bool) -> None:
     config: Final = MinimaxVideoConfig()
     assert config.map_openai_params(
-        {"size": "1280x720", "aspect_ratio": "9:16"},
-        "MiniMax-H3",
-        drop_params,
+        {"size": "1280x720", "aspect_ratio": "9:16"}, "MiniMax-H3", drop_params,
     ) == {"ratio": "9:16"}
     assert config.map_openai_params(
-        cast(VideoCreateOptionalRequestParams, {"size": "1280x720", "ratio": "9:16"}),
-        "MiniMax-H3",
-        drop_params,
+        cast(VideoCreateOptionalRequestParams, {"size": "1280x720", "ratio": "9:16"}), "MiniMax-H3", drop_params,
     ) == {"ratio": "9:16"}

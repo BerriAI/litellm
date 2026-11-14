@@ -80,7 +80,9 @@ def _team_loader(team_tools: list[str] | None | str) -> TeamObjectLoader:
 
 
 def _missing_dashboard_team_loader() -> tuple[TeamObjectLoader, AsyncMock]:
-    missing_team: Final = HTTPException(status_code=404, detail="Team doesn't exist in db. Team=litellm-dashboard")
+    missing_team: Final = HTTPException(
+        status_code=404, detail="Team doesn't exist in db. Team=litellm-dashboard"
+    )
     load_team: Final = AsyncMock(side_effect=missing_team)
     return cast(TeamObjectLoader, load_team), load_team
 

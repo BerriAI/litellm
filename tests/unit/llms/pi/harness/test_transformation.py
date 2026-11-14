@@ -607,9 +607,7 @@ def test_thinking_declares_a_reasoning_model_only_when_a_level_is_requested(
     thinking: PiThinkingLevel | None, declared_model: Mapping[str, object]
 ) -> None:
     models: Final = setup_models(setup_for(make_ctx(options=PiOptions(thinking=thinking))))
-    declared: Final = {
-        key: value for key, value in models["providers"]["litellm"]["models"][0].items() if key != "maxTokens"
-    }
+    declared: Final = {key: value for key, value in models["providers"]["litellm"]["models"][0].items() if key != "maxTokens"}
     assert declared == {key: value for key, value in declared_model.items() if key != "maxTokens"}, (
         "pi drops --thinking to off unless the model declares reasoning, and drops xhigh/max to high "
         "unless thinkingLevelMap names them; declaring reasoning with no level makes pi send its default effort"

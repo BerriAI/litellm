@@ -17,6 +17,7 @@ response and assert:
    raising ``AttributeError``.
 """
 
+
 import pytest
 
 
@@ -87,9 +88,14 @@ def test_stream_chunk_builder_coerces_server_tool_use_to_pydantic():
     assert rebuilt.usage is not None  # type: ignore[attr-defined]
     server_tool_use = rebuilt.usage.server_tool_use  # type: ignore[attr-defined]
 
-    assert server_tool_use is not None, "server_tool_use should be carried through from the final chunk"
+    assert (
+        server_tool_use is not None
+    ), "server_tool_use should be carried through from the final chunk"
     assert isinstance(server_tool_use, ServerToolUse), (
-        f"expected ServerToolUse, got {type(server_tool_use).__name__}: {server_tool_use!r}"
+        f"expected ServerToolUse, got {type(server_tool_use).__name__}: "
+        f"{server_tool_use!r}"
     )
     # Attribute access must not raise (this is exactly what was broken).
     assert server_tool_use.web_search_requests == 3
+
+

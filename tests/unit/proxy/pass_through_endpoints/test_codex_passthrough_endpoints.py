@@ -955,6 +955,7 @@ def test_native_responses_reach_litellm_models_only_for_a_key_that_may_call_v1_r
     assert chatgpt.called is not through_litellm
 
 
+
 @pytest.mark.parametrize(
     ("user_role", "through_litellm"),
     [
@@ -1557,9 +1558,7 @@ def xai_fireworks_and_openai_router(monkeypatch: pytest.MonkeyPatch) -> Router:
     ("model", "replayed", "expected"),
     [
         pytest.param("open-weights", _CHATGPT_REASONING, None, id="chatgpt reasoning to fireworks is dropped"),
-        pytest.param(
-            "open-weights", _LUNA_REASONING, None, id="another deployment's reasoning to fireworks is dropped"
-        ),
+        pytest.param("open-weights", _LUNA_REASONING, None, id="another deployment's reasoning to fireworks is dropped"),
         pytest.param("oai-luna", _LUNA_REASONING, _LUNA_BLOB, id="the minting deployment's reasoning is kept"),
     ],
 )
@@ -1603,11 +1602,7 @@ _OTHER_DEPLOYMENTS_BLOB: Final = ResponsesAPIRequestUtils.wrap_encrypted_content
     ("model", "replayed", "store", "expected"),
     [
         pytest.param(
-            "oai-luna",
-            _WHOLE_FIREWORKS_REASONING,
-            False,
-            [_SUMMARY_ONLY_REASONING],
-            id="whole fireworks item to openai",
+            "oai-luna", _WHOLE_FIREWORKS_REASONING, False, [_SUMMARY_ONLY_REASONING], id="whole fireworks item to openai"
         ),
         pytest.param(
             "oai-luna",
@@ -1856,8 +1851,6 @@ def test_codex_namespace_tool_called_through_the_chat_bridge_comes_back_with_its
 
 _CLOCK_NAMESPACE: Final = _namespace("clock", "sleep")
 _CLOCK_TOOLS: Final = {"type": "additional_tools", "role": "developer", "tools": [_CLOCK_NAMESPACE]}
-
-
 def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
 ) -> None:
@@ -1870,6 +1863,7 @@ def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
     )
     assert response.status_code == 200, response.text
     assert json.loads(provider.calls.last.request.content)["tools"] == [_CLOCK_NAMESPACE]
+
 
 
 @pytest.mark.parametrize(
@@ -1902,13 +1896,7 @@ def test_codex_tool_list_repeated_on_every_turn_reaches_fireworks_merged_only_un
     assert response.status_code == 200, response.text
     assert json.loads(provider.calls.last.request.content)["tools"] == expected_tools
 
-
-_CUSTOM_EXEC_TOOL: Final = {
-    "type": "custom",
-    "name": "exec",
-    "description": "Run a command",
-    "format": {"type": "text"},
-}
+_CUSTOM_EXEC_TOOL: Final = {"type": "custom", "name": "exec", "description": "Run a command", "format": {"type": "text"}}
 _XAI_SEARCH_CALL: Final = {
     "id": "call_search",
     "type": "function",

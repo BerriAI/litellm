@@ -70,7 +70,9 @@ def _config(directory: Path, token_url: str) -> Path:
 
 def _scrubbed() -> tuple[str, ...]:
     return tuple(
-        name for name in os.environ if name.upper() in _PROXY_VARIABLES or name.upper().startswith(_SCRUBBED_PREFIXES)
+        name
+        for name in os.environ
+        if name.upper() in _PROXY_VARIABLES or name.upper().startswith(_SCRUBBED_PREFIXES)
     )
 
 
@@ -83,21 +85,18 @@ def forward() -> Iterator[ForwardProxy]:
 @pytest.fixture(scope="module")
 def isolated(forward: ForwardProxy, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("url-join-host")
-    with (
-        gateway_from_environment() as shared,
-        owned_proxy(
-            shared,
-            directory,
-            {
-                "HTTP_PROXY": forward.url,
-                "HTTPS_PROXY": forward.url,
-                "NO_PROXY": "127.0.0.1,localhost",
-                "PROXY_BATCH_POLLING_ENABLED": "false",
-            },
-            config=_config(directory, shared.upstream_url.rstrip("/")),
-            remove_environment=_scrubbed(),
-        ) as candidate,
-    ):
+    with gateway_from_environment() as shared, owned_proxy(
+        shared,
+        directory,
+        {
+            "HTTP_PROXY": forward.url,
+            "HTTPS_PROXY": forward.url,
+            "NO_PROXY": "127.0.0.1,localhost",
+            "PROXY_BATCH_POLLING_ENABLED": "false",
+        },
+        config=_config(directory, shared.upstream_url.rstrip("/")),
+        remove_environment=_scrubbed(),
+    ) as candidate:
         yield candidate
 
 

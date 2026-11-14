@@ -42,7 +42,9 @@ class MockStreamingCallback(CustomLogger):
                 if "choices" in chunk:
                     for choice in chunk["choices"]:
                         if "delta" in choice and "content" in choice["delta"]:
-                            choice["delta"]["content"] = f"[{self.prefix}]" + choice["delta"]["content"]
+                            choice["delta"]["content"] = (
+                                f"[{self.prefix}]" + choice["delta"]["content"]
+                            )
             yield chunk
 
 
@@ -85,7 +87,9 @@ async def test_streaming_hook_is_async_generator():
             collected_chunks.append(chunk)
 
         # Verify all chunks were yielded
-        assert len(collected_chunks) == 4, f"Expected 4 chunks, got {len(collected_chunks)}"
+        assert (
+            len(collected_chunks) == 4
+        ), f"Expected 4 chunks, got {len(collected_chunks)}"
         assert callback.chunks_processed == 4, "Callback should have processed 4 chunks"
 
 

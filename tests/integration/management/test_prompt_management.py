@@ -108,6 +108,7 @@ def _assert_chat_response(response: httpx.Response) -> None:
     assert completion.choices[0].message.content == "management response", response.text
 
 
+
 def _chat_reply(content: str) -> Reply:
     return Reply(
         body=json.dumps(
@@ -325,9 +326,9 @@ def test_prompt_create_and_patch_resolve_on_peer_after_database_sync(gateway: Ga
             _replies_with("patched template"),
             seconds=40,
         )
-        assert ChatCompletion.model_validate_json(resynced.content).choices[0].message.content == "patched template", (
-            resynced.text
-        )
+        assert (
+            ChatCompletion.model_validate_json(resynced.content).choices[0].message.content == "patched template"
+        ), resynced.text
         requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
         assert all((request.method, request.target) == ("POST", "/v1/chat/completions") for request in requests), (
             requests

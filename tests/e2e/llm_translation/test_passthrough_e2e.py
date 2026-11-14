@@ -71,9 +71,13 @@ def _fetch_cost_breakdown(client: PassthroughClient, request_id: str | None) -> 
         mode=Mode.NONSTREAM,
     )
 )
-def test_gemini_passthrough_nonstreaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+def test_gemini_passthrough_nonstreaming_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
     tag = f"e2e-passthrough-{unique_marker()}"
-    result = client.gemini_generate(scoped_key, GEMINI_MODEL, "Say hello in one word", tags=[tag, "gemini"])
+    result = client.gemini_generate(
+        scoped_key, GEMINI_MODEL, "Say hello in one word", tags=[tag, "gemini"]
+    )
     require_successful_call(result)
 
     row = _fetch_cost_breakdown(client, result.call_id)
@@ -82,9 +86,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(client: PassthroughClient, sc
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
 
 
-@pytest.mark.skip(
-    reason="stage red: product gap, native passthrough returns no x-litellm-response-cost or x-ratelimit-* headers"
-)
+@pytest.mark.skip(reason="stage red: product gap, native passthrough returns no x-litellm-response-cost or x-ratelimit-* headers")
 @meta(
     Subject(
         domain=Domain.PASSTHROUGH,
@@ -102,7 +104,9 @@ def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_rout
     spend, and x-ratelimit-* so a client can pace itself. It returns neither
     today, which makes native traffic invisible to the same tooling.
     """
-    result = client.gemini_generate(scoped_key, GEMINI_MODEL, f"Say hello in one word. {unique_marker()}")
+    result = client.gemini_generate(
+        scoped_key, GEMINI_MODEL, f"Say hello in one word. {unique_marker()}"
+    )
     require_successful_call(result)
 
     assert result.call_id, "passthrough must stamp x-litellm-call-id"
@@ -110,7 +114,9 @@ def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_rout
         "passthrough generateContent returned no x-litellm-response-cost header, so a "
         "native call cannot be reconciled against spend the way /chat/completions can"
     )
-    assert result.response_cost > 0, f"x-litellm-response-cost must be a real cost, got {result.response_cost}"
+    assert result.response_cost > 0, (
+        f"x-litellm-response-cost must be a real cost, got {result.response_cost}"
+    )
 
     pacing = tuple(name for name in result.headers if name.startswith("x-ratelimit-"))
     assert pacing, (
@@ -128,7 +134,9 @@ def test_gemini_passthrough_returns_the_same_header_contract_as_the_managed_rout
         mode=Mode.STREAM,
     )
 )
-def test_gemini_passthrough_streaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+def test_gemini_passthrough_streaming_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
     result = client.gemini_stream(scoped_key, GEMINI_MODEL, "Count to five")
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
@@ -147,7 +155,9 @@ def test_gemini_passthrough_streaming_logs_cost(client: PassthroughClient, scope
         mode=Mode.NONSTREAM,
     )
 )
-def test_gemini_passthrough_tool_call_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+def test_gemini_passthrough_tool_call_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
     result = client.gemini_generate(
         scoped_key,
         GEMINI_MODEL,
@@ -187,7 +197,9 @@ def test_gemini_passthrough_tool_call_logs_cost(client: PassthroughClient, scope
         mode=Mode.NONSTREAM,
     )
 )
-def test_anthropic_passthrough_nonstreaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+def test_anthropic_passthrough_nonstreaming_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
     result = client.anthropic_message(scoped_key, ANTHROPIC_PASSTHROUGH_MODEL, "Say hello")
     require_successful_call(result)
 
@@ -205,8 +217,12 @@ def test_anthropic_passthrough_nonstreaming_logs_cost(client: PassthroughClient,
         mode=Mode.STREAM,
     )
 )
-def test_anthropic_passthrough_streaming_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
-    result = client.anthropic_message(scoped_key, ANTHROPIC_PASSTHROUGH_MODEL, "Count to five", stream=True)
+def test_anthropic_passthrough_streaming_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
+    result = client.anthropic_message(
+        scoped_key, ANTHROPIC_PASSTHROUGH_MODEL, "Count to five", stream=True
+    )
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
@@ -224,7 +240,9 @@ def test_anthropic_passthrough_streaming_logs_cost(client: PassthroughClient, sc
         mode=Mode.NONSTREAM,
     )
 )
-def test_anthropic_passthrough_tool_call_logs_cost(client: PassthroughClient, scoped_key: str) -> None:
+def test_anthropic_passthrough_tool_call_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
     result = client.anthropic_message(
         scoped_key,
         ANTHROPIC_PASSTHROUGH_MODEL,
@@ -305,11 +323,17 @@ class TestOpenAIPassthroughPrefix:
         reaches OpenAI's file API instead of 500ing on a provider-name lookup."""
         content = f'{{"marker":"{unique_marker()}"}}\n'.encode()
         uploaded = unwrap(
-            client.openai_passthrough_upload_file(scoped_key, content=content, filename="e2e-passthrough-batch.jsonl")
+            client.openai_passthrough_upload_file(
+                scoped_key, content=content, filename="e2e-passthrough-batch.jsonl"
+            )
         )
-        resources.defer(lambda: client.openai_passthrough_delete_file(scoped_key, uploaded.id))
+        resources.defer(
+            lambda: client.openai_passthrough_delete_file(scoped_key, uploaded.id)
+        )
 
-        assert uploaded.object == "file", f"/openai_passthrough/v1/files did not relay OpenAI's file object: {uploaded}"
+        assert uploaded.object == "file", (
+            f"/openai_passthrough/v1/files did not relay OpenAI's file object: {uploaded}"
+        )
         assert uploaded.purpose == "batch"
         assert uploaded.bytes == len(content)
 
@@ -322,12 +346,16 @@ class TestOpenAIPassthroughPrefix:
             models=(),
         )
     )
-    def test_passthrough_prefix_lists_batches_from_openai(self, client: PassthroughClient, scoped_key: str) -> None:
+    def test_passthrough_prefix_lists_batches_from_openai(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
         """Pins GitHub issue #36086 on the batches route: the dedicated prefix
         relays OpenAI's own batch page instead of dying on the provider lookup."""
         listed = unwrap(client.openai_passthrough_list_batches(scoped_key))
 
-        assert listed.object == "list", f"/openai_passthrough/v1/batches did not relay OpenAI's batch page: {listed}"
+        assert listed.object == "list", (
+            f"/openai_passthrough/v1/batches did not relay OpenAI's batch page: {listed}"
+        )
 
 
 class TestOpenAIPassthroughSpend:
@@ -349,7 +377,9 @@ class TestOpenAIPassthroughSpend:
             mode=Mode.STREAM,
         )
     )
-    def test_streamed_responses_call_logs_its_cost(self, client: PassthroughClient, scoped_key: str) -> None:
+    def test_streamed_responses_call_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
         """Pins GitHub issue #36523: a streamed passthrough Responses call is billed
         under the provider id the caller was served, never a $0 row under a random
         id."""
@@ -367,9 +397,13 @@ class TestOpenAIPassthroughSpend:
             f"the stream never delivered a response.completed frame, so there is no "
             f"provider id to reconcile against: last events {result.stream_events[-3:]}"
         )
-        assert completed.usage is not None, f"the completed response carried no usage to price from: {completed}"
+        assert completed.usage is not None, (
+            f"the completed response carried no usage to price from: {completed}"
+        )
 
-        rows = client.proxy.poll_logs_for_request_id(completed.id, predicate=lambda rows: (rows[0].spend or 0) > 0)
+        rows = client.proxy.poll_logs_for_request_id(
+            completed.id, predicate=lambda rows: (rows[0].spend or 0) > 0
+        )
         assert rows, (
             f"no spend row for the response the customer was served ({completed.id}); "
             "a streamed passthrough call OpenAI bills them for is invisible to the "
@@ -396,14 +430,20 @@ class TestOpenAIPassthroughSpend:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_embeddings_call_logs_its_cost(self, client: PassthroughClient, scoped_key: str) -> None:
+    def test_embeddings_call_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
         """Pins GitHub issue #36646: a passthrough embeddings call writes a priced
         spend row instead of no row at all."""
-        result = client.openai_passthrough_embed(scoped_key, EMBEDDING_MODEL, f"cost this sentence {unique_marker()}")
+        result = client.openai_passthrough_embed(
+            scoped_key, EMBEDDING_MODEL, f"cost this sentence {unique_marker()}"
+        )
         require_successful_call(result)
         assert result.call_id, "embeddings passthrough returned no x-litellm-call-id"
 
-        rows = client.proxy.poll_logs_for_request_id(result.call_id, predicate=lambda rows: (rows[0].spend or 0) > 0)
+        rows = client.proxy.poll_logs_for_request_id(
+            result.call_id, predicate=lambda rows: (rows[0].spend or 0) > 0
+        )
         assert rows, (
             f"no spend row for embeddings call {result.call_id}; the customer is billed "
             "by OpenAI for tokens the gateway never counted against their budget"
@@ -443,7 +483,9 @@ class TestOpenAIProviderPrefixChat:
         completion = ChatResponse.model_validate_json(result.body)
         assert completion.id, f"/openai/v1/chat/completions relayed no completion id: {result.body[:300]}"
         content = (
-            completion.choices[0].message.content if completion.choices and completion.choices[0].message else None
+            completion.choices[0].message.content
+            if completion.choices and completion.choices[0].message
+            else None
         )
         assert content and content.strip(), (
             f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
@@ -517,7 +559,9 @@ class TestOpenAIPassthroughWebsocket:
         """Pins GitHub issue #36088 on the second prefix: /openai/v1/responses upgrades
         as well. A responses.connect socket waits for the client to speak first, so the
         accepted handshake is the whole signal here."""
-        handshake = client.openai_passthrough_websocket(scoped_key, "/openai/v1/responses", first_event_timeout=2.0)
+        handshake = client.openai_passthrough_websocket(
+            scoped_key, "/openai/v1/responses", first_event_timeout=2.0
+        )
 
         assert handshake.rejected_status is None, (
             f"/openai/v1/responses refused the websocket upgrade with HTTP "

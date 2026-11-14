@@ -44,15 +44,15 @@ def _reply(
             }
             all_provider: Final[dict[str, JsonValue]] = {"provider": _PROVIDER}
             first_provider: Final = all_provider if stream_provider_mode == "all" else {}
-            finish_provider: Final = all_provider if stream_provider_mode in ("all", "last") else {}
+            finish_provider: Final = (
+                all_provider if stream_provider_mode in ("all", "last") else {}
+            )
             usage_provider: Final = all_provider if stream_provider_mode == "all" else {}
             chunks: Final[tuple[dict[str, JsonValue], ...]] = (
                 {
                     **common,
                     **first_provider,
-                    "choices": [
-                        {"index": 0, "delta": {"role": "assistant", "content": _ANSWER}, "finish_reason": None}
-                    ],
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": _ANSWER}, "finish_reason": None}],
                 },
                 {
                     **common,
@@ -63,7 +63,8 @@ def _reply(
             )
             return Reply(
                 content_type="text/event-stream",
-                chunks=tuple(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks) + (b"data: [DONE]\n\n",),
+                chunks=tuple(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks)
+                + (b"data: [DONE]\n\n",),
             )
 
         provider: Final[dict[str, JsonValue]] = {"provider": _PROVIDER} if response_provider else {}

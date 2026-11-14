@@ -877,7 +877,9 @@ def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
 def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):
     """The proxy shutdown hook flushes through this, so a span finished just before a
     graceful restart must reach the exporter without waiting for the batch interval."""
-    exporters: Final[list[InMemorySpanExporter]] = []
+    exporters: Final[
+        list[InMemorySpanExporter]
+    ] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())

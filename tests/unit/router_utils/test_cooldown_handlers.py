@@ -78,9 +78,7 @@ def _ctx_double(
     ctx.settings.return_value.allowed_fails_policy = None
     ctx.settings.return_value.allowed_fails_for.return_value = None
     ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
-    ctx.health.return_value.cooldowns = CooldownCache(
-        RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
-    )
+    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
     return ctx
 
 
@@ -369,9 +367,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
     def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
         ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
-        ctx.health.return_value.cooldowns = CooldownCache(
-            store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
-        )
+        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
         return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):

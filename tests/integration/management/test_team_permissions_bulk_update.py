@@ -31,7 +31,9 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # ---------------------------------------------------------------------------
 
 
-async def test_bulk_update_specific_team_only_mutates_listed(gateway_client, db, resources, actors):
+async def test_bulk_update_specific_team_only_mutates_listed(
+    gateway_client, db, resources, actors
+):
     target = await create_scratch_team(
         db,
         team_id=resources.tag("target"),
@@ -59,15 +61,20 @@ async def test_bulk_update_specific_team_only_mutates_listed(gateway_client, db,
     assert resp.status_code == 200, resp.text
     assert resp.json()["teams_updated"] == 1
 
-    target_row = await db.db.litellm_teamtable.find_unique(where={"team_id": target})
-    assert perm in (target_row.team_member_permissions or []), (
-        f"target team did not gain perm; got={target_row.team_member_permissions}"
+    target_row = await db.db.litellm_teamtable.find_unique(
+        where={"team_id": target}
     )
+    assert perm in (
+        target_row.team_member_permissions or []
+    ), f"target team did not gain perm; got={target_row.team_member_permissions}"
 
     for tid, before_perms in before.items():
-        after_row = await db.db.litellm_teamtable.find_unique(where={"team_id": tid})
+        after_row = await db.db.litellm_teamtable.find_unique(
+            where={"team_id": tid}
+        )
         assert list(after_row.team_member_permissions or []) == before_perms, (
-            f"untouched team {tid} mutated: {before_perms} → {list(after_row.team_member_permissions or [])}"
+            f"untouched team {tid} mutated: "
+            f"{before_perms} → {list(after_row.team_member_permissions or [])}"
         )
 
 
@@ -77,7 +84,9 @@ async def test_bulk_update_specific_team_only_mutates_listed(gateway_client, db,
 # ---------------------------------------------------------------------------
 
 
-async def test_bulk_update_specific_team_idempotent(gateway_client, db, resources, actors):
+async def test_bulk_update_specific_team_idempotent(
+    gateway_client, db, resources, actors
+):
     target = await create_scratch_team(
         db,
         team_id=resources.tag("target"),
@@ -101,14 +110,19 @@ async def test_bulk_update_specific_team_idempotent(gateway_client, db, resource
 # ---------------------------------------------------------------------------
 
 
-async def test_bulk_update_unknown_team_id_rejected(gateway_client, db, resources, actors):
+async def test_bulk_update_unknown_team_id_rejected(
+    gateway_client, db, resources, actors
+):
     existing = await create_scratch_team(
         db,
         team_id=resources.tag("real"),
         team_member_permissions=[],
     )
     before = list(
-        (await db.db.litellm_teamtable.find_unique(where={"team_id": existing})).team_member_permissions or []
+        (
+            await db.db.litellm_teamtable.find_unique(where={"team_id": existing})
+        ).team_member_permissions
+        or []
     )
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
@@ -125,10 +139,12 @@ async def test_bulk_update_unknown_team_id_rejected(gateway_client, db, resource
     assert "not found" in resp.text.lower() or "ghost" in resp.text, resp.text
     # Critical: the partial-success regression shape is "real team got
     # mutated before the ghost-id check ran". Re-read and assert it didn't.
-    after_real = await db.db.litellm_teamtable.find_unique(where={"team_id": existing})
-    assert list(after_real.team_member_permissions or []) == before, (
-        "partial mutation: real team changed despite ghost-id rejection"
+    after_real = await db.db.litellm_teamtable.find_unique(
+        where={"team_id": existing}
     )
+    assert (
+        list(after_real.team_member_permissions or []) == before
+    ), "partial mutation: real team changed despite ghost-id rejection"
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +170,9 @@ async def test_bulk_update_unknown_team_id_rejected(gateway_client, db, resource
     ],
     ids=["neither_selector", "both_selectors"],
 )
-async def test_bulk_update_selector_validation(body, expected_substring: str, gateway_client, actors):
+async def test_bulk_update_selector_validation(
+    body, expected_substring: str, gateway_client, actors
+):
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
         "/team/permissions_bulk_update",
@@ -170,15 +188,23 @@ async def test_bulk_update_selector_validation(body, expected_substring: str, ga
 # ---------------------------------------------------------------------------
 
 
-async def test_bulk_update_apply_to_all_mutates_every_team(gateway_client, db, resources, actors):
+async def test_bulk_update_apply_to_all_mutates_every_team(
+    gateway_client, db, resources, actors
+):
     # Two resources teams so we can assert "every" includes our own targets.
-    a = await create_scratch_team(db, team_id=resources.tag("a"), team_member_permissions=[])
-    b = await create_scratch_team(db, team_id=resources.tag("b"), team_member_permissions=["other"])
+    a = await create_scratch_team(
+        db, team_id=resources.tag("a"), team_member_permissions=[]
+    )
+    b = await create_scratch_team(
+        db, team_id=resources.tag("b"), team_member_permissions=["other"]
+    )
     perm = "/key/health"  # distinct from the specific-team scenarios above
 
     all_teams = await db.db.litellm_teamtable.find_many()
     snapshot = {t.team_id: list(t.team_member_permissions or []) for t in all_teams}
-    expected_updates: Final = sum(1 for permissions in snapshot.values() if perm not in permissions)
+    expected_updates: Final = sum(
+        1 for permissions in snapshot.values() if perm not in permissions
+    )
 
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(

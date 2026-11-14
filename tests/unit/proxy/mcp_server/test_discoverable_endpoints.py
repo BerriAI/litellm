@@ -774,7 +774,9 @@ async def test_token_endpoint_forwards_code_verifier():
     # Mock the async httpx client with AsyncMock for async methods
     from unittest.mock import AsyncMock
 
-    with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
         mock_async_client = MagicMock()
         # Use AsyncMock for the async post method
         mock_async_client.post = AsyncMock(return_value=mock_response)
@@ -2802,7 +2804,9 @@ async def test_token_endpoint_respects_x_forwarded_proto():
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
         mock_get_client.return_value = mock_async_client
 
         await token_endpoint(
@@ -3097,7 +3101,9 @@ async def test_token_endpoint_respects_x_forwarded_host():
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
         mock_get_client.return_value = mock_async_client
 
         await token_endpoint(
@@ -4174,7 +4180,9 @@ async def test_authorize_root_resolves_single_oauth2_server():
     mock_request.headers = {}
 
     try:
-        with patch("litellm.proxy.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        with patch(
+            "litellm.proxy.mcp_server.discoverable_endpoints.encrypt_value_helper"
+        ) as mock_encrypt:
             mock_encrypt.return_value = "mocked_encrypted_state"
 
             # Call /authorize WITHOUT mcp_server_name, with dummy_client as client_id
@@ -4311,7 +4319,9 @@ async def test_token_root_resolves_single_oauth2_server():
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     try:
-        with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
             mock_get_client.return_value = mock_async_client
 
             # Call /token WITHOUT mcp_server_name
@@ -5177,7 +5187,9 @@ async def test_token_endpoint_refresh_token_grant():
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
         mock_get_client.return_value = mock_async_client
 
         response = await token_endpoint(
@@ -5348,7 +5360,9 @@ async def test_authorize_endpoint_accepts_ipv4_loopback_range_and_ipv6_full_form
         "http://[0:0:0:0:0:0:0:1]:3000/cb",
         "http://localhost:3000/cb",
     ):
-        with patch("litellm.proxy.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        with patch(
+            "litellm.proxy.mcp_server.discoverable_endpoints.encrypt_value_helper"
+        ) as mock_encrypt:
             mock_encrypt.return_value = "mocked_encrypted_state"
             response = await authorize(
                 request=mock_request,
@@ -5883,9 +5897,7 @@ async def _bridge_register_response(
         ),
         patch(
             "litellm.proxy.utils.get_prisma_client_or_throw",
-            **(
-                {"return_value": MagicMock()} if database_connected else {"side_effect": HTTPException(status_code=500)}
-            ),
+            **({"return_value": MagicMock()} if database_connected else {"side_effect": HTTPException(status_code=500)}),
         ),
     ):
         response = await register_client_with_server(
@@ -8793,7 +8805,9 @@ async def test_token_endpoint_uses_client_secret_basic_when_configured():
     }
     mock_response.raise_for_status = MagicMock()
 
-    with patch("litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
         mock_async_client = MagicMock()
         mock_async_client.post = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_async_client
@@ -12085,8 +12099,12 @@ def _native_client_app(monkeypatch):
     async def fake_lookup(user_id):
         return (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam(team_id="team-b"))
 
-    monkeypatch.setattr("litellm.proxy.mcp_server.discoverable_endpoints.mint_proxy_credential", fake_mint)
-    monkeypatch.setattr("litellm.proxy.mcp_server.discoverable_endpoints.lookup_consent_teams", fake_lookup)
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.discoverable_endpoints.mint_proxy_credential", fake_mint
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.discoverable_endpoints.lookup_consent_teams", fake_lookup
+    )
     global_mcp_server_manager.registry.clear()
     app = FastAPI()
     app.include_router(router)
@@ -12116,16 +12134,12 @@ def test_gateway_authorize_requires_live_browser_session(
     client, _, _ = _native_client_app(monkeypatch)
     database: Final = browser_session_database
     assert database.row is not None
-    database.row = (
-        None
-        if session_state == "revoked"
-        else database.row.model_copy(
-            update={
-                "blocked": session_state == "blocked",
-                "expires": datetime(2000 if session_state == "expired" else 2099, 1, 1, tzinfo=timezone.utc),
-                "user_id": "another-user" if session_state == "wrong_owner" else "u1",
-            }
-        )
+    database.row = None if session_state == "revoked" else database.row.model_copy(
+        update={
+            "blocked": session_state == "blocked",
+            "expires": datetime(2000 if session_state == "expired" else 2099, 1, 1, tzinfo=timezone.utc),
+            "user_id": "another-user" if session_state == "wrong_owner" else "u1",
+        }
     )
     cookie: Final = _browser_session_cookie(
         monkeypatch, "u1", session_key="" if session_state == "missing_key" else "sk-browser-session"
@@ -12672,7 +12686,9 @@ def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
     async def fake_reload(user_id: str):
         return None
 
-    monkeypatch.setattr("litellm.proxy.mcp_server.discoverable_endpoints.reload_active_user_by_id", fake_reload)
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.discoverable_endpoints.reload_active_user_by_id", fake_reload
+    )
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
@@ -15650,16 +15666,10 @@ def test_root_metadata_is_the_gateways_own_and_lists_the_jwt_bearer_grant_when_i
     request.base_url = "https://llm.example.com/"
     request.headers = {}
     with (
-        patch.object(
-            discoverable_endpoints, "jwt_bearer_available", return_value=available
-        ),  # test-quality-ok: deployment gate seam
-        patch.object(
-            discoverable_endpoints, "token_exchange_available", return_value=True
-        ),  # test-quality-ok: deployment gate seam
+        patch.object(discoverable_endpoints, "jwt_bearer_available", return_value=available),  # test-quality-ok: deployment gate seam
+        patch.object(discoverable_endpoints, "token_exchange_available", return_value=True),  # test-quality-ok: deployment gate seam
     ):
-        document = discoverable_endpoints._build_oauth_authorization_server_response(
-            request=request, mcp_server_name=None
-        )
+        document = discoverable_endpoints._build_oauth_authorization_server_response(request=request, mcp_server_name=None)
     assert document["issuer"] == "https://llm.example.com"
     assert document["token_endpoint"] == "https://llm.example.com/token"
     assert (JWT_BEARER_GRANT_TYPE in document["grant_types_supported"]) is available
@@ -15687,19 +15697,11 @@ def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateway
     request.headers = {}
     try:
         with (
-            patch.object(
-                discoverable_endpoints, "jwt_bearer_available", return_value=True
-            ),  # test-quality-ok: deployment gate seam
-            patch.object(
-                discoverable_endpoints, "token_exchange_available", return_value=True
-            ),  # test-quality-ok: deployment gate seam
-            patch.object(
-                global_mcp_server_manager, "get_mcp_server_by_name", return_value=server
-            ),  # test-quality-ok: resolver seam
+            patch.object(discoverable_endpoints, "jwt_bearer_available", return_value=True),  # test-quality-ok: deployment gate seam
+            patch.object(discoverable_endpoints, "token_exchange_available", return_value=True),  # test-quality-ok: deployment gate seam
+            patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=server),  # test-quality-ok: resolver seam
         ):
-            document = discoverable_endpoints._build_oauth_authorization_server_response(
-                request=request, mcp_server_name=None
-            )
+            document = discoverable_endpoints._build_oauth_authorization_server_response(request=request, mcp_server_name=None)
     finally:
         global_mcp_server_manager.registry.clear()
     assert document["token_endpoint"] == "https://llm.example.com/test_oauth/token"

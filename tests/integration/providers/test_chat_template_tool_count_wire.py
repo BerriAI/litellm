@@ -50,9 +50,7 @@ _SCHEMA: Final[dict[str, JsonValue]] = {
     "required": ["query"],
 }
 _FUNCTION: Final[dict[str, JsonValue]] = {"name": "lookup", "parameters": _SCHEMA}
-_OPENAI_NAMESPACE: Final = (
-    "namespace functions {\n\ntype lookup = (_: {\nquery: string,\n}) => any;\n\n} // namespace functions"
-)
+_OPENAI_NAMESPACE: Final = "namespace functions {\n\ntype lookup = (_: {\nquery: string,\n}) => any;\n\n} // namespace functions"
 _ANTHROPIC_TOOL: Final[dict[str, JsonValue]] = {"name": "lookup", "input_schema": _SCHEMA}
 _OPENAI_TOOL: Final[dict[str, JsonValue]] = {"type": "function", "function": _FUNCTION}
 _RESPONSES_TOOL: Final[dict[str, JsonValue]] = {"type": "function", **_FUNCTION}
@@ -229,10 +227,7 @@ def test_messages_count_tokens_counts_qwen3_5_tools_the_way_its_chat_template_re
 def test_messages_count_tokens_skips_web_search_and_counts_unmapped_tool_keys_for_deepseek_v4(
     gateway: Gateway,
 ) -> None:
-    deferred_function: Final[dict[str, JsonValue]] = {
-        "name": "lookup",
-        "parameters": {**_SCHEMA, "defer_loading": True},
-    }
+    deferred_function: Final[dict[str, JsonValue]] = {"name": "lookup", "parameters": {**_SCHEMA, "defer_loading": True}}
     with wire_server(_completion) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "count", _DEEPSEEK_V4, wire.url)
         plain: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, (_ANTHROPIC_TOOL,)))

@@ -5,6 +5,7 @@ This module tests that tool metadata is preserved when creating prefixed tools,
 which is critical for ChatGPT UI widget rendering.
 """
 
+
 import pytest
 
 # Add the parent directory to the path so we can import litellm
@@ -45,7 +46,9 @@ class TestMCPMetadataPreservation:
         )
 
         # Create prefixed tools
-        prefixed_tools = manager._create_prefixed_tools([tool_with_metadata], mock_server, add_prefix=True)
+        prefixed_tools = manager._create_prefixed_tools(
+            [tool_with_metadata], mock_server, add_prefix=True
+        )
 
         # Verify
         assert len(prefixed_tools) == 1
@@ -63,7 +66,7 @@ class TestMCPMetadataPreservation:
 
         # Check that other fields are preserved
         assert prefixed_tool.description == "Display a greeting widget"
-        assert prefixed_tool.input_schema == {"type": "object", "properties": {}}
+        assert prefixed_tool.input_schema== {"type": "object", "properties": {}}
 
 
 if __name__ == "__main__":

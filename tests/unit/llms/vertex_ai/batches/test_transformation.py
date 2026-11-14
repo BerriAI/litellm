@@ -524,9 +524,7 @@ def test_is_vertex_anthropic_batch_model(model: str, expected: bool):
 
 
 def test_claude_output_row_is_costed_from_anthropic_usage_and_its_own_model():
-    def cost_calculator(
-        usage, model, custom_llm_provider=None, model_info=None, vertex_location=None
-    ) -> tuple[float, float]:
+    def cost_calculator(usage, model, custom_llm_provider=None, model_info=None, vertex_location=None) -> tuple[float, float]:
         if model != "claude-sonnet-4-6":
             return 0.0, 0.0
         return usage.prompt_tokens * 0.001, usage.completion_tokens * 0.002

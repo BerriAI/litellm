@@ -39,7 +39,9 @@ def _call(client: BudgetClient, key: str, model: str):
         mode=Mode.NONSTREAM,
     )
 )
-def test_model_max_budget_isolates_per_model(client: BudgetClient, resources: ResourceManager) -> None:
+def test_model_max_budget_isolates_per_model(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     key = client.generate_key(
         model_max_budget={
             **model_budget(CAPPED_MODEL, 1e-6),
@@ -76,7 +78,9 @@ def test_model_max_budget_isolates_per_model(client: BudgetClient, resources: Re
         mode=Mode.NONSTREAM,
     )
 )
-def test_end_user_model_max_budget_enforces_per_model_rpm(client: BudgetClient, resources: ResourceManager) -> None:
+def test_end_user_model_max_budget_enforces_per_model_rpm(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """A per-model rpm_limit on an end-user budget must actually throttle.
 
     model_max_budget takes an rpm_limit alongside the spend cap, letting a
@@ -85,7 +89,11 @@ def test_end_user_model_max_budget_enforces_per_model_rpm(client: BudgetClient, 
     already works, so this pins the end-user gap.
     """
     budget_id = client.create_budget(
-        model_max_budget={FREE_MODEL: ModelBudgetEntry(budget_limit=1000.0, time_period="1d", rpm_limit=1)}
+        model_max_budget={
+            FREE_MODEL: ModelBudgetEntry(
+                budget_limit=1000.0, time_period="1d", rpm_limit=1
+            )
+        }
     )
     resources.defer(lambda: client.delete_budget(budget_id))
 
@@ -96,10 +104,14 @@ def test_end_user_model_max_budget_enforces_per_model_rpm(client: BudgetClient, 
     key = client.generate_key()
     resources.defer(lambda: client.delete_key(key))
 
-    first = client.chat(key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer)
+    first = client.chat(
+        key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
+    )
     require_successful_call(first)
 
-    blocked = client.chat(key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer)
+    blocked = client.chat(
+        key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
+    )
     assert blocked.status_code == 429, (
         "the second call under an end-user model rpm_limit of 1 must be blocked; "
         f"got {blocked.status_code}: {blocked.body[:300]}"

@@ -47,7 +47,9 @@ def _resolve_base() -> str:
 
 FAKE_OPENAI_API_BASE: Final = _resolve_base()
 
-_SERVER_SCRIPT: Final = Path(__file__).resolve().parent / "_fake_openai_endpoint_server.py"
+_SERVER_SCRIPT: Final = (
+    Path(__file__).resolve().parent / "_fake_openai_endpoint_server.py"
+)
 _HEALTH_TIMEOUT_SECONDS: Final = 30.0
 
 
@@ -65,7 +67,9 @@ def _wait_until_healthy(base: str) -> None:
         if _is_healthy(base):
             return
         time.sleep(0.5)
-    raise RuntimeError(f"fake OpenAI endpoint at {base} did not become healthy within {_HEALTH_TIMEOUT_SECONDS}s")
+    raise RuntimeError(
+        f"fake OpenAI endpoint at {base} did not become healthy within {_HEALTH_TIMEOUT_SECONDS}s"
+    )
 
 
 @lru_cache(maxsize=1)

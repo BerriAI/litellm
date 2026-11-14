@@ -83,8 +83,7 @@ def test_function_tool_shapes_map_to_vertex_declarations(tool: JsonValue) -> Non
 
 def test_long_anthropic_tool_name_is_truncated_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 70
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"name": name, "description": "Look up a value", "input_schema": _SCHEMA}],
     )
@@ -106,8 +105,7 @@ def test_long_anthropic_tool_name_is_truncated_for_vertex() -> None:
 
 def test_64_character_anthropic_tool_name_is_unchanged_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 53
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"name": name, "input_schema": _SCHEMA}],
     )
@@ -118,8 +116,7 @@ def test_64_character_anthropic_tool_name_is_unchanged_for_vertex() -> None:
 
 def test_long_openai_chat_tool_name_is_unchanged_for_vertex() -> None:
     name: Final = "mcp__docs__" + "a" * 70
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"type": "function", "function": {"name": name, "parameters": _SCHEMA}}],
     )
@@ -129,8 +126,7 @@ def test_long_openai_chat_tool_name_is_unchanged_for_vertex() -> None:
 
 
 def test_unknown_tools_are_omitted() -> None:
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=None,
         tools=[{"type": "web_search_preview"}, {"type": "computer_use"}],
     )
@@ -140,8 +136,7 @@ def test_unknown_tools_are_omitted() -> None:
 
 
 def test_text_block_system_instruction_keeps_one_part_per_block() -> None:
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=[{"type": "text", "text": "First instruction."}, {"type": "text", "text": "Second instruction."}],
         tools=None,
     )
@@ -151,17 +146,14 @@ def test_text_block_system_instruction_keeps_one_part_per_block() -> None:
 
 
 def test_string_system_instruction_maps_to_one_part() -> None:
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash", system="Follow this instruction.", tools=None
-    )
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", system="Follow this instruction.", tools=None)
 
     assert isinstance(context, VertexGeminiCountContext)
     assert context.system_instruction == {"parts": ({"text": "Follow this instruction."},)}
 
 
 def test_non_text_system_block_returns_an_error_value() -> None:
-    context: Final = vertex_gemini_count_context(
-        model="gemini-2.5-flash",
+    context: Final = vertex_gemini_count_context(model="gemini-2.5-flash", 
         system=[{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
         tools=None,
     )

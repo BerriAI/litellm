@@ -130,7 +130,8 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
 
             if mapping and claimed:
                 rows: Final = read_rows(
-                    'SELECT models, access_group_ids FROM "LiteLLM_VerificationToken" WHERE user_id=%s AND team_id=%s',
+                    'SELECT models, access_group_ids FROM "LiteLLM_VerificationToken" '
+                    'WHERE user_id=%s AND team_id=%s',
                     (subject, team_id),
                 )
                 assert len(rows) == 1, rows

@@ -93,10 +93,7 @@ def test_llm_call_span_cost_breakdown():
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
 
 
-_PRICE_LOOKUP_FAILED: Final = {
-    "error_str": "This model isn't mapped yet. model=openai/unpriced-model",
-    "traceback_str": "",
-}
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
 
 
 @pytest.mark.parametrize(

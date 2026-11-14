@@ -50,18 +50,35 @@ def _capture_request(url: str, headers: dict, data) -> dict:
 
 
 def test_get_bedrock_route_mantle():
-    assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
+    assert (
+        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
+        == "mantle"
+    )
 
 
 def test_get_bedrock_route_mantle_does_not_match_other_routes():
-    assert BedrockModelInfo.get_bedrock_route("anthropic.claude-3-sonnet-20240229-v1:0") != "mantle"
-    assert BedrockModelInfo.get_bedrock_route("converse/anthropic.claude-3-sonnet") != "mantle"
+    assert (
+        BedrockModelInfo.get_bedrock_route("anthropic.claude-3-sonnet-20240229-v1:0")
+        != "mantle"
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("converse/anthropic.claude-3-sonnet")
+        != "mantle"
+    )
 
 
 def test_explicit_mantle_route_flag():
-    assert BedrockModelInfo._explicit_mantle_route("mantle/anthropic.claude-mythos-preview") is True
+    assert (
+        BedrockModelInfo._explicit_mantle_route(
+            "mantle/anthropic.claude-mythos-preview"
+        )
+        is True
+    )
     assert BedrockModelInfo._explicit_mantle_route("anthropic.claude-3-sonnet") is False
-    assert BedrockModelInfo._explicit_mantle_route("converse/anthropic.claude-3-sonnet") is False
+    assert (
+        BedrockModelInfo._explicit_mantle_route("converse/anthropic.claude-3-sonnet")
+        is False
+    )
 
 
 def test_mantle_url_construction():
@@ -94,7 +111,9 @@ def test_get_bedrock_chat_config_returns_mantle_config():
 
 
 def test_get_bedrock_provider_config_for_messages_api_mantle():
-    config = BedrockModelInfo.get_bedrock_provider_config_for_messages_api("mantle/anthropic.claude-mythos-preview")
+    config = BedrockModelInfo.get_bedrock_provider_config_for_messages_api(
+        "mantle/anthropic.claude-mythos-preview"
+    )
     assert isinstance(config, AmazonMantleMessagesConfig)
 
 
@@ -116,6 +135,7 @@ _VPC_ENDPOINT = "https://vpce-0a1b2c3d.bedrock-mantle.us-gov-west-1.vpce.amazona
 @pytest.fixture(autouse=True)
 def no_ambient_mantle_api_base(monkeypatch):
     monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
 
 
 def test_mantle_chat_url_honors_api_base_host():
@@ -665,7 +685,8 @@ _ANTHROPIC_SSE_EVENTS = (
 
 def _anthropic_sse_bytes() -> bytes:
     return "".join(
-        f"event: {event}\ndata: {json.dumps(payload)}\n\n" for event, payload in _ANTHROPIC_SSE_EVENTS
+        f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+        for event, payload in _ANTHROPIC_SSE_EVENTS
     ).encode()
 
 

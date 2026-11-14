@@ -202,7 +202,9 @@ class TestRunAsyncBilling:
         assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.064)
 
     def test_transient_poll_failure_keeps_polling(self, tinyfish_env):
-        fake_client = _FakeClient(payloads=[(500, {}), {"run_id": "run-9", "status": "COMPLETED", "num_of_steps": 3}])
+        fake_client = _FakeClient(
+            payloads=[(500, {}), {"run_id": "run-9", "status": "COMPLETED", "num_of_steps": 3}]
+        )
 
         run = asyncio.run(
             TinyFishPassthroughLoggingHandler._poll_until_terminal("run-9", fake_client, poll_interval_seconds=0.0)
@@ -263,9 +265,7 @@ class TestRunCostStatusGate:
 
 class TestRunIdFromSseFrames:
     def test_finds_run_id_in_first_frame(self):
-        frames = (
-            b'data: {"run_id": "run-7", "event": "INITIALIZED"}\n\ndata: {"run_id": "run-7", "event": "ACTION"}\n\n'
-        )
+        frames = b'data: {"run_id": "run-7", "event": "INITIALIZED"}\n\ndata: {"run_id": "run-7", "event": "ACTION"}\n\n'
         assert run_id_from_sse_frames(frames) == "run-7"
 
     def test_finds_run_id_in_a_frame_whose_json_holds_unicode_line_separators(self) -> None:
@@ -312,7 +312,6 @@ class TestStartSseRunBilling:
 
     def test_flag_defaults_to_not_spawned(self):
         assert not sse_poller_spawned(_make_logging_obj())
-
     def test_collected_chunks_price_via_run_fetch(self, tinyfish_env):
         logging_obj = _make_logging_obj()
         chunks = [

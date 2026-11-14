@@ -23,7 +23,9 @@ def use_local_model_cost_map():
 
     original_model_cost = litellm.model_cost
     litellm.model_cost = json.loads(
-        files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
+        files("litellm")
+        .joinpath("model_prices_and_context_window_backup.json")
+        .read_text(encoding="utf-8")
     )
     litellm.get_model_info.cache_clear()
     publish(litellm.model_cost)

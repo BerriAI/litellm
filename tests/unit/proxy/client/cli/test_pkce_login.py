@@ -600,7 +600,9 @@ def test_fresh_api_key_refreshes_near_expiry_and_saves_before_returning():
 
 
 @pytest.mark.parametrize(("seconds_left", "refreshes"), [(200, True), (600, False)])
-def test_fresh_api_key_refreshes_exactly_when_is_cli_token_fresh_stops_calling_the_key_fresh(seconds_left, refreshes):
+def test_fresh_api_key_refreshes_exactly_when_is_cli_token_fresh_stops_calling_the_key_fresh(
+    seconds_left, refreshes
+):
     """`lite up` and `lite auth print-token` ask `is_cli_token_fresh` and then `fresh_api_key`; a key
     the first calls stale that the second would not renew left `lite up` refusing a renewable login."""
     record = {**STORED, "expires_at": time.time() + seconds_left}
@@ -641,9 +643,7 @@ def test_fresh_api_key_reports_why_a_renewal_failed_unless_a_sibling_rotated_fir
     assert _fresh(STORED, lambda _: None, failing, now=lambda: 999_950.0, warn=warnings.append) == "sk-cli-old"
     assert _fresh(STORED, lambda _: None, failing, now=lambda: 1_000_001.0, warn=warnings.append) is None
     assert warnings == ["Could not renew the key: token request failed with 503: temporarily_unavailable"] * 2
-    sibling = _fresh(
-        STORED, lambda _: None, failing, reload=lambda: rotated, now=lambda: 1_000_001.0, warn=warnings.append
-    )
+    sibling = _fresh(STORED, lambda _: None, failing, reload=lambda: rotated, now=lambda: 1_000_001.0, warn=warnings.append)
     assert sibling == "sk-cli-sibling"
     assert len(warnings) == 2
 

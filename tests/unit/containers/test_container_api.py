@@ -65,7 +65,9 @@ class TestContainerAPI:
             "container_create_handler",
             return_value=mock_response,
         ):
-            response = create_container(name="Test Container", custom_llm_provider="openai")
+            response = create_container(
+                name="Test Container", custom_llm_provider="openai"
+            )
 
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_123456"
@@ -142,7 +144,9 @@ class TestContainerAPI:
             "container_create_handler",
             return_value=mock_response,
         ):
-            response = await acreate_container(name="Async Test Container", custom_llm_provider="openai")
+            response = await acreate_container(
+                name="Async Test Container", custom_llm_provider="openai"
+            )
 
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_async_123"
@@ -205,7 +209,9 @@ class TestContainerAPI:
             has_more=False,
         )
 
-        with patch.object(base_llm_http_handler, "container_list_handler", return_value=mock_response):
+        with patch.object(
+            base_llm_http_handler, "container_list_handler", return_value=mock_response
+        ):
             response = await alist_containers(custom_llm_provider="openai")
 
             assert isinstance(response, ContainerListResponse)
@@ -218,7 +224,9 @@ class TestContainerAPI:
             ("cntr_different_id", "Another Container", "stopped", "openai"),
         ],
     )
-    def test_retrieve_container_basic(self, container_id, container_name, status, provider):
+    def test_retrieve_container_basic(
+        self, container_id, container_name, status, provider
+    ):
         """Test basic container retrieval functionality.
 
         This test verifies that:
@@ -244,7 +252,9 @@ class TestContainerAPI:
             return_value=mock_response,
         ) as mock_method:
             # Act: Call retrieve_container
-            response = retrieve_container(container_id=container_id, custom_llm_provider=provider)
+            response = retrieve_container(
+                container_id=container_id, custom_llm_provider=provider
+            )
 
             # Assert: Verify the handler was called correctly
             mock_method.assert_called_once()
@@ -349,7 +359,9 @@ class TestContainerAPI:
             "container_retrieve_handler",
             return_value=mock_response,
         ):
-            response = await aretrieve_container(container_id=container_id, custom_llm_provider="openai")
+            response = await aretrieve_container(
+                container_id=container_id, custom_llm_provider="openai"
+            )
 
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
@@ -357,14 +369,18 @@ class TestContainerAPI:
     def test_delete_container_basic(self):
         """Test basic container deletion functionality."""
         container_id = "cntr_delete_test"
-        mock_response = DeleteContainerResult(id=container_id, object="container.deleted", deleted=True)
+        mock_response = DeleteContainerResult(
+            id=container_id, object="container.deleted", deleted=True
+        )
 
         with patch.object(
             base_llm_http_handler,
             "container_delete_handler",
             return_value=mock_response,
         ):
-            response = delete_container(container_id=container_id, custom_llm_provider="openai")
+            response = delete_container(
+                container_id=container_id, custom_llm_provider="openai"
+            )
 
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
@@ -375,14 +391,18 @@ class TestContainerAPI:
     async def test_adelete_container_basic(self):
         """Test basic async container deletion functionality."""
         container_id = "cntr_async_delete"
-        mock_response = DeleteContainerResult(id=container_id, object="container.deleted", deleted=True)
+        mock_response = DeleteContainerResult(
+            id=container_id, object="container.deleted", deleted=True
+        )
 
         with patch.object(
             base_llm_http_handler,
             "container_delete_handler",
             return_value=mock_response,
         ):
-            response = await adelete_container(container_id=container_id, custom_llm_provider="openai")
+            response = await adelete_container(
+                container_id=container_id, custom_llm_provider="openai"
+            )
 
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
@@ -396,7 +416,9 @@ class TestContainerAPI:
             side_effect=Exception("API Error"),
         ):
             with pytest.raises(litellm.APIConnectionError):
-                create_container(name="Error Test Container", custom_llm_provider="openai")
+                create_container(
+                    name="Error Test Container", custom_llm_provider="openai"
+                )
 
     def test_container_provider_config_retrieval(self):
         """Test that provider config is retrieved correctly."""
@@ -410,15 +432,21 @@ class TestContainerAPI:
             name="Config Test",
         )
 
-        with patch("litellm.containers.main.ProviderConfigManager") as mock_config_manager:
-            mock_config_manager.get_provider_container_config.return_value = OpenAIContainerConfig()
+        with patch(
+            "litellm.containers.main.ProviderConfigManager"
+        ) as mock_config_manager:
+            mock_config_manager.get_provider_container_config.return_value = (
+                OpenAIContainerConfig()
+            )
 
             with patch.object(
                 base_llm_http_handler,
                 "container_create_handler",
                 return_value=mock_response,
             ):
-                response = create_container(name="Config Test", custom_llm_provider="openai")
+                response = create_container(
+                    name="Config Test", custom_llm_provider="openai"
+                )
 
                 # Verify provider config was requested
                 mock_config_manager.get_provider_container_config.assert_called_once()
@@ -450,7 +478,9 @@ class TestContainerAPI:
             new_callable=AsyncMock,
             return_value=mock_response,
         ):
-            result = await router.acreate_container(name="Test Container", custom_llm_provider="openai")
+            result = await router.acreate_container(
+                name="Test Container", custom_llm_provider="openai"
+            )
 
             assert result.id == "cntr_test"
             assert result.name == "Test Container"

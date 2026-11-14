@@ -115,16 +115,11 @@ def mock_user_api_key_auth():
 
 @pytest.mark.parametrize("path", ("/customer/new", "/customer/update"))
 def test_customer_rejects_an_attached_budget_with_windows(
-    mock_prisma_client: MagicMock,
-    mock_user_api_key_auth: object,
-    path: str,
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, path: str,
 ) -> None:
-    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate(
-        {
-            "budget_id": "combined",
-            "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
-        }
-    )
+    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate({
+        "budget_id": "combined", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
+    })
     response: Final = client.post(path, json={"user_id": "customer", "budget_id": "combined"})
     assert response.status_code == 400, response.text
 

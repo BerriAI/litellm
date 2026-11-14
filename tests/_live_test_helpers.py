@@ -12,6 +12,7 @@ def _skip_live_prompt_caching_test():
         pytest.skip("Live prompt-caching E2E tests cannot run under VCR replay")
 
 
+
 class TogetherCostEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
@@ -24,7 +25,9 @@ class TogetherCostEntry(BaseModel):
     supports_response_schema: bool | None = None
 
 
-def cheapest_together_chat_model(*, function_calling: bool = False, response_schema: bool = False) -> str:
+def cheapest_together_chat_model(
+    *, function_calling: bool = False, response_schema: bool = False
+) -> str:
     import litellm
 
     today = date.today().isoformat()

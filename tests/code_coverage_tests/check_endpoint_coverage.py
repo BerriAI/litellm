@@ -75,7 +75,9 @@ def extract_endpoints_from_sidebars() -> Dict[str, str]:
 
     # Pattern 1: Categories with labels at the top level (8 spaces indent)
     # Example:  "        {type: "category", label: "/a2a - A2A Agent Gateway""
-    category_pattern = r'^\s{8}\{\s*\n\s{10}type:\s*"category",\s*\n\s{10}label:\s*"([^"]+)"'
+    category_pattern = (
+        r'^\s{8}\{\s*\n\s{10}type:\s*"category",\s*\n\s{10}label:\s*"([^"]+)"'
+    )
     for match in re.finditer(category_pattern, section, re.MULTILINE):
         label = match.group(1)
         # Skip utility categories
@@ -100,7 +102,9 @@ def load_provider_endpoints_file() -> Dict:
     file_path = repo_root / "provider_endpoints_support.json"
 
     if not file_path.exists():
-        print(f"❌ ERROR: Could not find provider_endpoints_support.json at {file_path}")
+        print(
+            f"❌ ERROR: Could not find provider_endpoints_support.json at {file_path}"
+        )
         sys.exit(1)
 
     with open(file_path, "r") as f:
@@ -136,7 +140,9 @@ def check_provider_endpoint_keys(data: Dict) -> List[str]:
     providers = data.get("providers", {})
 
     for provider_name, provider_data in providers.items():
-        if "endpoints" in provider_data and isinstance(provider_data["endpoints"], dict):
+        if "endpoints" in provider_data and isinstance(
+            provider_data["endpoints"], dict
+        ):
             provider_endpoint_keys.update(provider_data["endpoints"].keys())
 
     # Get all endpoint definitions
@@ -177,7 +183,9 @@ def check_unused_endpoints(data: Dict) -> List[Tuple[str, str]]:
     # Collect all endpoint keys used by providers
     used_keys = set()
     for provider_data in providers.values():
-        if "endpoints" in provider_data and isinstance(provider_data["endpoints"], dict):
+        if "endpoints" in provider_data and isinstance(
+            provider_data["endpoints"], dict
+        ):
             used_keys.update(provider_data["endpoints"].keys())
 
     # Find unused endpoints (excluding special ones)
@@ -198,7 +206,9 @@ def check_unused_endpoints(data: Dict) -> List[Tuple[str, str]]:
 
 def main():
     """Main function to validate endpoint coverage."""
-    print("🔍 Checking endpoint coverage between sidebars.js and provider_endpoints_support.json...")
+    print(
+        "🔍 Checking endpoint coverage between sidebars.js and provider_endpoints_support.json..."
+    )
 
     has_errors = False
 
@@ -210,7 +220,9 @@ def main():
     print("\n📖 Test 1: Checking endpoints from sidebars.js...")
     sidebar_endpoints = extract_endpoints_from_sidebars()
     print(f"✓ Found {len(sidebar_endpoints)} endpoints in sidebars.js")
-    print(f"✓ Found {len(defined_endpoints)} endpoint definitions in provider_endpoints_support.json")
+    print(
+        f"✓ Found {len(defined_endpoints)} endpoint definitions in provider_endpoints_support.json"
+    )
 
     # Check for missing endpoints
     missing_endpoints = []
@@ -232,9 +244,7 @@ def main():
     # Report missing endpoints from sidebars
     if missing_endpoints:
         has_errors = True
-        error_msg = (
-            "\n❌ ERROR: The following endpoints are in sidebars.js but missing from provider_endpoints_support.json:\n"
-        )
+        error_msg = "\n❌ ERROR: The following endpoints are in sidebars.js but missing from provider_endpoints_support.json:\n"
         error_msg += "=" * 70 + "\n"
 
         for key, label in missing_endpoints:
@@ -261,7 +271,9 @@ def main():
 
         print(error_msg)
     else:
-        print(f"✅ All {len(sidebar_endpoints)} endpoints from sidebars.js are defined!")
+        print(
+            f"✅ All {len(sidebar_endpoints)} endpoints from sidebars.js are defined!"
+        )
 
     # Test 2: Check that all provider endpoint keys have provider_json_field entries
     print("\n📋 Test 2: Checking provider endpoint keys...")
@@ -326,7 +338,9 @@ def main():
         error_msg += "\n" + "=" * 70 + "\n"
         error_msg += f"\n💡 These {len(unused_endpoints)} endpoint(s) are defined but not used by any provider.\n"
         error_msg += "   Either:\n"
-        error_msg += "   1. Add the endpoint to relevant providers' 'endpoints' objects, OR\n"
+        error_msg += (
+            "   1. Add the endpoint to relevant providers' 'endpoints' objects, OR\n"
+        )
         error_msg += "   2. Remove the endpoint definition if it's no longer needed\n"
 
         print(error_msg)

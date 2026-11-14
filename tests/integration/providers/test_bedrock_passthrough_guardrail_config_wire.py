@@ -508,9 +508,7 @@ def test_deployment_without_a_guardrail_forwards_the_caller_guardrail_sent_as_x_
     marker: Final = uuid.uuid4().hex
     runtime: Final = rig.runtime(monkeypatch, _CALLER_INVOKE_HEADERS)
 
-    outcome: Final = _send(
-        runtime, action, rig.unguarded_model, f"{marker} say {_BLOCKED_WORD}", caller_guardrail=False
-    )
+    outcome: Final = _send(runtime, action, rig.unguarded_model, f"{marker} say {_BLOCKED_WORD}", caller_guardrail=False)
 
     assert outcome == Outcome(_BLOCKED_TEXT, intervened=True, traced_guardrail=None), outcome
     (request,) = rig.received(rig.wire, marker)

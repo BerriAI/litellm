@@ -186,7 +186,6 @@ async def test_sdk_rejection_sync_logging_allows_concurrent_ping(
     loop: Final = asyncio.get_running_loop()
     ping_responses: Final = SimpleQueue[EmptyResult]()
     async with Client(server, mode="legacy") as client:
-
         def sync_failure(
             kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
@@ -327,7 +326,6 @@ def _call_tool_params(name, arguments=None):
 
     return CallToolRequestParams(name=name, arguments=arguments)
 
-
 class TestMCPLogger(CustomLogger):
     def __init__(self):
         self.standard_logging_payload = None
@@ -365,7 +363,9 @@ def _set_authorized_user(server_ids):
 async def test_mcp_cost_tracking():
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
-    mock_result = CallToolResult(content=[TextContent(type="text", text="Test response")], isError=False)
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Test response")], isError=False
+    )
 
     # Create a mock MCPClient
     mock_client = AsyncMock()
@@ -426,6 +426,7 @@ async def test_mcp_cost_tracking():
                 local_mcp_server_manager,
             ),
         ):
+
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
@@ -434,10 +435,12 @@ async def test_mcp_cost_tracking():
             )
 
             # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = "zapier_gmail_server"
-            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["zapier_gmail_server-add_tools"] = (
-                "zapier_gmail_server"
-            )
+            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+                "add_tools"
+            ] = "zapier_gmail_server"
+            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+                "zapier_gmail_server-add_tools"
+            ] = "zapier_gmail_server"
 
             # Call mcp tool
             response = await mcp_server_tool_call(
@@ -449,7 +452,9 @@ async def test_mcp_cost_tracking():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload = (
-                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
             )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
 
@@ -459,7 +464,9 @@ async def test_mcp_cost_tracking():
             if isinstance(response, CallToolResult):
                 response_list = response.content
             else:
-                response_list = list(response)  # Convert iterable to list for backward compatibility
+                response_list = list(
+                    response
+                )  # Convert iterable to list for backward compatibility
             assert len(response_list) == 1
             assert isinstance(response_list[0], TextContent)
             assert response_list[0].text == "Test response"
@@ -470,7 +477,9 @@ async def test_mcp_cost_tracking():
             ######
             # verify response cost is 1.2 as set on default_cost_per_query
             # Critical - the cost is tracked as $1.2
-            assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
+            assert (
+                logged_standard_logging_payload is not None
+            ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.2
 
 
@@ -479,7 +488,9 @@ async def test_mcp_cost_tracking_per_tool():
     """Test that individual tool costs are tracked correctly when tool_name_to_cost_per_query is configured"""
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
-    mock_result = CallToolResult(content=[TextContent(type="text", text="Test response")], isError=False)
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Test response")], isError=False
+    )
 
     # Create a mock MCPClient
     mock_client = AsyncMock()
@@ -542,10 +553,18 @@ async def test_mcp_cost_tracking_per_tool():
         await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["expensive_tool"] = "test_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["test_server-expensive_tool"] = "test_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["cheap_tool"] = "test_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["test_server-cheap_tool"] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "expensive_tool"
+        ] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "test_server-expensive_tool"
+        ] = "test_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["cheap_tool"] = (
+            "test_server"
+        )
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "test_server-cheap_tool"
+        ] = "test_server"
 
         # Patch the global manager in both modules where it's used
         with (
@@ -558,6 +577,7 @@ async def test_mcp_cost_tracking_per_tool():
                 local_mcp_server_manager,
             ),
         ):
+
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
@@ -575,12 +595,18 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_1 = (
-                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
             )
-            print("logged_standard_logging_payload_1", logged_standard_logging_payload_1)
+            print(
+                "logged_standard_logging_payload_1", logged_standard_logging_payload_1
+            )
 
             # Verify expensive tool cost
-            assert logged_standard_logging_payload_1 is not None, "Standard logging payload 1 should not be None"
+            assert (
+                logged_standard_logging_payload_1 is not None
+            ), "Standard logging payload 1 should not be None"
             assert logged_standard_logging_payload_1["response_cost"] == 5.0
 
             # Reset logger for second test
@@ -597,12 +623,18 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_2 = (
-                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
             )
-            print("logged_standard_logging_payload_2", logged_standard_logging_payload_2)
+            print(
+                "logged_standard_logging_payload_2", logged_standard_logging_payload_2
+            )
 
             # Verify cheap tool cost
-            assert logged_standard_logging_payload_2 is not None, "Standard logging payload 2 should not be None"
+            assert (
+                logged_standard_logging_payload_2 is not None
+            ), "Standard logging payload 2 should not be None"
             assert logged_standard_logging_payload_2["response_cost"] == 0.1
 
             # Add basic response assertions
@@ -637,7 +669,9 @@ class MCPLoggerHook(TestMCPLogger):
 async def test_mcp_tool_call_hook():
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
-    mock_result = CallToolResult(content=[TextContent(type="text", text="Test response")], isError=False)
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Test response")], isError=False
+    )
 
     # Create a mock MCPClient
     mock_client = AsyncMock()
@@ -683,10 +717,12 @@ async def test_mcp_tool_call_hook():
         await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = "zapier_gmail_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["zapier_gmail_server-add_tools"] = (
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = (
             "zapier_gmail_server"
         )
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "zapier_gmail_server-add_tools"
+        ] = "zapier_gmail_server"
 
         # Patch the global manager in both modules where it's used
         with (
@@ -699,6 +735,7 @@ async def test_mcp_tool_call_hook():
                 local_mcp_server_manager,
             ),
         ):
+
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
@@ -717,14 +754,18 @@ async def test_mcp_tool_call_hook():
 
             # check logged standard logging payload
             logged_standard_logging_payload = (
-                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
             )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
-            assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
+            assert (
+                logged_standard_logging_payload is not None
+            ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
 
 
-_QUEUED_LOGGING_OUTLIVES_TEST = """
+_QUEUED_LOGGING_OUTLIVES_TEST = '''
 import time
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -747,7 +788,7 @@ async def test_2_starts_after_the_previous_tests_logging_ran():
     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
     await GLOBAL_LOGGING_WORKER.flush()
     assert [t < started_at for t in ran_at] == [True, False]
-"""
+'''
 
 
 def test_logging_queued_by_one_test_is_drained_before_the_next(tmp_path: Path):

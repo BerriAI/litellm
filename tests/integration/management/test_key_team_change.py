@@ -93,7 +93,9 @@ async def test_key_team_change_accepted(gateway_client, db, resources, actors):
     )
     assert resp.status_code == 200, resp.text
 
-    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key_cleartext)})
+    row = await db.db.litellm_verificationtoken.find_unique(
+        where={"token": hash_token(key_cleartext)}
+    )
     assert row is not None
     assert row.team_id == target_team, "key did not move to target team"
 
@@ -112,7 +114,9 @@ async def test_key_team_change_accepted(gateway_client, db, resources, actors):
         "key_owner_not_team_member",
     ],
 )
-async def test_key_team_change_rejected_guards(scenario: str, gateway_client, db, resources, actors):
+async def test_key_team_change_rejected_guards(
+    scenario: str, gateway_client, db, resources, actors
+):
     owner_id = actors.keys[Actor.OWNER].user_id
 
     team_kwargs: Dict[str, Any] = {
@@ -164,10 +168,12 @@ async def test_key_team_change_rejected_guards(scenario: str, gateway_client, db
         403,
     ), f"{scenario}: expected 400/403, got {resp.status_code}: {resp.text}"
 
-    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key_cleartext)})
+    row = await db.db.litellm_verificationtoken.find_unique(
+        where={"token": hash_token(key_cleartext)}
+    )
     assert row is not None
     assert row.team_id == actors.team_alpha_id, (
-        f"{scenario}: row team_id mutated despite rejection — got {row.team_id!r}"
+        f"{scenario}: row team_id mutated despite rejection — " f"got {row.team_id!r}"
     )
 
 
@@ -179,7 +185,9 @@ async def test_key_team_change_rejected_guards(scenario: str, gateway_client, db
 # ---------------------------------------------------------------------------
 
 
-async def test_key_team_change_rejected_initiator_not_admin(gateway_client, db, resources, actors):
+async def test_key_team_change_rejected_initiator_not_admin(
+    gateway_client, db, resources, actors
+):
     owner_id = actors.keys[Actor.OWNER].user_id
     target_team = await create_scratch_team(
         db,
@@ -214,6 +222,8 @@ async def test_key_team_change_rejected_initiator_not_admin(gateway_client, db, 
         401,
         403,
     ), f"expected 401/403, got {resp.status_code}: {resp.text}"
-    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key_cleartext)})
+    row = await db.db.litellm_verificationtoken.find_unique(
+        where={"token": hash_token(key_cleartext)}
+    )
     assert row is not None
     assert row.team_id == actors.team_alpha_id, "row team_id mutated despite rejection"

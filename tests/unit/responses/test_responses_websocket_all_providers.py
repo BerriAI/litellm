@@ -64,12 +64,16 @@ class TestResponsesAPIWebSocketSupport:
     def test_openai_supports_native_websocket(self):
         """OpenAI should support native websocket"""
         config = OpenAIResponsesAPIConfig()
-        assert config.supports_native_websocket() is True, "OpenAI should support native websocket"
+        assert (
+            config.supports_native_websocket() is True
+        ), "OpenAI should support native websocket"
 
     def test_azure_supports_native_websocket(self):
         """Azure should support native websocket"""
         config = AzureOpenAIResponsesAPIConfig()
-        assert config.supports_native_websocket() is True, "Azure should support native websocket"
+        assert (
+            config.supports_native_websocket() is True
+        ), "Azure should support native websocket"
 
     def test_azure_websocket_url_uses_v1_path(self):
         """Azure WebSocket URL must use /openai/v1/responses (no api-version)"""
@@ -100,7 +104,7 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_azure_websocket_url_requires_api_base(self):
         config = AzureOpenAIResponsesAPIConfig()
-        with pytest.raises(ValueError, match="api_base is required for Azure WebSocket"):
+        with pytest.raises(ValueError, match='api_base is required for Azure WebSocket'):
             config.get_websocket_url(api_base=None, litellm_params={})
 
     def test_azure_model_not_in_websocket_url(self):
@@ -110,7 +114,9 @@ class TestResponsesAPIWebSocketSupport:
     def test_openai_default_websocket_url_converts_scheme(self):
         """The base get_websocket_url default converts the HTTP endpoint to wss://"""
         config = OpenAIResponsesAPIConfig()
-        url = config.get_websocket_url(api_base="https://api.openai.com/v1", litellm_params={})
+        url = config.get_websocket_url(
+            api_base="https://api.openai.com/v1", litellm_params={}
+        )
         assert url == "wss://api.openai.com/v1/responses"
 
     def test_openai_model_in_websocket_url_default(self):
@@ -118,59 +124,79 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_fireworks_ai_uses_managed_websocket(self):
         """Fireworks AI should use managed websocket handler"""
-        assert FireworksAIResponsesAPIConfig().supports_native_websocket() is False, (
-            "Fireworks AI should use managed websocket handler"
-        )
+        assert (
+            FireworksAIResponsesAPIConfig().supports_native_websocket() is False
+        ), "Fireworks AI should use managed websocket handler"
 
     def test_xai_uses_managed_websocket(self):
         """XAI should use managed websocket handler"""
         config = XAIResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "XAI should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "XAI should use managed websocket handler"
 
     def test_github_copilot_uses_managed_websocket(self):
         """GitHub Copilot should use managed websocket handler"""
         config = GithubCopilotResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "GitHub Copilot should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "GitHub Copilot should use managed websocket handler"
 
     def test_chatgpt_uses_managed_websocket(self):
         """ChatGPT should use managed websocket handler"""
         config = ChatGPTResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "ChatGPT should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "ChatGPT should use managed websocket handler"
 
     def test_litellm_proxy_uses_managed_websocket(self):
         """LiteLLM Proxy should use managed websocket handler"""
         config = LiteLLMProxyResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "LiteLLM Proxy should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "LiteLLM Proxy should use managed websocket handler"
 
     def test_volcengine_uses_managed_websocket(self):
         """VolcEngine should use managed websocket handler"""
         config = VolcEngineResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "VolcEngine should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "VolcEngine should use managed websocket handler"
 
     def test_manus_uses_managed_websocket(self):
         """Manus should use managed websocket handler"""
         config = ManusResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "Manus should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "Manus should use managed websocket handler"
 
     def test_perplexity_uses_managed_websocket(self):
         """Perplexity should use managed websocket handler"""
         config = PerplexityResponsesConfig()
-        assert config.supports_native_websocket() is False, "Perplexity should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "Perplexity should use managed websocket handler"
 
     def test_databricks_uses_managed_websocket(self):
         """Databricks should use managed websocket handler"""
         config = DatabricksResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "Databricks should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "Databricks should use managed websocket handler"
 
     def test_openrouter_uses_managed_websocket(self):
         """OpenRouter should use managed websocket handler"""
         config = OpenRouterResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "OpenRouter should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "OpenRouter should use managed websocket handler"
 
     def test_hosted_vllm_uses_managed_websocket(self):
         """Hosted vLLM should use managed websocket handler"""
         config = HostedVLLMResponsesAPIConfig()
-        assert config.supports_native_websocket() is False, "Hosted vLLM should use managed websocket handler"
+        assert (
+            config.supports_native_websocket() is False
+        ), "Hosted vLLM should use managed websocket handler"
 
 
 class TestManagedWebSocketHandlerIntegration:
@@ -359,10 +385,7 @@ class TestManagedWebSocketHandlerIntegration:
                     "response": {
                         "id": "resp_1",
                         "output": [
-                            {
-                                "type": "message",
-                                "content": [{"type": "output_text", "text": "Sent to <EMAIL_ADDRESS_1>"}],
-                            }
+                            {"type": "message", "content": [{"type": "output_text", "text": "Sent to <EMAIL_ADDRESS_1>"}]}
                         ],
                     },
                 }
@@ -508,7 +531,9 @@ class TestManagedWebSocketHandlerIntegration:
         assert second_call_input == expected_input, terminal_type
 
     @pytest.mark.asyncio
-    async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(self, monkeypatch):
+    async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
+        self, monkeypatch
+    ):
         """
         A generate=false warmup frame (codex prewarm) carries empty input that
         managed HTTP providers reject. It must not call the provider, and should
@@ -562,7 +587,9 @@ class TestManagedWebSocketHandlerIntegration:
 
         assert called is False
         assert mock_websocket.send_text.call_count == 2
-        events = [json.loads(call.args[0]) for call in mock_websocket.send_text.call_args_list]
+        events = [
+            json.loads(call.args[0]) for call in mock_websocket.send_text.call_args_list
+        ]
         assert events[0]["type"] == "response.created"
         assert events[0]["response"]["status"] == "in_progress"
         assert events[1]["type"] == "response.completed"
@@ -571,7 +598,9 @@ class TestManagedWebSocketHandlerIntegration:
         assert events[1]["response"]["model"] == "gpt-5.5-mantle"
 
     @pytest.mark.asyncio
-    async def test_warmup_previous_response_id_not_forwarded_to_provider(self, monkeypatch):
+    async def test_warmup_previous_response_id_not_forwarded_to_provider(
+        self, monkeypatch
+    ):
         import json
         from unittest.mock import AsyncMock, MagicMock
 
@@ -622,7 +651,9 @@ class TestManagedWebSocketHandlerIntegration:
                 }
             )
         )
-        warmup_id = json.loads(mock_websocket.send_text.call_args_list[1].args[0])["response"]["id"]
+        warmup_id = json.loads(mock_websocket.send_text.call_args_list[1].args[0])[
+            "response"
+        ]["id"]
 
         await handler._process_response_create(
             json.dumps(
@@ -696,7 +727,9 @@ class TestChunkTransformation:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["type"] == "message"
         assert messages[0]["role"] == "assistant"
@@ -725,7 +758,9 @@ class TestChunkTransformation:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "Part 1. Part 2."
 
@@ -750,7 +785,9 @@ class TestChunkTransformation:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["type"] == "function_call"
         assert messages[0]["id"] == "call_123"
@@ -781,7 +818,9 @@ class TestChunkTransformation:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "Valid text"
 
@@ -808,7 +847,9 @@ class TestChunkTransformation:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "Valid"
 
@@ -900,10 +941,14 @@ class TestUpdateProxyRequest:
             },
         }
 
-        ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "anthropic/claude-sonnet-4-5")
+        ManagedResponsesWebSocketHandler._update_proxy_request(
+            call_kwargs, "anthropic/claude-sonnet-4-5"
+        )
 
         assert "litellm_params" not in call_kwargs
-        assert call_kwargs["proxy_server_request"]["body"]["model"] == ("anthropic/claude-sonnet-4-5")
+        assert call_kwargs["proxy_server_request"]["body"]["model"] == (
+            "anthropic/claude-sonnet-4-5"
+        )
         assert call_kwargs["proxy_server_request"]["body"]["input"] == "hello"
 
     def test_proxy_server_request_matches_metadata(self):
@@ -918,7 +963,10 @@ class TestUpdateProxyRequest:
 
         ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "gpt-4o")
 
-        assert call_kwargs["proxy_server_request"] == call_kwargs["litellm_metadata"]["proxy_server_request"]
+        assert (
+            call_kwargs["proxy_server_request"]
+            == call_kwargs["litellm_metadata"]["proxy_server_request"]
+        )
 
 
 class TestWebSocketEventTypes:
@@ -1158,7 +1206,9 @@ class TestMultiTurnSessionHistory:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 3
         assert messages[0]["content"][0]["text"] == "First message"
         assert messages[1]["type"] == "function_call"
@@ -1210,7 +1260,9 @@ class TestMultiTurnSessionHistory:
             },
         }
 
-        messages = ManagedResponsesWebSocketHandler._extract_output_messages(completed_event)
+        messages = ManagedResponsesWebSocketHandler._extract_output_messages(
+            completed_event
+        )
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "Part 1Part 2"
 
@@ -1225,7 +1277,9 @@ class TestMultiTurnSessionHistory:
             "response": {"id": "resp_abc123", "status": "completed"},
         }
 
-        response_id = ManagedResponsesWebSocketHandler._extract_response_id(completed_event)
+        response_id = ManagedResponsesWebSocketHandler._extract_response_id(
+            completed_event
+        )
         assert response_id == "resp_abc123"
 
     def test_extract_response_id_handles_missing_response(self):
@@ -1236,7 +1290,9 @@ class TestMultiTurnSessionHistory:
 
         completed_event = {"type": "response.completed"}
 
-        response_id = ManagedResponsesWebSocketHandler._extract_response_id(completed_event)
+        response_id = ManagedResponsesWebSocketHandler._extract_response_id(
+            completed_event
+        )
         assert response_id is None
 
 
@@ -1414,7 +1470,9 @@ class TestWebSocketProjectQuotaEnforcement:
             quota_callbacks=[quota_callback],
         )
 
-        allowed = await handler._enforce_or_reject_frame(json.dumps({"type": "response.create", "input": "hi"}))
+        allowed = await handler._enforce_or_reject_frame(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
 
         assert allowed is False
         mock_backend_ws.send.assert_not_called()
@@ -1530,7 +1588,9 @@ class TestWebSocketProjectQuotaEnforcement:
             quota_callbacks=[quota_callback],
         )
 
-        allowed = await handler._enforce_or_reject_frame(json.dumps({"type": "response.create", "input": "hi"}))
+        allowed = await handler._enforce_or_reject_frame(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
 
         assert allowed is True
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
@@ -2113,7 +2173,10 @@ class TestWebSocketTurnAdmission:
         await drain_logging_tasks()
 
         assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
-        assert usage.get_local(_TURNED_ON) == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert (
+            usage.get_local(_TURNED_ON)
+            == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2178,7 +2241,10 @@ class TestWebSocketTurnAdmission:
         )
 
         assert usage.get_local(_OPENED_ON) == _OTHER_USAGE
-        assert usage.get_local(_TURNED_ON) == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        assert (
+            usage.get_local(_TURNED_ON)
+            == _OTHER_USAGE + first_turn_tokens + 2 * _OUTPUT_TOKENS_PER_TURN
+        )
 
     @pytest.mark.asyncio
     async def test_managed_relay_sends_the_provider_only_the_metadata_each_turn_carries(
@@ -2305,6 +2371,7 @@ class TestWebSocketTurnAdmission:
             if json.loads(call.args[0]).get("type") == "error"
         ]
         assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
+
 
     @pytest.mark.asyncio
     @_TURN_REFUSALS
@@ -2499,6 +2566,7 @@ class TestWebSocketTurnAdmission:
             (429, "rate_limit_exceeded"),
         ]
 
+
     @pytest.mark.asyncio
     async def test_native_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(self):
         from unittest.mock import AsyncMock
@@ -2680,7 +2748,6 @@ class TestWebSocketTurnAdmission:
         assert _errors(websocket) == [(500, {"type": "server_error", "message": "custom check failed"})]
         assert websocket.close_code is None
 
-
 def _deployment_defaults():
     from types import MappingProxyType
 
@@ -2744,9 +2811,7 @@ class TestNativeWebSocketDeploymentDefaults:
     ):
         from litellm.responses.main import _build_responses_websocket_request_defaults
 
-        defaults = _build_responses_websocket_request_defaults(
-            {"model": "gpt-5-pro", "reasoning_effort": reasoning_effort}
-        )
+        defaults = _build_responses_websocket_request_defaults({"model": "gpt-5-pro", "reasoning_effort": reasoning_effort})
 
         assert dict(defaults.fill_missing) == {"reasoning": {"effort": reasoning_effort}}
 
@@ -3025,13 +3090,17 @@ class TestNativeWebSocketGuardrails:
             authorized_model="authorized-deployment",
         )
 
-        flat_message = await handler._mask_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+        flat_message = await handler._mask_response_create(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
         nested_message = await handler._mask_response_create(
             json.dumps({"type": "response.create", "response": {"input": "hi"}})
         )
 
         assert json.loads(flat_message)["model"] == "authorized-deployment"
-        assert json.loads(nested_message)["response"]["model"] == "authorized-deployment"
+        assert (
+            json.loads(nested_message)["response"]["model"] == "authorized-deployment"
+        )
 
     @pytest.mark.asyncio
     async def test_completed_event_with_null_response_passes_through(self):
@@ -3079,7 +3148,9 @@ class TestNativeWebSocketGuardrails:
             def _unmask_pii_text(self, text, pii_tokens):
                 return text
 
-            async def check_pii(self, text, output_parse_pii, presidio_config, request_data):
+            async def check_pii(
+                self, text, output_parse_pii, presidio_config, request_data
+            ):
                 self.check_pii_calls.append(text)
                 return text
 
@@ -3099,11 +3170,21 @@ class TestNativeWebSocketGuardrails:
         logging_obj.dispatch_success_handlers = AsyncMock()
         logging_obj.copy_for_new_call.return_value = logging_obj
 
-        delta_event = json.dumps({"type": "response.output_text.delta", "delta": "alice@example.com"})
+        delta_event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "alice@example.com"}
+        )
         completed_event = json.dumps(
             {
                 "type": "response.completed",
-                "response": {"output": [{"content": [{"type": "output_text", "text": "alice@example.com"}]}]},
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {"type": "output_text", "text": "alice@example.com"}
+                            ]
+                        }
+                    ]
+                },
             }
         )
 
@@ -3142,7 +3223,9 @@ class TestNativeWebSocketGuardrails:
             def _unmask_pii_text(self, text, pii_tokens):
                 return text
 
-            async def check_pii(self, text, output_parse_pii, presidio_config, request_data):
+            async def check_pii(
+                self, text, output_parse_pii, presidio_config, request_data
+            ):
                 self.check_pii_calls.append(text)
                 return text.replace("alice@example.com", "<EMAIL_ADDRESS>")
 
@@ -3163,7 +3246,9 @@ class TestNativeWebSocketGuardrails:
         logging_obj.copy_for_new_call.return_value = logging_obj
 
         done_events = [
-            json.dumps({"type": "response.output_text.done", "text": "alice@example.com"}),
+            json.dumps(
+                {"type": "response.output_text.done", "text": "alice@example.com"}
+            ),
             json.dumps(
                 {
                     "type": "response.content_part.done",
@@ -3175,7 +3260,9 @@ class TestNativeWebSocketGuardrails:
                     "type": "response.output_item.done",
                     "item": {
                         "type": "message",
-                        "content": [{"type": "output_text", "text": "alice@example.com"}],
+                        "content": [
+                            {"type": "output_text", "text": "alice@example.com"}
+                        ],
                     },
                 }
             ),
@@ -3183,7 +3270,15 @@ class TestNativeWebSocketGuardrails:
         completed_event = json.dumps(
             {
                 "type": "response.completed",
-                "response": {"output": [{"content": [{"type": "output_text", "text": "alice@example.com"}]}]},
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {"type": "output_text", "text": "alice@example.com"}
+                            ]
+                        }
+                    ]
+                },
             }
         )
 
@@ -3278,9 +3373,7 @@ class TestNativeWebSocketGuardrailMasking:
         )
         handler.logging_obj.copy_for_new_call.return_value = handler.logging_obj
 
-        await handler._forward_guarded_frame(
-            json.dumps({"type": "response.create", "input": "email alice@example.com"})
-        )
+        await handler._forward_guarded_frame(json.dumps({"type": "response.create", "input": "email alice@example.com"}))
 
         assert json.loads(backend_ws.send.await_args.args[0])["input"] == "email <EMAIL_ADDRESS_1>"
         reply = json.dumps({"type": "response.output_text.delta", "delta": "Sent to <EMAIL_ADDRESS_1>"})
@@ -3296,13 +3389,17 @@ class TestNativeWebSocketGuardrailMasking:
         )
 
         masked = await handler._mask_response_create(
-            json.dumps({"type": "response.create", "input": "email alice@example.com now"})
+            json.dumps(
+                {"type": "response.create", "input": "email alice@example.com now"}
+            )
         )
         obj = json.loads(masked)
 
         assert obj["model"] == "auth-model"
         assert obj["input"] == "email <EMAIL_ADDRESS_1> now"
-        assert handler.request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
 
     @pytest.mark.asyncio
     async def test_mask_response_create_list_content_string(self):
@@ -3377,7 +3474,9 @@ class TestNativeWebSocketGuardrailMasking:
         obj = json.loads(masked)
 
         assert obj["input"][0]["output"] == "tool returned <EMAIL_ADDRESS_1>"
-        assert handler.request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
 
     @pytest.mark.asyncio
     async def test_mask_response_create_function_call_output_blocks(self):
@@ -3446,7 +3545,9 @@ class TestNativeWebSocketGuardrailMasking:
         obj = json.loads(masked)
 
         assert obj["instructions"] == "reply to <EMAIL_ADDRESS_1>"
-        assert handler.request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
 
     @pytest.mark.asyncio
     async def test_mask_response_create_nested_instructions(self):
@@ -3467,7 +3568,9 @@ class TestNativeWebSocketGuardrailMasking:
         obj = json.loads(masked)
 
         assert obj["response"]["instructions"] == "email <EMAIL_ADDRESS_1>"
-        assert handler.request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
 
     @pytest.mark.asyncio
     async def test_mask_response_create_non_create_unchanged(self):
@@ -3483,7 +3586,9 @@ class TestNativeWebSocketGuardrailMasking:
 
     @pytest.mark.asyncio
     async def test_mask_response_create_invalid_json_unchanged(self):
-        handler = _make_streaming(request_data={}, guardrail_callbacks=[_FakeWSGuardrail()])
+        handler = _make_streaming(
+            request_data={}, guardrail_callbacks=[_FakeWSGuardrail()]
+        )
         assert await handler._mask_response_create("not json {{{") == "not json {{{"
 
     @pytest.mark.asyncio
@@ -3543,39 +3648,60 @@ class TestNativeWebSocketGuardrailMasking:
     async def test_unmask_response_event_completed(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
-            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}},
+            request_data={
+                "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}
+            },
             guardrail_callbacks=[guardrail],
         )
 
         event = json.dumps(
             {
                 "type": "response.completed",
-                "response": {"output": [{"content": [{"type": "output_text", "text": "to <EMAIL_ADDRESS_1>"}]}]},
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {"type": "output_text", "text": "to <EMAIL_ADDRESS_1>"}
+                            ]
+                        }
+                    ]
+                },
             }
         )
         unmasked = json.loads(handler._unmask_response_event(event))
-        assert unmasked["response"]["output"][0]["content"][0]["text"] == "to alice@example.com"
+        assert (
+            unmasked["response"]["output"][0]["content"][0]["text"]
+            == "to alice@example.com"
+        )
 
     @pytest.mark.asyncio
     async def test_unmask_response_event_delta(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
-            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}},
+            request_data={
+                "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}
+            },
             guardrail_callbacks=[guardrail],
         )
 
-        event = json.dumps({"type": "response.output_text.delta", "delta": "<EMAIL_ADDRESS_1>"})
+        event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "<EMAIL_ADDRESS_1>"}
+        )
         unmasked = json.loads(handler._unmask_response_event(event))
         assert unmasked["delta"] == "alice@example.com"
 
     def test_unmask_response_event_no_tokens_unchanged(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(request_data={}, guardrail_callbacks=[guardrail])
-        event = json.dumps({"type": "response.output_text.delta", "delta": "<EMAIL_ADDRESS_1>"})
+        event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "<EMAIL_ADDRESS_1>"}
+        )
         assert handler._unmask_response_event(event) == event
 
     def test_unmask_response_event_no_guardrails_unchanged(self):
-        handler = _make_streaming(request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "x"}}})
+        handler = _make_streaming(
+            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "x"}}}
+        )
         event = json.dumps({"type": "response.completed", "response": {}})
         assert handler._unmask_response_event(event) == event
 
@@ -3596,7 +3722,9 @@ class TestNativeWebSocketGuardrailMasking:
 
     def test_unmask_response_event_malformed_output_items_unchanged(self):
         handler = _make_streaming(
-            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}},
+            request_data={
+                "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}
+            },
             guardrail_callbacks=[_FakeWSGuardrail()],
         )
         event = json.dumps(
@@ -3618,13 +3746,17 @@ class TestNativeWebSocketGuardrailMasking:
             request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "x"}}},
             guardrail_callbacks=[_FakeWSGuardrail()],
         )
-        event = json.dumps({"type": "response.in_progress", "delta": "<EMAIL_ADDRESS_1>"})
+        event = json.dumps(
+            {"type": "response.in_progress", "delta": "<EMAIL_ADDRESS_1>"}
+        )
         assert handler._unmask_response_event(event) == event
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_event(self):
         guardrail = _FakeWSGuardrail()
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[guardrail])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
 
         event = json.dumps(
             {
@@ -3644,12 +3776,17 @@ class TestNativeWebSocketGuardrailMasking:
             }
         )
         masked = json.loads(await handler._mask_response_completed(event))
-        assert masked["response"]["output"][0]["content"][0]["text"] == "contact <EMAIL_ADDRESS_1>"
+        assert (
+            masked["response"]["output"][0]["content"][0]["text"]
+            == "contact <EMAIL_ADDRESS_1>"
+        )
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_masks_function_call_arguments(self):
         guardrail = _FakeWSGuardrail()
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[guardrail])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
 
         event = json.dumps(
             {
@@ -3666,12 +3803,17 @@ class TestNativeWebSocketGuardrailMasking:
             }
         )
         masked = json.loads(await handler._mask_response_completed(event))
-        assert masked["response"]["output"][0]["arguments"] == '{"to": "<EMAIL_ADDRESS_1>"}'
+        assert (
+            masked["response"]["output"][0]["arguments"]
+            == '{"to": "<EMAIL_ADDRESS_1>"}'
+        )
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_masks_reasoning_summary(self):
         guardrail = _FakeWSGuardrail()
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[guardrail])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
 
         event = json.dumps(
             {
@@ -3692,30 +3834,43 @@ class TestNativeWebSocketGuardrailMasking:
             }
         )
         masked = json.loads(await handler._mask_response_completed(event))
-        assert masked["response"]["output"][0]["summary"][0]["text"] == "user is <EMAIL_ADDRESS_1>"
+        assert (
+            masked["response"]["output"][0]["summary"][0]["text"]
+            == "user is <EMAIL_ADDRESS_1>"
+        )
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_delta_unchanged(self):
         guardrail = _FakeWSGuardrail()
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[guardrail])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[guardrail]
+        )
 
-        event = json.dumps({"type": "response.output_text.delta", "delta": "alice@example.com"})
+        event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "alice@example.com"}
+        )
         assert await handler._mask_response_completed(event) == event
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_no_guardrails_unchanged(self):
         handler = _make_streaming(request_data={})
-        event = json.dumps({"type": "response.output_text.delta", "delta": "alice@example.com"})
+        event = json.dumps(
+            {"type": "response.output_text.delta", "delta": "alice@example.com"}
+        )
         assert await handler._mask_response_completed(event) == event
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_invalid_json_unchanged(self):
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()]
+        )
         assert await handler._mask_response_completed("not json {{{") == "not json {{{"
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_malformed_unchanged(self):
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()]
+        )
         event = json.dumps(
             {
                 "type": "response.completed",
@@ -3732,7 +3887,9 @@ class TestNativeWebSocketGuardrailMasking:
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_non_dict_response_unchanged(self):
-        handler = _make_streaming(request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()])
+        handler = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()]
+        )
         event = json.dumps({"type": "response.completed", "response": ["bad"]})
         assert await handler._mask_response_completed(event) == event
 
@@ -3746,7 +3903,9 @@ class TestNativeWebSocketGuardrailMasking:
         websocket = MagicMock()
         websocket.receive_text = AsyncMock(
             side_effect=[
-                json.dumps({"type": "response.create", "input": "ping alice@example.com"}),
+                json.dumps(
+                    {"type": "response.create", "input": "ping alice@example.com"}
+                ),
                 Exception("stop"),
             ]
         )
@@ -3755,7 +3914,9 @@ class TestNativeWebSocketGuardrailMasking:
             websocket=websocket,
             backend_ws=backend_ws,
             request_data={},
-            first_message=json.dumps({"type": "response.create", "input": "alice@example.com"}),
+            first_message=json.dumps(
+                {"type": "response.create", "input": "alice@example.com"}
+            ),
             guardrail_callbacks=[guardrail],
             authorized_model="auth-model",
         )
@@ -3769,7 +3930,9 @@ class TestNativeWebSocketGuardrailMasking:
         second_sent = json.loads(backend_ws.send.await_args_list[1][0][0])
         assert second_sent["model"] == "auth-model"
         assert second_sent["input"] == "ping <EMAIL_ADDRESS_1>"
-        assert handler.request_data["metadata"]["pii_tokens"] == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+        assert handler.request_data["metadata"]["pii_tokens"] == {
+            "<EMAIL_ADDRESS_1>": "alice@example.com"
+        }
 
     @pytest.mark.asyncio
     async def test_backend_to_client_suppresses_deltas_and_masks_completed(self):
@@ -3783,7 +3946,9 @@ class TestNativeWebSocketGuardrailMasking:
         backend_ws = MagicMock()
         backend_ws.recv = AsyncMock(
             side_effect=[
-                json.dumps({"type": "response.output_text.delta", "delta": "alice@example.com"}),
+                json.dumps(
+                    {"type": "response.output_text.delta", "delta": "alice@example.com"}
+                ),
                 json.dumps(
                     {
                         "type": "response.completed",
@@ -3821,7 +3986,10 @@ class TestNativeWebSocketGuardrailMasking:
         websocket.send_text.assert_awaited_once()
         forwarded = json.loads(websocket.send_text.await_args[0][0])
         assert forwarded["type"] == "response.completed"
-        assert forwarded["response"]["output"][0]["content"][0]["text"] == "contact <EMAIL_ADDRESS_1>"
+        assert (
+            forwarded["response"]["output"][0]["content"][0]["text"]
+            == "contact <EMAIL_ADDRESS_1>"
+        )
 
     @pytest.mark.asyncio
     async def test_backend_to_client_suppresses_function_call_arguments_done(self):
@@ -3878,7 +4046,10 @@ class TestNativeWebSocketGuardrailMasking:
         sent_payload = websocket.send_text.await_args[0][0]
         forwarded = json.loads(sent_payload)
         assert forwarded["type"] == "response.completed"
-        assert forwarded["response"]["output"][0]["arguments"] == '{"to": "<EMAIL_ADDRESS_1>"}'
+        assert (
+            forwarded["response"]["output"][0]["arguments"]
+            == '{"to": "<EMAIL_ADDRESS_1>"}'
+        )
         assert "alice@example.com" not in sent_payload
 
     @pytest.mark.asyncio
@@ -4004,7 +4175,10 @@ class TestNativeWebSocketGuardrailMasking:
         sent_payload = websocket.send_text.await_args[0][0]
         forwarded = json.loads(sent_payload)
         assert forwarded["type"] == "response.completed"
-        assert forwarded["response"]["output"][0]["summary"][0]["text"] == "user is <EMAIL_ADDRESS_1>"
+        assert (
+            forwarded["response"]["output"][0]["summary"][0]["text"]
+            == "user is <EMAIL_ADDRESS_1>"
+        )
         assert "alice@example.com" not in sent_payload
 
 
@@ -4280,9 +4454,7 @@ class TestResponsesWebSocketCredentials:
             )
 
         sent_types: Final = [json.loads(call.args[0]).get("type") for call in websocket.send_text.await_args_list]
-        assert chat_completions.called, (
-            f"the request never reached {api_base}/chat/completions, client saw {sent_types}"
-        )
+        assert chat_completions.called, f"the request never reached {api_base}/chat/completions, client saw {sent_types}"
         assert chat_completions.calls.last.request.headers["Authorization"] == f"Bearer {expected_key}"
         assert "response.completed" in sent_types
 
@@ -4340,7 +4512,9 @@ class TestNativeWebSocketUrlConstruction:
         from urllib.parse import parse_qs, urlparse
 
         qs = parse_qs(urlparse(captured_urls[0]).query)
-        assert qs.get("model") == ["gpt-4o-mini"], f"Expected model in URL, got: {captured_urls[0]}"
+        assert qs.get("model") == [
+            "gpt-4o-mini"
+        ], f"Expected model in URL, got: {captured_urls[0]}"
 
     @pytest.mark.asyncio
     async def test_ws_url_preserves_existing_params_and_adds_model(self):
@@ -4361,7 +4535,9 @@ class TestNativeWebSocketUrlConstruction:
 
         mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
         mock_config.supports_native_websocket.return_value = True
-        mock_config.get_websocket_url.return_value = "wss://custom.example.com/v1/responses?api-version=2024-05-01"
+        mock_config.get_websocket_url.return_value = (
+            "wss://custom.example.com/v1/responses?api-version=2024-05-01"
+        )
         mock_config.validate_environment.return_value = {}
 
         mock_logging = MagicMock()
@@ -4386,8 +4562,12 @@ class TestNativeWebSocketUrlConstruction:
         from urllib.parse import parse_qs, urlparse
 
         qs = parse_qs(urlparse(captured_urls[0]).query)
-        assert qs.get("model") == ["gpt-4o"], f"model missing from URL: {captured_urls[0]}"
-        assert qs.get("api-version") == ["2024-05-01"], f"existing param lost: {captured_urls[0]}"
+        assert qs.get("model") == [
+            "gpt-4o"
+        ], f"model missing from URL: {captured_urls[0]}"
+        assert qs.get("api-version") == [
+            "2024-05-01"
+        ], f"existing param lost: {captured_urls[0]}"
 
     @pytest.mark.asyncio
     async def test_ws_passes_litellm_params_to_get_websocket_url(self):
@@ -4396,7 +4576,9 @@ class TestNativeWebSocketUrlConstruction:
 
         mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
         mock_config.supports_native_websocket.return_value = True
-        mock_config.get_websocket_url.return_value = "wss://example.openai.azure.com/openai/v1/responses"
+        mock_config.get_websocket_url.return_value = (
+            "wss://example.openai.azure.com/openai/v1/responses"
+        )
         mock_config.validate_environment.return_value = {}
 
         mock_logging = MagicMock()
@@ -4452,6 +4634,7 @@ def _wrapped_reasoning_item():
 
 
 class TestNativeWebSocketEncryptedContentAffinity:
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
     async def test_client_to_backend_restores_wrapped_ids(self, nested: bool):
@@ -4626,9 +4809,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         backend_ws.recv = AsyncMock(
             side_effect=[
                 json.dumps({"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning_item)}),
-                json.dumps(
-                    {"type": "response.completed", "response": {"id": "resp_1", "output": [dict(reasoning_item)]}}
-                ),
+                json.dumps({"type": "response.completed", "response": {"id": "resp_1", "output": [dict(reasoning_item)]}}),
                 Exception("stop"),
             ]
         )

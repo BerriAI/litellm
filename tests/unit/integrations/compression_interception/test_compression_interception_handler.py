@@ -112,7 +112,9 @@ async def test_pre_call_hook_compresses_messages_and_injects_tool(monkeypatch):
         ],
     }
 
-    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+    result = await logger.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.anthropic_messages
+    )
 
     assert result is not None
     assert result["messages"] == compressed_result["messages"]
@@ -154,7 +156,9 @@ async def test_pre_call_hook_below_trigger_does_not_inject_empty_tools(monkeypat
         "messages": original_messages,
     }
 
-    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+    result = await logger.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.anthropic_messages
+    )
 
     assert result is not None
     # Original request had no ``tools`` — skipped compression must leave it that way.
@@ -213,7 +217,9 @@ async def test_build_agentic_loop_plan_returns_request_patch():
 
     logging_obj = MagicMock()
     logging_obj.litellm_call_id = call_id
-    logging_obj.model_call_details = {"agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}}
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
+    }
 
     plan = await logger.async_build_agentic_loop_plan(
         tools={
@@ -387,7 +393,8 @@ async def test_build_agentic_loop_plan_missing_key_fallback():
 
     assert plan.request_patch is not None
     assert (
-        plan.request_patch.messages[-1]["content"][0]["content"] == "[compressed content key 'not_found.py' not found]"
+        plan.request_patch.messages[-1]["content"][0]["content"]
+        == "[compressed content key 'not_found.py' not found]"
     )
 
 
@@ -554,10 +561,7 @@ async def test_pre_call_hook_counts_tokens_off_the_event_loop():
         (
             {
                 "type": "allowed_tools",
-                "allowed_tools": {
-                    "mode": "auto",
-                    "tools": [{"type": "function", "function": {"name": "existing_tool"}}],
-                },
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "existing_tool"}}]},
             },
             {"type": "function", "function": {"name": "litellm_content_retrieve"}},
         ),

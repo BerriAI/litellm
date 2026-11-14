@@ -18,6 +18,7 @@ filter, dropping the staticmethod/classmethod filter, or narrowing the prefix
 filter so single-underscore names leak back in) makes a test fail.
 """
 
+
 import pytest
 
 
@@ -55,19 +56,29 @@ class _ConcreteBatchesConfig(BaseBatchesConfig):
     ) -> dict:
         return headers
 
-    def get_complete_batch_url(self, api_base, api_key, model, optional_params, litellm_params, data) -> str:
+    def get_complete_batch_url(
+        self, api_base, api_key, model, optional_params, litellm_params, data
+    ) -> str:
         return "https://example.com/batch"
 
-    def transform_create_batch_request(self, model, create_batch_data, optional_params, litellm_params):
+    def transform_create_batch_request(
+        self, model, create_batch_data, optional_params, litellm_params
+    ):
         return {"created": True}
 
-    def transform_create_batch_response(self, model, raw_response, logging_obj, litellm_params):
+    def transform_create_batch_response(
+        self, model, raw_response, logging_obj, litellm_params
+    ):
         return raw_response
 
-    def transform_retrieve_batch_request(self, batch_id, optional_params, litellm_params):
+    def transform_retrieve_batch_request(
+        self, batch_id, optional_params, litellm_params
+    ):
         return {"batch_id": batch_id}
 
-    def transform_retrieve_batch_response(self, model, raw_response, logging_obj, litellm_params):
+    def transform_retrieve_batch_response(
+        self, model, raw_response, logging_obj, litellm_params
+    ):
         return raw_response
 
     def get_error_class(self, error_message, status_code, headers):
@@ -107,7 +118,11 @@ def test_fully_concrete_subclass_can_be_instantiated():
 def test_subclass_missing_any_abstract_member_cannot_instantiate(missing_member):
     """Every abstract member is part of the contract: dropping any one of them
     leaves the subclass abstract and uninstantiable."""
-    namespace = {k: v for k, v in _ConcreteBatchesConfig.__dict__.items() if not k.startswith("__")}
+    namespace = {
+        k: v
+        for k, v in _ConcreteBatchesConfig.__dict__.items()
+        if not k.startswith("__")
+    }
     namespace.pop(missing_member)
     Incomplete = type("Incomplete", (BaseBatchesConfig,), namespace)
     with pytest.raises(TypeError):

@@ -603,10 +603,9 @@ def test_native_cohere_embed_relay_prices_an_image_at_the_input_tokens_foundry_a
     assert logging_obj.response_cost_calculator(result=result) == pytest.approx(24 * per_token)
 
 
+
 def test_native_cohere_embed_relay_rows_keep_their_embedding_type() -> None:
-    result, _ = _cohere_embed_relay_result(
-        {**COHERE_EMBED_BODY, "embeddings": {"float": TWO_VECTORS, "int8": [[1, 2]]}}
-    )
+    result, _ = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "embeddings": {"float": TWO_VECTORS, "int8": [[1, 2]]}})
 
     assert isinstance(result, EmbeddingResponse)
     assert [(row["type"], row["index"], row["embedding"]) for row in result.data] == [
@@ -614,7 +613,6 @@ def test_native_cohere_embed_relay_rows_keep_their_embedding_type() -> None:
         ("float", 1, TWO_VECTORS[1]),
         ("int8", 0, [1, 2]),
     ]
-
 
 @pytest.mark.parametrize("texts", [None, "hello world", [1, 2], ["hello", 3]])
 def test_native_cohere_embed_relay_with_billed_units_is_costed_whatever_texts_holds(texts: object) -> None:

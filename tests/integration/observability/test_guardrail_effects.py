@@ -2000,8 +2000,6 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
             for response in responses:
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
-
-
 @pytest.mark.parametrize(
     ("logging_only_settings", "scanned_directions"),
     (
@@ -2162,8 +2160,6 @@ def test_logging_only_scope_literal_or_mode_mismatch_is_ignored_at_load_and_keep
             assert len(upstream.drain()) == 0
             guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]
             assert any(object_value(row)["guardrail_name"] == identity for row in guardrails), guardrails
-
-
 _TOKEN: Final = re.compile(rb"token-[0-9a-f]{32}-\d+")
 
 
@@ -2846,7 +2842,9 @@ _LIVE_DETECT_ONLY_PIPELINE: Final = MappingProxyType({"streaming_buffer_until_mo
 def test_live_detect_only_pipeline_releases_chunks_before_the_scan_and_scans_what_a_disconnected_client_received(
     gateway: Gateway, tmp_path: Path, disconnect: Callable[[_DisconnectRig, int], str]
 ) -> None:
-    with _disconnect_rig(gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True) as rig:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
         scans: Final = _scanned_while_upstream_is_held(rig, disconnect)
         assert len(scans) == 1, scans
 
@@ -2854,7 +2852,9 @@ def test_live_detect_only_pipeline_releases_chunks_before_the_scan_and_scans_wha
 def test_live_detect_only_pipeline_records_the_verdict_of_a_disconnected_stream_on_the_spend_row(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _disconnect_rig(gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True) as rig:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
         _scanned_while_upstream_is_held(rig, _chat_httpx)
         assert _post_call_statuses(rig, rig.model) == (("success",),)
 
@@ -2881,9 +2881,7 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
 def test_a_fully_read_stream_is_scanned_exactly_once(
     gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue], pipeline: bool
 ) -> None:
-    with _disconnect_rig(
-        gateway, tmp_path, params=params, gated=False, default_on=not pipeline, pipeline=pipeline
-    ) as rig:
+    with _disconnect_rig(gateway, tmp_path, params=params, gated=False, default_on=not pipeline, pipeline=pipeline) as rig:
         response: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0))
         assert response.status_code == 200, response.text
         assert rig.secret() in response.text and "[DONE]" in response.text, response.text

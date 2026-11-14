@@ -1245,6 +1245,7 @@ def test_the_rebuilt_response_keeps_the_upstream_cost_a_stamped_usage_chunk_save
     )
 
 
+
 def _perplexity_usage_chunk(cost: Mapping[str, float], finish_reason: str | None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-pplx",
@@ -1284,7 +1285,6 @@ def test_a_provider_usage_key_named_like_the_dropped_cost_flag_keeps_the_stream_
 
     assert response is not None
     assert getattr(response.usage, "cost", None) == 0.00371
-
 
 def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     """Regression for https://github.com/BerriAI/litellm/issues/32051
@@ -2836,9 +2836,7 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
 
 
-def _vllm_chat_chunk(
-    index: int, content: str, finish_reason: str | None = None, **fields: object
-) -> ModelResponseStream:
+def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None, **fields: object) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-1",
         created=1,
@@ -2892,13 +2890,14 @@ def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_pro
             _vllm_chat_chunk(0, "", "stop", stop_reason=None, token_ids=None),
         ]
     )
-    other_built: Final = stream_chunk_builder(chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")])
+    other_built: Final = stream_chunk_builder(
+        chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")]
+    )
 
     assert vllm_built is not None and other_built is not None
-    assert {field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")} == {
-        "stop_reason": None,
-        "token_ids": None,
-    }
+    assert {
+        field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")
+    } == {"stop_reason": None, "token_ids": None}
     assert {"stop_reason", "token_ids"}.isdisjoint(other_built.model_dump()["choices"][0])
 
 

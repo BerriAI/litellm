@@ -110,8 +110,7 @@ def test_sse_event_limit_is_a_safe_upstream_fault(sdk_wrapped: bool, nested: boo
     decoder_message: Final = f"Server-sent event exceeded the {limit} byte limit."
     failure: Final = (
         MCPError(code=CONNECTION_CLOSED, message=f"SSE stream failed: {decoder_message}")
-        if sdk_wrapped
-        else httpx2.SSEError(decoder_message)
+        if sdk_wrapped else httpx2.SSEError(decoder_message)
     )
     wrapped: Final = BaseExceptionGroup("private-upstream-secret", [failure]) if nested else failure
     fault: Final = classify_list_exception(wrapped)
@@ -123,10 +122,7 @@ def test_sse_event_limit_is_a_safe_upstream_fault(sdk_wrapped: bool, nested: boo
     assert fault.public_message == message
     assert list_fault_http_status(fault) == 502
     assert outcome_wire_value(fault) == {
-        "status": "upstream_error",
-        "reason": "sse_event_too_large",
-        "limit_bytes": limit,
-        "message": message,
+        "status": "upstream_error", "reason": "sse_event_too_large", "limit_bytes": limit, "message": message,
     }
 
 
@@ -137,14 +133,12 @@ def test_sse_event_limit_is_a_safe_upstream_fault(sdk_wrapped: bool, nested: boo
         MCPError(code=-32603, message="SSE stream failed: Server-sent event exceeded the 1024 byte limit."),
         MCPError(code=CONNECTION_CLOSED, message="SSE stream failed: Server-sent event exceeded the 0 byte limit."),
         MCPError(code=CONNECTION_CLOSED, message="SSE stream failed: Server-sent event exceeded the -1 byte limit."),
-        MCPError(
-            code=CONNECTION_CLOSED,
-            message=("SSE stream failed: Server-sent event exceeded the 10000000000000000000 byte limit."),
-        ),
-        MCPError(
-            code=CONNECTION_CLOSED,
-            message=("SSE stream failed: Server-sent event exceeded the 1024 byte limit. private-secret"),
-        ),
+        MCPError(code=CONNECTION_CLOSED, message=(
+            "SSE stream failed: Server-sent event exceeded the 10000000000000000000 byte limit."
+        )),
+        MCPError(code=CONNECTION_CLOSED, message=(
+            "SSE stream failed: Server-sent event exceeded the 1024 byte limit. private-secret"
+        )),
         httpx2.SSEError("private-secret Server-sent event exceeded the 1024 byte limit."),
         httpx2.SSEError("Expected response with content type 'text/event-stream', got 'private-secret'."),
         RuntimeError("SSE stream failed: Server-sent event exceeded the 1024 byte limit."),
@@ -161,13 +155,10 @@ def test_unrelated_errors_do_not_claim_an_sse_event_limit(failure: Exception) ->
 def test_upstream_auth_takes_precedence_over_sse_event_limit(status_code: int) -> None:
     request: Final = httpx2.Request("POST", "https://upstream.example/mcp")
     response: Final = httpx2.Response(status_code, request=request)
-    failure: Final = BaseExceptionGroup(
-        "upstream errors",
-        [
-            httpx2.SSEError("Server-sent event exceeded the 1024 byte limit."),
-            httpx2.HTTPStatusError("private-secret", request=request, response=response),
-        ],
-    )
+    failure: Final = BaseExceptionGroup("upstream errors", [
+        httpx2.SSEError("Server-sent event exceeded the 1024 byte limit."),
+        httpx2.HTTPStatusError("private-secret", request=request, response=response),
+    ])
     fault: Final = classify_list_exception(failure)
     assert fault.tag == ("auth_required" if status_code == 401 else "forbidden")
     assert list_fault_http_status(fault) == status_code
@@ -371,24 +362,21 @@ def test_pure_non_auth_response_still_classifies_upstream_error():
     assert fault.status_code == 502
 
 
-@pytest.mark.parametrize(
-    "status, challenge, expected",
-    [
-        (403, 'Bearer error="insufficient_scope", scope="tools.write"', "tools.write"),
-        (403, 'bEaReR error=insufficient_scope, scope="tools.read tools.write"', "tools.read tools.write"),
-        (403, 'Bearer error="insufficient_scope"', ""),
+@pytest.mark.parametrize("status, challenge, expected", [
+    (403, 'Bearer error="insufficient_scope", scope="tools.write"', "tools.write"),
+    (403, 'bEaReR error=insufficient_scope, scope="tools.read tools.write"', "tools.read tools.write"),
+    (403, 'Bearer error="insufficient_scope"', ""),
         (403, 'Bearer error="insufficient_scope", scope=', None),
-        (403, 'Bearer error="insufficient_scope", scope', None),
-        (401, 'Bearer error="insufficient_scope", scope="tools.write"', None),
-        (403, 'Bearer error="invalid_token", scope="tools.write"', None),
-        (403, "", None),
-        (403, 'Basic error="insufficient_scope", scope="tools.write"', None),
-        (403, 'Bearer error_description="error=insufficient_scope", scope="tools.write"', None),
-        (403, 'Bearer error="insufficient_scope", error="invalid_token"', None),
-        (403, 'Bearer error="insufficient_scope", scope="tools.write\r\ninjected"', None),
-        (403, 'Bearer error="insufficient_scope", scope="tools.write", Basic realm="other"', None),
-    ],
-)
+    (403, 'Bearer error="insufficient_scope", scope', None),
+    (401, 'Bearer error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="invalid_token", scope="tools.write"', None),
+    (403, '', None),
+    (403, 'Basic error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error_description="error=insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="insufficient_scope", error="invalid_token"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write\r\ninjected"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write", Basic realm="other"', None),
+])
 @pytest.mark.parametrize("client", ["httpx", "httpx2"])
 def test_managed_scope_step_up_only_accepts_unambiguous_bearer_challenges(status, challenge, expected, client):
     import httpx2
@@ -396,9 +384,7 @@ def test_managed_scope_step_up_only_accepts_unambiguous_bearer_challenges(status
     from litellm.proxy.mcp_server.faults.list_outcomes import upstream_insufficient_scope
 
     transport = httpx if client == "httpx" else httpx2
-    response = transport.Response(
-        status, headers={"www-authenticate": challenge}, request=transport.Request("POST", "https://peer.test/mcp")
-    )
+    response = transport.Response(status, headers={"www-authenticate": challenge}, request=transport.Request("POST", "https://peer.test/mcp"))
     cause = transport.HTTPStatusError("upstream rejected", request=response.request, response=response)
     wrapped = RuntimeError("transport failure")
     wrapped.__cause__ = cause

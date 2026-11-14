@@ -447,8 +447,7 @@ def test_chat_tool_result_turn_reaches_mantle_as_tool_use_and_tool_result_blocks
     marker: Final = uuid4().hex
     tool_call: Final = f"toolu_{marker}"
     expected: Final = _outbound(
-        gateway,
-        _HAIKU,
+        gateway, _HAIKU,
         [
             _user_turn(marker),
             {
@@ -493,8 +492,7 @@ def test_chat_json_schema_response_format_is_sent_as_a_forced_tool_and_returned_
 ) -> None:
     marker: Final = uuid4().hex
     expected: Final = _outbound(
-        gateway,
-        _HAIKU,
+        gateway, _HAIKU,
         [_user_turn(marker)],
         tools=[{"name": "json_tool_call", "input_schema": _CITY_SCHEMA}],
         tool_choice={"name": "json_tool_call", "type": "tool"},

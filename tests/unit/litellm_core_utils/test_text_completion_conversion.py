@@ -76,7 +76,9 @@ def test_completion_vllm(provider):
 
     client = OpenAI(api_key="my-fake-key")
 
-    with patch.object(client.completions.with_raw_response, "create", side_effect=mock_post) as mock_call:
+    with patch.object(
+        client.completions.with_raw_response, "create", side_effect=mock_post
+    ) as mock_call:
         response = text_completion(
             model="{provider}/gemini-2.5-flash-lite".format(provider=provider),
             prompt="ping",
@@ -1229,7 +1231,10 @@ def test_unit_test_text_completion_object():
     assert text_completion_obj.id == "cmpl-99y7B2svVoRWe1xd7UFRmeGjZrFSh"
     assert text_completion_obj.object == "text_completion"
     assert text_completion_obj.created == 1712163061
-    assert text_completion_obj.model == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
+    assert (
+        text_completion_obj.model
+        == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
+    )
     assert text_completion_obj.system_fingerprint == None
     assert len(text_completion_obj.choices) == len(openai_object["choices"])
 

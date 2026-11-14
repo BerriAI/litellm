@@ -67,9 +67,14 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
     return [row.model_dump(include=fields) for row in rows]
 
 
-def _require_row(rows: list[SpendLogRow], predicate: Callable[[SpendLogRow], bool], what: str) -> SpendLogRow:
+def _require_row(
+    rows: list[SpendLogRow], predicate: Callable[[SpendLogRow], bool], what: str
+) -> SpendLogRow:
     matches = [r for r in rows if predicate(r)]
-    assert matches, f"no SpendLogs row {what} after polling; saw {len(rows)} row(s): {_summarize(rows)}"
+    assert matches, (
+        f"no SpendLogs row {what} after polling; saw {len(rows)} row(s): "
+        f"{_summarize(rows)}"
+    )
     return matches[0]
 
 
@@ -83,7 +88,9 @@ def _require_row(rows: list[SpendLogRow], predicate: Callable[[SpendLogRow], boo
         mode=Mode.NONSTREAM,
     )
 )
-def test_chat_completion_writes_nonzero_spend_row(client: SpendClient, scoped_key: str) -> None:
+def test_chat_completion_writes_nonzero_spend_row(
+    client: SpendClient, scoped_key: str
+) -> None:
     chat = unwrap(
         client.chat(
             scoped_key,
@@ -93,7 +100,9 @@ def test_chat_completion_writes_nonzero_spend_row(client: SpendClient, scoped_ke
         )
     )
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(r.status == "success" for r in rs))
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.status == "success" for r in rs)
+    )
     row = _require_row(rows, lambda r: r.status == "success", "for the chat call")
 
     assert (row.spend or 0) > 0, f"chat row should cost > 0: {_summarize(rows)}"
@@ -108,7 +117,9 @@ def test_chat_completion_writes_nonzero_spend_row(client: SpendClient, scoped_ke
     assert total == prompt + completion, f"token arithmetic broken: {_summarize(rows)}"
 
     if chat.id:
-        assert any(r.request_id == chat.id for r in rows), f"row request_id != client response.id ({chat.id})"
+        assert any(
+            r.request_id == chat.id for r in rows
+        ), f"row request_id != client response.id ({chat.id})"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.stream.logs_cost")
@@ -121,20 +132,30 @@ def test_chat_completion_writes_nonzero_spend_row(client: SpendClient, scoped_ke
         mode=Mode.STREAM,
     )
 )
-def test_streaming_chat_completion_tracks_spend(client: SpendClient, scoped_key: str) -> None:
+def test_streaming_chat_completion_tracks_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
     result = client.chat_stream(
         scoped_key,
         GEMINI_MODEL,
         f"count to three {unique_marker()}",
         max_tokens=64,
     )
-    assert result.ok, f"stream failed (status {result.status_code}): {result.body[:300]}"
+    assert (
+        result.ok
+    ), f"stream failed (status {result.status_code}): {result.body[:300]}"
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs))
-    row = _require_row(rows, lambda r: (r.spend or 0) > 0, "with nonzero spend for the stream")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    )
+    row = _require_row(
+        rows, lambda r: (r.spend or 0) > 0, "with nonzero spend for the stream"
+    )
     prompt = row.prompt_tokens or 0
     completion = row.completion_tokens or 0
-    assert prompt > 0 and completion > 0, f"streaming tokens not tracked: {_summarize(rows)}"
+    assert (
+        prompt > 0 and completion > 0
+    ), f"streaming tokens not tracked: {_summarize(rows)}"
     assert (row.total_tokens or 0) == prompt + completion
 
 
@@ -148,7 +169,9 @@ def test_streaming_chat_completion_tracks_spend(client: SpendClient, scoped_key:
         mode=Mode.STREAM,
     )
 )
-def test_streaming_messages_via_responses_bridge_tracks_spend(client: SpendClient, scoped_key: str) -> None:
+def test_streaming_messages_via_responses_bridge_tracks_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
     """A streaming anthropic-format /v1/messages request served by an openai-provider
     model is bridged through litellm's anthropic-messages -> Responses adapter, and
     consuming the whole SSE stream writes exactly one costed spend row.
@@ -167,33 +190,48 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(client: SpendClien
         f"reply with exactly one word {unique_marker()}",
         max_tokens=64,
     )
-    assert result.ok, f"bridged /v1/messages stream failed (status {result.status_code}): {result.body[:300]}"
-    assert result.is_streaming, f"expected an SSE stream from /v1/messages, got content-type {result.content_type!r}"
+    assert (
+        result.ok
+    ), f"bridged /v1/messages stream failed (status {result.status_code}): {result.body[:300]}"
+    assert result.is_streaming, (
+        f"expected an SSE stream from /v1/messages, got content-type "
+        f"{result.content_type!r}"
+    )
     assert result.chunks > 0, "no SSE events were consumed from the /v1/messages stream"
-    assert result.stream_error is None, f"the /v1/messages stream carried an error event: {result.stream_error}"
+    assert (
+        result.stream_error is None
+    ), f"the /v1/messages stream carried an error event: {result.stream_error}"
 
     def is_bridged_costed(row: SpendLogRow) -> bool:
         return (row.spend or 0) > 0 and "anthropic_messages" in (row.call_type or "")
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(is_bridged_costed(r) for r in rs))
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(is_bridged_costed(r) for r in rs)
+    )
     costed = [r for r in rows if (r.spend or 0) > 0]
     bridged = [r for r in costed if is_bridged_costed(r)]
     assert bridged == costed, (
         f"a costed row was not billed as a /v1/messages call (wrong call_type); "
         f"the bridge must keep the messages billing identity: {_summarize(rows)}"
     )
-    assert len(bridged) == 1, f"expected exactly one costed row for the bridged stream, saw {_summarize(rows)}"
+    assert len(bridged) == 1, (
+        f"expected exactly one costed row for the bridged stream, saw {_summarize(rows)}"
+    )
 
     row = bridged[0]
     assert row.custom_llm_provider == "openai", (
         f"bridged row not attributed to the openai Responses backend "
         f"(custom_llm_provider {row.custom_llm_provider!r}): {_summarize(rows)}"
     )
-    assert "codex" in (row.model or ""), f"row model {row.model!r} is not the Responses-only codex deployment"
+    assert "codex" in (row.model or ""), (
+        f"row model {row.model!r} is not the Responses-only codex deployment"
+    )
 
     prompt = row.prompt_tokens or 0
     completion = row.completion_tokens or 0
-    assert prompt > 0 and completion > 0, f"bridged stream tokens not tracked: {_summarize(rows)}"
+    assert (
+        prompt > 0 and completion > 0
+    ), f"bridged stream tokens not tracked: {_summarize(rows)}"
     assert (row.total_tokens or 0) == prompt + completion, (
         f"token arithmetic broken on the bridged row: {_summarize(rows)}"
     )
@@ -210,7 +248,9 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(client: SpendClien
         mode=Mode.NONSTREAM,
     )
 )
-def test_embedding_writes_nonzero_spend_row(client: SpendClient, scoped_key: str) -> None:
+def test_embedding_writes_nonzero_spend_row(
+    client: SpendClient, scoped_key: str
+) -> None:
     _ = unwrap(
         client.embed(
             scoped_key,
@@ -219,8 +259,12 @@ def test_embedding_writes_nonzero_spend_row(client: SpendClient, scoped_key: str
         )
     )
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs))
-    row = _require_row(rows, lambda r: (r.spend or 0) > 0, "with nonzero spend for the embedding")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    )
+    row = _require_row(
+        rows, lambda r: (r.spend or 0) > 0, "with nonzero spend for the embedding"
+    )
     assert (row.prompt_tokens or 0) > 0
     assert (row.completion_tokens or 0) == 0, "embeddings have no completion tokens"
     assert "text-embedding-3-small" in (row.model or "")
@@ -235,7 +279,9 @@ def test_embedding_writes_nonzero_spend_row(client: SpendClient, scoped_key: str
         mode=Mode.NONSTREAM,
     )
 )
-def test_cache_hit_is_zero_cost_and_suffixed(client: SpendClient, scoped_key: str) -> None:
+def test_cache_hit_is_zero_cost_and_suffixed(
+    client: SpendClient, scoped_key: str
+) -> None:
     # Unique marker shared by both calls: call 1 is a guaranteed cache MISS (fresh
     # content, paid), call 2 repeats the identical request and HITS the cache just
     # populated. The marker keeps each run isolated - a fixed prompt would persist
@@ -243,26 +289,33 @@ def test_cache_hit_is_zero_cost_and_suffixed(client: SpendClient, scoped_key: st
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
     first = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
     answered = first.choices and first.choices[0].message and first.choices[0].message.content
-    assert answered, f"{GEMINI_MODEL} returned no text, and a reply with no output is never cached: {first}"
+    assert answered, (
+        f"{GEMINI_MODEL} returned no text, and a reply with no output is never cached: {first}"
+    )
     _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
 
     rows = client.poll_logs_for_key(
         scoped_key,
-        predicate=lambda rs: any(r.cache_hit == "True" for r in rs) and any(r.cache_hit != "True" for r in rs),
+        predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        and any(r.cache_hit != "True" for r in rs),
     )
     cache_row = _require_row(
         rows,
         lambda r: r.cache_hit == "True",
-        "with cache_hit=True (caching is enabled on the e2e proxy, so an identical repeat call must hit the cache)",
+        "with cache_hit=True (caching is enabled on the e2e proxy, so an identical "
+        "repeat call must hit the cache)",
     )
-    assert (cache_row.spend or 0) == 0.0, f"cache hit was charged (double-charge regression): {_summarize(rows)}"
+    assert (
+        cache_row.spend or 0
+    ) == 0.0, f"cache hit was charged (double-charge regression): {_summarize(rows)}"
     assert "_cache_hit" in (cache_row.request_id or ""), (
-        "cache-hit row missing the _cache_hit request_id suffix; duplicate-key collisions will silently drop rows"
+        "cache-hit row missing the _cache_hit request_id suffix; "
+        "duplicate-key collisions will silently drop rows"
     )
     paid_rows = [r for r in rows if r.cache_hit != "True"]
-    assert any((r.spend or 0) > 0 for r in paid_rows), (
-        f"the non-cached call should still be charged: {_summarize(rows)}"
-    )
+    assert any(
+        (r.spend or 0) > 0 for r in paid_rows
+    ), f"the non-cached call should still be charged: {_summarize(rows)}"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.key_rollup.matches_sum_of_logs")
@@ -295,9 +348,9 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     assert logs_total > 0
 
     key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
-    assert _approx_equal(key_spend, logs_total), (
-        f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
-    )
+    assert _approx_equal(
+        key_spend, logs_total
+    ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
 
 
 @pytest.mark.replayable
@@ -310,7 +363,9 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
         mode=Mode.NONSTREAM,
     )
 )
-def test_burst_of_concurrent_calls_loses_no_spend(client: SpendClient, resources: ResourceManager) -> None:
+def test_burst_of_concurrent_calls_loses_no_spend(
+    client: SpendClient, resources: ResourceManager
+) -> None:
     from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
 
     traffic: Final = create_traffic(client, resources)
@@ -334,7 +389,9 @@ def test_burst_of_concurrent_calls_loses_no_spend(client: SpendClient, resources
         mode=Mode.NONSTREAM,
     )
 )
-def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(client: SpendClient, scoped_key: str) -> None:
+def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
+    client: SpendClient, scoped_key: str
+) -> None:
     """/spend/logs/v2 pagination contract for the key filter: page_size caps the
     rows returned, total counts every row for the filter (so with page_size=1,
     total_pages == total), a page past the end returns no rows while reporting
@@ -353,7 +410,9 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(client: SpendClient
                 max_tokens=16,
             )
         )
-    rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=lambda rs: sum((r.spend or 0) for r in rs) > 0)
+    rows = client.poll_logs_for_key(
+        scoped_key, min_rows=2, predicate=lambda rs: sum((r.spend or 0) for r in rs) > 0
+    )
     hashed_key = rows[0].api_key
     assert hashed_key, f"polled rows carry no api_key: {_summarize(rows)}"
 
@@ -361,16 +420,24 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(client: SpendClient
     assert first.total >= 2, f"expected >=2 rows for the key, got total={first.total}"
     assert len(first.data) == 1, f"page_size=1 returned {len(first.data)} rows"
     assert first.total_pages == first.total, (
-        f"page_size=1 must give one page per row: total={first.total} total_pages={first.total_pages}"
+        f"page_size=1 must give one page per row: "
+        f"total={first.total} total_pages={first.total_pages}"
     )
 
-    beyond = client.spend_logs_page(api_key=hashed_key, page=first.total_pages + 7, page_size=1)
+    beyond = client.spend_logs_page(
+        api_key=hashed_key, page=first.total_pages + 7, page_size=1
+    )
     assert beyond.data == [], f"out-of-range page returned rows: {beyond.data}"
-    assert beyond.total == first.total, f"out-of-range page changed the total: {beyond.total} != {first.total}"
+    assert beyond.total == first.total, (
+        f"out-of-range page changed the total: {beyond.total} != {first.total}"
+    )
 
-    nomatch = client.spend_logs_page(api_key=f"sk-no-such-key-{unique_marker()}", page=1, page_size=1)
+    nomatch = client.spend_logs_page(
+        api_key=f"sk-no-such-key-{unique_marker()}", page=1, page_size=1
+    )
     assert nomatch.total == 0 and nomatch.data == [], (
-        f"filter matching nothing must report zero: total={nomatch.total} rows={len(nomatch.data)}"
+        f"filter matching nothing must report zero: "
+        f"total={nomatch.total} rows={len(nomatch.data)}"
     )
 
 
@@ -385,10 +452,18 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(client: SpendClient
 )
 def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     tag = f"e2e-spend-{unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, "tagged request", tags=[tag], max_tokens=16))
+    _ = unwrap(
+        client.chat(
+            scoped_key, GEMINI_MODEL, "tagged request", tags=[tag], max_tokens=16
+        )
+    )
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(tag in (r.request_tags or []) for r in rs))
-    _require_row(rows, lambda r: tag in (r.request_tags or []), f"carrying request tag {tag!r}")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(tag in (r.request_tags or []) for r in rs)
+    )
+    _require_row(
+        rows, lambda r: tag in (r.request_tags or []), f"carrying request tag {tag!r}"
+    )
 
 
 @pytest.mark.covers("quota_management.spend_tracking.tags.attributes_spend")
@@ -400,7 +475,9 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
         mode=Mode.NONSTREAM,
     )
 )
-def test_tag_spend_matches_sum_of_tagged_logs(client: SpendClient, scoped_key: str) -> None:
+def test_tag_spend_matches_sum_of_tagged_logs(
+    client: SpendClient, scoped_key: str
+) -> None:
     # Unique tag so /spend/tags can't be polluted by other rows; unique content
     # per call so both are fresh misses (paid), not cache hits.
     tag = f"e2e-tagspend-{unique_marker()}"
@@ -444,12 +521,20 @@ def test_tag_spend_matches_sum_of_tagged_logs(client: SpendClient, scoped_key: s
         mode=Mode.NONSTREAM,
     )
 )
-def test_end_user_spend_attributed_on_row(client: SpendClient, scoped_key: str, resources: ResourceManager) -> None:
+def test_end_user_spend_attributed_on_row(
+    client: SpendClient, scoped_key: str, resources: ResourceManager
+) -> None:
     customer = resources.customer(f"e2e-cust-{unique_marker()}")
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, "hi", user=customer, max_tokens=16))
+    _ = unwrap(
+        client.chat(scoped_key, GEMINI_MODEL, "hi", user=customer, max_tokens=16)
+    )
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(r.end_user == customer for r in rs))
-    row = _require_row(rows, lambda r: r.end_user == customer, f"attributed to end_user {customer!r}")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.end_user == customer for r in rs)
+    )
+    row = _require_row(
+        rows, lambda r: r.end_user == customer, f"attributed to end_user {customer!r}"
+    )
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
 
 
@@ -477,11 +562,17 @@ def test_end_user_header_attributes_responses_row(
     headers = ClientAttributionHeaders.model_validate(
         {"authorization": f"Bearer {scoped_key}", header: customer, "x-litellm-tags": tag}
     )
-    sent = client.send_responses_with_headers(headers, CODEX_MODEL, f"one word {unique_marker()}")
+    sent = client.send_responses_with_headers(
+        headers, CODEX_MODEL, f"one word {unique_marker()}"
+    )
     assert sent.ok, f"/v1/responses failed with {sent.status_code}: {sent.body[:300]}"
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(r.end_user == customer for r in rs))
-    row = _require_row(rows, lambda r: r.end_user == customer, f"attributed to end_user {customer!r} via {header}")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.end_user == customer for r in rs)
+    )
+    row = _require_row(
+        rows, lambda r: r.end_user == customer, f"attributed to end_user {customer!r} via {header}"
+    )
     assert row.call_type == "aresponses", f"row is not a Responses row: {_summarize(rows)}"
     assert tag in (row.request_tags or []), f"tag {tag!r} missing from {row.request_tags}"
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
@@ -500,36 +591,52 @@ def test_end_user_header_attributes_responses_row(
         mode=Mode.NONSTREAM,
     )
 )
-def test_each_model_on_a_shared_key_gets_its_own_row(client: SpendClient, scoped_key: str) -> None:
+def test_each_model_on_a_shared_key_gets_its_own_row(
+    client: SpendClient, scoped_key: str
+) -> None:
     """One key calling two different models, on two providers, gets one spend row per
     call - each carrying its own model and a nonzero cost, under distinct request_ids
     that match the call's response id. Pins per-model/per-provider attribution: a
     regression that stamps the wrong model on the row, bills a call's cost to the
     sibling deployment, or collapses both calls onto one request_id fails here."""
-    gemini = unwrap(client.chat(scoped_key, GEMINI_MODEL, f"one word {unique_marker()}", max_tokens=16))
-    claude = unwrap(client.chat(scoped_key, CLAUDE_MODEL, f"one word {unique_marker()}", max_tokens=16))
+    gemini = unwrap(
+        client.chat(
+            scoped_key, GEMINI_MODEL, f"one word {unique_marker()}", max_tokens=16
+        )
+    )
+    claude = unwrap(
+        client.chat(
+            scoped_key, CLAUDE_MODEL, f"one word {unique_marker()}", max_tokens=16
+        )
+    )
 
     def both_models_costed(rows: list[SpendLogRow]) -> bool:
         costed = [r.model or "" for r in rows if (r.spend or 0) > 0]
-        return any(GEMINI_MODEL in m for m in costed) and any(CLAUDE_MODEL in m for m in costed)
+        return any(GEMINI_MODEL in m for m in costed) and any(
+            CLAUDE_MODEL in m for m in costed
+        )
 
     rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
-    gemini_row = _require_row(rows, lambda r: GEMINI_MODEL in (r.model or ""), "for the gemini call")
-    claude_row = _require_row(rows, lambda r: CLAUDE_MODEL in (r.model or ""), "for the claude call")
+    gemini_row = _require_row(
+        rows, lambda r: GEMINI_MODEL in (r.model or ""), "for the gemini call"
+    )
+    claude_row = _require_row(
+        rows, lambda r: CLAUDE_MODEL in (r.model or ""), "for the claude call"
+    )
 
     assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
     assert (claude_row.spend or 0) > 0, f"claude row should cost > 0: {_summarize(rows)}"
-    assert gemini_row.request_id != claude_row.request_id, (
-        f"two distinct calls collapsed onto one request_id: {_summarize(rows)}"
-    )
+    assert (
+        gemini_row.request_id != claude_row.request_id
+    ), f"two distinct calls collapsed onto one request_id: {_summarize(rows)}"
     if gemini.id:
-        assert gemini_row.request_id == gemini.id, (
-            f"gemini row request_id {gemini_row.request_id} != response id {gemini.id}"
-        )
+        assert (
+            gemini_row.request_id == gemini.id
+        ), f"gemini row request_id {gemini_row.request_id} != response id {gemini.id}"
     if claude.id:
-        assert claude_row.request_id == claude.id, (
-            f"claude row request_id {claude_row.request_id} != response id {claude.id}"
-        )
+        assert (
+            claude_row.request_id == claude.id
+        ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
@@ -552,10 +659,16 @@ def test_failure_call_writes_failure_status_row(
     resources.defer(lambda: client.proxy.delete_model(model_id))
 
     result = client.chat(scoped_key, model, f"trigger failure {unique_marker()}", max_tokens=1)
-    assert not is_ok(result), f"a call to a deployment with an invalid upstream key must fail, not succeed: {result}"
+    assert not is_ok(result), (
+        f"a call to a deployment with an invalid upstream key must fail, not succeed: {result}"
+    )
 
-    rows = client.poll_logs_for_key(scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs))
-    failure_row = _require_row(rows, lambda r: r.status == "failure", "with status=failure for the rejected call")
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
+    )
+    failure_row = _require_row(
+        rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
+    )
     assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
 
 
@@ -603,7 +716,8 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
     assert len(messages) == 2, f"provider wording must stay distinct in error_message: {messages}"
     normalized = {info.normalized_error for info in infos if info is not None}
     assert normalized == {"401_AUTHENTICATION_FAILED"}, (
-        f"both auth failures must share one normalized_error cluster key; saw {normalized} for messages {messages}"
+        f"both auth failures must share one normalized_error cluster key; saw {normalized} "
+        f"for messages {messages}"
     )
 
 
@@ -666,8 +780,13 @@ def test_pre_call_rejection_row_attributes_provider_and_model_id(
     )
 )
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
-    cost = client.calculate_spend(GEMINI_MODEL, "estimate the cost of this request")
-    assert cost > 0, "/spend/calculate returned 0 for gemini-3.8-flash; cost map may be missing this model"
+    cost = client.calculate_spend(
+        GEMINI_MODEL, "estimate the cost of this request"
+    )
+    assert cost > 0, (
+        "/spend/calculate returned 0 for gemini-3.8-flash; "
+        "cost map may be missing this model"
+    )
 
 
 @meta(
@@ -679,13 +798,19 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         mode=Mode.NONSTREAM,
     )
 )
-def test_spend_logs_endpoint_returns_spend(client: SpendClient, scoped_key: str) -> None:
+def test_spend_logs_endpoint_returns_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
     """The /spend/logs read endpoint returns a 200 carrying the key's spend, never a
     5xx. Regression for intermittent 500s (DB query / serialization errors under load)
     on this endpoint: every poll asserts a success response, not just a truthy row
     list, so a 500 fails loudly instead of being swallowed as 'no rows yet'; the
     call's nonzero spend must surface before the deadline."""
-    unwrap(client.chat(scoped_key, GEMINI_MODEL, f"spend logs {unique_marker()}", max_tokens=16))
+    unwrap(
+        client.chat(
+            scoped_key, GEMINI_MODEL, f"spend logs {unique_marker()}", max_tokens=16
+        )
+    )
 
     proxy = client.proxy
     deadline = time.monotonic() + proxy.poll_timeout
@@ -701,5 +826,8 @@ def test_spend_logs_endpoint_returns_spend(client: SpendClient, scoped_key: str)
         if sum((r.spend or 0) for r in rows) > 0:
             return
         if time.monotonic() >= deadline:
-            pytest.fail(f"/spend/logs never surfaced the key's spend before the deadline; saw {_summarize(rows)}")
+            pytest.fail(
+                f"/spend/logs never surfaced the key's spend before the deadline; "
+                f"saw {_summarize(rows)}"
+            )
         time.sleep(proxy.poll_interval)

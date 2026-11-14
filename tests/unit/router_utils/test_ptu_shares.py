@@ -186,11 +186,7 @@ def test_no_share_or_no_sizing_row_sets_no_ceiling():
 def test_naming_a_shared_deployment_by_id_or_provider_model_draws_on_its_groups_ceiling():
     """The router serves a deployment id or a provider model string when no group has that
     name, so those names share the group's ceiling instead of bypassing it."""
-    payg: Final = {
-        "model_name": "gpt-4.1-payg",
-        "litellm_params": {"model": "azure/gpt-4.1"},
-        "model_info": {"id": "payg"},
-    }
+    payg: Final = {"model_name": "gpt-4.1-payg", "litellm_params": {"model": "azure/gpt-4.1"}, "model_info": {"id": "payg"}}
     deployments: Final = [payg, _shared(), _OPEN]
     by_group: Final = _unaliased_ceiling(deployments, "team-a", "gpt-4.1-ptu")
     assert by_group is not None

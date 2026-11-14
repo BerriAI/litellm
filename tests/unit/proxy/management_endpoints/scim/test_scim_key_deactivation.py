@@ -133,7 +133,9 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
     """Reactivation must leave keys an admin blocked (no scim_blocked marker) alone."""
     keys = [
         # SCIM-blocked: should be unblocked.
-        _build_token_row("hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}),
+        _build_token_row(
+            "hash-scim", "user-x", blocked=True, metadata={"scim_blocked": True}
+        ),
         # Admin-blocked for unrelated reasons: must remain blocked.
         _build_token_row("hash-admin", "user-x", blocked=True, metadata={}),
     ]
@@ -194,7 +196,9 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
     assert update_kwargs["where"] == {"token": "hash-a"}
     assert update_kwargs["data"]["blocked"] is True
     assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
-    mock_db.litellm_usertable.delete_many.assert_awaited_once_with(where={"user_id": {"in": [user_id]}})
+    mock_db.litellm_usertable.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [user_id]}}
+    )
 
 
 @pytest.mark.asyncio
@@ -219,7 +223,9 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     mock_db.litellm_teammembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
     )
-    mock_db.litellm_usertable.delete_many = AsyncMock(side_effect=lambda **kw: call_order.append(("user", kw)) or 1)
+    mock_db.litellm_usertable.delete_many = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("user", kw)) or 1
+    )
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
@@ -245,8 +251,12 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
             )
         }
     }
-    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(where={"user_id": {"in": [user_id]}})
-    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(where={"user_id": {"in": [user_id]}})
+    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [user_id]}}
+    )
+    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [user_id]}}
+    )
 
     stages = [stage for stage, _ in call_order]
     assert stages.index("user") > stages.index("invitation")
@@ -271,9 +281,13 @@ async def test_scim_patch_user_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-z", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=mock_user, updated_user=updated_user
+    )
 
-    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="False")])
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="replace", path="active", value="False")]
+    )
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -322,10 +336,18 @@ async def test_scim_patch_user_active_true_unblocks_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    keys = [_build_token_row("hash-r", user_id, blocked=True, metadata={"scim_blocked": True})]
-    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=mock_user, updated_user=updated_user)
+    keys = [
+        _build_token_row(
+            "hash-r", user_id, blocked=True, metadata={"scim_blocked": True}
+        )
+    ]
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=mock_user, updated_user=updated_user
+    )
 
-    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value="True")])
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="replace", path="active", value="True")]
+    )
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -376,9 +398,13 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
         teams=[],
         metadata={"scim_active": True, "scim_metadata": {}},
     )
-    mock_client, mock_db = _build_prisma_with_keys(user_keys=[], mock_user=mock_user, updated_user=updated_user)
+    mock_client, mock_db = _build_prisma_with_keys(
+        user_keys=[], mock_user=mock_user, updated_user=updated_user
+    )
 
-    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")])
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="New")]
+    )
     mock_scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
         id=user_id,
@@ -431,8 +457,14 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
         teams=[],
         metadata={"scim_active": False},
     )
-    keys = [_build_token_row("hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True})]
-    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=deactivated, updated_user=deactivated)
+    keys = [
+        _build_token_row(
+            "hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True}
+        )
+    ]
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=deactivated, updated_user=deactivated
+    )
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id))
 
@@ -486,7 +518,9 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
         metadata={"scim_active": False, "scim_metadata": {}},
     )
     keys = [_build_token_row("hash-block-me", user_id, blocked=False)]
-    mock_client, mock_db = _build_prisma_with_keys(keys, mock_user=active, updated_user=deactivated)
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=active, updated_user=deactivated
+    )
 
     put_user = SCIMUser.model_validate(_build_put_user_payload(user_id, active=False))
 
@@ -537,16 +571,10 @@ async def test_scim_status_write_refreshes_user_cache(
 
     user_id: Final = "scim-cache-user"
     saved: Final = LiteLLM_UserTable(
-        user_id=user_id,
-        user_email="x@example.com",
-        teams=[],
-        metadata={"scim_active": not active if status_change else active},
+        user_id=user_id, user_email="x@example.com", teams=[], metadata={"scim_active": not active if status_change else active},
     )
     updated: Final = LiteLLM_UserTable(
-        user_id=user_id,
-        user_email="x@example.com",
-        teams=[],
-        metadata={"scim_active": active},
+        user_id=user_id, user_email="x@example.com", teams=[], metadata={"scim_active": active},
     )
     client, db = _build_prisma_with_keys([], mock_user=saved.model_copy(deep=True), updated_user=updated)
     if failure == "write":
@@ -556,15 +584,9 @@ async def test_scim_status_write_refreshes_user_cache(
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", client
-        ),  # test-quality-ok: substitute the database dependency
-        patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", cache
-        ),  # test-quality-ok: exercise a real isolated cache
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
-        ),  # test-quality-ok: isolate the logging dependency
+        patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
         patch(  # test-quality-ok: observe the Redis publication boundary
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
             new_callable=AsyncMock,
@@ -572,16 +594,13 @@ async def test_scim_status_write_refreshes_user_cache(
     ):
         request: Final = (
             update_user(user_id=user_id, user=SCIMUser.model_validate(_build_put_user_payload(user_id, active=active)))
-            if method == "PUT"
-            else patch_user(
-                user_id=user_id,
-                patch_ops=SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path="active", value=active)]),
-            )
+            if method == "PUT" else
+            patch_user(user_id=user_id, patch_ops=SCIMPatchOp(
+                Operations=[SCIMPatchOperation(op="replace", path="active", value=active)]
+            ))
         )
         if failure == "write" or (failure == "keys" and status_change):
-            with pytest.raises(
-                ProxyException, match="status write failed" if failure == "write" else "key update failed"
-            ):
+            with pytest.raises(ProxyException, match="status write failed" if failure == "write" else "key update failed"):
                 await request
         else:
             response: Final = await request
@@ -612,15 +631,9 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", client
-        ),  # test-quality-ok: substitute the database dependency
-        patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", cache
-        ),  # test-quality-ok: exercise a real isolated cache
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
-        ),  # test-quality-ok: isolate the logging dependency
+        patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
         patch(  # test-quality-ok: observe the Redis publication boundary
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
             new_callable=AsyncMock,

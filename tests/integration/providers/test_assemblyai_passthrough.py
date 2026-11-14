@@ -18,9 +18,7 @@ _PROVIDER_KEY: Final = "synthetic-assemblyai-key"
 _TRANSCRIPT_REQUEST: Final = {"audio_url": "https://assembly.ai/wildfires.mp3", "speech_models": ["universal-2"]}
 _QUEUED: Final = {"id": "transcript-1", "status": "queued", "audio_url": "https://assembly.ai/wildfires.mp3"}
 _COMPLETED: Final = {"id": "transcript-1", "status": "completed", "text": "Smoke from wildfires in Canada."}
-_SCRUBBED: Final = frozenset(
-    {"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "ASSEMBLYAI_API_KEY"}
-)
+_SCRUBBED: Final = frozenset({"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "ASSEMBLYAI_API_KEY"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +59,8 @@ def assemblyai(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_AssemblyAI
             use_in_pass_through=True,
         )
         yield _AssemblyAI(wire, proxy)
+
+
 
 
 def test_a_db_assemblyai_deployment_serves_the_transcript_routes(assemblyai: _AssemblyAI) -> None:

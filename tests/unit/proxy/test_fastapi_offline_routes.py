@@ -1,9 +1,11 @@
 """
 Unit test for testing /routes endpoint with FastAPIOffline app initialization.
 
-This test verifies that the /routes endpoint works correctly when the proxy
+This test verifies that the /routes endpoint works correctly when the proxy 
 server is initialized using FastAPIOffline instead of regular FastAPI.
 """
+
+
 
 import pytest
 from fastapi.testclient import TestClient
@@ -96,7 +98,9 @@ class TestFastAPIOfflineRoutes:
         client = TestClient(app)
 
         # Mock the authentication to bypass the auth requirement
-        with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth") as mock_auth:
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
+        ) as mock_auth:
             # Configure mock to return a successful auth response
             mock_auth.return_value = {"user_id": "test_user", "api_key": "test_key"}
 

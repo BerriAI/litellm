@@ -196,7 +196,9 @@ def _rig(directory: Path) -> Iterator[Rig]:
                 proxy,
                 owner,
                 intruder,
-                MappingProxyType({OPENAI.provider: (on_openai, on_both), ANTHROPIC.provider: (on_anthropic, on_both)}),
+                MappingProxyType(
+                    {OPENAI.provider: (on_openai, on_both), ANTHROPIC.provider: (on_anthropic, on_both)}
+                ),
                 (on_anthropic, on_openai, on_both),
             )
 

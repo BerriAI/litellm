@@ -193,7 +193,9 @@ def _operation_specs(
     )
 
 
-def _phase_specs(phase: str, openai_model: str, anthropic_model: str, attack: bool) -> tuple[CallSpec, ...]:
+def _phase_specs(
+    phase: str, openai_model: str, anthropic_model: str, attack: bool
+) -> tuple[CallSpec, ...]:
     return (
         *_operation_specs(phase, "chat", openai_model, anthropic_model, attack),
         *_operation_specs(phase, "chat-stream", openai_model, anthropic_model, attack),
@@ -209,7 +211,9 @@ def _wait_and_request(candidate: Gateway, gate: threading.Event, spec: CallSpec)
     return CallResult(spec, status, text, headers)
 
 
-def test_h20_yaml_default_on_scans_tuple_attack_and_benign(gateway: Gateway, tmp_path: Path) -> None:
+def test_h20_yaml_default_on_scans_tuple_attack_and_benign(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     with dispatch_rig(gateway, tmp_path, default_on=True) as (owned, azure, provider, _):
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
@@ -243,7 +247,9 @@ def test_h20_yaml_default_on_scans_tuple_attack_and_benign(gateway: Gateway, tmp
             _assert_spend(allowed.headers["x-litellm-call-id"], allowed.text)
 
 
-def test_x1_azure_server_stop_restart_during_mixed_burst(gateway: Gateway, tmp_path: Path) -> None:
+def test_x1_azure_server_stop_restart_during_mixed_burst(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     with ExitStack() as resources:
         redis: Final = resources.enter_context(owned_redis(tmp_path))
         provider: Final = resources.enter_context(wire_server(provider_handler))
@@ -304,9 +310,9 @@ def test_x1_azure_server_stop_restart_during_mixed_burst(gateway: Gateway, tmp_p
                         restarted_azure_lifetime.close()
                     assert set(first_azure_texts) == {result.spec.prompt for result in up_results}, up_results[0].text
                     provider_requests: Final = provider_texts(provider)
-                    assert all(result.spec.prompt not in provider_requests for result in down_results), down_results[
-                        0
-                    ].text
+                    assert all(result.spec.prompt not in provider_requests for result in down_results), (
+                        down_results[0].text
+                    )
                     assert set(provider_requests) == {result.spec.prompt for result in recovery_results}, (
                         recovery_results[-1].text
                     )
@@ -317,7 +323,9 @@ def test_x1_azure_server_stop_restart_during_mixed_burst(gateway: Gateway, tmp_p
             first_azure_lifetime.close()
 
 
-def test_x2_slow_azure_edge_completes_twenty_concurrent_requests(gateway: Gateway, tmp_path: Path) -> None:
+def test_x2_slow_azure_edge_completes_twenty_concurrent_requests(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     with dispatch_rig(gateway, tmp_path, behavior=AzureBehavior(delay_seconds=0.2)) as (
         owned,
         azure,
@@ -355,7 +363,9 @@ def test_x2_slow_azure_edge_completes_twenty_concurrent_requests(gateway: Gatewa
                 _assert_spend(response.headers["x-litellm-call-id"], response.text)
 
 
-def test_x3_killing_one_worker_leaves_the_other_serving(gateway: Gateway, tmp_path: Path) -> None:
+def test_x3_killing_one_worker_leaves_the_other_serving(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     entered: Final = threading.Event()
     with dispatch_rig(gateway, tmp_path, behavior=AzureBehavior(delay_seconds=0.15, entered=entered)) as (
         owned,
@@ -381,7 +391,8 @@ def test_x3_killing_one_worker_leaves_the_other_serving(gateway: Gateway, tmp_pa
                     assert survivor in owned.worker_pids(), "The second proxy worker exited with the killed worker"
                     prompts: Final = tuple(f"worker survivor {uuid.uuid4().hex}" for _ in range(8))
                     futures: Final = tuple(
-                        executor.submit(_safe_request, candidate, model, prompt) for prompt in prompts
+                        executor.submit(_safe_request, candidate, model, prompt)
+                        for prompt in prompts
                     )
                     responses: Final = tuple(future.result(timeout=70) for future in (*inflight, *futures))
             surviving_responses: Final = tuple(response for response in responses[4:] if response is not None)
@@ -398,7 +409,9 @@ def test_x3_killing_one_worker_leaves_the_other_serving(gateway: Gateway, tmp_pa
 
 
 @pytest.mark.timeout(2 * readiness_seconds(2) + 2 * graceful_stop_seconds() + 120)
-def test_x4_proxy_restart_preserves_completed_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
+def test_x4_proxy_restart_preserves_completed_spend_rows(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     entered: Final = threading.Event()
     arrived: Final = threading.Semaphore(0)
     release: Final = threading.Event()
@@ -436,7 +449,8 @@ def test_x4_proxy_restart_preserves_completed_spend_rows(gateway: Gateway, tmp_p
                 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                     interrupted_prompts: Final = tuple(f"X4_WAIT {uuid.uuid4().hex}" for _ in range(10))
                     interrupted: Final = tuple(
-                        executor.submit(_safe_request, first.gateway, model, prompt) for prompt in interrupted_prompts
+                        executor.submit(_safe_request, first.gateway, model, prompt)
+                        for prompt in interrupted_prompts
                     )
                     arrived_count: Final = sum(arrived.acquire(timeout=30) for _ in interrupted_prompts)
                     assert arrived_count == len(interrupted_prompts), (

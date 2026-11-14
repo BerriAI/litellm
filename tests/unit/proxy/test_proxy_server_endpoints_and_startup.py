@@ -4662,7 +4662,11 @@ class TestPriceDataReloadAPI:
         try:
             with patch(
                 "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-                new=AsyncMock(return_value=ModelCostMapReloaded(model_count=1)),
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_count=1
+                    )
+                ),
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -4994,7 +4998,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5074,7 +5080,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5115,7 +5123,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 for _ in range(3):
                     for pod in pods:
@@ -5156,7 +5166,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
@@ -5189,7 +5201,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5228,7 +5242,9 @@ class TestPriceDataReloadIntegration:
                 ) as mock_get_map,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
 
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -5375,7 +5391,9 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
-                mock_get_map.return_value = ModelCostMapReloaded(model_count=1)
+                mock_get_map.return_value = ModelCostMapReloaded(
+                    model_count=1
+                )
                 mock_prisma.db.litellm_config.upsert = AsyncMock(
                     return_value=_reload_schedule_row({}, reload_revision=9)
                 )
@@ -13932,12 +13950,10 @@ async def test_key_window_spend_row_is_enqueued_with_the_actual_cost(duration: s
     assert enqueued[0]["entity_id"] == "hashed-token"
     assert enqueued[0]["window_duration"] == duration
     assert enqueued[0]["spend"] == pytest.approx(0.25)
-    expected_start: Final = (
-        datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
-    )
-    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(
-        timespec="microseconds"
-    )
+    expected_start: Final = datetime(2028, 1, 1, tzinfo=timezone.utc) if duration == "12mo" else reset_at - timedelta(days=30)
+    assert enqueued[0]["window_start"] == expected_start.astimezone(timezone.utc).replace(
+        tzinfo=None
+    ).isoformat(timespec="microseconds")
 
 
 @pytest.mark.asyncio
@@ -15800,9 +15816,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     litellm.utils._select_custom_tokenizer_helper.cache_clear()
     try:
         responses: Final = [
-            await proxy_server_module.count_request_tokens(
-                TokenCountRequest(model="self-hosted", prompt="count me once")
-            )
+            await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted", prompt="count me once"))
             for _ in range(3)
         ]
         assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
@@ -15810,12 +15824,8 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
-        await proxy_server_module.count_request_tokens(
-            TokenCountRequest(model="self-hosted-pinned", prompt="count me once")
-        )
-        await proxy_server_module.count_request_tokens(
-            TokenCountRequest(model="self-hosted-private", prompt="count me once")
-        )
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.count_request_tokens(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
         assert from_pretrained.call_args_list == [
             mock.call("my-org/tokenizer", revision="main", token=None),
             mock.call("my-org/tokenizer", revision="v2", token=None),

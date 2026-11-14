@@ -436,7 +436,7 @@ def _output_tokens_from_logged_chunks(chunks: list[bytes]) -> int | None:
         for line in raw.decode().splitlines():
             if not line.startswith("data:"):
                 continue
-            data = json.loads(line[len("data:") :].strip())
+            data = json.loads(line[len("data:"):].strip())
             usage = data.get("usage") if isinstance(data, dict) else None
             if isinstance(usage, dict) and usage.get("output_tokens") is not None:
                 latest = usage["output_tokens"]
@@ -865,9 +865,7 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
             await asyncio.sleep(0)
 
         assert iterator.logged_chunks, "capped pump never billed"
-        assert (
-            len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
-        )
+        assert len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
         assert len(iterator.logged_chunks) < 100
         assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
         assert tail_reached is False, "pump kept draining past the cap instead of stopping"
@@ -1101,10 +1099,7 @@ async def test_proxy_disconnect_closing_upstream_prices_recovered_tokens():
         (
             {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}},
             {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            *(
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}}
-                for _ in range(6)
-            ),
+            *({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}} for _ in range(6)),
         )
     )
     enqueued: list = []
@@ -1181,9 +1176,7 @@ async def test_async_sse_wrapper_aborts_upstream_when_detached_drain_cap_reached
             self.aclose_called = True
 
     stream = _AbortableStream()
-    iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("abort_upstream_at_cap"), request_body={}
-    )
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("abort_upstream_at_cap"), request_body={})
     try:
         gen = iterator.async_sse_wrapper(stream)
         await gen.__anext__()
@@ -1417,15 +1410,13 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
 
     hidden_params: AnthropicMessagesStreamHiddenParams = {"additional_headers": {}}
     assert (
-        AnthropicMessagesStreamingResponse(
-            completion_stream=_HoldingBack(), hidden_params=hidden_params
-        ).has_buffered_provider_output
+        AnthropicMessagesStreamingResponse(completion_stream=_HoldingBack(), hidden_params=hidden_params)
+        .has_buffered_provider_output
         is True
     )
     assert (
-        AnthropicMessagesStreamingResponse(
-            completion_stream=_bare_stream(), hidden_params=hidden_params
-        ).has_buffered_provider_output
+        AnthropicMessagesStreamingResponse(completion_stream=_bare_stream(), hidden_params=hidden_params)
+        .has_buffered_provider_output
         is False
     )
 
@@ -1852,10 +1843,7 @@ async def test_native_stream_preserves_nullable_stop_fields_across_chunk_boundar
 
 def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:
     return [
-        json.loads(line[len(b"data:") :])
-        for frame in frames
-        for line in frame.splitlines()
-        if line.startswith(b"data:")
+        json.loads(line[len(b"data:") :]) for frame in frames for line in frame.splitlines() if line.startswith(b"data:")
     ]
 
 
@@ -1863,13 +1851,9 @@ def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:
 @pytest.mark.parametrize("separator", [b"\n", b"\r\n"])
 @pytest.mark.parametrize("chunk_size", [1, 7, 4096])
 async def test_safeguarded_sse_stream_stamps_the_final_delta_across_chunk_boundaries(separator: bytes, chunk_size: int):
-    classifier: Final = _OneVerdictClassifier(
-        '{"verdicts": {"call_curl": {"flagged": true, "explanation": "fetched"}}}'
-    )
+    classifier: Final = _OneVerdictClassifier('{"verdicts": {"call_curl": {"flagged": true, "explanation": "fetched"}}}')
     frames: Final = _sse_frames(separator)
-    stream: Final = SafeguardedAnthropicSSEStream(
-        _chunked(b"".join(frames), chunk_size), _safeguards_evaluator(classifier)
-    )
+    stream: Final = SafeguardedAnthropicSSEStream(_chunked(b"".join(frames), chunk_size), _safeguards_evaluator(classifier))
     emitted: Final = await _drained(stream)
     assert len(emitted) == len(frames)
     assert [emitted[i] for i in (0, 1, 2, 3, 5)] == [frames[i] for i in (0, 1, 2, 3, 5)]
@@ -1936,12 +1920,9 @@ async def test_safeguarded_sse_stream_reports_upstream_buffering_and_closes_the_
     assert stream.has_buffered_provider_output is True
     await stream.aclose()
     assert upstream.closed is True
-    assert (
-        SafeguardedAnthropicSSEStream(
-            _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
-        ).has_buffered_provider_output
-        is False
-    )
+    assert SafeguardedAnthropicSSEStream(
+        _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
+    ).has_buffered_provider_output is False
 
 
 def _finite_stream(chunks: int) -> AsyncIterator[dict[str, object]]:
@@ -1974,9 +1955,7 @@ async def test_pump_exits_when_relay_generator_is_never_closed_and_queue_is_full
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0.05)
 
-    iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("pump_stall_full_queue"), request_body={}
-    )
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("pump_stall_full_queue"), request_body={})
     gen = iterator.async_sse_wrapper(_finite_stream(50))
     await gen.__anext__()
 
@@ -2162,6 +2141,7 @@ async def test_slow_client_that_resumes_after_the_stall_timeout_gets_an_error_in
     assert first_frame.startswith(b"event: message_start\n")
     assert rest[-1] == _incomplete_stream_error_sse_event()
     assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+
 
 
 @pytest.mark.asyncio

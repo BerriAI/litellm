@@ -660,7 +660,9 @@ def test_anthropic_compatible_providers_receive_the_beta_only_where_the_proxy_de
         _spend_row(f"msg_{marker}")
 
 
-def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(gateway: Gateway, tmp_path: Path) -> None:
+def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     marker: Final = uuid.uuid4().hex
     token_dir: Final = tmp_path / "copilot"
     token_dir.mkdir()

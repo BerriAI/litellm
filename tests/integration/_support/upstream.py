@@ -609,9 +609,7 @@ class Provider:
                     .replace("$REQUEST_ID", scenario_id)
                     .replace("$UNIQUE_ID", unique_id)
                 )
-                return Response(
-                    content=stream_body.encode(), media_type=response.content_type, headers=response.headers
-                )
+                return Response(content=stream_body.encode(), media_type=response.content_type, headers=response.headers)
             case EventStreamResponse():
                 events: Final = (
                     tuple(

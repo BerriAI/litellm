@@ -34,7 +34,8 @@ def test_hash_token_method_returns_sha256(prisma_client: PrismaClient) -> None:
         "result": prisma_client.hash_token(token),
         "len": len(prisma_client.hash_token(token)),
         "expected": hashlib.sha256(token.encode()).hexdigest(),
-        "deterministic": prisma_client.hash_token(token) == prisma_client.hash_token(token),
+        "deterministic": prisma_client.hash_token(token)
+        == prisma_client.hash_token(token),
     }
     assert actual == {
         "result": hashlib.sha256(token.encode()).hexdigest(),
@@ -147,7 +148,9 @@ def test_jsonify_team_object_error_on_non_dict(prisma_client: PrismaClient) -> N
         (json.dumps({"status": "failure"}), "failure"),
     ],
 )
-def test_get_request_status_pins_status_resolution(prisma_client: PrismaClient, metadata: Any, expected: str) -> None:
+def test_get_request_status_pins_status_resolution(
+    prisma_client: PrismaClient, metadata: Any, expected: str
+) -> None:
     assert prisma_client.get_request_status({"metadata": metadata}) == expected
 
 
@@ -172,11 +175,15 @@ async def test_get_generic_data_dispatches_by_table(
 ) -> None:
     row = SimpleNamespace(user_id="u1", spend=0.5, name="Alice")
     prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=row)
-    result = await prisma_client.get_generic_data(key="user_id", value="u1", table_name="users")
+    result = await prisma_client.get_generic_data(
+        key="user_id", value="u1", table_name="users"
+    )
     actual = {
         "result_is_row": result is row,
         "find_first_count": prisma_client.db.litellm_usertable.find_first.await_count,
-        "where_kwarg": prisma_client.db.litellm_usertable.find_first.await_args.kwargs["where"],
+        "where_kwarg": prisma_client.db.litellm_usertable.find_first.await_args.kwargs[
+            "where"
+        ],
         "user_attr": result.user_id,
     }
     assert actual == {
@@ -192,9 +199,7 @@ async def test_get_generic_data_unknown_table_returns_none(
     prisma_client: PrismaClient,
 ) -> None:
     result = await prisma_client.get_generic_data(
-        key="x",
-        value="y",
-        table_name="bogus",  # type: ignore[arg-type]
+        key="x", value="y", table_name="bogus"  # type: ignore[arg-type]
     )
     assert result is None
 
@@ -203,9 +208,13 @@ async def test_get_generic_data_unknown_table_returns_none(
 async def test_get_generic_data_logs_failure_handler_and_raises_on_error(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_usertable.find_first = AsyncMock(side_effect=RuntimeError("db boom"))
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=RuntimeError("db boom")
+    )
     with pytest.raises(RuntimeError, match="db boom"):
-        await prisma_client.get_generic_data(key="user_id", value="x", table_name="users")
+        await prisma_client.get_generic_data(
+            key="user_id", value="x", table_name="users"
+        )
 
 
 @pytest.mark.asyncio
@@ -215,7 +224,9 @@ async def test_query_first_with_cached_plan_fallback_happy_returns_row(
     expected = {"token": "abc", "team_spend": 1.0, "team_max_budget": 5.0}
     prisma_client.db.query_first = AsyncMock(return_value=expected)
     prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-    result = await prisma_client._query_first_with_cached_plan_fallback("SELECT * FROM x WHERE token = $1", "abc")
+    result = await prisma_client._query_first_with_cached_plan_fallback(
+        "SELECT * FROM x WHERE token = $1", "abc"
+    )
     actual = {
         "result": result,
         "call_count": prisma_client.db.query_first.await_count,
@@ -250,7 +261,9 @@ async def test_query_first_with_cached_plan_fallback_reconnects_then_retries_ide
     prisma_client.db.query_first = query_first
     prisma_client.attempt_db_reconnect = reconnect
 
-    result = await prisma_client._query_first_with_cached_plan_fallback(original_query, "abc")
+    result = await prisma_client._query_first_with_cached_plan_fallback(
+        original_query, "abc"
+    )
 
     assert result == expected
     assert query_first.await_count == 2
@@ -325,7 +338,9 @@ async def test_query_first_with_cached_plan_fallback_retries_when_reconnect_retu
 async def test_query_first_with_cached_plan_fallback_reraises_non_plan_errors(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.query_first = AsyncMock(side_effect=RuntimeError("totally unrelated"))
+    prisma_client.db.query_first = AsyncMock(
+        side_effect=RuntimeError("totally unrelated")
+    )
     prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     with pytest.raises(RuntimeError, match="totally unrelated"):
         await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
@@ -419,13 +434,19 @@ async def test_get_data_token_find_unique_returns_record(
     token = "sk-key-1"
     hashed = hashlib.sha256(token.encode()).hexdigest()
     record = SimpleNamespace(token=hashed, user_id="u1", expires=None, spend=0.5)
-    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=record)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=record
+    )
 
     result = await prisma_client.get_data(token=token, table_name="key")
     actual = {
         "result_is_record": result is record,
-        "where_arg": prisma_client.db.litellm_verificationtoken.find_unique.await_args.kwargs["where"],
-        "include_arg": prisma_client.db.litellm_verificationtoken.find_unique.await_args.kwargs["include"],
+        "where_arg": prisma_client.db.litellm_verificationtoken.find_unique.await_args.kwargs[
+            "where"
+        ],
+        "include_arg": prisma_client.db.litellm_verificationtoken.find_unique.await_args.kwargs[
+            "include"
+        ],
         "token_field_matches": result.token == hashed,
     }
     assert actual == {
@@ -440,7 +461,9 @@ async def test_get_data_token_find_unique_returns_record(
 async def test_get_data_token_find_unique_missing_token_raises_401(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
     with pytest.raises(HTTPException) as excinfo:
         await prisma_client.get_data(token="sk-missing", table_name="key")
     err = excinfo.value
@@ -462,8 +485,12 @@ async def test_get_data_user_find_unique_returns_user_row(
     result = await prisma_client.get_data(user_id="u-7", table_name="user")
     actual = {
         "result_is_row": result is row,
-        "where_arg": prisma_client.db.litellm_usertable.find_unique.await_args.kwargs["where"],
-        "include_arg": prisma_client.db.litellm_usertable.find_unique.await_args.kwargs["include"],
+        "where_arg": prisma_client.db.litellm_usertable.find_unique.await_args.kwargs[
+            "where"
+        ],
+        "include_arg": prisma_client.db.litellm_usertable.find_unique.await_args.kwargs[
+            "include"
+        ],
         "spend": row.spend,
     }
     assert actual == {
@@ -478,7 +505,9 @@ async def test_get_data_user_find_unique_returns_user_row(
 async def test_get_data_logs_and_raises_on_db_error(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=RuntimeError("network split"))
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=RuntimeError("network split")
+    )
     with pytest.raises(RuntimeError, match="network split"):
         await prisma_client.get_data(token="sk-broken", table_name="key")
 
@@ -511,7 +540,9 @@ async def test_get_data_combined_view_returns_view_for_deprecated_key(
         )
     )
 
-    response = await prisma_client.get_data(token=old_hash, table_name="combined_view", query_type="find_unique")
+    response = await prisma_client.get_data(
+        token=old_hash, table_name="combined_view", query_type="find_unique"
+    )
 
     assert isinstance(response, LiteLLM_VerificationTokenView)
     assert response.token == active_hash
@@ -519,7 +550,9 @@ async def test_get_data_combined_view_returns_view_for_deprecated_key(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [5, None])
-async def test_get_data_team_keys_forward_limit_as_take(prisma_client: PrismaClient, limit: Any) -> None:
+async def test_get_data_team_keys_forward_limit_as_take(
+    prisma_client: PrismaClient, limit: Any
+) -> None:
     """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
     database caps how many of a team's keys come back.
     ``limit=None`` leaves ``take`` unset so every key is returned.
@@ -611,21 +644,14 @@ async def test_authoritative_combined_key_view_uses_writer_through_rotation(
     writer: Final = MagicMock()
     reader: Final = MagicMock()
     active: Final = {
-        "token": "current-token",
-        "team_id": "current-team",
-        "team_models": None,
-        "team_blocked": None,
-        "team_members_with_roles": None,
-        "user_id": None,
-        "expires": None,
+        "token": "current-token", "team_id": "current-team", "team_models": None,
+        "team_blocked": None, "team_members_with_roles": None, "user_id": None, "expires": None,
     }
     writer.query_first = AsyncMock(side_effect=[None, active] if rotated else [active])
     reader.query_first = AsyncMock(return_value={**active, "team_id": "stale-team"})
-    writer.litellm_deprecatedverificationtoken.find_first = AsyncMock(
-        return_value=SimpleNamespace(
-            active_token_id="current-token", revoke_at=datetime.now(timezone.utc) + timedelta(hours=1)
-        )
-    )
+    writer.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=SimpleNamespace(
+        active_token_id="current-token", revoke_at=datetime.now(timezone.utc) + timedelta(hours=1)
+    ))
     prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
     response: Final = await prisma_client.get_data(token="original-token", table_name="combined_view", use_writer=True)
     assert isinstance(response, LiteLLM_VerificationTokenView)

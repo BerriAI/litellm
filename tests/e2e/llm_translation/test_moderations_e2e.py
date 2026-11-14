@@ -38,7 +38,9 @@ def _register_moderation_model(proxy: ProxyClient, resources: ResourceManager) -
     model = f"e2e-moderation-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(model=OPENAI_MODERATION_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(
+            model=OPENAI_MODERATION_BACKEND, api_key="os.environ/OPENAI_API_KEY"
+        ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
@@ -93,11 +95,11 @@ class TestModerations:
         moderation = client.moderations.create(model=model, input=BENIGN_TEXT)
         assert moderation.results, f"/moderations returned no results: {moderation!r}"
         item = moderation.results[0]
-        assert not item.flagged, f"benign text was flagged as {_flagged_categories(item)}: {item!r}"
+        assert not item.flagged, (
+            f"benign text was flagged as {_flagged_categories(item)}: {item!r}"
+        )
 
-    @pytest.mark.skip(
-        reason="stage red: product gap, /v1/moderations 500s (KeyError 'input') on missing input instead of 400"
-    )
+    @pytest.mark.skip(reason="stage red: product gap, /v1/moderations 500s (KeyError 'input') on missing input instead of 400")
     @pytest.mark.covers("llm.moderations.openai.input_validation.nonstream.works")
     @meta(
         Subject(
@@ -107,7 +109,9 @@ class TestModerations:
             models=(),
         )
     )
-    def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+    def test_missing_input_returns_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
         model = _register_moderation_model(proxy, resources)
         key = resources.key()
         result = proxy.transport.send(

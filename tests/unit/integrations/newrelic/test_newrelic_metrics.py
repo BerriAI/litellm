@@ -461,7 +461,7 @@ class TestFlushConcurrency:
 
         async def _post_appending_mid_flight(**kwargs):
             logger.log_queue.append(interleaved)
-            raise HTTPStatusError("e", request=_response(500).request, response=_response(500))
+            raise HTTPStatusError('e', request=_response(500).request, response=_response(500))
 
         logger.async_client.post = AsyncMock(side_effect=_post_appending_mid_flight)
 
@@ -624,9 +624,13 @@ async def test_append_after_eviction_drain_self_flushes():
     """An in-flight callback holding an evicted (stopped) logger still delivers
     its record: with no periodic loop left, the append itself drains."""
     logger = _make_logger()
-    with patch.object(logger.async_client, "post", new=AsyncMock(return_value=_response(202))) as mock_post:
+    with patch.object(
+        logger.async_client, "post", new=AsyncMock(return_value=_response(202))
+    ) as mock_post:
         logger.stop()
-        await logger.async_log_success_event({"standard_logging_object": _standard_logging_object()}, None, None, None)
+        await logger.async_log_success_event(
+            {"standard_logging_object": _standard_logging_object()}, None, None, None
+        )
     assert mock_post.await_count >= 1, "record appended after stop() must be flushed, not stranded"
     assert logger.log_queue == []
 
@@ -637,11 +641,7 @@ async def test_final_drain_retries_transient_failure_then_delivers():
     batch: the final drain retries on its own (no periodic loop is left)."""
     logger = _make_logger()
     err = _response(500)
-    responses = [
-        HTTPStatusError("e", request=err.request, response=err),
-        HTTPStatusError("e", request=err.request, response=err),
-        _response(202),
-    ]
+    responses = [HTTPStatusError('e', request=err.request, response=err), HTTPStatusError('e', request=err.request, response=err), _response(202)]
     post_mock = AsyncMock(side_effect=responses)
     with patch.object(logger, "async_client") as client, patch("asyncio.sleep", new=AsyncMock()):
         client.post = post_mock

@@ -283,9 +283,9 @@ def test_each_dashscope_prefix_reaches_its_own_environment_base_with_its_own_env
         ("GET", f"{OSS_PATH}{task_of(video_id)}.mp4"),
     ]
     assert [request.headers.get("authorization") for request in received[:3]] == [f"Bearer {key}"] * 3
-    assert all(other.drain() == () for name, other in environment_wires.items() if name != provider), (
-        "A prefix reached another prefix's environment base"
-    )
+    assert all(
+        other.drain() == () for name, other in environment_wires.items() if name != provider
+    ), "A prefix reached another prefix's environment base"
 
 
 @pytest.mark.timeout(_CHAOS_TIMEOUT)

@@ -14,7 +14,9 @@ def test_bedrock_image_prepare_request_with_arn() -> None:
             "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration."
             "_get_boto_credentials_from_optional_params"
         ),
-        patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"),
+        patch(
+            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"
+        ),
     ):
         request = image_generation._prepare_request(
             model="amazon.nova-canvas-v1:0",
@@ -29,7 +31,8 @@ def test_bedrock_image_prepare_request_with_arn() -> None:
         )
 
     assert (
-        request.endpoint_url == "https://bedrock-runtime.test.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012"
+        request.endpoint_url
+        == "https://bedrock-runtime.test.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012"
         "%3Aapplication-inference-profile%2Fabcdefghi123/invoke"
     )
 
@@ -43,7 +46,9 @@ def test_bedrock_image_prepare_request_without_arn() -> None:
             "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration."
             "_get_boto_credentials_from_optional_params"
         ),
-        patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"),
+        patch(
+            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"
+        ),
     ):
         request = image_generation._prepare_request(
             model="amazon.nova-canvas-v1:0",
@@ -55,4 +60,7 @@ def test_bedrock_image_prepare_request_without_arn() -> None:
             logging_obj=MagicMock(),
         )
 
-    assert request.endpoint_url == "https://bedrock-runtime.test.com/model/amazon.nova-canvas-v1:0/invoke"
+    assert (
+        request.endpoint_url
+        == "https://bedrock-runtime.test.com/model/amazon.nova-canvas-v1:0/invoke"
+    )

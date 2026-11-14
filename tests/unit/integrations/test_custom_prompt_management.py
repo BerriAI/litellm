@@ -77,7 +77,10 @@ async def test_custom_prompt_management_with_prompt_id(monkeypatch):
 
         assert request_body["model"] == "claude-3-5-sonnet"
         # the message gets applied to the prompt from the custom prompt management callback
-        assert request_body["messages"][0]["content"][0]["text"] == "This is the prompt for test_prompt_id"
+        assert (
+            request_body["messages"][0]["content"][0]["text"]
+            == "This is the prompt for test_prompt_id"
+        )
 
 
 @pytest.mark.asyncio
@@ -130,4 +133,6 @@ async def test_custom_prompt_management_without_prompt_id():
 
         assert request_body["model"] == "claude-3-5-sonnet"
         # the message does not get applied to the prompt from the custom prompt management callback since we did not pass a prompt_id
-        assert request_body["messages"][0]["content"][0]["text"] == "Hello, how are you?"
+        assert (
+            request_body["messages"][0]["content"][0]["text"] == "Hello, how are you?"
+        )

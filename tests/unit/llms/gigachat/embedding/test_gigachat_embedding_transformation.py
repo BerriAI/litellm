@@ -84,12 +84,16 @@ class TestGetOpenaiCompatibleProviderInfo:
 
     def test_resolves_api_base_when_none(self, monkeypatch):
         monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
-        provider, api_base, api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key="key")
+        provider, api_base, api_key = self.config._get_openai_compatible_provider_info(
+            api_base=None, api_key="key"
+        )
         assert api_base is not None
         assert api_base.endswith("/api/v1")
 
     def test_returns_none_api_key(self):
-        _, _, api_key = self.config._get_openai_compatible_provider_info(api_base="https://example.com", api_key=None)
+        _, _, api_key = self.config._get_openai_compatible_provider_info(
+            api_base="https://example.com", api_key=None
+        )
         assert api_key is None
 
 
@@ -99,31 +103,22 @@ class TestGetCompleteUrl:
 
     def test_default_url(self):
         url = self.config.get_complete_url(
-            api_base=None,
-            api_key=None,
-            model="GigaChat",
-            optional_params={},
-            litellm_params={},
+            api_base=None, api_key=None, model="GigaChat",
+            optional_params={}, litellm_params={},
         )
         assert url.endswith("/embeddings")
 
     def test_custom_api_base(self):
         url = self.config.get_complete_url(
-            api_base="https://custom.example.com",
-            api_key=None,
-            model="GigaChat",
-            optional_params={},
-            litellm_params={},
+            api_base="https://custom.example.com", api_key=None, model="GigaChat",
+            optional_params={}, litellm_params={},
         )
         assert url == "https://custom.example.com/embeddings"
 
     def test_trailing_slash_api_base(self):
         url = self.config.get_complete_url(
-            api_base="https://custom.example.com/",
-            api_key=None,
-            model="GigaChat",
-            optional_params={},
-            litellm_params={},
+            api_base="https://custom.example.com/", api_key=None, model="GigaChat",
+            optional_params={}, litellm_params={},
         )
         assert url == "https://custom.example.com/embeddings"
 
@@ -175,24 +170,20 @@ class TestTransformEmbeddingResponse:
         self.logging_obj = MagicMock()
 
     def _make_gigachat_response(self, data: list[dict]) -> httpx.Response:
-        return _make_httpx_response(
-            {
-                "object": "list",
-                "data": data,
-                "model": "Embeddings",
-            }
-        )
+        return _make_httpx_response({
+            "object": "list",
+            "data": data,
+            "model": "Embeddings",
+        })
 
     def test_basic_response(self):
-        raw = self._make_gigachat_response(
-            [
-                {
-                    "object": "embedding",
-                    "embedding": [0.1, 0.2, 0.3],
-                    "index": 0,
-                }
-            ]
-        )
+        raw = self._make_gigachat_response([
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2, 0.3],
+                "index": 0,
+            }
+        ])
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="gigachat/Embeddings",
@@ -212,22 +203,20 @@ class TestTransformEmbeddingResponse:
         assert result.usage.total_tokens == 0
 
     def test_aggregates_per_embedding_usage(self):
-        raw = self._make_gigachat_response(
-            [
-                {
-                    "object": "embedding",
-                    "embedding": [0.1, 0.2],
-                    "index": 0,
-                    "usage": {"prompt_tokens": 5},
-                },
-                {
-                    "object": "embedding",
-                    "embedding": [0.3, 0.4],
-                    "index": 1,
-                    "usage": {"prompt_tokens": 7},
-                },
-            ]
-        )
+        raw = self._make_gigachat_response([
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2],
+                "index": 0,
+                "usage": {"prompt_tokens": 5},
+            },
+            {
+                "object": "embedding",
+                "embedding": [0.3, 0.4],
+                "index": 1,
+                "usage": {"prompt_tokens": 7},
+            },
+        ])
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="gigachat/Embeddings",
@@ -247,16 +236,14 @@ class TestTransformEmbeddingResponse:
         assert "usage" not in result.data[1]
 
     def test_usage_removed_from_individual_embeddings(self):
-        raw = self._make_gigachat_response(
-            [
-                {
-                    "object": "embedding",
-                    "embedding": [0.5],
-                    "index": 0,
-                    "usage": {"prompt_tokens": 3},
-                }
-            ]
-        )
+        raw = self._make_gigachat_response([
+            {
+                "object": "embedding",
+                "embedding": [0.5],
+                "index": 0,
+                "usage": {"prompt_tokens": 3},
+            }
+        ])
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="gigachat/Embeddings",
@@ -273,11 +260,9 @@ class TestTransformEmbeddingResponse:
             assert "usage" not in emb
 
     def test_passes_model_from_response(self):
-        raw = self._make_gigachat_response(
-            [
-                {"object": "embedding", "embedding": [0.1], "index": 0},
-            ]
-        )
+        raw = self._make_gigachat_response([
+            {"object": "embedding", "embedding": [0.1], "index": 0},
+        ])
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="gigachat/Embeddings",
@@ -290,6 +275,7 @@ class TestTransformEmbeddingResponse:
             litellm_params={},
         )
         assert result.model == "Embeddings"
+
 
 
 class TestValidateEnvironment:

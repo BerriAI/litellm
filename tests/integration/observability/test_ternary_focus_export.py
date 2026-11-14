@@ -217,9 +217,7 @@ def test_ternary_export_includes_spend_updated_in_the_last_hours_when_the_databa
 
 
 @pytest.mark.parametrize("export_format", ["parquet", "csv"])
-def test_the_generic_focus_logger_does_not_upload_to_ternary(
-    gateway: Gateway, tmp_path: Path, export_format: str
-) -> None:
+def test_the_generic_focus_logger_does_not_upload_to_ternary(gateway: Gateway, tmp_path: Path, export_format: str) -> None:
     service: Final = f"generic-focus-{uuid.uuid4().hex[:10]}"
     today: Final = utc_today()
 

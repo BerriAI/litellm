@@ -143,9 +143,7 @@ def seams():
                 AsyncMock(side_effect=lambda self=None, **kw: (self.data if self else {}, MagicMock())),
             )
         )
-        stack.enter_context(
-            patch.object(ProxyBaseLLMRequestProcessing, "get_custom_headers", MagicMock(return_value={}))
-        )
+        stack.enter_context(patch.object(ProxyBaseLLMRequestProcessing, "get_custom_headers", MagicMock(return_value={})))
         for name, mock in litellm_calls.items():
             stack.enter_context(patch.object(litellm, name, mock))
         stack.enter_context(patch.object(proxy_server, "llm_router", router))

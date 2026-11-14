@@ -370,11 +370,7 @@ async def test_responses_followup_keeps_the_caller_model_across_the_chat_complet
     ("tool_choice", "followup_tool_choice"),
     [
         (
-            {
-                "type": "allowed_tools",
-                "mode": "required",
-                "tools": [{"type": "function", "name": "litellm_web_search"}],
-            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "litellm_web_search"}]},
             {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "litellm_web_search"}]},
         ),
         ({"type": "function", "name": "litellm_web_search"}, None),

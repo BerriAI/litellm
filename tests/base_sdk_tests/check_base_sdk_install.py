@@ -49,9 +49,7 @@ def _base_closure(pending: frozenset[str], reached: frozenset[str] = frozenset()
     if not pending:
         return reached
     expanded: Final = reached | pending
-    return _base_closure(
-        frozenset(chain.from_iterable(_base_requirements(name) for name in pending)) - expanded, expanded
-    )
+    return _base_closure(frozenset(chain.from_iterable(_base_requirements(name) for name in pending)) - expanded, expanded)
 
 
 def check_environment_is_base_only() -> str:
@@ -222,12 +220,8 @@ def check_bedrock_credential_resolution() -> str:
     if importlib.util.find_spec("boto3") is None:
         try:
             BaseAWSLLM()._sign_request(
-                service_name="bedrock",
-                headers={},
-                optional_params={"aws_region_name": "us-east-1"},
-                request_data={},
-                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
-                api_key="",
+                service_name="bedrock", headers={}, optional_params={"aws_region_name": "us-east-1"},
+                request_data={}, api_base="https://bedrock-runtime.us-east-1.amazonaws.com", api_key="",
             )
         except ImportError as error:
             _require("pip install boto3" in str(error), f"missing installation guidance: {error}")

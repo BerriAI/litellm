@@ -41,7 +41,9 @@ def test_create_skill_forwards_description_and_instructions_from_extra_body(monk
         custom_llm_provider=LlmProviders.LITELLM_PROXY.value,
     )
 
-    assert handler.create_skill_handler.call_args.kwargs["description"] == ("Runs SQL against the inventory database")
+    assert handler.create_skill_handler.call_args.kwargs["description"] == (
+        "Runs SQL against the inventory database"
+    )
     assert handler.create_skill_handler.call_args.kwargs["instructions"] == "Summarize results"
 
 

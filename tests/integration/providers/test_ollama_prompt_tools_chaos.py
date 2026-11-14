@@ -328,20 +328,14 @@ def _with_list_system(body: dict[str, JsonValue], endpoint: Endpoint, system: st
         case "chat":
             return {
                 **body,
-                "messages": [
-                    {"role": "system", "content": [{"type": "text", "text": system}]},
-                    *_items(body, "messages"),
-                ],
+                "messages": [{"role": "system", "content": [{"type": "text", "text": system}]}, *_items(body, "messages")],
             }
         case "messages":
             return {**body, "system": [{"type": "text", "text": system}]}
         case "responses":
             return {
                 **body,
-                "input": [
-                    {"role": "system", "content": [{"type": "input_text", "text": system}]},
-                    *_items(body, "input"),
-                ],
+                "input": [{"role": "system", "content": [{"type": "input_text", "text": system}]}, *_items(body, "input")],
             }
 
 

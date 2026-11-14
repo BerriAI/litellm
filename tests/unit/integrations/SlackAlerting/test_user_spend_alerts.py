@@ -80,7 +80,9 @@ def test_thresholds_disabled_suppresses_threshold_events():
 
 def test_anomaly_detected_above_multiple_of_baseline():
     args: Final = SlackAlertingArgs(spend_anomaly_multiplier=3.0, spend_anomaly_min_spend=10.0)
-    events: Final = _evaluate(_row(daily_spend=70.0, monthly_spend=100.0, baseline_spend=70.0), args)
+    events: Final = _evaluate(
+        _row(daily_spend=70.0, monthly_spend=100.0, baseline_spend=70.0), args
+    )
     assert [e.kind for e in events] == ["anomaly"]
     assert events[0].alert_type == AlertType.user_spend_anomalies
     assert "`$10.00`" in events[0].message
@@ -89,7 +91,9 @@ def test_anomaly_detected_above_multiple_of_baseline():
 
 def test_no_anomaly_within_baseline_multiple():
     args: Final = SlackAlertingArgs(spend_anomaly_multiplier=3.0, spend_anomaly_min_spend=10.0)
-    assert _evaluate(_row(daily_spend=25.0, monthly_spend=100.0, baseline_spend=70.0), args) == ()
+    assert (
+        _evaluate(_row(daily_spend=25.0, monthly_spend=100.0, baseline_spend=70.0), args) == ()
+    )
 
 
 def test_no_anomaly_below_min_spend_floor():

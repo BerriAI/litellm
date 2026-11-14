@@ -286,7 +286,9 @@ async def test_anthropic_messages_with_mcp_hands_execution_the_requests_served_t
     ]
 
     process = AsyncMock(return_value=(served, {"read_wiki_structure": "deepwiki"}))
-    execute = AsyncMock(return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "read_wiki_structure"}])
+    execute = AsyncMock(
+        return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "read_wiki_structure"}]
+    )
     responses = [
         {
             "stop_reason": "tool_use",

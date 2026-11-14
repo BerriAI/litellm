@@ -57,7 +57,9 @@ def test_audio_transcription_enforces_key_model_access(gateway: Gateway, path: s
             path, {"model": allowed}, {"file": ("a.wav", _WAV_BYTES, _WAV_CONTENT_TYPE)}, key=key
         )
         assert granted.status_code == 200, granted.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/v1/audio/transcriptions")
+        ]
 
 
 @pytest.mark.parametrize("path", ("/v1/audio/speech", "/audio/speech"))

@@ -146,4 +146,7 @@ def test_empty_constraints_match_nothing() -> None:
     )
 
     assert catalog.decision(RouteContext(Route.OCR), rules) is Decision.PYTHON
-    assert catalog.decision(RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), rules) is Decision.PYTHON
+    assert (
+        catalog.decision(RouteContext(Route.OCR, features=frozenset({Feature.STREAMING})), rules)
+        is Decision.PYTHON
+    )

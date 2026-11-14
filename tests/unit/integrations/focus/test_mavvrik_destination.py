@@ -609,7 +609,10 @@ async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
     await logger._run_scheduled_export()
 
     assert db_mock.get_usage_data.call_count == 1
-    assert db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date() == yesterday.date()
+    assert (
+        db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date()
+        == yesterday.date()
+    )
 
 
 @pytest.mark.asyncio
@@ -772,7 +775,8 @@ async def test_run_scheduled_export_uses_one_clock_read_across_midnight():
     await logger._run_scheduled_export()
 
     windows: Final = tuple(
-        (call.kwargs["start_time_utc"], call.kwargs["end_time_utc"]) for call in db_mock.get_usage_data.call_args_list
+        (call.kwargs["start_time_utc"], call.kwargs["end_time_utc"])
+        for call in db_mock.get_usage_data.call_args_list
     )
     assert windows == (
         (

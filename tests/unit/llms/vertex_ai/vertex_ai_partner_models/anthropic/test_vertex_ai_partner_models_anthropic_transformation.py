@@ -1,3 +1,4 @@
+
 import base64
 import copy
 import json
@@ -32,7 +33,9 @@ from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFU
     ],
 )
 def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
-    supported_openai_params = VertexAIAnthropicConfig().get_supported_openai_params(model=model)
+    supported_openai_params = VertexAIAnthropicConfig().get_supported_openai_params(
+        model=model
+    )
 
     if expected_thinking:
         assert "thinking" in supported_openai_params
@@ -135,9 +138,9 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
 
     # Assert that the anthropic-beta header with web-search is present
     assert "anthropic-beta" in headers, "anthropic-beta header should be present"
-    assert headers["anthropic-beta"] == "web-search-2025-03-05", (
-        f"anthropic-beta should be 'web-search-2025-03-05', got: {headers['anthropic-beta']}"
-    )
+    assert (
+        headers["anthropic-beta"] == "web-search-2025-03-05"
+    ), f"anthropic-beta should be 'web-search-2025-03-05', got: {headers['anthropic-beta']}"
 
     # Test that header is NOT added for non-Vertex requests
     headers_non_vertex = model_info.get_anthropic_headers(
@@ -148,8 +151,9 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
 
     # For non-Vertex (Anthropic-hosted), the web search header should NOT be in anthropic-beta
     # because Anthropic doesn't require it
-    assert "anthropic-beta" not in headers_non_vertex or "web-search" not in headers_non_vertex.get(
-        "anthropic-beta", ""
+    assert (
+        "anthropic-beta" not in headers_non_vertex
+        or "web-search" not in headers_non_vertex.get("anthropic-beta", "")
     ), "anthropic-beta with web-search should not be present for non-Vertex requests"
 
 
@@ -259,11 +263,13 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
         },
         "is_vertex_request": True,
     }
-    result_vertex = config.update_headers_with_optional_anthropic_beta(headers_vertex, optional_params_vertex)
-
-    assert "anthropic-beta" not in result_vertex, (
-        f"Vertex request should NOT have anthropic-beta header for structured output, got: {result_vertex.get('anthropic-beta')}"
+    result_vertex = config.update_headers_with_optional_anthropic_beta(
+        headers_vertex, optional_params_vertex
     )
+
+    assert (
+        "anthropic-beta" not in result_vertex
+    ), f"Vertex request should NOT have anthropic-beta header for structured output, got: {result_vertex.get('anthropic-beta')}"
 
     # Test case 2: Non-Vertex request with output_format SHOULD add beta header
     headers_non_vertex = {}
@@ -281,12 +287,12 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
         headers_non_vertex, optional_params_non_vertex
     )
 
-    assert "anthropic-beta" in result_non_vertex, (
-        "Non-Vertex request SHOULD have anthropic-beta header for structured output"
-    )
-    assert result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13", (
-        f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"
-    )
+    assert (
+        "anthropic-beta" in result_non_vertex
+    ), "Non-Vertex request SHOULD have anthropic-beta header for structured output"
+    assert (
+        result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13"
+    ), f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"
 
 
 def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
@@ -340,7 +346,9 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
 
     # Should have tools and tool_choice (tool-based approach)
     assert "tools" in result_params, "Tools should be present for structured output"
-    assert "tool_choice" in result_params, "Tool choice should be present for structured output"
+    assert (
+        "tool_choice" in result_params
+    ), "Tool choice should be present for structured output"
     assert "json_mode" in result_params, "JSON mode should be enabled"
 
     # Verify the tool is the response format tool
@@ -365,7 +373,9 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
     # Mock the parent transform_request to return data with output_format
     original_transform = config.__class__.__bases__[0].transform_request
 
-    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
+    def mock_transform_request(
+        self, model, messages, optional_params, litellm_params, headers
+    ):
         # Return test data that includes output_format
         return test_data.copy()
 
@@ -383,7 +393,9 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
 
         assert "output_format" not in final_data
         assert final_data["output_config"]["format"]["type"] == "json_schema"
-        assert "model" not in final_data, "model is still stripped (Vertex routes by URL)"
+        assert (
+            "model" not in final_data
+        ), "model is still stripped (Vertex routes by URL)"
         assert "tools" in final_data, "tools should still be present"
         assert "tool_choice" in final_data, "tool_choice should still be present"
 
@@ -419,7 +431,9 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
     )
 
     # Should still use tool-based approach
-    assert "tools" in result_params, "Claude 3 Sonnet should also use tool-based structured output"
+    assert (
+        "tools" in result_params
+    ), "Claude 3 Sonnet should also use tool-based structured output"
     assert "tool_choice" in result_params, "Tool choice should be present"
     assert "json_mode" in result_params, "JSON mode should be enabled"
 
@@ -781,7 +795,9 @@ def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
 
     original_transform = config.__class__.__bases__[0].transform_request
 
-    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
+    def mock_transform_request(
+        self, model, messages, optional_params, litellm_params, headers
+    ):
         return test_data.copy()
 
     config.__class__.__bases__[0].transform_request = mock_transform_request
@@ -1081,12 +1097,11 @@ def test_vertex_ai_anthropic_tool_based_response_format_still_upgrades_legacy_th
     assert result_params["output_config"] == {"effort": "high"}
 
 
+
+
 def _mid_conversation_system_conversation() -> list[dict]:
     return [
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}],
-        },
+        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Second question"},
@@ -1145,11 +1160,7 @@ def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], li
     second_question = {"role": "user", "content": "Second question"}
     second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
     turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
-    turn_n_plus_two = [
-        *turn_n_plus_one,
-        _thinking_reply("Second answer"),
-        {"role": "user", "content": "Third question"},
-    ]
+    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
     return turn_n, turn_n_plus_one, turn_n_plus_two
 
 
@@ -1211,9 +1222,7 @@ _SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so 
 _CLEAR_TOOL_USES: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
 
 
-def _vertex_request(
-    optional_params: dict[str, object], headers: dict[str, str], litellm_params: dict[str, object] | None = None
-) -> dict:
+def _vertex_request(optional_params: dict[str, object], headers: dict[str, str], litellm_params: dict[str, object] | None = None) -> dict:
     return VertexAIAnthropicConfig().transform_request(
         model="claude-opus-4-6",
         messages=[{"role": "user", "content": "Hello"}],
@@ -1316,7 +1325,9 @@ def test_vertex_ai_anthropic_client_sent_body_header_only_beta_moves_to_the_head
     gets the beta as a header and keeps its other betas in the body."""
     headers: Final[dict[str, str]] = {}
 
-    result: Final = _vertex_request({"anthropic_beta": [header_only_beta, "interleaved-thinking-2025-05-14"]}, headers)
+    result: Final = _vertex_request(
+        {"anthropic_beta": [header_only_beta, "interleaved-thinking-2025-05-14"]}, headers
+    )
 
     assert headers["anthropic-beta"] == header_only_beta
     assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
@@ -1398,10 +1409,7 @@ def test_vertex_ai_anthropic_malformed_anthropic_beta_is_dropped_under_drop_para
     local_beta_headers_config: None, malformed: object, source: str, field: str, auto_beta: bool
 ) -> None:
     headers: Final[dict[str, str]] = {}
-    params: Final = {
-        **_malformed_beta_params(source, malformed),
-        **({"context_management": _CLEAR_TOOL_USES} if auto_beta else {}),
-    }
+    params: Final = {**_malformed_beta_params(source, malformed), **({"context_management": _CLEAR_TOOL_USES} if auto_beta else {})}
 
     result: Final = _vertex_request(params, headers, litellm_params={"drop_params": True})
 
@@ -1421,9 +1429,7 @@ _VERTEX_MESSAGE_RESPONSE: Final = {
 }
 
 
-def test_vertex_ai_anthropic_completion_sends_compact_2026_09_04_beta_on_the_wire(
-    local_beta_headers_config: None,
-) -> None:
+def test_vertex_ai_anthropic_completion_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config: None) -> None:
     """A chat completion with `compaction` on a Vertex Claude deployment reaches Vertex with the beta in the
     anthropic-beta request header and never in the body field, the shape Vertex accepts (live, 2026-10-05)."""
     mock_response: Final = MagicMock()
@@ -1482,9 +1488,7 @@ def test_chat_preserves_thinking_display_and_beta(thinking_type: str, display: s
 
     assert result["thinking"]["type"] == "adaptive"
     assert result["thinking"]["display"] == display
-    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (
-        display == "updates"
-    )
+    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (display == "updates")
     assert "existing-beta" in headers["anthropic-beta"].split(",")
 
 
@@ -1496,11 +1500,8 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     headers: Final = {}
     result: Final = VertexAIAnthropicConfig().transform_request(
-        model="claude-fable-5-1",
-        messages=[{"role": "user", "content": "Hello"}],
-        optional_params={"thinking": thinking},
-        litellm_params={},
-        headers=headers,
+        model="claude-fable-5-1", messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"thinking": thinking}, litellm_params={}, headers=headers,
     )
 
     assert result["thinking"] == thinking

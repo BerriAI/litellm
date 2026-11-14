@@ -58,29 +58,23 @@ async def _client(env: pytest.MonkeyPatch, url: str, replica: str | None = None)
 
 @pytest.mark.asyncio
 async def test_migration_and_projector_use_the_primary_across_clients(
-    database: tuple[str, psycopg.Connection[tuple[object, ...]]],
-    monkeypatch: pytest.MonkeyPatch,
+    database: tuple[str, psycopg.Connection[tuple[object, ...]]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url, connection = database
     connection.execute('CREATE TABLE "LiteLLM_SpendLogs" (request_id TEXT PRIMARY KEY)')
-    connection.execute(
-        'INSERT INTO "LiteLLM_AutoRouterBaselineComparison" '
-        "(scope,api_key,session_id,router_name,initial_equivalent,revision) "
-        "VALUES ('test','key','session','router',TRUE,1)"
-    )
+    connection.execute('INSERT INTO "LiteLLM_AutoRouterBaselineComparison" '
+        '(scope,api_key,session_id,router_name,initial_equivalent,revision) '
+        "VALUES ('test','key','session','router',TRUE,1)")
     async with _client(monkeypatch, url, url.split("?")[0]) as first:
         assert await BaselineAccountingStore.for_client(first).project("test") == "published"
     async with _client(monkeypatch, url) as restarted:
         assert await BaselineAccountingStore.for_client(restarted).project("test") == "unchanged"
-    assert connection.execute(
-        'SELECT revision=published_revision FROM "LiteLLM_AutoRouterBaselineComparison"'
-    ).fetchone() == (True,)
+    assert connection.execute('SELECT revision=published_revision FROM "LiteLLM_AutoRouterBaselineComparison"').fetchone() == (True,)
 
 
 @pytest.mark.asyncio
 async def test_primary_outage_and_missing_table_are_unavailable(
-    database: tuple[str, psycopg.Connection[tuple[object, ...]]],
-    monkeypatch: pytest.MonkeyPatch,
+    database: tuple[str, psycopg.Connection[tuple[object, ...]]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url, connection = database
     async with _client(monkeypatch, "postgresql://unused:unused@127.0.0.1:1/unreachable", url) as degraded:
@@ -93,8 +87,7 @@ async def test_primary_outage_and_missing_table_are_unavailable(
 
 @pytest.mark.asyncio
 async def test_locked_projection_is_bounded_and_cancellation_propagates(
-    database: tuple[str, psycopg.Connection[tuple[object, ...]]],
-    monkeypatch: pytest.MonkeyPatch,
+    database: tuple[str, psycopg.Connection[tuple[object, ...]]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url, connection = database
     async with _client(monkeypatch, url) as client:

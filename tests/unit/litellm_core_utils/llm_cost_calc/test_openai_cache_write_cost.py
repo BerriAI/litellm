@@ -91,7 +91,8 @@ def test_responses_api_cache_write_costs_the_same_as_chat(local_model_cost_map):
     rates = litellm.model_cost[MODEL]
     fresh_tokens = prompt_tokens - cache_write_tokens
     assert responses_prompt_cost == pytest.approx(
-        fresh_tokens * rates["input_cost_per_token"] + cache_write_tokens * rates["cache_creation_input_token_cost"]
+        fresh_tokens * rates["input_cost_per_token"]
+        + cache_write_tokens * rates["cache_creation_input_token_cost"]
     )
     assert responses_prompt_cost == pytest.approx(chat_prompt_cost)
     assert responses_completion_cost == pytest.approx(chat_completion_cost)

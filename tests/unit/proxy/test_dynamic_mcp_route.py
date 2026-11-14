@@ -23,13 +23,16 @@ from fastapi import HTTPException
 # ---------------------------------------------------------------------------
 
 _MCP_MANAGER = "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-_HANDLE_HTTP = "litellm.proxy.mcp_server.server.handle_streamable_http_mcp"
+_HANDLE_HTTP = (
+    "litellm.proxy.mcp_server.server.handle_streamable_http_mcp"
+)
 _STREAM_ASGI = "litellm.proxy.proxy_server._stream_mcp_asgi_response"
 _PRISMA = "litellm.proxy.proxy_server.prisma_client"
 _IS_ACCESS_GROUP = "litellm.proxy.proxy_server._is_mcp_access_group_cached"
 _USER_API_KEY_CACHE = "litellm.proxy.proxy_server.user_api_key_cache"
 _GET_ACCESS_GROUP_SERVERS = (
-    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups"
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp."
+    "MCPRequestHandler.get_mcp_servers_from_access_groups"
 )
 _FORWARD = "litellm.proxy.proxy_server._mcp_forward_as_path"
 _RESOLVE_CSV = "litellm.proxy.proxy_server._resolve_mcp_csv_tokens"
@@ -232,7 +235,9 @@ async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups()
     fake_mgr = MagicMock()
     # Only "registered_srv" is a known server alias.
     fake_mgr.get_mcp_server_by_name = MagicMock(
-        side_effect=lambda name, client_ip=None: _fake_server(name) if name == "registered_srv" else None
+        side_effect=lambda name, client_ip=None: (
+            _fake_server(name) if name == "registered_srv" else None
+        )
     )
 
     # "dev_group" is a real access group; "ghost" is not.
@@ -242,7 +247,9 @@ async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups()
         patch(_MCP_MANAGER, fake_mgr),
         patch(_IS_ACCESS_GROUP, new=is_group),
     ):
-        resolved = await _resolve_mcp_csv_tokens("registered_srv,dev_group,ghost", client_ip=None)
+        resolved = await _resolve_mcp_csv_tokens(
+            "registered_srv,dev_group,ghost", client_ip=None
+        )
 
     assert resolved == ["registered_srv", "dev_group"]
     # Access-group lookup must NOT be called for "registered_srv" (already
@@ -493,7 +500,9 @@ async def test_dynamic_mcp_route_unexpected_exception_returns_500_without_traceb
     request = _make_request("/boom/mcp")
 
     fake_mgr = MagicMock()
-    fake_mgr.get_mcp_server_by_name = MagicMock(side_effect=RuntimeError("internal host: redis://10.0.0.1:6379"))
+    fake_mgr.get_mcp_server_by_name = MagicMock(
+        side_effect=RuntimeError("internal host: redis://10.0.0.1:6379")
+    )
 
     with patch(_MCP_MANAGER, fake_mgr):
         with pytest.raises(HTTPException) as exc_info:
@@ -514,7 +523,9 @@ async def test_toolset_mcp_route_unexpected_exception_returns_500_without_traceb
     request = _make_request("/toolset/broken_toolset/mcp")
 
     fake_mgr = MagicMock()
-    fake_mgr.get_toolset_by_name_cached = AsyncMock(side_effect=RuntimeError("connection to db-host:5432 refused"))
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(
+        side_effect=RuntimeError("connection to db-host:5432 refused")
+    )
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
@@ -615,21 +626,13 @@ async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch
     from litellm.proxy.mcp_server import mcp_server_manager
 
     old_row = LiteLLM_MCPServerTable(
-        server_id="catalog-route",
-        server_name="previous",
-        alias="previous",
-        transport="http",
-        url="https://previous.example/mcp",
-        updated_at=datetime(2026, 1, 1),
+        server_id="catalog-route", server_name="previous", alias="previous", transport="http",
+        url="https://previous.example/mcp", updated_at=datetime(2026, 1, 1),
     )
-    new_row = old_row.model_copy(
-        update={
-            "server_name": "current",
-            "alias": "current",
-            "url": "https://current.example/mcp",
-            "updated_at": datetime(2026, 1, 2),
-        }
-    )
+    new_row = old_row.model_copy(update={
+        "server_name": "current", "alias": "current", "url": "https://current.example/mcp",
+        "updated_at": datetime(2026, 1, 2),
+    })
 
     async def find_rows(*, where):
         if "mcp_access_groups" in where or change == "delete":
@@ -637,13 +640,11 @@ async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch
         return [new_row]
 
     read_rows = AsyncMock(side_effect=find_rows)
-    prisma = SimpleNamespace(
-        db=SimpleNamespace(
-            litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
-            litellm_mcptoolsettable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
-            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
-        )
-    )
+    prisma = SimpleNamespace(db=SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
+        litellm_mcptoolsettable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+    ))
     prisma.writer_db = prisma.db
     manager = mcp_server_manager.MCPServerManager()
     if change != "create":

@@ -3040,7 +3040,9 @@ class TestOpenAIPassthroughDecisionsSpendLog:
     ):
         decisions_rates: Final = litellm.model_cost[DECISIONS_MODEL]
 
-        spend_log_row: Final = await self._spend_row("POST", url_route, {**DECISIONS_REQUEST, "model": requested_model})
+        spend_log_row: Final = await self._spend_row(
+            "POST", url_route, {**DECISIONS_REQUEST, "model": requested_model}
+        )
 
         assert spend_log_row["prompt_tokens"] == DECISIONS_INPUT_TOKENS
         assert spend_log_row["completion_tokens"] == DECISIONS_OUTPUT_TOKENS

@@ -66,7 +66,9 @@ async def test_string_harness_raises_type_error_with_hint(monkeypatch, sandbox):
 async def test_options_mismatch(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch)
     with pytest.raises(OptionsMismatch, match="CodexOptions"):
-        await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, options=CodexOptions())
+        await runtime.aagent(
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, options=CodexOptions()
+        )
     assert adapter_cls.instances == []
 
 
@@ -101,14 +103,20 @@ async def test_skills_capability_error_before_start(monkeypatch, sandbox, tmp_pa
 async def test_skill_folder_without_skill_md_rejected(monkeypatch, sandbox, tmp_path):
     install_adapter(monkeypatch)
     with pytest.raises(ValueError, match=r"SKILL\.md"):
-        await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, skills=[tmp_path])
+        await runtime.aagent(
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, skills=[tmp_path]
+        )
 
 
 async def test_ask_without_handler_only_allowed_for_stream(monkeypatch, sandbox):
     install_adapter(monkeypatch)
     with pytest.raises(ValueError, match="on_approval"):
-        await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask")
-    stream = runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True)
+        await runtime.aagent(
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask"
+        )
+    stream = runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True
+    )
     events = await _collect(stream)
     assert isinstance(events[-1], Done)
 
@@ -117,10 +125,7 @@ async def test_invalid_permissions_value(monkeypatch, sandbox):
     install_adapter(monkeypatch)
     with pytest.raises(ValueError, match="permissions"):
         await runtime.aagent(
-            Harness.CLAUDE_CODE,
-            "hi",
-            sandbox=sandbox,
-            permissions="yolo",  # type: ignore[arg-type]
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="yolo"  # type: ignore[arg-type]
         )
 
 
@@ -132,14 +137,20 @@ def test_litellm_proxy_prefix_routes_through_gateway_env(monkeypatch):
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
     model, gateway = runtime.resolve_model_route("litellm_proxy/coder", None, None)
     assert model == "coder"
-    assert gateway == runtime.GatewayTarget(api_base="https://gw.example.com", api_key="sk-test")
+    assert gateway == runtime.GatewayTarget(
+        api_base="https://gw.example.com", api_key="sk-test"
+    )
 
 
 def test_litellm_proxy_call_args_win_over_env(monkeypatch):
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://env.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-env")
-    _, gateway = runtime.resolve_model_route("litellm_proxy/coder", "sk-arg", "https://arg.example.com")
-    assert gateway == runtime.GatewayTarget(api_base="https://arg.example.com", api_key="sk-arg")
+    _, gateway = runtime.resolve_model_route(
+        "litellm_proxy/coder", "sk-arg", "https://arg.example.com"
+    )
+    assert gateway == runtime.GatewayTarget(
+        api_base="https://arg.example.com", api_key="sk-arg"
+    )
 
 
 def test_litellm_proxy_without_base_raises(monkeypatch):
@@ -177,7 +188,9 @@ async def test_gateway_passed_to_endpoint(monkeypatch, sandbox):
     install_adapter(monkeypatch)
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://gw.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
-    await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, model="litellm_proxy/m")
+    await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, model="litellm_proxy/m"
+    )
     endpoint = FakeEndpoint.instances[0]
     assert endpoint.gateway.api_key == "sk-test"
     assert endpoint.model == "m"
@@ -189,7 +202,9 @@ async def test_gateway_passed_to_endpoint(monkeypatch, sandbox):
 
 async def test_text_and_tool_events_flow_and_done_last(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch)
-    events = await _collect(runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True))
+    events = await _collect(
+        runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True)
+    )
     kinds = [type(e).__name__ for e in events]
     assert kinds == ["Text", "ToolCall", "ToolResult", "Text", "Done"]
     assert sum(isinstance(e, Done) for e in events) == 1
@@ -244,7 +259,9 @@ async def _tool_loop(adapter, ctx, prompt) -> AsyncIterator[Event]:
 
 async def test_max_turns_stop(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=_tool_loop)
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, max_turns=3)
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, max_turns=3
+    )
     assert result.stop_reason == "max_turns"
     assert sum(isinstance(e, ToolCall) for e in result.events) == 3
     assert "stop" in adapter_cls.instances[0].calls
@@ -258,7 +275,9 @@ async def _slow(adapter, ctx, prompt) -> AsyncIterator[Event]:
 
 async def test_timeout_stop(monkeypatch, sandbox):
     install_adapter(monkeypatch, script=_slow)
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, timeout=0.2)
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, timeout=0.2
+    )
     assert result.stop_reason == "timeout"
     assert result.text == "thinking"
 
@@ -351,7 +370,9 @@ async def test_approval_handler_raises_denies(monkeypatch, sandbox):
 
 async def test_stream_consumer_answers_approval(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=script_approval)
-    stream = runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True)
+    stream = runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True
+    )
     async for event in stream:
         if isinstance(event, Approval):
             event.allow()
@@ -360,7 +381,11 @@ async def test_stream_consumer_answers_approval(monkeypatch, sandbox):
 
 async def test_unanswered_approval_denied(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=script_approval)
-    events = await _collect(runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True))
+    events = await _collect(
+        runtime.aagent(
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True
+        )
+    )
     allowed, reason = adapter_cls.instances[0].approvals[0]
     assert allowed is False and "not answered" in reason
     assert isinstance(events[-1], Done)
@@ -384,14 +409,20 @@ def _answer_script(text: str, output_json: str | None = None):
 
 
 async def test_structured_output_from_text(monkeypatch, sandbox):
-    install_adapter(monkeypatch, script=_answer_script('Sure. {"x": 1} then {"value": 42} done'))
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer)
+    install_adapter(
+        monkeypatch, script=_answer_script('Sure. {"x": 1} then {"value": 42} done')
+    )
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer
+    )
     assert result.output == Answer(value=42)
 
 
 async def test_structured_output_from_ctx_output_json(monkeypatch, sandbox):
     install_adapter(monkeypatch, script=_answer_script("ok", '{"value": 7}'))
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer)
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer
+    )
     assert result.output == Answer(value=7)
 
 
@@ -412,7 +443,9 @@ async def test_structured_output_missing_json(monkeypatch, sandbox):
 
 async def test_stream_yields_done_before_output_invalid(monkeypatch, sandbox):
     install_adapter(monkeypatch, script=_answer_script("nothing"))
-    stream = runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer, stream=True)
+    stream = runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer, stream=True
+    )
     seen: list[object] = []
     with pytest.raises(OutputInvalid):
         await _drain_into(stream, seen)
@@ -447,7 +480,9 @@ async def test_file_changes_emitted_once(monkeypatch, sandbox, tmp_path):
     (tmp_path / "keep.txt").write_text("original\n")
     (tmp_path / "gone.txt").write_text("bye\n")
     install_adapter(monkeypatch, script=_edit_files)
-    events = await _collect(runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True))
+    events = await _collect(
+        runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True)
+    )
     file_events = [e for e in events if isinstance(e, FileChange)]
     assert sorted((e.path, e.kind) for e in file_events) == [
         ("gone.txt", "deleted"),
@@ -505,7 +540,9 @@ async def test_session_restarts_after_timeout(monkeypatch, sandbox):
         yield Text("ok")
 
     adapter_cls = install_adapter(monkeypatch, script=script)
-    async with runtime.aagent_session(Harness.CLAUDE_CODE, sandbox=sandbox, timeout=0.2) as session:
+    async with runtime.aagent_session(
+        Harness.CLAUDE_CODE, sandbox=sandbox, timeout=0.2
+    ) as session:
         assert (await session.arun("one")).stop_reason == "timeout"
         assert (await session.arun("two")).text == "ok"
     adapter = adapter_cls.instances[0]
@@ -515,7 +552,9 @@ async def test_session_restarts_after_timeout(monkeypatch, sandbox):
 
 async def test_detach_state_round_trip_resume(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch)
-    async with runtime.aagent_session(Harness.CLAUDE_CODE, sandbox=sandbox, model="m1") as session:
+    async with runtime.aagent_session(
+        Harness.CLAUDE_CODE, sandbox=sandbox, model="m1"
+    ) as session:
         await session.arun("one")
         state = await session.adetach()
     data = state.dumps()

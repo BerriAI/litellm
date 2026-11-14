@@ -34,20 +34,32 @@ class TestAmazonInvokeAgentConfig:
         return [
             {
                 "headers": {"event_type": "chunk"},
-                "payload": {"bytes": base64.b64encode("Hello ".encode("utf-8")).decode("utf-8")},
+                "payload": {
+                    "bytes": base64.b64encode("Hello ".encode("utf-8")).decode("utf-8")
+                },
             },
             {
                 "headers": {"event_type": "chunk"},
-                "payload": {"bytes": base64.b64encode("world!".encode("utf-8")).decode("utf-8")},
+                "payload": {
+                    "bytes": base64.b64encode("world!".encode("utf-8")).decode("utf-8")
+                },
             },
             {
                 "headers": {"event_type": "trace"},
                 "payload": {
                     "trace": {
                         "preProcessingTrace": {
-                            "modelInvocationOutput": {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 20}}}
+                            "modelInvocationOutput": {
+                                "metadata": {
+                                    "usage": {"inputTokens": 10, "outputTokens": 20}
+                                }
+                            }
                         },
-                        "orchestrationTrace": {"modelInvocationInput": {"foundationModel": "anthropic.claude-v2"}},
+                        "orchestrationTrace": {
+                            "modelInvocationInput": {
+                                "foundationModel": "anthropic.claude-v2"
+                            }
+                        },
                     }
                 },
             },
@@ -74,7 +86,9 @@ class TestAmazonInvokeAgentConfig:
             with pytest.raises(ValueError, match="Invalid model format"):
                 config._get_agent_id_and_alias_id(invalid_model)
 
-    @patch("litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str")
+    @patch(
+        "litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str"
+    )
     def test_transform_request(self, mock_convert, config, sample_messages):
         """Test transform_request method"""
         mock_convert.return_value = "What is the weather like?"
@@ -151,7 +165,9 @@ class TestAmazonInvokeAgentConfig:
         """Test _extract_and_update_preprocessing_usage method"""
         trace_data = {
             "preProcessingTrace": {
-                "modelInvocationOutput": {"metadata": {"usage": {"inputTokens": 15, "outputTokens": 25}}}
+                "modelInvocationOutput": {
+                    "metadata": {"usage": {"inputTokens": 15, "outputTokens": 25}}
+                }
             }
         }
         usage_info = {"inputTokens": 5, "outputTokens": 10, "model": None}
@@ -174,7 +190,11 @@ class TestAmazonInvokeAgentConfig:
 
     def test_extract_orchestration_model(self, config):
         """Test _extract_orchestration_model method"""
-        trace_data = {"orchestrationTrace": {"modelInvocationInput": {"foundationModel": "anthropic.claude-v2"}}}
+        trace_data = {
+            "orchestrationTrace": {
+                "modelInvocationInput": {"foundationModel": "anthropic.claude-v2"}
+            }
+        }
         result = config._extract_orchestration_model(trace_data)
         assert result == "anthropic.claude-v2"
 
@@ -195,7 +215,9 @@ class TestAmazonInvokeAgentConfig:
         }
         model_response = ModelResponse()
 
-        result = config._build_model_response(content, model, usage_info, model_response)
+        result = config._build_model_response(
+            content, model, usage_info, model_response
+        )
 
         assert len(result.choices) == 1
         assert result.choices[0].message.content == content
@@ -207,7 +229,9 @@ class TestAmazonInvokeAgentConfig:
         assert result.usage.completion_tokens == 20
         assert result.usage.total_tokens == 30
 
-    @patch("litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str")
+    @patch(
+        "litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str"
+    )
     @patch.object(AmazonInvokeAgentConfig, "get_runtime_endpoint")
     @patch.object(AmazonInvokeAgentConfig, "_get_aws_region_name")
     def test_get_complete_url(self, mock_region, mock_endpoint, mock_convert, config):
@@ -224,17 +248,23 @@ class TestAmazonInvokeAgentConfig:
         optional_params = {}
         litellm_params = {}
 
-        result = config.get_complete_url(api_base, api_key, model, optional_params, litellm_params)
+        result = config.get_complete_url(
+            api_base, api_key, model, optional_params, litellm_params
+        )
 
         assert (
             "https://bedrock-runtime.us-east-1.amazonaws.com/agents/L1RT58GYRW/agentAliases/MFPSBCXYTW/sessions"
             in result
         )
 
-    @patch("litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str")
+    @patch(
+        "litellm.llms.bedrock.chat.invoke_agent.transformation.convert_content_list_to_str"
+    )
     @patch.object(AmazonInvokeAgentConfig, "get_runtime_endpoint")
     @patch.object(AmazonInvokeAgentConfig, "_get_aws_region_name")
-    def test_get_complete_url_encodes_session_id(self, mock_region, mock_endpoint, mock_convert, config):
+    def test_get_complete_url_encodes_session_id(
+        self, mock_region, mock_endpoint, mock_convert, config
+    ):
         """Test get_complete_url encodes session ID path segment."""
         mock_endpoint.return_value = (
             "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -259,7 +289,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -268,7 +297,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -301,7 +329,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -316,13 +343,11 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
-
 @pytest.fixture
 def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-
 
 @pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
 def test_bedrock_agents_with_custom_params():

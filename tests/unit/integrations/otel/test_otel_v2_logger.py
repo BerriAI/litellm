@@ -511,7 +511,9 @@ def test_cache_hit_without_pre_call_emits_zero_cost_span():
         saved_cache_cost=0.002,
         cost_breakdown={"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
     )
-    asyncio.run(logger.async_log_success_event(_kwargs(payload=payload), None, None, None))
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
     (span,) = exporter.get_finished_spans()
     assert span.attributes[LiteLLM.CACHE_HIT] is True
     assert span.attributes[LiteLLM.SAVED_CACHE_COST] == 0.002
@@ -534,7 +536,9 @@ def test_cache_miss_without_pre_call_still_emits_no_span():
     with no ``pre_call`` carrier and no cache hit still emits nothing."""
     logger, exporter = _logger()
     payload: Final = _payload(cache_hit=False, response_cost=0.002)
-    asyncio.run(logger.async_log_success_event(_kwargs(payload=payload), None, None, None))
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
     assert exporter.get_finished_spans() == ()
 
 

@@ -115,7 +115,9 @@ TOOL_PARAMS: Final = tuple(
 WEATHER_TOOL = FunctionTool(
     name="get_weather",
     description="Get the current temperature in Fahrenheit for a given city.",
-    parameters=JsonSchema(properties={"city": JsonSchemaProperty(type="string")}, required=["city"]),
+    parameters=JsonSchema(
+        properties={"city": JsonSchemaProperty(type="string")}, required=["city"]
+    ),
 )
 
 
@@ -196,7 +198,9 @@ def test_tool_call_round_trip(
         session.send(ResponseCreate())
         final_answer = _tool_call_loop(session, max_rounds=4)
 
-        assert "72" in transcript(final_answer), "the answer after the tool results did not use them"
+        assert "72" in transcript(final_answer), (
+            "the answer after the tool results did not use them"
+        )
 
 
 def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[ReceivedEvent, ...]:
@@ -210,7 +214,9 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
         events = session.collect_until("response.done", timeout=60)
         done = parse_last(events, "response.done", ResponseDone)
         assert done is not None
-        calls = tuple(item for item in done.response.output or () if item.type == "function_call")
+        calls = tuple(
+            item for item in done.response.output or () if item.type == "function_call"
+        )
         if not calls:
             assert round_index > 0, "model did not emit a function call"
             return events
@@ -221,12 +227,16 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
         )
         for item in calls:
             assert item.name == "get_weather", item
-            args_event = next(event for event in done_args if event.call_id == item.call_id)
+            args_event = next(
+                event for event in done_args if event.call_id == item.call_id
+            )
             args = WeatherArgs.model_validate_json(args_event.arguments)
             tool_result = WeatherResult(city=args.city, temperature_f=72)
             session.send(
                 ConversationItemCreate(
-                    item=FunctionCallOutputItem(call_id=args_event.call_id, output=tool_result.model_dump_json())
+                    item=FunctionCallOutputItem(
+                        call_id=args_event.call_id, output=tool_result.model_dump_json()
+                    )
                 )
             )
         session.send(ResponseCreate())
@@ -267,7 +277,9 @@ def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
     resources.defer(lambda: client.proxy.delete_model(model_id))
 
     with client.connect(key=scoped_key, model=model_name) as session:
-        first = ServerEnvelope.model_validate_json(as_text(session.connection.recv(timeout=15)))
+        first = ServerEnvelope.model_validate_json(
+            as_text(session.connection.recv(timeout=15))
+        )
         assert first.type == "error", first
         with pytest.raises(ConnectionClosedError) as closed:
             session.connection.recv(timeout=15)

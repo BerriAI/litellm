@@ -106,7 +106,10 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     tool_call_id = tools[0]["id"]
 
     # Verify signature is always in provider_specific_fields
-    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == test_signature
+    )
 
     # When preview features enabled, signature should be embedded in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
@@ -243,7 +246,9 @@ def test_openai_client_e2e_flow(enable_preview_features):
         ],
     }
     # Step 4: LiteLLM converts back to Gemini format, extracting signature
-    gemini_parts_converted = convert_to_gemini_tool_call_invoke(openai_assistant_message)
+    gemini_parts_converted = convert_to_gemini_tool_call_invoke(
+        openai_assistant_message
+    )
 
     # Verify signature is preserved through the round trip
     assert len(gemini_parts_converted) == 1
@@ -278,7 +283,10 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert len(tools) == 2
 
     # First tool call should have signature in provider_specific_fields
-    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == signature1
+    )
 
     # When preview features enabled, first tool call has signature in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
@@ -507,9 +515,7 @@ async def _messages_tool_use_blocks(stream: bool) -> list[Mapping[str, object]]:
             return [block for block in response["content"] if block["type"] == "tool_use"]
         assert isinstance(response, AsyncIterator)
         relayed: Final = b"".join([chunk async for chunk in response])
-    events: Final = [
-        json.loads(line.removeprefix(b"data: ")) for line in relayed.splitlines() if line.startswith(b"data:")
-    ]
+    events: Final = [json.loads(line.removeprefix(b"data: ")) for line in relayed.splitlines() if line.startswith(b"data:")]
     return [event["content_block"] for event in events if _is_tool_use_start(event)]
 
 
@@ -607,9 +613,7 @@ def test_responses_function_call_provider_fields_reach_the_provider_only_with_sh
         )
         sent_body: Final = json.loads(route.calls.last.request.content)
 
-    sent_tool_calls: Final = list(
-        chain.from_iterable(message.get("tool_calls") or () for message in sent_body["messages"])
-    )
+    sent_tool_calls: Final = list(chain.from_iterable(message.get("tool_calls") or () for message in sent_body["messages"]))
     assert len(sent_tool_calls) == 1
     assert ("provider_specific_fields" in sent_tool_calls[0]) is bool(request_params)
 
@@ -623,7 +627,9 @@ def test_responses_function_call_replays_its_thought_signature_to_gemini(client_
         "name": function_call.name,
         "arguments": function_call.arguments,
         **(
-            {"provider_specific_fields": function_call.provider_specific_fields} if client_keeps_provider_fields else {}
+            {"provider_specific_fields": function_call.provider_specific_fields}
+            if client_keeps_provider_fields
+            else {}
         ),
     }
 
@@ -717,10 +723,7 @@ def test_deployment_setting_rejects_a_value_that_is_not_a_boolean():
             model_list=[
                 {
                     "model_name": "gemini-agentcore",
-                    "litellm_params": {
-                        "model": "gemini/gemini-3.5-flash",
-                        "thought_signature_in_tool_call_id": "maybe",
-                    },
+                    "litellm_params": {"model": "gemini/gemini-3.5-flash", "thought_signature_in_tool_call_id": "maybe"},
                 }
             ]
         )
@@ -845,18 +848,11 @@ def test_tool_results_keep_their_own_names_when_tool_call_ids_share_a_prefix(too
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": name, "arguments": '{"city": "Paris"}'},
-                        }
+                        {"id": call_id, "type": "function", "function": {"name": name, "arguments": '{"city": "Paris"}'}}
                         for name, call_id in called_tools
                     ],
                 },
-                *(
-                    {"role": "tool", "tool_call_id": call_id, "content": f'{{"{name}": 1}}'}
-                    for name, call_id in called_tools
-                ),
+                *({"role": "tool", "tool_call_id": call_id, "content": f'{{"{name}": 1}}'} for name, call_id in called_tools),
             ],
             tools=[WEATHER_TOOL, TIME_TOOL],
             api_key="test-gemini-key",

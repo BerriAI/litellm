@@ -555,11 +555,7 @@ class TestVertexAITextToSpeechConfig:
                     "multiSpeakerVoiceConfig": {
                         "speakerVoiceConfigs": [
                             {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
-                            {
-                                "speaker": "Katie",
-                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
-                                "tone": "x",
-                            },
+                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "x"},
                         ]
                     }
                 },
@@ -569,16 +565,8 @@ class TestVertexAITextToSpeechConfig:
                 {
                     "multiSpeakerVoiceConfig": {
                         "speakerVoiceConfigs": [
-                            {
-                                "speaker": "Ryan",
-                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}},
-                                "tone": "x",
-                            },
-                            {
-                                "speaker": "Katie",
-                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
-                                "tone": "y",
-                            },
+                            {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}, "tone": "x"},
+                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "y"},
                         ]
                     }
                 },
@@ -601,10 +589,7 @@ class TestVertexAITextToSpeechConfig:
                 },
                 "multiSpeakerVoiceConfig.speakerVoiceConfigs.voiceConfig.replicatedVoiceConfig",
             ),
-            (
-                {"languageCode": ["en-US"], "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
-                "languageCode",
-            ),
+            ({"languageCode": ["en-US"], "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}, "languageCode"),
             ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": 5}}}, "voiceConfig.prebuiltVoiceConfig.voiceName"),
             ({"voiceConfig": "Puck"}, "voiceConfig"),
             ({"multiSpeakerVoiceConfig": [{"speaker": "Ryan"}]}, "multiSpeakerVoiceConfig"),
@@ -2206,12 +2191,8 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_malformed_params_are_bad_request
 async def test_aspeech_vertex_ai_beta_lyria_2_serves_the_openai_params_it_ignores(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
 ) -> None:
-    route: Final = respx_mock.post(
-        url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$"
-    ).mock(
-        return_value=httpx.Response(
-            200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]}
-        )
+    route: Final = respx_mock.post(url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$").mock(
+        return_value=httpx.Response(200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]})
     )
 
     response: Final = await litellm.aspeech(

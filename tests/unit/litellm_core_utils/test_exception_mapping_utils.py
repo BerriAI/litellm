@@ -162,9 +162,7 @@ def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
     ("provider_error", "mapped_class"),
     [
         (
-            httpx.ReadError(
-                "peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")
-            ),
+            httpx.ReadError("peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")),
             litellm.APIConnectionError,
         ),
         (RuntimeError("stream decoder failed"), litellm.APIConnectionError),
@@ -3404,7 +3402,9 @@ def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() ->
         headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIDSIGNED/20261029/us-east-1/bedrock/aws4_request"},
         content=b'{"messages":[{"role":"user","content":[{"text":"hi"}]}]}',
     )
-    upstream: Final = httpx.Response(500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request)
+    upstream: Final = httpx.Response(
+        500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request
+    )
 
     with pytest.raises(litellm.ServiceUnavailableError) as raised:
         exception_type(

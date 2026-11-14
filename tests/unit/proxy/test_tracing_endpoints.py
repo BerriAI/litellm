@@ -1009,12 +1009,8 @@ async def test_storage_preserves_page_cursor_and_normalizes_remote_trace_data(
 
     def accept(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content) == {
-            "operation": "trace",
-            "scope": {**scope, "team_ids": []},
-            "trace_id": "t1",
-            "trace_ref": "run",
-            "cursor": cursor,
-            "page_size": page_size,
+            "operation": "trace", "scope": {**scope, "team_ids": []}, "trace_id": "t1", "trace_ref": "run",
+            "cursor": cursor, "page_size": page_size,
         }
         return httpx.Response(200, json={**TRACE_RESPONSE, "next_cursor": "more"})
 
@@ -1030,9 +1026,7 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
     async with httpx.AsyncClient(
         base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=QUERY_HELP))
     ) as client:
-        assert await LensTraceStorage(RemoteTraceStore(client)).query_help(
-            {"kind": "all"}, "secret"
-        ) == TraceQueryHelp.model_validate(QUERY_HELP)
+        assert await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
 
 
 @pytest.mark.parametrize(
@@ -1056,8 +1050,7 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
 )
 async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(drift: Mapping[str, object]) -> None:
     async with httpx.AsyncClient(
-        base_url="http://lens",
-        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift})),
+        base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift}))
     ) as client:
         with pytest.raises(RuntimeError, match="invalid response"):
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")

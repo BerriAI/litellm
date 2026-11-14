@@ -274,42 +274,12 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _ended_sse_chunks() -> list:
         events = [
-            (
-                "message_start",
-                {
-                    "type": "message_start",
-                    "message": {
-                        "id": "msg_1",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-4-5",
-                        "content": [],
-                        "stop_reason": None,
-                        "usage": {"input_tokens": 1, "output_tokens": 0},
-                    },
-                },
-            ),
-            (
-                "content_block_start",
-                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            ),
-            (
-                "content_block_delta",
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}},
-            ),
-            (
-                "content_block_delta",
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}},
-            ),
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}}),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            (
-                "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                    "usage": {"output_tokens": 2},
-                },
-            ),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
             ("message_stop", {"type": "message_stop"}),
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
@@ -406,58 +376,13 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
         events = [
-            (
-                "message_start",
-                {
-                    "type": "message_start",
-                    "message": {
-                        "id": "msg_1",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-4-5",
-                        "content": [],
-                        "stop_reason": None,
-                        "usage": {"input_tokens": 1, "output_tokens": 0},
-                    },
-                },
-            ),
-            (
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}},
-                },
-            ),
-            (
-                "content_block_delta",
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
-            ),
-            (
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'},
-                },
-            ),
-            (
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "input_json_delta", "partial_json": 'mon"}'},
-                },
-            ),
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            (
-                "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                    "usage": {"output_tokens": 2},
-                },
-            ),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
             ("message_stop", {"type": "message_stop"}),
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
@@ -478,8 +403,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
             json.loads(line[len("data:") :].strip())["delta"]["partial_json"]
             for chunk in chunks
             for line in chunk.decode().split("\n")
-            if line.startswith("data:")
-            and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
+            if line.startswith("data:") and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
         ]
 
     @pytest.mark.asyncio
@@ -572,10 +496,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[LiteLLMLoggingObj] = None,
             ) -> GenericGuardrailAPIInputs:
                 for tool_call in inputs.get("tool_calls", []):
-                    if (
-                        isinstance(tool_call, ChatCompletionMessageToolCall)
-                        and "persimmon" in tool_call.function.arguments
-                    ):
+                    if isinstance(tool_call, ChatCompletionMessageToolCall) and "persimmon" in tool_call.function.arguments:
                         tool_call.function.arguments = '{"fruit": "[MASKED]"}'
                 return inputs
 
@@ -2681,7 +2602,9 @@ class TestAnthropicMessagesScanOnlyToolResults:
                 {"role": "user", "content": "weather in Paris?"},
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}],
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
                 },
                 {
                     "role": "user",
@@ -3026,7 +2949,9 @@ class TestStructuredWriteBackKeepsToolResults:
         ],
         ids=["tool_reference", "empty"],
     )
-    async def test_tool_result_stays_right_after_its_tool_use(self, tool_result_content, expected_written_back_content):
+    async def test_tool_result_stays_right_after_its_tool_use(
+        self, tool_result_content, expected_written_back_content
+    ):
         handler = AnthropicMessagesHandler()
         data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
 

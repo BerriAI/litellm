@@ -31,11 +31,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.types.proxy.auth.customer_hierarchy import (
-    CustomerHierarchyAuth,
-    CustomerRequestIdentity,
-    CustomerScopeAuth,
-)
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerRequestIdentity, CustomerScopeAuth
 from tests._master_key import MASTER_KEY
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -246,11 +242,7 @@ async def test_restricted_key_model_list_denial_names_the_denied_model(
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(
-            identity,
-            request,
-            {"model": ["model-a", "model-b"]},
-            "/chat/completions",
-            "synthetic",
+            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic",
             force_virtual_key_checks=True,
         )
     assert denied.value.code == "403"
@@ -814,6 +806,8 @@ def test_get_api_key_from_custom_header_different_casing():
         custom_header_name="X-Custom-API-Key",
         expected_api_key=token,
     )
+
+
 
 
 @pytest.mark.parametrize(

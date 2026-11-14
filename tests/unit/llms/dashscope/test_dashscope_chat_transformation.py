@@ -85,7 +85,9 @@ class TestDashScopeConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = (
+            True  # since this uses respx, we need to set use_aiohttp_transport to False
+        )
 
         # Set up environment variables for the test
         api_key = "fake-dashscope-key"
@@ -122,7 +124,9 @@ class TestDashScopeConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
+            messages=[
+                {"role": "user", "content": "write code for saying hey from LiteLLM"}
+            ],
             api_key=api_key,
             api_base=api_base,
         )
@@ -185,8 +189,10 @@ class TestDashScopeConfig:
             },
         ]
 
-        transformed_messages, _ = config.remove_cache_control_flag_from_messages_and_tools(
-            model="dashscope/qwen-turbo", messages=messages
+        transformed_messages, _ = (
+            config.remove_cache_control_flag_from_messages_and_tools(
+                model="dashscope/qwen-turbo", messages=messages
+            )
         )
 
         assert transformed_messages[0].get("cache_control") == {"type": "ephemeral"}
@@ -194,7 +200,9 @@ class TestDashScopeConfig:
     @pytest.mark.parametrize("reasoning_effort", ["none", "minimal", "low", "high"])
     def test_dashscope_forwards_reasoning_effort(self, reasoning_effort: str):
         """DashScope supports reasoning_effort, so it must reach the provider instead of being dropped."""
-        assert "reasoning_effort" in DashScopeChatConfig().get_supported_openai_params(model="qwen3.7-plus")
+        assert "reasoning_effort" in DashScopeChatConfig().get_supported_openai_params(
+            model="qwen3.7-plus"
+        )
 
         optional_params = litellm.get_optional_params(
             model="qwen3.7-plus",

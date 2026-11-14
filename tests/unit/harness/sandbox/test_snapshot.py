@@ -105,7 +105,9 @@ async def test_large_text_file_has_no_diff(tmp_path):
 
 
 async def test_capture_respects_total_cap(tmp_path, monkeypatch):
-    monkeypatch.setattr("litellm.harness.sandbox.snapshot.HARNESS_SNAPSHOT_MAX_TOTAL_BYTES", 10)
+    monkeypatch.setattr(
+        "litellm.harness.sandbox.snapshot.HARNESS_SNAPSHOT_MAX_TOTAL_BYTES", 10
+    )
     box = sandbox.local(tmp_path)
     try:
         await box.write("a.txt", b"x" * 8)

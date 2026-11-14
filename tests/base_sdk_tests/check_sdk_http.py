@@ -223,14 +223,10 @@ def check_cache_hit(base: str) -> None:
         assert REQUESTS.get(timeout=10)[0] == "/v1/chat/completions"
         cached: Final = litellm.completion(**arguments)
         assert payload(cached) == payload(first)
-        assert payload(cached)["choices"] == [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "pong"},
-                "finish_reason": "stop",
-                "provider_specific_fields": {},
-            }
-        ]
+        assert payload(cached)["choices"] == [{
+            "index": 0, "message": {"role": "assistant", "content": "pong"},
+            "finish_reason": "stop", "provider_specific_fields": {},
+        }]
         assert payload(cached)["usage"] == CHAT["usage"]
         assert REQUESTS.empty(), "the second SDK call missed the response cache"
 
@@ -330,15 +326,9 @@ def check_http(base: str) -> None:
     assert headers["authorization"] == "Bearer test-key"
     assert json.loads(body)["messages"] == MESSAGES
     enqueue_stream()
-    assert (
-        "".join(part.choices[0].delta.content or "" for part in litellm.completion(**arguments, stream=True)) == "pong"
-    )
+    assert "".join(part.choices[0].delta.content or "" for part in litellm.completion(**arguments, stream=True)) == "pong"
     REQUESTS.get(timeout=10)
-    for status, exception in (
-        (401, litellm.AuthenticationError),
-        (429, litellm.RateLimitError),
-        (500, litellm.InternalServerError),
-    ):
+    for status, exception in ((401, litellm.AuthenticationError), (429, litellm.RateLimitError), (500, litellm.InternalServerError)):
         enqueue({"error": {"message": "controlled upstream failure"}}, status)
         try:
             litellm.completion(**arguments, num_retries=0, max_retries=0)
@@ -376,17 +366,10 @@ def check_http(base: str) -> None:
             RELEASE.set()
 
     asyncio.run(check_async())
-    enqueue(
-        {
-            "object": "list",
-            "model": "text-embedding-3-small",
-            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
-            "usage": {"prompt_tokens": 3, "total_tokens": 3},
-        }
-    )
-    embedding: Final = litellm.embedding(
-        model="text-embedding-3-small", input=["ping"], api_key="test-key", api_base=base + "/v1"
-    )
+    enqueue({"object": "list", "model": "text-embedding-3-small",
+             "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+             "usage": {"prompt_tokens": 3, "total_tokens": 3}})
+    embedding: Final = litellm.embedding(model="text-embedding-3-small", input=["ping"], api_key="test-key", api_base=base + "/v1")
     assert embedding.data[0]["embedding"] == [0.1, 0.2]
     assert REQUESTS.get(timeout=10)[0] == "/v1/embeddings"
     RELEASE.clear()
@@ -399,75 +382,47 @@ def check_http(base: str) -> None:
         raise AssertionError("stalled upstream did not time out")
     finally:
         RELEASE.set()
-    for signed in (False, True) if importlib.util.find_spec("boto3") else (False,):
+    for signed in ((False, True) if importlib.util.find_spec("boto3") else (False,)):
         for asynchronous in (False, True):
-            enqueue(
-                {
-                    "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
-                    "stopReason": "end_turn",
-                    "usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5},
-                    "metrics": {"latencyMs": 1},
-                }
-            )
+            enqueue({
+                "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5},
+                "metrics": {"latencyMs": 1},
+            })
             bedrock: Final = dict(
-                model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-                messages=MESSAGES,
-                aws_region_name="us-east-1",
-                aws_bedrock_runtime_endpoint=base,
-                **(
-                    {"aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret", "api_key": ""}
-                    if signed
-                    else {"api_key": "bearer-key"}
-                ),
+                model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0", messages=MESSAGES,
+                aws_region_name="us-east-1", aws_bedrock_runtime_endpoint=base,
+                **({"aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret", "api_key": ""}
+                   if signed else {"api_key": "bearer-key"}),
             )
-            result: Final = (
-                asyncio.run(litellm.acompletion(**bedrock)) if asynchronous else litellm.completion(**bedrock)
-            )
+            result: Final = asyncio.run(litellm.acompletion(**bedrock)) if asynchronous else litellm.completion(**bedrock)
             assert result.choices[0].message.content == "pong"
             assert result.usage.total_tokens == 5
             path, headers, body = REQUESTS.get(timeout=10)
             assert path.endswith("/converse")
-            assert headers["authorization"].startswith("AWS4-HMAC-SHA256" if signed else "Bearer bearer-key")
+            assert headers["authorization"].startswith(
+                "AWS4-HMAC-SHA256" if signed else "Bearer bearer-key"
+            )
             assert json.loads(body)["messages"][0]["content"][0]["text"] == "ping"
     if importlib.util.find_spec("botocore") is not None:
-        RESPONSES.put(
-            (
-                200,
-                b"".join(
-                    (
-                        bedrock_event("messageStart", {"role": "assistant"}),
-                        bedrock_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "pong"}}),
-                        bedrock_event("messageStop", {"stopReason": "end_turn"}),
-                        bedrock_event("metadata", {"usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}}),
-                    )
-                ),
-            )
-        )
+        RESPONSES.put((200, b"".join((
+            bedrock_event("messageStart", {"role": "assistant"}),
+            bedrock_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "pong"}}),
+            bedrock_event("messageStop", {"stopReason": "end_turn"}),
+            bedrock_event("metadata", {"usage": {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}}),
+        ))))
         streamed: Final = litellm.completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=MESSAGES,
-            api_key="bearer-key",
-            aws_region_name="us-east-1",
-            aws_bedrock_runtime_endpoint=base,
-            stream=True,
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0", messages=MESSAGES,
+            api_key="bearer-key", aws_region_name="us-east-1", aws_bedrock_runtime_endpoint=base, stream=True,
         )
         assert "".join(part.choices[0].delta.content or "" for part in streamed) == "pong"
         assert REQUESTS.get(timeout=10)[0].endswith("/converse-stream")
-    enqueue(
-        {
-            "id": "msg-http-check",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-3-sonnet-20240229",
-            "content": [{"type": "text", "text": "pong"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 2},
-        }
-    )
-    anthropic: Final = litellm.completion(
-        model="anthropic/claude-3-sonnet-20240229", messages=MESSAGES, api_key="test-key", api_base=base, max_tokens=16
-    )
+    enqueue({"id": "msg-http-check", "type": "message", "role": "assistant", "model": "claude-3-sonnet-20240229",
+             "content": [{"type": "text", "text": "pong"}], "stop_reason": "end_turn", "stop_sequence": None,
+             "usage": {"input_tokens": 3, "output_tokens": 2}})
+    anthropic: Final = litellm.completion(model="anthropic/claude-3-sonnet-20240229", messages=MESSAGES,
+                                        api_key="test-key", api_base=base, max_tokens=16)
     assert anthropic.choices[0].message.content == "pong"
     assert anthropic.usage.total_tokens == 5
     assert REQUESTS.get(timeout=10)[0] == "/v1/messages"

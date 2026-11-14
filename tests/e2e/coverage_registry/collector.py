@@ -75,9 +75,19 @@ class _CoversSink:
             for item, skipped in ((i, _is_skipped(i)) for i in session.items)
             for marker in item.iter_markers(name="covers")
         )
-        declared = tuple((skipped, arg) for skipped, args in marker_args for arg in args if isinstance(arg, str))
-        self.covered_ids = frozenset(cell_id for skipped, cell_id in declared if not skipped)
-        self.skipped_only_ids = frozenset(cell_id for skipped, cell_id in declared if skipped) - self.covered_ids
+        declared = tuple(
+            (skipped, arg)
+            for skipped, args in marker_args
+            for arg in args
+            if isinstance(arg, str)
+        )
+        self.covered_ids = frozenset(
+            cell_id for skipped, cell_id in declared if not skipped
+        )
+        self.skipped_only_ids = (
+            frozenset(cell_id for skipped, cell_id in declared if skipped)
+            - self.covered_ids
+        )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
         if report.failed:
@@ -142,7 +152,9 @@ def _percent(covered: int, total: int) -> float:
     return (100.0 * covered / total) if total else 0.0
 
 
-def _module_coverage(module: str, cells: tuple[Cell, ...], covered: frozenset[str]) -> ModuleCoverage:
+def _module_coverage(
+    module: str, cells: tuple[Cell, ...], covered: frozenset[str]
+) -> ModuleCoverage:
     in_module = tuple(c for c in cells if dashboard_module(c) == module)
     p0 = tuple(c for c in in_module if c.tier is Tier.P0)
     return ModuleCoverage(
@@ -193,7 +205,8 @@ def render(report: CoverageReport) -> str:
     orphans = (
         (
             f"\n{len(report.orphan_markers)} marker(s) point at ids not in the registry "
-            f"(reconcile: fix the marker or add the cell):\n  " + "\n  ".join(report.orphan_markers),
+            f"(reconcile: fix the marker or add the cell):\n  "
+            + "\n  ".join(report.orphan_markers),
         )
         if report.orphan_markers
         else ()
@@ -210,7 +223,8 @@ def render(report: CoverageReport) -> str:
     warning = (
         (
             f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
-            f"collection, so coverage may undercount:\n  " + "\n  ".join(report.collection_errors),
+            f"collection, so coverage may undercount:\n  "
+            + "\n  ".join(report.collection_errors),
         )
         if report.collection_errors
         else ()
@@ -255,8 +269,12 @@ def render_prometheus(report: CoverageReport) -> str:
     ]
     for module in report.modules:
         label = _label_value(module.module)
-        lines.append(f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}')
-        lines.append(f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}')
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}'
+        )
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}'
+        )
     lines.extend(
         [
             f'litellm_e2e_coverage_cells{{module="ALL",state="covered"}} {report.covered}',
@@ -267,7 +285,9 @@ def render_prometheus(report: CoverageReport) -> str:
     )
     for module in report.modules:
         label = _label_value(module.module)
-        lines.append(f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}')
+        lines.append(
+            f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}'
+        )
     lines.extend(
         [
             f'litellm_e2e_coverage_percent{{module="ALL"}} {report.coverage_percent:.6f}',
@@ -286,7 +306,12 @@ def render_prometheus(report: CoverageReport) -> str:
 
 
 def render_loki(report: CoverageReport) -> str:
-    lines = [(f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} covered={report.covered} total={report.total}")]
+    lines = [
+        (
+            f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} "
+            f"covered={report.covered} total={report.total}"
+        )
+    ]
     lines.extend(
         (
             f"COVERAGE_MODULE module={loki_module_label(module.module)} "

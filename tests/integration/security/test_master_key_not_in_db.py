@@ -13,10 +13,7 @@ from litellm.proxy.utils import hash_token
 def test_master_key_not_inserted(gateway: Gateway, tmp_path: Path) -> None:
     with scratch_database() as database:
         with owned_proxy(
-            gateway,
-            tmp_path,
-            {"DATABASE_URL": database},
-            remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA"),
+            gateway, tmp_path, {"DATABASE_URL": database}, remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA")
         ) as proxy:
             assert proxy.request("GET", "/health/liveliness").status_code == 200
             stored_tokens: Final = frozenset(
@@ -25,6 +22,4 @@ def test_master_key_not_inserted(gateway: Gateway, tmp_path: Path) -> None:
             )
     for leaked in (hash_token(gateway.key), gateway.key):
         assert leaked not in stored_tokens, "the master key was found in LiteLLM_VerificationToken"
-    assert stored_tokens == frozenset(), (
-        f"startup unexpectedly wrote tokens to LiteLLM_VerificationToken: {stored_tokens}"
-    )
+    assert stored_tokens == frozenset(), f"startup unexpectedly wrote tokens to LiteLLM_VerificationToken: {stored_tokens}"

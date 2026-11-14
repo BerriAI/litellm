@@ -48,7 +48,9 @@ def _request_object(body: bytes) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(body)
 
 
-def _deployment_list(model_name: str, api_base: str, deployment_ids: tuple[str, str]) -> list[dict[str, JsonValue]]:
+def _deployment_list(
+    model_name: str, api_base: str, deployment_ids: tuple[str, str]
+) -> list[dict[str, JsonValue]]:
     return [
         {
             "model_name": model_name,
@@ -132,7 +134,9 @@ async def _exercise_router(router: Router, model_name: str, markers: tuple[str, 
         model=model_name, messages=[{"role": "user", "content": markers[1]}], max_tokens=8
     )
     with pytest.raises(litellm.RateLimitError, match="No deployments available"):
-        await router.acompletion(model=model_name, messages=[{"role": "user", "content": markers[2]}], max_tokens=8)
+        await router.acompletion(
+            model=model_name, messages=[{"role": "user", "content": markers[2]}], max_tokens=8
+        )
     return _model_id(first), _model_id(second)
 
 

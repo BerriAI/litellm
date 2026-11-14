@@ -134,7 +134,7 @@ class TestVolcengineResponsesAPITransformation:
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
 
-        with pytest.raises(ValueError, match="Volcengine API key is required\\. Set ARK_API_KEY /"):
+        with pytest.raises(ValueError, match='Volcengine API key is required\\. Set ARK_API_KEY /'):
             config.validate_environment(headers={}, model="volcengine/demo", litellm_params={})
 
     def test_valid_thinking_caching_and_expire_at_pass(self):

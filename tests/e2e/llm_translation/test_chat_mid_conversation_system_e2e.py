@@ -288,10 +288,7 @@ class TestAnthropicChatMidConversationSystem:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(FLAGGED_MODEL,),
-            capabilities=(
-                Capability.MID_CONVERSATION_SYSTEM,
-                Capability.PROMPT_CACHING,
-            ),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -310,10 +307,7 @@ class TestAnthropicChatMidConversationSystem:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(UNFLAGGED_MODEL,),
-            capabilities=(
-                Capability.MID_CONVERSATION_SYSTEM,
-                Capability.PROMPT_CACHING,
-            ),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -338,10 +332,7 @@ class TestBedrockInvokeChatMidConversationSystem:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.BEDROCK,),
             models=(FLAGGED_MODEL,),
-            capabilities=(
-                Capability.MID_CONVERSATION_SYSTEM,
-                Capability.PROMPT_CACHING,
-            ),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -360,10 +351,7 @@ class TestBedrockInvokeChatMidConversationSystem:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.BEDROCK,),
             models=(UNFLAGGED_MODEL,),
-            capabilities=(
-                Capability.MID_CONVERSATION_SYSTEM,
-                Capability.PROMPT_CACHING,
-            ),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
             mode=Mode.NONSTREAM,
         )
     )

@@ -576,10 +576,7 @@ def test_token_signs_in_without_a_refresh_token_when_session_signing_is_unusable
         assert replay.status_code == 400
         assert replay.json()["error"] == "expired_token"
         principal = SessionPrincipal(
-            user_id="user-123",
-            client_id=gateway_endpoints.CLAUDE_CODE_CLIENT_ID,
-            audience="proxy_api",
-            team_id="team-a",
+            user_id="user-123", client_id=gateway_endpoints.CLAUDE_CODE_CLIENT_ID, audience="proxy_api", team_id="team-a"
         )
         refused = _refresh(client, _foreign_refresh_token(principal))
     assert refused.status_code == 500

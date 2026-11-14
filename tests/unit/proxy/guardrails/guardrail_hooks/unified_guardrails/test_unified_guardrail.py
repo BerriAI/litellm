@@ -1315,9 +1315,9 @@ class TestStreamingTransform:
             [server_chunk, _stream_chunk("done", finish_reason="stop")],
         )
 
-        delivered: Final = [
-            getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices
-        ]
+        delivered: Final = (
+            [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
+        )
         assert server_fields in delivered
         assert "".join(_delta_text(item) for item in out) == "DONE"
 

@@ -320,11 +320,7 @@ def test_ollama_pt_consecutive_user_messages():
 
 
 def _ollama_tool_turn(*results: object) -> list[dict]:
-    call: Final = {
-        "id": "call_1",
-        "type": "function",
-        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
-    }
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
     return [
         {"role": "user", "content": "Weather in Paris?"},
         {"role": "assistant", "content": None, "tool_calls": [call]},
@@ -1380,6 +1376,7 @@ def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_ho
     assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
 
+
 def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
     signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
     redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
@@ -1398,7 +1395,6 @@ def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_ca
             {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
         ],
     }
-
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -2328,11 +2324,10 @@ def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
     ]
 
 
+
 def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     message: Final = ChatCompletionToolMessage(
-        role="tool",
-        name="lookup",
-        content=[
+        role="tool", name="lookup", content=[
             {"type": "text", "text": '{"ok":true}'},
             {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
         ],
@@ -2341,7 +2336,6 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
         router.get("https://8.8.8.8/unavailable.png").respond(404)
         result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
-
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
@@ -8532,6 +8526,7 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
     ], f"Expected order but got: {types}"
 
 
+
 def _paused_web_search_turn(
     thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
 ) -> dict[str, object]:
@@ -8994,11 +8989,7 @@ TEMPLATE_INITIAL = "<start>"
 TEMPLATE_FINAL = "<end>"
 
 PARTIAL_TEMPLATE = {"roles": TEMPLATE_ROLES}
-FULL_TEMPLATE = {
-    "roles": TEMPLATE_ROLES,
-    "initial_prompt_value": TEMPLATE_INITIAL,
-    "final_prompt_value": TEMPLATE_FINAL,
-}
+FULL_TEMPLATE = {"roles": TEMPLATE_ROLES, "initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
 ROLELESS_TEMPLATE = {"initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
 
 
@@ -9220,9 +9211,7 @@ def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypa
         pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
         pytest.param({"roles": {**TEMPLATE_ROLES, 1: {"pre_message": "x"}}}, id="unused-non-string-role"),
-        pytest.param(
-            {"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"
-        ),
+        pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
     ],
 )
 def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):

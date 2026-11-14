@@ -156,6 +156,11 @@ class TestXAICostCalculator:
         setattr(reported, "server_side_tool_usage_details", {"web_search_calls": 3})
         assert get_cost_for_web_search_request("xai", reported, {}) == 0.0
 
+
+
+
+
+
     def test_zero_reported_cost_is_honoured(self):
         """A reported zero is a real answer, not a missing value."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300, cost=0.0)

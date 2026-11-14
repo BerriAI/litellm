@@ -18,16 +18,10 @@ from litellm.types.proxy.skill_scanning import SkillScan, SkillScannerConfig, Sk
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 CONFIG: Final = SkillScannerConfig(endpoint="https://scanner.example/scan", api_key_env="SCANNER_TEST_KEY")
 REPORT: Final = SkillScanReport(
-    scanner_version="test-version",
-    complete=True,
-    scan_mode="static-only",
-    risk_score=0,
-    findings=(),
+    scanner_version="test-version", complete=True, scan_mode="static-only", risk_score=0, findings=(),
 )
 TARGET: Final = SkillScanInput(
-    SkillScan(
-        id="scan-1", status="running", requested_by="admin", started_at=NOW, expires_at=NOW + timedelta(seconds=10)
-    ),
+    SkillScan(id="scan-1", status="running", requested_by="admin", started_at=NOW, expires_at=NOW + timedelta(seconds=10)),
     {"source": "archive", "url": "https://gateway.example/private.zip"},
     b"exact-private-archive",
 )
@@ -81,12 +75,9 @@ async def test_missing_requested_semantic_pass_remains_incomplete(existing_limit
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         result: Final = await scan_report(client, CONFIG.model_copy(update={"use_llm": True}), "token", TARGET)
     assert isinstance(result, SkillScanReport)
-    assert result == report.model_copy(
-        update={
-            "complete": False,
-            "limitations": (*report.limitations[:99], "Requested semantic analysis did not run."),
-        }
-    )
+    assert result == report.model_copy(update={
+        "complete": False, "limitations": (*report.limitations[:99], "Requested semantic analysis did not run."),
+    })
     assert SkillScanReport.model_validate(result.model_dump()) == result
 
 
@@ -97,14 +88,9 @@ def test_interrupted_scan_becomes_retryable_without_changing_completed_evidence(
     assert complete.at(NOW + timedelta(days=1)) == complete
 
 
-@pytest.mark.parametrize(
-    "endpoint",
-    (
-        "http://scanner.example/scan",
-        "https://user:secret@scanner.example/scan",
-        "https://scanner.example/scan?token=secret",
-    ),
-)
+@pytest.mark.parametrize("endpoint", (
+    "http://scanner.example/scan", "https://user:secret@scanner.example/scan", "https://scanner.example/scan?token=secret",
+))
 def test_scanner_config_rejects_unsafe_credential_destinations(endpoint: str) -> None:
     with pytest.raises(ValidationError):
         SkillScannerConfig(endpoint=endpoint, api_key_env="SCANNER_TEST_KEY")
@@ -122,33 +108,18 @@ def test_adapter_authentication_and_exact_remote_source(monkeypatch: pytest.Monk
     with TestClient(server.app) as client:
         assert client.post("/scan", data={"source": "{}"}).status_code == 401
         assert client.post("/scan", headers={"Authorization": "Bearer wrong"}, data={"source": "{}"}).status_code == 401
-        response = client.post(
-            "/scan",
-            headers={"Authorization": "Bearer adapter-secret"},
-            data={
-                "source": '{"source":"git","url":"https://example.org/repo.git","ref":"release"}',
-            },
-        )
+        response = client.post("/scan", headers={"Authorization": "Bearer adapter-secret"}, data={
+            "source": '{"source":"git","url":"https://example.org/repo.git","ref":"release"}',
+        })
         assert response.status_code == 400
         for deadline, status in ((NOW.isoformat(), 504), (NOW.replace(tzinfo=None).isoformat(), 422)):
-            rejected: Final = client.post(
-                "/scan",
-                headers={"Authorization": "Bearer adapter-secret"},
-                data={
-                    "source": '{"source":"archive","url":"https://example.org/skill.zip"}',
-                    "expires_at": deadline,
-                },
-            )
+            rejected: Final = client.post("/scan", headers={"Authorization": "Bearer adapter-secret"}, data={
+                "source": '{"source":"archive","url":"https://example.org/skill.zip"}', "expires_at": deadline,
+            })
             assert rejected.status_code == status
     launch.assert_not_called()
-    assert (
-        server.source_target({"source": "archive", "url": "https://example.org/skill.zip"})
-        == "https://example.org/skill.zip"
-    )
-    assert (
-        server.source_target({"source": "github", "repo": "example/skills", "ref": "v2", "path": "skills/review"})
-        == "https://github.com/example/skills/tree/v2/skills/review"
-    )
+    assert server.source_target({"source": "archive", "url": "https://example.org/skill.zip"}) == "https://example.org/skill.zip"
+    assert server.source_target({"source": "github", "repo": "example/skills", "ref": "v2", "path": "skills/review"}) == "https://github.com/example/skills/tree/v2/skills/review"
 
 
 def test_adapter_accepts_expanded_stored_skill_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,10 +140,7 @@ def test_adapter_accepts_expanded_stored_skill_bytes(monkeypatch: pytest.MonkeyP
     expected: Final = (stored_size, hashlib.sha256(stored).hexdigest())
 
     async def run_worker(
-        target: str,
-        output: Path,
-        use_llm: bool,
-        expires_at: datetime | None = None,
+        target: str, output: Path, use_llm: bool, expires_at: datetime | None = None,
     ) -> dict[str, object]:
         received: Final = Path(target).read_bytes()
         actual: Final = (len(received), hashlib.sha256(received).hexdigest())
@@ -182,10 +150,6 @@ def test_adapter_accepts_expanded_stored_skill_bytes(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(server, "run_worker", run_worker)
     monkeypatch.setenv("SKILL_SCANNER_API_KEY", "adapter-secret")
     with TestClient(server.app) as client:
-        response: Final = client.post(
-            "/scan",
-            headers={"Authorization": "Bearer adapter-secret"},
-            data={"source": "{}"},
-            files={"file": ("skill.zip", stored, "application/zip")},
-        )
+        response: Final = client.post("/scan", headers={"Authorization": "Bearer adapter-secret"},
+                                      data={"source": "{}"}, files={"file": ("skill.zip", stored, "application/zip")})
     assert response.status_code == 200 and response.json() == {"complete": True}

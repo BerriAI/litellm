@@ -371,7 +371,9 @@ class BudgetClient:
         resp = self.proxy.transport.send(
             "/customer/new",
             headers=self.proxy.transport.master,
-            json=CustomerNewBody(user_id=customer_id, max_budget=max_budget, budget_id=budget_id),
+            json=CustomerNewBody(
+                user_id=customer_id, max_budget=max_budget, budget_id=budget_id
+            ),
         )
         assert resp.ok, resp.body
         return customer_id

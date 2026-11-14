@@ -46,13 +46,21 @@ def _make_mock_proxy_config():
     cfg.initialize_secret_manager = MagicMock()
     cfg._last_hashicorp_vault_config = None
     cfg._cyberark_boot_env = None
-    cfg._encrypt_env_variables = MagicMock(side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()})
-    cfg._decrypt_db_variables = MagicMock(
-        side_effect=lambda d: {k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()}
+    cfg._encrypt_env_variables = MagicMock(
+        side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
     )
-    cfg.encrypt_env_variables = MagicMock(side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()})
+    cfg._decrypt_db_variables = MagicMock(
+        side_effect=lambda d: {
+            k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
+        }
+    )
+    cfg.encrypt_env_variables = MagicMock(
+        side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
+    )
     cfg.decrypt_db_variables = MagicMock(
-        side_effect=lambda d: {k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()}
+        side_effect=lambda d: {
+            k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
+        }
     )
     return cfg
 
@@ -108,7 +116,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.example.com"
         data = _upserted_data(mock_db)
         assert data["vault_token"] == "enc_my-secret-vault-token"
-        mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="hashicorp_vault")
+        mock_cfg.initialize_secret_manager.assert_called_with(
+            key_management_system="hashicorp_vault"
+        )
         assert mock_cfg._last_hashicorp_vault_config is not None
 
         # 2. GET: sensitive fields masked
@@ -147,7 +157,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
             os.environ.pop(v, None)
         mock_db.find_unique = AsyncMock(return_value=None)
         mock_db.upsert = AsyncMock(return_value=None)
-        r = client.post(VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"})
+        r = client.post(
+            VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"}
+        )
         assert r.status_code == 200
         assert _upserted_data(mock_db) == {
             "vault_addr": "enc_https://v.com",
@@ -164,7 +176,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
         # 7. DELETE idempotent
         mock_db.delete = AsyncMock(
-            side_effect=RecordNotFoundError(data={"clientVersion": "0.0.0"}, message="Not found")
+            side_effect=RecordNotFoundError(
+                data={"clientVersion": "0.0.0"}, message="Not found"
+            )
         )
         assert client.delete(VAULT_URL).status_code == 200
 
@@ -252,9 +266,7 @@ async def test_hashicorp_vault_login_and_secret_namespaces(client, monkeypatch):
         auth_headers = {"X-Vault-Token": "tok"}
         mock_manager._get_request_headers = MagicMock(return_value=auth_headers)
         mock_manager._get_login_headers = MagicMock(return_value={"X-Vault-Namespace": "root"})
-        litellm.secret_manager_client = (
-            mock_manager  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = mock_manager  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
@@ -270,17 +282,15 @@ async def test_hashicorp_vault_login_and_secret_namespaces(client, monkeypatch):
         assert mock_http.get.call_args.kwargs["headers"] == {"X-Vault-Token": "tok", "X-Vault-Namespace": "root"}
         assert auth_headers == {"X-Vault-Token": "tok"}
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_vault_validation_errors_and_access_control(client, monkeypatch):
+async def test_hashicorp_vault_validation_errors_and_access_control(
+    client, monkeypatch
+):
     """Validation (missing fields, init failure rollback), DELETE preserves
     non-Vault secret managers, non-admin 403 on all endpoints."""
     mock_prisma, mock_db = _make_mock_db()
@@ -306,7 +316,9 @@ async def test_hashicorp_vault_validation_errors_and_access_control(client, monk
         mock_cfg.initialize_secret_manager = MagicMock(side_effect=Exception("fail"))
         monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.old.com")
         monkeypatch.setenv("HCP_VAULT_TOKEN", "old-token")
-        r = client.post(VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"})
+        r = client.post(
+            VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"}
+        )
         assert r.status_code == 500
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.old.com"
         mock_db.upsert.assert_not_awaited()
@@ -324,7 +336,10 @@ async def test_hashicorp_vault_validation_errors_and_access_control(client, monk
             user_role=LitellmUserRoles.INTERNAL_USER, user_id="user"
         )
         assert client.get(VAULT_URL).status_code == 403
-        assert client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code == 403
+        assert (
+            client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code
+            == 403
+        )
         assert client.delete(VAULT_URL).status_code == 403
 
     finally:
@@ -361,7 +376,9 @@ async def test_cyberark_crud_lifecycle(client, monkeypatch):
         assert os.environ["CYBERARK_API_KEY"] == "my-secret-api-key"
         data = _upserted_data(mock_db)
         assert data["cyberark_api_key"] == "enc_my-secret-api-key"
-        mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="cyberark")
+        mock_cfg.initialize_secret_manager.assert_called_with(
+            key_management_system="cyberark"
+        )
         assert mock_cfg._last_cyberark_config is not None
 
         # 2. GET: sensitive fields masked
@@ -396,12 +413,8 @@ async def test_cyberark_crud_lifecycle(client, monkeypatch):
         assert data["client_cert"] == "enc_/certs/client.pem"
 
         # 5. DELETE: clears everything
-        litellm.secret_manager_client = (
-            MagicMock()
-        )  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        litellm._key_management_system = (
-            KeyManagementSystem.CYBERARK
-        )  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm.secret_manager_client = MagicMock()  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = KeyManagementSystem.CYBERARK  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         r = client.delete(CYBERARK_URL)
         assert r.status_code == 200
         assert os.environ.get("CYBERARK_API_BASE") is None
@@ -410,7 +423,9 @@ async def test_cyberark_crud_lifecycle(client, monkeypatch):
 
         # 6. DELETE idempotent
         mock_db.delete = AsyncMock(
-            side_effect=RecordNotFoundError(data={"clientVersion": "0.0.0"}, message="Not found")
+            side_effect=RecordNotFoundError(
+                data={"clientVersion": "0.0.0"}, message="Not found"
+            )
         )
         assert client.delete(CYBERARK_URL).status_code == 200
 
@@ -437,12 +452,8 @@ async def test_cyberark_crud_lifecycle(client, monkeypatch):
         assert len(schema["properties"]["cyberark_api_base"]["description"]) > 0
 
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
@@ -487,12 +498,8 @@ async def test_cyberark_validation_errors_and_access_control(client, monkeypatch
 
         # 4. DELETE preserves non-CyberArk secret manager
         aws = MagicMock()
-        litellm.secret_manager_client = (
-            aws  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            KeyManagementSystem.AWS_SECRET_MANAGER
-        )  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm.secret_manager_client = aws  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         assert client.delete(CYBERARK_URL).status_code == 200
         assert litellm.secret_manager_client is aws
 
@@ -501,17 +508,18 @@ async def test_cyberark_validation_errors_and_access_control(client, monkeypatch
             user_role=LitellmUserRoles.INTERNAL_USER, user_id="user"
         )
         assert client.get(CYBERARK_URL).status_code == 403
-        assert client.post(CYBERARK_URL, json={"cyberark_api_base": "https://c.com"}).status_code == 403
+        assert (
+            client.post(
+                CYBERARK_URL, json={"cyberark_api_base": "https://c.com"}
+            ).status_code
+            == 403
+        )
         assert client.delete(CYBERARK_URL).status_code == 403
         assert client.post(CYBERARK_URL + "/test_connection").status_code == 403
 
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
@@ -546,12 +554,8 @@ async def test_cyberark_delete_restores_deployment_env_config(client, monkeypatc
         mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="cyberark")
         assert mock_cfg._last_cyberark_config is None
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
@@ -582,15 +586,13 @@ async def test_cyberark_persist_failure_rolls_back_runtime_state(client, monkeyp
         assert os.environ["CYBERARK_API_BASE"] == "https://conjur.prev.com"
         assert os.environ["CYBERARK_API_KEY"] == "prev-key"
         # last call must be the rollback reinit against the restored env
-        assert mock_cfg.initialize_secret_manager.call_args_list[-1].kwargs["key_management_system"] == "cyberark"
+        assert (
+            mock_cfg.initialize_secret_manager.call_args_list[-1].kwargs["key_management_system"] == "cyberark"
+        )
         assert os.environ.get("CYBERARK_API_BASE") != "https://conjur.new.com"
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
@@ -605,7 +607,9 @@ async def test_cyberark_persist_failure_restores_hashicorp_manager(client, monke
 
     def _fake_init(key_management_system):
         litellm._key_management_system = (  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-            KeyManagementSystem.CYBERARK if key_management_system == "cyberark" else KeyManagementSystem.HASHICORP_VAULT
+            KeyManagementSystem.CYBERARK
+            if key_management_system == "cyberark"
+            else KeyManagementSystem.HASHICORP_VAULT
         )
 
     mock_cfg.initialize_secret_manager = MagicMock(side_effect=_fake_init)
@@ -616,9 +620,7 @@ async def test_cyberark_persist_failure_restores_hashicorp_manager(client, monke
 
     try:
         monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.example.com")
-        litellm._key_management_system = (
-            KeyManagementSystem.HASHICORP_VAULT
-        )  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
 
         r = client.post(
             CYBERARK_URL,
@@ -630,12 +632,8 @@ async def test_cyberark_persist_failure_restores_hashicorp_manager(client, monke
             mock_cfg.initialize_secret_manager.call_args_list[-1].kwargs["key_management_system"] == "hashicorp_vault"
         )
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         os.environ.pop("HCP_VAULT_ADDR", None)
         _cleanup()
 
@@ -694,9 +692,7 @@ async def test_cyberark_test_connection(client, monkeypatch):
 
     try:
         # Not configured → 400
-        litellm.secret_manager_client = (
-            None  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = None  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         r = client.post(CYBERARK_URL + "/test_connection")
         assert r.status_code == 400
         assert "not configured" in r.json()["detail"].lower()
@@ -705,10 +701,10 @@ async def test_cyberark_test_connection(client, monkeypatch):
         mock_manager = MagicMock(spec=CyberArkSecretManager)
         mock_manager.conjur_addr = "https://conjur.example.com"
         mock_manager.ssl_verify = True
-        mock_manager._get_request_headers = MagicMock(return_value={"Authorization": "Token abc"})
-        litellm.secret_manager_client = (
-            mock_manager  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        mock_manager._get_request_headers = MagicMock(
+            return_value={"Authorization": "Token abc"}
         )
+        litellm.secret_manager_client = mock_manager  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
@@ -725,17 +721,15 @@ async def test_cyberark_test_connection(client, monkeypatch):
         assert called_url == "https://conjur.example.com/whoami"
 
         # Auth failure → 502
-        mock_manager._get_request_headers = MagicMock(side_effect=Exception("bad credentials"))
+        mock_manager._get_request_headers = MagicMock(
+            side_effect=Exception("bad credentials")
+        )
         r = client.post(CYBERARK_URL + "/test_connection")
         assert r.status_code == 502
         assert "authentication failed" in r.json()["detail"].lower()
     finally:
-        litellm.secret_manager_client = (
-            old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
-        litellm._key_management_system = (
-            old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
-        )
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         _cleanup()
 
 
@@ -793,7 +787,9 @@ class TestHashicorpVaultAuditLog:
             _cleanup()
 
     @pytest.mark.asyncio
-    async def test_post_action_is_updated_when_row_exists_with_null_config_value(self, client, monkeypatch):
+    async def test_post_action_is_updated_when_row_exists_with_null_config_value(
+        self, client, monkeypatch
+    ):
         """A row can exist in ``litellm_configoverrides`` with a NULL
         ``config_value`` (e.g. an earlier failed write left a stub).
         Re-POSTing must label the audit row as ``updated`` — the row
@@ -837,7 +833,9 @@ class TestHashicorpVaultAuditLog:
             _cleanup()
 
     @pytest.mark.asyncio
-    async def test_delete_emits_audit_log_only_when_row_existed(self, client, monkeypatch):
+    async def test_delete_emits_audit_log_only_when_row_existed(
+        self, client, monkeypatch
+    ):
         monkeypatch.setattr(litellm, "store_audit_logs", True)
         mock_prisma, mock_db = _make_mock_db()
         mock_cfg = _make_mock_proxy_config()

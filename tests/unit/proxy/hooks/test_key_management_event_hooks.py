@@ -73,7 +73,9 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
+            patch(
+                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
+            ),
         ):
             # Should not raise even though email fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -139,7 +141,9 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
+            patch(
+                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
+            ),
         ):
             # Should not raise even though secret manager fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -205,7 +209,9 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        mock_secret_manager.async_rotate_secret = AsyncMock(
+            return_value={"status": "success"}
+        )
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -279,7 +285,9 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        mock_secret_manager.async_rotate_secret = AsyncMock(
+            return_value={"status": "success"}
+        )
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -345,7 +353,9 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Setup
         mock_secret_manager = MagicMock()
-        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        mock_secret_manager.async_rotate_secret = AsyncMock(
+            return_value={"status": "success"}
+        )
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -505,6 +515,7 @@ class TestRotateVirtualKeyInSecretManager:
 
 
 class TestKeyUpdatedSecretManagerSync:
+
     @staticmethod
     def _configure_secret_manager(
         monkeypatch: pytest.MonkeyPatch, stored_value: str | None, store_virtual_keys: bool = True
@@ -681,8 +692,7 @@ class TestKeyUpdatedAuditLogObjectId:
         hashed_key = hash_token("sk-raw-test-key-31620")
 
         audit_row: Final = await self._run_updated_hook_and_capture_audit_log(
-            request_key=hashed_key,
-            detach_project=detach_project,
+            request_key=hashed_key, detach_project=detach_project,
         )
 
         assert audit_row.object_id == hashed_key

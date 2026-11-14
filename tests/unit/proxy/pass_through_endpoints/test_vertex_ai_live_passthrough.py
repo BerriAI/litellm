@@ -682,7 +682,9 @@ class TestVertexAILivePassthroughLoggingHandler:
         if any(m != "TEXT" for m, _ in prompt_details + candidate_details) and audio_in != text_in:
             assert cost > text_only, f"{label}: non-text modalities must add cost"
 
-    def test_vertex_ai_live_passthrough_handler_integration(self, handler, mock_logging_obj, sample_websocket_messages):
+    def test_vertex_ai_live_passthrough_handler_integration(
+        self, handler, mock_logging_obj, sample_websocket_messages
+    ):
         """Test the main passthrough handler method"""
         url_route = "/vertex_ai/live"
         start_time = datetime.now()
@@ -713,7 +715,9 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert "completion_tokens" in usage
         assert "total_tokens" in usage
 
-    def test_vertex_ai_live_passthrough_handler_no_usage(self, handler, mock_logging_obj):
+    def test_vertex_ai_live_passthrough_handler_no_usage(
+        self, handler, mock_logging_obj
+    ):
         """Test handler with messages that don't contain usage metadata"""
         messages = [
             {"type": "session.created", "session": {"id": "test"}},
@@ -771,7 +775,9 @@ class TestVertexAILivePassthroughIntegration:
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.VertexAILivePassthroughLoggingHandler"
     )
     @pytest.mark.asyncio
-    async def test_success_handler_vertex_ai_live_integration(self, mock_handler_class, mock_logging_obj):
+    async def test_success_handler_vertex_ai_live_integration(
+        self, mock_handler_class, mock_logging_obj
+    ):
         """Test the success handler integration with Vertex AI Live"""
 
         # Mock the handler

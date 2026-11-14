@@ -14,10 +14,10 @@ from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_ht
 
 def _key_rows(digest: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        "SELECT token, key_name, key_alias, models, aliases, config, router_settings, user_id, team_id, "
-        "agent_id, project_id, permissions, max_parallel_requests, metadata, blocked, tpm_limit, rpm_limit, "
-        "tpd_limit, max_budget, budget_duration, allowed_cache_controls, allowed_routes, key_type, policies, "
-        "access_group_ids, model_spend, model_max_budget, budget_fallbacks, budget_id, organization_id, "
+        'SELECT token, key_name, key_alias, models, aliases, config, router_settings, user_id, team_id, '
+        'agent_id, project_id, permissions, max_parallel_requests, metadata, blocked, tpm_limit, rpm_limit, '
+        'tpd_limit, max_budget, budget_duration, allowed_cache_controls, allowed_routes, key_type, policies, '
+        'access_group_ids, model_spend, model_max_budget, budget_fallbacks, budget_id, organization_id, '
         'object_permission_id, budget_limits FROM "LiteLLM_VerificationToken" WHERE token = %s',
         (digest,),
     )
@@ -34,9 +34,7 @@ def test_generated_partial_updates_preserve_persisted_and_effective_state(gatewa
                 self.models = (scenario.model(), scenario.model())
                 self.key = scenario.key(models=[self.models[0]], key_alias="initial", metadata={"revision": "initial"})
                 self.expected: dict[str, JsonValue] = {
-                    "models": [self.models[0]],
-                    "key_alias": "initial",
-                    "metadata": {"revision": "initial"},
+                    "models": [self.models[0]], "key_alias": "initial", "metadata": {"revision": "initial"}
                 }
                 gateway.chat(self.models[0], key=self.key)
             except BaseException:
@@ -71,8 +69,7 @@ def test_generated_partial_updates_preserve_persisted_and_effective_state(gatewa
             assert {field: info[field] for field in self.expected} == self.expected
             for model in self.models:
                 response: Final = gateway.request(
-                    "POST",
-                    "/v1/chat/completions",
+                    "POST", "/v1/chat/completions",
                     {"model": model, "messages": [{"role": "user", "content": "generated update control"}]},
                     key=self.key,
                 )
@@ -97,10 +94,8 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
         models: Final = (scenario.model(), scenario.model())
         key: Final = scenario.key(models=[models[0]], max_budget=0, metadata={"ordinary": "value"})
         denied: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": models[0], "messages": [{"role": "user", "content": "zero budget"}]},
-            key=key,
+            "POST", "/v1/chat/completions",
+            {"model": models[0], "messages": [{"role": "user", "content": "zero budget"}]}, key=key,
         )
         assert denied.status_code == 422, denied.text
         assert denied.json()["error"]["type"] == "budget_exceeded"
@@ -111,10 +106,8 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             assert object_value(gateway.chat(model, key=key)["usage"])["total_tokens"] == 40
         gateway.post("/key/update", {"key": key, "blocked": True})
         blocked: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": models[0], "messages": [{"role": "user", "content": "blocked control"}]},
-            key=key,
+            "POST", "/v1/chat/completions",
+            {"model": models[0], "messages": [{"role": "user", "content": "blocked control"}]}, key=key,
         )
         assert blocked.status_code == 401, blocked.text
         assert blocked.json()["error"]["type"] == "auth_error"
@@ -131,10 +124,8 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             (sha256(key.encode()).hexdigest(),),
         ) == [{"max_budget": 0.0}]
         zero_after_update: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": models[0], "messages": [{"role": "user", "content": "updated zero budget"}]},
-            key=key,
+            "POST", "/v1/chat/completions",
+            {"model": models[0], "messages": [{"role": "user", "content": "updated zero budget"}]}, key=key,
         )
         assert zero_after_update.status_code == 422, zero_after_update.text
         assert zero_after_update.json()["error"]["type"] == "budget_exceeded"
@@ -162,14 +153,11 @@ def test_project_omission_clear_and_invalid_update_have_distinct_effects(gateway
         def saved() -> list[dict[str, object]]:
             return read_rows(
                 'SELECT key_alias, project_id, team_id, models, max_budget FROM "LiteLLM_VerificationToken" '
-                "WHERE token = %s",
-                (digest,),
+                'WHERE token = %s', (digest,),
             )
 
         before: Final = saved()
-        assert before == [
-            {"key_alias": "after", "project_id": project, "team_id": team, "models": [model], "max_budget": 5}
-        ]
+        assert before == [{"key_alias": "after", "project_id": project, "team_id": team, "models": [model], "max_budget": 5}]
         for invalid in (other, ""):
             rejected: Final = gateway.request(
                 "POST", "/key/update", {"key": key, "project_id": invalid, "key_alias": "must-not-persist"}
@@ -179,9 +167,7 @@ def test_project_omission_clear_and_invalid_update_have_distinct_effects(gateway
             gateway.chat(model, key=key)
         gateway.post("/project/update", {"project_id": project, "blocked": True})
         denied: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": "blocked project"}]},
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "blocked project"}]},
             key=key,
         )
         assert denied.status_code == 401, denied.text
@@ -191,10 +177,8 @@ def test_project_omission_clear_and_invalid_update_have_distinct_effects(gateway
             assert saved() == [{**before[0], "project_id": None}]
             assert object_value(gateway.chat(model, key=key)["usage"])["total_tokens"] == 40
             outside_request: Final = gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {"model": outside, "messages": [{"role": "user", "content": "detached scope control"}]},
-                key=key,
+                "POST", "/v1/chat/completions",
+                {"model": outside, "messages": [{"role": "user", "content": "detached scope control"}]}, key=key,
             )
             assert outside_request.status_code == 403, outside_request.text
             assert outside_request.json()["error"]["type"] == "key_model_access_denied"
@@ -208,9 +192,7 @@ def test_denied_key_update_preserves_saved_grants_and_serving(gateway: Gateway) 
         owner: Final = scenario.user(user_role="internal_user")
         other: Final = scenario.user(user_role="internal_user")
         key: Final = scenario.key(user_id=owner, models=[model], key_alias="unchanged", max_budget=2)
-        caller: Final = scenario.key(
-            user_id=other, models=[model], allowed_routes=["/key/update", "/v1/chat/completions"]
-        )
+        caller: Final = scenario.key(user_id=other, models=[model], allowed_routes=["/key/update", "/v1/chat/completions"])
         gateway.chat(model, key=key)
         denied: Final = gateway.request(
             "POST", "/key/update", {"key": key, "key_alias": "wrong", "models": [outside], "max_budget": 0}, key=caller
@@ -222,10 +204,8 @@ def test_denied_key_update_preserves_saved_grants_and_serving(gateway: Gateway) 
         ) == [{"user_id": owner, "models": [model], "key_alias": "unchanged", "max_budget": 2.0}]
         assert object_value(gateway.chat(model, key=key)["usage"])["total_tokens"] == 40
         rejected: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": outside, "messages": [{"role": "user", "content": "unchanged scope"}]},
-            key=key,
+            "POST", "/v1/chat/completions",
+            {"model": outside, "messages": [{"role": "user", "content": "unchanged scope"}]}, key=key,
         )
         assert rejected.status_code == 403, rejected.text
         assert rejected.json()["error"]["type"] == "key_model_access_denied"
@@ -254,7 +234,9 @@ def test_restricted_actor_cannot_detach_key_from_project(gateway: Gateway) -> No
         assert len(before) == 1
         assert before[0]["project_id"] == project
         assert before[0]["team_id"] == team
-        denied: Final = gateway.request("POST", "/key/update", {"key": target, "project_id": None}, key=caller)
+        denied: Final = gateway.request(
+            "POST", "/key/update", {"key": target, "project_id": None}, key=caller
+        )
         assert denied.status_code == 403, denied.text
         assert _key_rows(digest) == before
 
@@ -287,7 +269,9 @@ def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Ga
         assert len(before) == 1
         assert before[0]["project_id"] == project
         assert before[0]["team_id"] == team
-        info_denied: Final = gateway.request("GET", "/key/info", params={"key": digest}, key=caller)
+        info_denied: Final = gateway.request(
+            "GET", "/key/info", params={"key": digest}, key=caller
+        )
         assert info_denied.status_code == 403, info_denied.text
         assert target not in info_denied.text
         assert digest not in info_denied.text
@@ -297,7 +281,9 @@ def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Ga
             "POST", "/key/update", {"key": target, "key_alias": "foreign-update"}, key=caller
         )
         assert update_denied.status_code == 401, update_denied.text
-        detach_denied: Final = gateway.request("POST", "/key/update", {"key": target, "project_id": None}, key=caller)
+        detach_denied: Final = gateway.request(
+            "POST", "/key/update", {"key": target, "project_id": None}, key=caller
+        )
         assert detach_denied.status_code == 401, detach_denied.text
         for response in (update_denied, detach_denied):
             assert target not in response.text

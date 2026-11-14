@@ -164,7 +164,9 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert reload_body["models_count"] == len(litellm.model_cost)
 
 
-def test_reload_model_cost_map_fetch_failure_502_keeps_map(client, auth_as, monkeypatch, mock_prisma):
+def test_reload_model_cost_map_fetch_failure_502_keeps_map(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """Fetch failure returns 502 with the reason; the pod's map and DB flag are untouched.
 
     Regression: the endpoint used to report success after silently swapping in
@@ -183,7 +185,11 @@ def test_reload_model_cost_map_fetch_failure_502_keeps_map(client, auth_as, monk
     monkeypatch.setattr("litellm.model_cost", sentinel_map, raising=False)
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(return_value=ModelCostMapReloadUnavailable(reason="HTTP 429 from upstream (after 3 attempts)")),
+        AsyncMock(
+            return_value=ModelCostMapReloadUnavailable(
+                reason="HTTP 429 from upstream (after 3 attempts)"
+            )
+        ),
     )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -225,7 +231,9 @@ def test_reload_model_cost_map_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_prisma):
+def test_schedule_model_cost_map_reload_happy(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """Admin schedules a reload — handler upserts config and echoes interval."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -254,7 +262,9 @@ def test_schedule_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock
     assert set(upsert_data["create"]) == {"param_name", "param_value"}
 
 
-def test_schedule_model_cost_map_reload_invalid_hours(client, auth_as, monkeypatch, mock_prisma):
+def test_schedule_model_cost_map_reload_invalid_hours(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """hours <= 0 is rejected with 400."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -331,7 +341,9 @@ def test_cancel_model_cost_map_reload_no_db_500(client, auth_as, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_model_cost_map_reload_status_no_db_not_scheduled(client, auth_as, monkeypatch):
+def test_get_model_cost_map_reload_status_no_db_not_scheduled(
+    client, auth_as, monkeypatch
+):
     """No prisma client → returns the not-scheduled shape (all-null) plus the cost map provenance."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -349,7 +361,9 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(client, auth_as, m
     }
 
 
-def test_get_model_cost_map_reload_status_scheduled(client, auth_as, monkeypatch, mock_prisma):
+def test_get_model_cost_map_reload_status_scheduled(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """A valid config row → scheduled=True and the interval is echoed."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -374,7 +388,9 @@ def test_get_model_cost_map_reload_status_scheduled(client, auth_as, monkeypatch
     }
 
 
-def test_get_model_cost_map_reload_status_reports_persisted_last_run(client, auth_as, monkeypatch, mock_prisma):
+def test_get_model_cost_map_reload_status_reports_persisted_last_run(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """last_run/next_run come from the DB row, so status survives pod restarts."""
     from datetime import datetime, timezone
 
@@ -401,7 +417,9 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(client, aut
     }
 
 
-def test_get_model_cost_map_reload_status_no_config_not_scheduled(client, auth_as, monkeypatch, mock_prisma):
+def test_get_model_cost_map_reload_status_no_config_not_scheduled(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """A row left behind by a manual reload (interval_hours=None) → not scheduled."""
     from datetime import datetime, timezone
 
@@ -474,7 +492,9 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
     }
 
 
-def test_get_model_cost_map_source_admin_view_only_allowed(client, auth_as, monkeypatch):
+def test_get_model_cost_map_source_admin_view_only_allowed(
+    client, auth_as, monkeypatch
+):
     """PROXY_ADMIN_VIEW_ONLY can read source info — pins the read-only ACL."""
     from litellm.proxy._types import LitellmUserRoles
 

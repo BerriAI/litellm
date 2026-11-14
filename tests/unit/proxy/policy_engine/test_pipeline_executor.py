@@ -1937,9 +1937,7 @@ async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_r
     guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("hello [MASKED]"))
     chunks = [_chunk()]
 
-    result = await _run_legacy_streaming_step(
-        monkeypatch, guardrail, chunks, translation=_UnscannableRewriteTranslation()
-    )
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=_UnscannableRewriteTranslation())
 
     _assert_passed_with_discard_warning(result, caplog, "the legacy hook's response could not be rescanned")
     assert chunks == [_chunk()]
@@ -2162,9 +2160,7 @@ async def test_later_legacy_step_sees_the_stream_as_the_earlier_step_left_it(mon
     assert [call["response"] for call in auditor.calls] == [_native("[REWRITTEN] hello world")]
 
 
-@pytest.mark.parametrize(
-    "clone", [copy.deepcopy, lambda exc: pickle.loads(pickle.dumps(exc))], ids=["deepcopy", "pickle"]
-)
+@pytest.mark.parametrize("clone", [copy.deepcopy, lambda exc: pickle.loads(pickle.dumps(exc))], ids=["deepcopy", "pickle"])
 def test_undeliverable_stream_rewrite_keeps_its_reason_through_a_copy(clone):
     original = UndeliverableStreamRewrite("masker", "the translation refused it")
 

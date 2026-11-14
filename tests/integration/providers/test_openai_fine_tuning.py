@@ -63,10 +63,9 @@ def _fine_tuning_response(request: Request) -> Reply:
 
 def test_openai_fine_tuning_routes_forward_requests(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = Path(__file__).with_name("fine_tuning_proxy_config.yaml")
-    with (
-        wire_server(_fine_tuning_response) as wire,
-        owned_proxy(gateway, tmp_path, {"FINE_TUNING_UPSTREAM_URL": f"{wire.url}/v1"}, config=config) as proxy,
-    ):
+    with wire_server(_fine_tuning_response) as wire, owned_proxy(
+        gateway, tmp_path, {"FINE_TUNING_UPSTREAM_URL": f"{wire.url}/v1"}, config=config
+    ) as proxy:
         file_contents: Final = Path(__file__).with_name("openai_fine_tuning.jsonl").read_bytes()
         file_response: Final = proxy.client.post(
             "/v1/files",

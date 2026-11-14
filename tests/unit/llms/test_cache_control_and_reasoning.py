@@ -7,6 +7,7 @@ This test file verifies the fixes for Issue #19923:
 - Model metadata correctly reflects capabilities
 """
 
+
 import pytest
 
 
@@ -273,11 +274,15 @@ def test_openrouter_supports_thinking_param_for_reasoning_models():
     config = OpenrouterConfig()
 
     # Test MiniMax (supports reasoning)
-    supported_params_minimax = config.get_supported_openai_params(model="openrouter/minimax/minimax-m2")
+    supported_params_minimax = config.get_supported_openai_params(
+        model="openrouter/minimax/minimax-m2"
+    )
     assert "thinking" in supported_params_minimax
     assert "reasoning_effort" in supported_params_minimax
 
     # Test GLM (supports reasoning)
-    supported_params_glm = config.get_supported_openai_params(model="openrouter/z-ai/glm-4.6")
+    supported_params_glm = config.get_supported_openai_params(
+        model="openrouter/z-ai/glm-4.6"
+    )
     assert "thinking" in supported_params_glm
     assert "reasoning_effort" in supported_params_glm

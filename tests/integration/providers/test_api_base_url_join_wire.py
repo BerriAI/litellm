@@ -223,7 +223,9 @@ def test_google_genai_generate_content_reaches_one_single_slash_url(gateway: Gat
     marker: Final = new_marker()
     with wire_server(join_peer) as wire, gateway.scenario() as scenario:
         model: Final = _deploy(scenario, _GEMINI, f"{wire.url}/gm/v1beta{trailing}")
-        response: Final = gateway.request("POST", f"/v1beta/models/{model}:generateContent", _gemini_contents(marker))
+        response: Final = gateway.request(
+            "POST", f"/v1beta/models/{model}:generateContent", _gemini_contents(marker)
+        )
         assert _gemini_text(body_of(response)) == reply_text(marker)
         assert_one_request(wire.drain(), _GEMINI.target, marker)
 
@@ -241,7 +243,9 @@ def test_google_genai_stream_generate_content_reaches_one_single_slash_url(gatew
         )
         assert response.status_code == 200, response.text
         assert marker in response.text, response.text
-        assert_one_request(wire.drain(), "/gm/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse", marker)
+        assert_one_request(
+            wire.drain(), "/gm/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse", marker
+        )
 
 
 @pytest.mark.parametrize("trailing", TRAILING, ids=TRAILING_IDS)

@@ -60,7 +60,7 @@ class TestRecraftImageGenerationTransformation:
         non_default_params = {"n": 2, "unsupported_param": "value"}
         optional_params = {}
 
-        with pytest.raises(ValueError, match="Supported parameters are") as exc_info:
+        with pytest.raises(ValueError, match='Supported parameters are') as exc_info:
             self.config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -101,7 +101,9 @@ class TestRecraftImageGenerationTransformation:
             litellm_params={},
         )
 
-        expected_url = f"https://secret.api.recraft.ai/{self.config.IMAGE_GENERATION_ENDPOINT}"
+        expected_url = (
+            f"https://secret.api.recraft.ai/{self.config.IMAGE_GENERATION_ENDPOINT}"
+        )
         assert result == expected_url
         mock_get_secret.assert_called_once_with("RECRAFT_API_BASE")
 
@@ -118,7 +120,9 @@ class TestRecraftImageGenerationTransformation:
             litellm_params={},
         )
 
-        expected_url = f"{self.config.DEFAULT_BASE_URL}/{self.config.IMAGE_GENERATION_ENDPOINT}"
+        expected_url = (
+            f"{self.config.DEFAULT_BASE_URL}/{self.config.IMAGE_GENERATION_ENDPOINT}"
+        )
         assert result == expected_url
 
     @patch("litellm.llms.recraft.image_generation.transformation.get_secret_str")
@@ -163,7 +167,7 @@ class TestRecraftImageGenerationTransformation:
         mock_get_secret.return_value = None
         headers = {}
 
-        with pytest.raises(ValueError, match="RECRAFT_API_KEY is not set") as exc_info:
+        with pytest.raises(ValueError, match='RECRAFT_API_KEY is not set') as exc_info:
             self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -240,7 +244,7 @@ class TestRecraftImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception, match="Error transforming image generation response: Invalid JSON") as exc_info:
+        with pytest.raises(Exception, match='Error transforming image generation response: Invalid JSON') as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,

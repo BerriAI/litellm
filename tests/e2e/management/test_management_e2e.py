@@ -154,12 +154,20 @@ class TestKeyRoutes:
 
         info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
-        assert info.models == [GEMINI_MODEL], f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
-        assert info.tpm_limit == 424242, f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
-        assert info.rpm_limit == 424243, f"/key/info reports rpm_limit {info.rpm_limit}, configured 424243"
+        assert info.models == [GEMINI_MODEL], (
+            f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+        assert info.tpm_limit == 424242, (
+            f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
+        )
+        assert info.rpm_limit == 424243, (
+            f"/key/info reports rpm_limit {info.rpm_limit}, configured 424243"
+        )
 
         _poll_chat_ok(client, key, GEMINI_MODEL)
-        _assert_model_denied(client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL)
+        _assert_model_denied(
+            client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL
+        )
 
     @pytest.mark.covers("mgmt.key.update.persists")
     @meta(
@@ -176,12 +184,16 @@ class TestKeyRoutes:
     ) -> None:
         key = _generate_key(client, resources, KeyGenerateBody(models=[GEMINI_MODEL]))
         _poll_chat_ok(client, key, GEMINI_MODEL)
-        _assert_model_denied(client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL)
+        _assert_model_denied(
+            client.chat_status(key, OPENAI_MODEL, f"say hi {unique_marker()}"), OPENAI_MODEL
+        )
 
         client.update_key_models(key, [OPENAI_MODEL])
 
         info = client.proxy.key_info(key)
-        assert info.models == [OPENAI_MODEL], f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
+        assert info.models == [OPENAI_MODEL], (
+            f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
+        )
 
         _poll_model_access_granted(client, key, OPENAI_MODEL)
         _poll_chat_denied(client, key, GEMINI_MODEL)
@@ -232,7 +244,10 @@ class TestKeyRoutes:
         def listed() -> bool | None:
             return True if client.key_alias_count(alias) == 1 else None
 
-        _ = _poll(client, listed, f"created key with alias {alias!r} never appeared in /key/list before the deadline")
+        _ = _poll(
+            client, listed, f"created key with alias {alias!r} never appeared in /key/list before the deadline"
+        )
+
 
     @pytest.mark.covers("mgmt.key.block.persists")
     @meta(
@@ -512,7 +527,6 @@ class TestTeamRoutes:
             return True if client.team_info(team_id).team_alias == updated_alias else None
 
         _ = _poll(client, reflected, f"/team/info never reflected team_alias {updated_alias!r} after /team/update")
-
     @pytest.mark.covers("mgmt.team.list.happy_path")
     @meta(
         Subject(
@@ -520,7 +534,9 @@ class TestTeamRoutes:
             route=Route.TEAM_MANAGEMENT,
         )
     )
-    def test_created_team_appears_in_team_list(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_created_team_appears_in_team_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         alias = f"e2e-mgmt-team-{unique_marker()}"
         team_id = _create_team(client, resources, alias, [GEMINI_MODEL])
 
@@ -684,7 +700,6 @@ class TestUserRoutes:
         assert info.user_role == "internal_user_viewer", (
             f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
-
     @pytest.mark.covers("mgmt.user.delete.persists")
     @meta(
         Subject(
@@ -692,7 +707,9 @@ class TestUserRoutes:
             route=Route.USER_MANAGEMENT,
         )
     )
-    def test_delete_removes_the_user_from_inventory(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_delete_removes_the_user_from_inventory(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         """The teardown's deferred delete fires again on the already-deleted user by
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /user/delete is a cheap no-op the warn-only
@@ -718,7 +735,9 @@ class TestUserRoutes:
             route=Route.USER_MANAGEMENT,
         )
     )
-    def test_created_users_appear_in_user_list(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_created_users_appear_in_user_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         user_ids = tuple(
             _create_user(
                 client,
@@ -731,7 +750,7 @@ class TestUserRoutes:
         for user_id in user_ids:
             _ = _poll(
                 client,
-                lambda user_id=user_id: True if user_id in client.user_list_ids(user_id) else None,
+                lambda user_id=user_id: (True if user_id in client.user_list_ids(user_id) else None),
                 f"/user/list never listed the created user {user_id} in the admin inventory",
             )
 
@@ -744,7 +763,9 @@ class TestOrganizationRoutes:
             route=Route.ORGANIZATION_MANAGEMENT,
         )
     )
-    def test_new_persists_to_organization_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_new_persists_to_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         alias = f"e2e-mgmt-org-{unique_marker()}"
         org_id = client.create_org(OrgNewBody(organization_alias=alias, models=[GEMINI_MODEL]))
         resources.defer(lambda: client.delete_org(org_id))
@@ -788,7 +809,9 @@ class TestOrganizationRoutes:
             route=Route.ORGANIZATION_MANAGEMENT,
         )
     )
-    def test_delete_removes_from_organization_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_delete_removes_from_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         """The teardown's deferred delete fires again on the already-deleted org by
         design: the deferred cleanup must survive this test failing before the
         in-body delete, and a repeat /organization/delete is a warn-only no-op the
@@ -901,7 +924,9 @@ class TestModelRoutes:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_delete_removes_from_model_info_catalog(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_delete_removes_from_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         """The teardown's deferred delete fires again on the already-deleted model by
         design: it is the safety net if this test fails before the in-body delete, and
         a repeat /model/delete is a warn-only no-op the teardown absorbs."""
@@ -927,7 +952,9 @@ class TestModelRoutes:
             route=Route.MODEL_MANAGEMENT,
         )
     )
-    def test_new_persists_to_model_info_catalog(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_new_persists_to_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         model_name = f"e2e-mgmt-model-{unique_marker()}"
         model_id = client.proxy.create_model(
             model_name,
@@ -999,13 +1026,17 @@ class TestCustomer:
             route=Route.CUSTOMER_MANAGEMENT,
         )
     )
-    def test_customer_create_persists_to_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_customer_create_persists_to_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         customer = f"e2e-customer-{unique_marker()}"
         client.create_customer(customer)
         resources.defer(lambda: client.delete_customer(customer))
 
         info = client.customer_info(customer)
-        assert info.user_id == customer, f"/customer/info did not report the created end-user; got {info.user_id!r}"
+        assert info.user_id == customer, (
+            f"/customer/info did not report the created end-user; got {info.user_id!r}"
+        )
 
 
 def _await_deleted_audit_rows(client: ManagementClient, token_hash: str) -> AuditLogPage:
@@ -1065,7 +1096,9 @@ class TestKeyDeletionAuditLog:
             route=Route.KEY_MANAGEMENT,
         )
     )
-    def test_key_delete_by_key_writes_audit_row(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_key_delete_by_key_writes_audit_row(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         created = _generate_response(client, resources, KeyGenerateBody(key_alias=f"e2e-audit-{unique_marker()}"))
         token = _token_of(created)
 
@@ -1081,7 +1114,9 @@ class TestKeyDeletionAuditLog:
             route=Route.KEY_MANAGEMENT,
         )
     )
-    def test_key_delete_by_alias_writes_audit_row(self, client: ManagementClient, resources: ResourceManager) -> None:
+    def test_key_delete_by_alias_writes_audit_row(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
         alias = f"e2e-audit-{unique_marker()}"
         created = _generate_response(client, resources, KeyGenerateBody(key_alias=alias))
         token = _token_of(created)

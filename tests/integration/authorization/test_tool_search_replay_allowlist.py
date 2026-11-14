@@ -144,7 +144,9 @@ def test_allowed_replay_is_served_and_its_cache_hit_still_checks_the_allowlist(g
         model: Final = _bridge(scenario, wire)
         allowed: Final = scenario.key(models=[model], metadata={"allowed_tools": [ts.WEATHER]})
         cached: Final = {
-            key: value for key, value in _replay_body(model, marker, [ts.loaded(ts.WEATHER)]).items() if key != "cache"
+            key: value
+            for key, value in _replay_body(model, marker, [ts.loaded(ts.WEATHER)]).items()
+            if key != "cache"
         }
         first: Final = gateway.request("POST", "/v1/chat/completions", cached, key=allowed)
         _assert_served(first, wire, marker)
@@ -153,7 +155,9 @@ def test_allowed_replay_is_served_and_its_cache_hit_still_checks_the_allowlist(g
         assert hit.status_code == 200 and hit.headers.get("x-litellm-cache-key"), (hit.text, dict(hit.headers))
         assert ts.first_message(hit.text)["content"] == rv.answer(marker), hit.text
         shell_body: Final = {
-            key: value for key, value in _replay_body(model, marker, [ts.loaded(shell)]).items() if key != "cache"
+            key: value
+            for key, value in _replay_body(model, marker, [ts.loaded(shell)]).items()
+            if key != "cache"
         }
         populated: Final = gateway.request("POST", "/v1/chat/completions", shell_body)
         assert populated.status_code == 200, populated.text

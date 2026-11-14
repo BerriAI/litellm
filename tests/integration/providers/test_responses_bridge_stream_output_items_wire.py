@@ -30,9 +30,7 @@ _DISCOVERY_PROBE: Final = ("GET", "/v1/models")
 
 
 def _frame(identity: str, delta: dict[str, JsonValue], finish_reason: str | None = None) -> bytes:
-    usage: Final = (
-        {"usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42}} if finish_reason else {}
-    )
+    usage: Final = {"usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42}} if finish_reason else {}
     body: Final = {
         "id": identity,
         "object": "chat.completion.chunk",
@@ -191,9 +189,7 @@ async def test_async_openai_sdk_responses_stream_text_reply_has_one_message_item
             (event.item.type, event.output_index) for event in events if event.type == "response.output_item.added"
         ]
         assert added == [("message", 0)], [event.type for event in events]
-        done: Final = [
-            (event.item.type, event.output_index) for event in events if event.type == "response.output_item.done"
-        ]
+        done: Final = [(event.item.type, event.output_index) for event in events if event.type == "response.output_item.done"]
         assert done == [("message", 0)], [event.type for event in events]
         assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == _ANSWER
         completed: Final = [event for event in events if event.type == "response.completed"]
@@ -223,9 +219,9 @@ async def test_async_openai_sdk_responses_stream_reasoning_then_text_gets_contig
         assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == _ANSWER
         completed: Final = [event for event in events if event.type == "response.completed"]
         assert len(completed) == 1 and completed[0].response.output_text == _ANSWER
-        assert [item.type for item in completed[0].response.output] == ["reasoning", "message"], completed[
-            0
-        ].response.output
+        assert [item.type for item in completed[0].response.output] == ["reasoning", "message"], (
+            completed[0].response.output
+        )
         _only_streamed_chat(wire)
         assert _spend_statuses(model) == ["success"]
 

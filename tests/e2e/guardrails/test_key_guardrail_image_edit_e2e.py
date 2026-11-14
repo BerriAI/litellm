@@ -46,14 +46,8 @@ class TestKeyAttachedGuardrailOnImageEdits:
         Subject(
             domain=Domain.GUARDRAILS,
             route=Route.IMAGES,
-            providers=(
-                Provider.GEMINI,
-                Provider.OPENAI,
-            ),
-            models=(
-                CHAT_MODEL,
-                IMAGE_BACKEND,
-            ),
+            providers=(Provider.GEMINI, Provider.OPENAI,),
+            models=(CHAT_MODEL, IMAGE_BACKEND,),
             mode=Mode.NONSTREAM,
         )
     )

@@ -158,7 +158,9 @@ def test_unmatched_successor_logs_below_warning_through_endpoint(client_with_cos
 
     assert response.status_code == 200, response.text
     successor_records = tuple(
-        record for record in caplog.records if record.name == verbose_logger.name and "successor" in record.getMessage()
+        record
+        for record in caplog.records
+        if record.name == verbose_logger.name and "successor" in record.getMessage()
     )
     assert successor_records
     assert all(record.levelno < logging.WARNING for record in successor_records)
@@ -193,7 +195,9 @@ def test_mixed_successor_group_logs_below_warning_through_endpoint(
         },
     )
 
-    def filtered_model_list(model_name: str | None = None, **_kwargs: object) -> tuple[dict[str, object], ...]:
+    def filtered_model_list(
+        model_name: str | None = None, **_kwargs: object
+    ) -> tuple[dict[str, object], ...]:
         return models if model_name is None else tuple(model for model in models if model["model_name"] == model_name)
 
     monkeypatch.setattr(router.get_model_list, "side_effect", filtered_model_list)
@@ -203,7 +207,9 @@ def test_mixed_successor_group_logs_below_warning_through_endpoint(
 
     assert response.status_code == 200, response.text
     successor_records: Final = tuple(
-        record for record in caplog.records if record.name == verbose_logger.name and "successor" in record.getMessage()
+        record
+        for record in caplog.records
+        if record.name == verbose_logger.name and "successor" in record.getMessage()
     )
     assert successor_records
     assert all(

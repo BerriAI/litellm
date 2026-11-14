@@ -130,7 +130,9 @@ def test_environment_is_the_source_when_yaml_only_relays_the_environment_variabl
 
 
 def test_environment_is_the_source_when_yaml_does_not_set_a_master_key():
-    verdict = _verdict(PUBLICLY_KNOWN_KEY, {"database_url": "postgresql://db"}, config_file_path="/app/config.yaml")
+    verdict = _verdict(
+        PUBLICLY_KNOWN_KEY, {"database_url": "postgresql://db"}, config_file_path="/app/config.yaml"
+    )
 
     assert isinstance(verdict, UnsafeMasterKeyRefused)
     assert verdict.source == EnvironmentSource()

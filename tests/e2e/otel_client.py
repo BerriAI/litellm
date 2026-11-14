@@ -177,9 +177,7 @@ class _Observation:
 
     def settled(self, names: set[str], prefixes: set[str]) -> bool:
         hits: Final = self.traces.hits
-        return (
-            self.unreachable is None and len(hits) == 1 and not self.missing and trace_settled(hits[0], names, prefixes)
-        )
+        return self.unreachable is None and len(hits) == 1 and not self.missing and trace_settled(hits[0], names, prefixes)
 
 
 @dataclass(frozen=True, slots=True)

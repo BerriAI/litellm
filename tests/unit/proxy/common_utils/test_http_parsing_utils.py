@@ -68,17 +68,12 @@ def _starlette_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path, path_params",
-    [
-        ("/claude-code/plugins/skill/archive/digest.zip", {"plugin_name": "skill"}),
-        ("/vector_stores/vs-safe/files", {}),
-    ],
-)
+@pytest.mark.parametrize("path, path_params", [
+    ("/claude-code/plugins/skill/archive/digest.zip", {"plugin_name": "skill"}),
+    ("/vector_stores/vs-safe/files", {}),
+])
 async def test_request_vector_store_values_cannot_forge_debug_log_lines(
-    path: str,
-    path_params: Mapping[str, str],
-    caplog: pytest.LogCaptureFixture,
+    path: str, path_params: Mapping[str, str], caplog: pytest.LogCaptureFixture,
 ) -> None:
     untrusted: Final = "private-value\r\nFORGED LOG LINE"
     request: Final = _starlette_request(b"{}", "application/json", path)
@@ -1517,7 +1512,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1570,7 +1564,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     publish(litellm.model_cost)
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1590,7 +1583,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -1614,7 +1606,6 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
 def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
     return Request_http_parsing(
         {
@@ -1626,13 +1617,11 @@ def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
         receive,
     )
 
-
 def _request_with_body(body: bytes) -> Request_http_parsing:
     async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
     return _request(receive)
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1640,13 +1629,11 @@ async def test_read_request_body_valid_json():
     result = await read_request_body(_request_with_body(b'{"key": "value"}'))
     assert result == {"key": "value"}
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_empty_body():
     result = await read_request_body(_request_with_body(b""))
     assert result == {}
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1654,14 +1641,12 @@ async def test_read_request_body_invalid_json():
     with pytest.raises(ProxyException):
         await read_request_body(_request_with_body(b'{"key": value}'))
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_large_payload():
     large_payload = '{"key":' + '"a"' * 10**6 + "}"
     with pytest.raises(ProxyException):
         await read_request_body(_request_with_body(large_payload.encode()))
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio

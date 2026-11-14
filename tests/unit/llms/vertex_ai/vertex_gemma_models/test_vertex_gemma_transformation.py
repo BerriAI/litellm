@@ -1360,9 +1360,7 @@ def test_sync_gemma_stream(_gemma_cached_access_token):
     assert chunks[1].choices[0].finish_reason == "stop"
 
 
-def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
-    _gemma_cached_access_token: None,
-) -> None:
+def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(_gemma_cached_access_token: None) -> None:
     stream: Final = litellm.completion(
         model="vertex_ai/gemma/test-model",
         messages=[{"role": "user", "content": "Reply exactly READY"}],

@@ -10,7 +10,9 @@ def _rendered_log_message(call):
     return message % values if values else message
 
 
-def create_mock_router(fallbacks=None, context_window_fallbacks=None, content_policy_fallbacks=None):
+def create_mock_router(
+    fallbacks=None, context_window_fallbacks=None, content_policy_fallbacks=None
+):
     """Helper function to create a mock router with fallback configurations."""
     router = Mock()
     router.settings.return_value = RouterSettings(
@@ -42,10 +44,14 @@ def test_model_with_fallbacks_returns_complete_list():
     """Test that model with fallbacks returns complete fallback list."""
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}]
+    fallbacks_config = [
+        {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
+    ]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (
             ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"],
             None,
@@ -59,10 +65,14 @@ def test_model_without_fallbacks_returns_empty_list():
     """Test that model without fallbacks returns empty list."""
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}]
+    fallbacks_config = [
+        {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
+    ]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (None, None)
 
         result = get_all_fallbacks("bedrock-claude-sonnet-4", llm_router=router)
@@ -76,14 +86,20 @@ def test_general_fallback_type():
     fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4"]}]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (["bedrock-claude-sonnet-4"], None)
 
-        result = get_all_fallbacks("claude-4-sonnet", llm_router=router, fallback_type="general")
+        result = get_all_fallbacks(
+            "claude-4-sonnet", llm_router=router, fallback_type="general"
+        )
         assert result == ["bedrock-claude-sonnet-4"]
 
         # Verify it used the general fallbacks config
-        mock_get_fallback.assert_called_once_with(fallbacks=fallbacks_config, model_group="claude-4-sonnet")
+        mock_get_fallback.assert_called_once_with(
+            fallbacks=fallbacks_config, model_group="claude-4-sonnet"
+        )
 
 
 def test_context_window_fallback_type():
@@ -93,14 +109,20 @@ def test_context_window_fallback_type():
     context_fallbacks_config = [{"gpt-4": ["gpt-3.5-turbo"]}]
     router = create_mock_router(context_window_fallbacks=context_fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (["gpt-3.5-turbo"], None)
 
-        result = get_all_fallbacks("gpt-4", llm_router=router, fallback_type="context_window")
+        result = get_all_fallbacks(
+            "gpt-4", llm_router=router, fallback_type="context_window"
+        )
         assert result == ["gpt-3.5-turbo"]
 
         # Verify it used the context window fallbacks config
-        mock_get_fallback.assert_called_once_with(fallbacks=context_fallbacks_config, model_group="gpt-4")
+        mock_get_fallback.assert_called_once_with(
+            fallbacks=context_fallbacks_config, model_group="gpt-4"
+        )
 
 
 def test_content_policy_fallback_type():
@@ -110,14 +132,20 @@ def test_content_policy_fallback_type():
     content_fallbacks_config = [{"claude-4": ["claude-3"]}]
     router = create_mock_router(content_policy_fallbacks=content_fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (["claude-3"], None)
 
-        result = get_all_fallbacks("claude-4", llm_router=router, fallback_type="content_policy")
+        result = get_all_fallbacks(
+            "claude-4", llm_router=router, fallback_type="content_policy"
+        )
         assert result == ["claude-3"]
 
         # Verify it used the content policy fallbacks config
-        mock_get_fallback.assert_called_once_with(fallbacks=content_fallbacks_config, model_group="claude-4")
+        mock_get_fallback.assert_called_once_with(
+            fallbacks=content_fallbacks_config, model_group="claude-4"
+        )
 
 
 def test_invalid_fallback_type_returns_empty_list():
@@ -127,7 +155,9 @@ def test_invalid_fallback_type_returns_empty_list():
     router = create_mock_router(fallbacks=[])
 
     with patch("litellm.proxy.auth.model_checks.verbose_proxy_logger") as mock_logger:
-        result = get_all_fallbacks("claude-4-sonnet", llm_router=router, fallback_type="invalid")
+        result = get_all_fallbacks(
+            "claude-4-sonnet", llm_router=router, fallback_type="invalid"
+        )
 
         assert result == []
         mock_logger.warning.assert_called_once_with("Unknown fallback_type: %s", "invalid")
@@ -139,16 +169,22 @@ def test_exception_handling_returns_empty_list():
 
     router = create_mock_router(fallbacks=[{"claude-4-sonnet": ["fallback"]}])
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.side_effect = Exception("Test exception")
 
-        with patch("litellm.proxy.auth.model_checks.verbose_proxy_logger") as mock_logger:
+        with patch(
+            "litellm.proxy.auth.model_checks.verbose_proxy_logger"
+        ) as mock_logger:
             result = get_all_fallbacks("claude-4-sonnet", llm_router=router)
 
             assert result == []
             mock_logger.error.assert_called_once()
             error_call_args = _rendered_log_message(mock_logger.error.call_args)
-            assert "Error getting fallbacks for model claude-4-sonnet" in error_call_args
+            assert (
+                "Error getting fallbacks for model claude-4-sonnet" in error_call_args
+            )
 
 
 def test_multiple_fallbacks_complete_list():
@@ -158,7 +194,9 @@ def test_multiple_fallbacks_complete_list():
     fallbacks_config = [{"gpt-4": ["gpt-4-turbo", "gpt-3.5-turbo", "claude-3-haiku"]}]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (
             ["gpt-4-turbo", "gpt-3.5-turbo", "claude-3-haiku"],
             None,
@@ -178,7 +216,9 @@ def test_wildcard_and_specific_fallbacks():
     ]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         # Test specific model fallbacks
         mock_get_fallback.return_value = (
             ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"],
@@ -200,12 +240,16 @@ def test_default_fallback_type_is_general():
     fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4"]}]
     router = create_mock_router(fallbacks=fallbacks_config)
 
-    with patch("litellm.proxy.auth.model_checks.fallback_chain") as mock_get_fallback:
+    with patch(
+        "litellm.proxy.auth.model_checks.fallback_chain"
+    ) as mock_get_fallback:
         mock_get_fallback.return_value = (["bedrock-claude-sonnet-4"], None)
 
         # Call without specifying fallback_type
         result = get_all_fallbacks("claude-4-sonnet", llm_router=router)
 
         # Should use general fallbacks (router.fallbacks)
-        mock_get_fallback.assert_called_once_with(fallbacks=fallbacks_config, model_group="claude-4-sonnet")
+        mock_get_fallback.assert_called_once_with(
+            fallbacks=fallbacks_config, model_group="claude-4-sonnet"
+        )
         assert result == ["bedrock-claude-sonnet-4"]

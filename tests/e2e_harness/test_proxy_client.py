@@ -116,11 +116,7 @@ def caller_boundary(
     thread.start()
     url: Final = f"http://127.0.0.1:{server.server_port}"
     proxy: Final = build_proxy_client(
-        base_url=url,
-        control_plane_base_url=url,
-        replica_urls=(url,),
-        control_replica_urls=(url,),
-        master_key="bootstrap",
+        base_url=url, control_plane_base_url=url, replica_urls=(url,), control_replica_urls=(url,), master_key="bootstrap"
     )
     try:
         yield ManagementClient(proxy=proxy, master_key="bootstrap"), received
@@ -740,11 +736,7 @@ def model_registry(
     thread.start()
     url: Final = f"http://127.0.0.1:{server.server_port}"
     proxy: Final = build_proxy_client(
-        base_url=url,
-        control_plane_base_url=url,
-        replica_urls=(url,),
-        control_replica_urls=(url,),
-        master_key="bootstrap",
+        base_url=url, control_plane_base_url=url, replica_urls=(url,), control_replica_urls=(url,), master_key="bootstrap"
     )
     try:
         yield replace(proxy, model_servable_timeout=0.3, model_servable_interval=0.01), writes, deleted

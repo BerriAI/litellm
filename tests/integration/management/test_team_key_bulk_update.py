@@ -36,7 +36,9 @@ async def _seed_team_key(db, gateway_client, prefix: str, actors, shape: str) ->
     internal = actors.keys[Actor.INTERNAL_USER].user_id
     owner = actors.keys[Actor.OWNER].user_id
     if shape == "admin":
-        await create_scratch_team(db, prefix, organization_id=actors.org_a_id, admin_user_ids=[internal])
+        await create_scratch_team(
+            db, prefix, organization_id=actors.org_a_id, admin_user_ids=[internal]
+        )
         key_owner = internal
     elif shape == "member_allowed":
         await create_scratch_team(
@@ -59,7 +61,9 @@ async def _seed_team_key(db, gateway_client, prefix: str, actors, shape: str) ->
         )
         key_owner = owner
     elif shape == "nonmember":
-        await create_scratch_team(db, prefix, organization_id=actors.org_a_id, admin_user_ids=[owner])
+        await create_scratch_team(
+            db, prefix, organization_id=actors.org_a_id, admin_user_ids=[owner]
+        )
         key_owner = owner
     else:
         pytest.fail(f"unknown shape={shape}")  # pragma: no cover
@@ -99,7 +103,9 @@ async def test_team_key_bulk_update_authz_matrix(
             "update_fields": {"max_budget": _MARKER_BUDGET},
         },
     )
-    assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} {shape}: {resp.status_code} {resp.text}"
 
     row = await db.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None
@@ -110,7 +116,9 @@ async def test_team_key_bulk_update_authz_matrix(
         assert row.max_budget != _MARKER_BUDGET, "denied but key mutated"
 
 
-async def test_team_key_bulk_update_requires_team_id(gateway_client, db, resources, actors):
+async def test_team_key_bulk_update_requires_team_id(
+    gateway_client, db, resources, actors
+):
     """An empty team_id is rejected 400."""
     resp = await gateway_client.post(
         "/team/key/bulk_update",
@@ -124,7 +132,9 @@ async def test_team_key_bulk_update_requires_team_id(gateway_client, db, resourc
     assert resp.status_code == 400, resp.text
 
 
-async def test_team_key_bulk_update_all_keys_in_team(gateway_client, db, resources, actors):
+async def test_team_key_bulk_update_all_keys_in_team(
+    gateway_client, db, resources, actors
+):
     """all_keys_in_team=True broadcasts the update to every key in the team."""
     admin = actors.keys[Actor.PROXY_ADMIN].cleartext
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
@@ -152,11 +162,15 @@ async def test_team_key_bulk_update_all_keys_in_team(gateway_client, db, resourc
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["successful_updates"]) == 2
     for key in keys:
-        row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key)})
+        row = await db.db.litellm_verificationtoken.find_unique(
+            where={"token": hash_token(key)}
+        )
         assert row is not None and row.max_budget == _MARKER_BUDGET
 
 
-async def test_team_key_bulk_update_no_keys_found_is_404(gateway_client, db, resources, actors):
+async def test_team_key_bulk_update_no_keys_found_is_404(
+    gateway_client, db, resources, actors
+):
     """all_keys_in_team=True on a team with no keys is a top-level 404."""
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
     resp = await gateway_client.post(
@@ -171,11 +185,15 @@ async def test_team_key_bulk_update_no_keys_found_is_404(gateway_client, db, res
     assert resp.status_code == 404, resp.text
 
 
-async def test_team_key_bulk_update_missing_key_is_isolated(gateway_client, db, resources, actors):
+async def test_team_key_bulk_update_missing_key_is_isolated(
+    gateway_client, db, resources, actors
+):
     """A key_id absent from the team lands in failed_updates; the batch still
     returns 200 and the real key is updated."""
     admin = actors.keys[Actor.PROXY_ADMIN].cleartext
-    real = await _seed_team_key(db, gateway_client, resources.prefix, actors, "nonmember")
+    real = await _seed_team_key(
+        db, gateway_client, resources.prefix, actors, "nonmember"
+    )
     missing = "sk-" + uuid.uuid4().hex
 
     resp = await gateway_client.post(
@@ -193,5 +211,7 @@ async def test_team_key_bulk_update_missing_key_is_isolated(gateway_client, db, 
     assert len(body["successful_updates"]) == 1
     assert len(body["failed_updates"]) == 1
 
-    row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(real)})
+    row = await db.db.litellm_verificationtoken.find_unique(
+        where={"token": hash_token(real)}
+    )
     assert row is not None and row.max_budget == _MARKER_BUDGET

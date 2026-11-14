@@ -122,9 +122,7 @@ class _ConnectionHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self.rfile.read(int(self.headers["Content-Length"]))
-        payload: Final = (
-            CHAT_COMPLETION if self.path.endswith("/chat/completions") else {"connection": self.connection_number}
-        )
+        payload: Final = CHAT_COMPLETION if self.path.endswith("/chat/completions") else {"connection": self.connection_number}
         body: Final = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -174,15 +172,7 @@ def test_rebuilt_shared_session_drops_idle_connection_after_configured_keepalive
 
 def _evicted_clients_exchange(base_url: str) -> EvictionReport:
     completed: Final = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-c",
-            EVICTED_CLIENTS_EXCHANGE,
-            base_url,
-            base_url.rsplit(":", 1)[1],
-            str(EVICTED_CLIENTS),
-        ],
+        [sys.executable, "-P", "-c", EVICTED_CLIENTS_EXCHANGE, base_url, base_url.rsplit(":", 1)[1], str(EVICTED_CLIENTS)],
         capture_output=True,
         text=True,
         timeout=300,

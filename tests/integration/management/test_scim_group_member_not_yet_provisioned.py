@@ -15,7 +15,9 @@ def test_scim_group_patch_add_member_provisions_the_missing_user(gateway: Gatewa
             f"/scim/v2/Groups/{team}",
             {
                 "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-                "Operations": [{"op": "add", "path": "members", "value": [{"value": missing_user}]}],
+                "Operations": [
+                    {"op": "add", "path": "members", "value": [{"value": missing_user}]}
+                ],
             },
         )
         scenario.cleanups.callback(scenario.delete_user, missing_user)

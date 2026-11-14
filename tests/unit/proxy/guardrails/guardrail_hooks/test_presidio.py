@@ -2567,11 +2567,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
         ),
         _anthropic_sse(
             "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'},
-            },
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
         ),
         _anthropic_sse("error", upstream_error),
     )
@@ -2626,11 +2622,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_t
         ),
         _anthropic_sse(
             "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": '{"command" "ls"'},
-            },
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command" "ls"'}},
         ),
         _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1}),
         _anthropic_sse("error", upstream_error),
@@ -2738,7 +2730,7 @@ STREAMS_WITH_A_NON_OBJECT_LINE_AND_NO_ANTHROPIC_FRAME: Final = {
     "list-type": (b'data: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
     "dict-type": (b'data: {"type": {"a": 1}}\n\n', b'data: {"text": "4111"}\n\n'),
     "error-frame-with-a-list-type": (b'event: error\ndata: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
-    "cut-character-at-the-end": (b"data: [5]\xe2",),
+    "cut-character-at-the-end": (b'data: [5]\xe2',),
     "word-then-non-object-before-gemini": (b"data: hello\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
     "null-then-non-object-before-gemini": (b"data: null\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
     "word-then-list-type-before-gemini": (b"data: hello\n\n", b'data: {"type": []}\n\n', _GEMINI_TEXT_FRAME),
@@ -4774,13 +4766,7 @@ _PERSON_NAME: Final = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
 
 def _person_spans(text: str) -> list[dict]:
     return [
-        {
-            "entity_type": "PERSON",
-            "start": match.start(),
-            "end": match.end(),
-            "score": 0.85,
-            "analysis_explanation": None,
-        }
+        {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85, "analysis_explanation": None}
         for match in _PERSON_NAME.finditer(text)
     ]
 
@@ -4986,7 +4972,9 @@ def test_validate_environment_missing_http(base_url):
         if not (base_url.startswith("https://") or base_url.startswith("http://")):
             expected_url = "http://" + base_url
 
-        assert pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/", "Got={}, Expected={}".format(
+        assert (
+            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+        ), "Got={}, Expected={}".format(
             pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
         )
         assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
@@ -5026,13 +5014,20 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
-            "metadata": {"pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}},
+            "messages": [
+                {"role": "system", "content": "You are an helpfull assistant"}
+            ],
+            "metadata": {
+                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
+            },
         },
         response=response,
     )
 
-    assert new_response.choices[0].message.content == "Hello Jane Doe! How can I assist you today?"
+    assert (
+        new_response.choices[0].message.content
+        == "Hello Jane Doe! How can I assist you today?"
+    )
 
 
 input_a_anonymizer_results = {
@@ -5075,7 +5070,9 @@ async def test_presidio_pii_masking_input_a():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_a_anonymizer_results)
+    pii_masking = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
+    )
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -5104,7 +5101,9 @@ async def test_presidio_pii_masking_input_b():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_b_anonymizer_results)
+    pii_masking = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
+    )
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -5191,12 +5190,16 @@ async def test_presidio_language_configuration():
     assert analyze_request_es["language"] == "es"
     assert analyze_request_es["text"] == test_text_es
 
-    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, mock_testing=True)
+    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, mock_testing=True
+    )
 
     test_text_en = "My phone number is +1 555-123-4567"
 
-    analyze_request_default = presidio_guardrail_default._get_presidio_analyze_request_payload(
-        text=test_text_en, presidio_config=None, request_data={}
+    analyze_request_default = (
+        presidio_guardrail_default._get_presidio_analyze_request_payload(
+            text=test_text_en, presidio_config=None, request_data={}
+        )
     )
 
     assert analyze_request_default["language"] == "en"
@@ -5208,7 +5211,9 @@ async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
     litellm.turn_on_debug()
 
-    presidio_guardrail = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, presidio_language="de", mock_testing=True)
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, presidio_language="de", mock_testing=True
+    )
 
     test_text = "Test text with PII"
 
@@ -5278,9 +5283,7 @@ class _InMemoryPresidioTransport(asyncio.Transport):
         if not separator:
             return
         request_line, *header_lines = head.decode().split("\r\n")
-        headers: Final = {
-            name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)
-        }
+        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
         if len(body) < int(headers.get("content-length", "0")):
             return
         self._received = b""
@@ -5444,7 +5447,9 @@ async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkey
     assert pii_masking_obj is not None
     assert hasattr(pii_masking_obj, "logging_only")
     assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
-    assert pii_masking_obj.should_run_guardrail(data={}, event_type=GuardrailEventHooks.logging_only)
+    assert pii_masking_obj.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.logging_only
+    )
 
 
 async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:

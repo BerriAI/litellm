@@ -63,14 +63,20 @@ def test_fetch_auth_token_success(mock_fetch_auth_token, mock_auth_response):
     config = AgentOpsConfig(api_key="test_key")
     agentops = AgentOps(config=config)
 
-    mock_fetch_auth_token.assert_called_once_with("test_key", "https://api.agentops.ai/v3/auth/token")
-    assert agentops.resource_attributes.get("project.id") == mock_auth_response.get("project_id")
+    mock_fetch_auth_token.assert_called_once_with(
+        "test_key", "https://api.agentops.ai/v3/auth/token"
+    )
+    assert agentops.resource_attributes.get("project.id") == mock_auth_response.get(
+        "project_id"
+    )
 
 
 @patch("litellm.integrations.agentops.agentops.AgentOps._fetch_auth_token")
 def test_fetch_auth_token_failure(mock_fetch_auth_token):
     """Test failed JWT token fetch"""
-    mock_fetch_auth_token.side_effect = Exception("Failed to fetch auth token: Unauthorized")
+    mock_fetch_auth_token.side_effect = Exception(
+        "Failed to fetch auth token: Unauthorized"
+    )
 
     config = AgentOpsConfig(api_key="test_key")
     agentops = AgentOps(config=config)
@@ -80,7 +86,9 @@ def test_fetch_auth_token_failure(mock_fetch_auth_token):
 
 
 @patch("litellm.integrations.agentops.agentops.AgentOps._fetch_auth_token")
-def test_agentops_initialization(mock_fetch_auth_token, agentops_config, mock_auth_response):
+def test_agentops_initialization(
+    mock_fetch_auth_token, agentops_config, mock_auth_response
+):
     """Test AgentOps initialization with config"""
     mock_fetch_auth_token.return_value = mock_auth_response
 

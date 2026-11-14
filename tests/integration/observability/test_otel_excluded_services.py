@@ -742,9 +742,7 @@ def test_postgres_exclusion_covers_spend_flush(
         op_start, _ = recorded_spans(audit_sinks.operator)
         ten_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
-        _await_db_span(
-            audit_sinks.operator, None, "postgres.update LiteLLM_VerificationToken", seconds=60, since=op_start
-        )
+        _await_db_span(audit_sinks.operator, None, "postgres.update LiteLLM_VerificationToken", seconds=60, since=op_start)
         operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
         _, operator_spans = recorded_spans(audit_sinks.operator, op_start)
         assert any(

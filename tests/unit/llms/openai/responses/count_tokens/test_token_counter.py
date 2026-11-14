@@ -471,7 +471,9 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
 async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
     monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
-    result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True})
+    result, route = await _count_tool_result_turns(
+        monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True}
+    )
 
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 9)
@@ -588,9 +590,7 @@ async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_li
 async def test_anthropic_format_malformed_clear_edit_answers_400_without_calling_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result, route = await _count_with_edit(
-        monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False
-    )
+    result, route = await _count_with_edit(monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False)
 
     assert route.called is False
     assert result is not None

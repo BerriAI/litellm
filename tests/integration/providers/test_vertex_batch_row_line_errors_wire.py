@@ -50,16 +50,12 @@ def _row_case(case: str, model: str) -> tuple[bytes, str]:
         case "body_5kb_string":
             return _with_body("x" * 5120), BODY_NOT_OBJECT
         case "body_twice_null_last":
-            twice: Final = (
-                f'{{"custom_id": "bad", "method": "POST", "url": "{CHAT_URL}", "body": {valid_body}, "body": null}}'
-            )
+            twice: Final = f'{{"custom_id": "bad", "method": "POST", "url": "{CHAT_URL}", "body": {valid_body}, "body": null}}'
             return twice.encode(), BODY_NOT_OBJECT
         case "message_without_role":
             return encoded(roleless_row("bad", model)), "missing field 'role'"
         case "responses_body_null":
-            return encoded(
-                {"custom_id": "bad", "method": "POST", "url": "/v1/responses", "body": None}
-            ), BODY_NOT_OBJECT
+            return encoded({"custom_id": "bad", "method": "POST", "url": "/v1/responses", "body": None}), BODY_NOT_OBJECT
         case _:
             raise AssertionError(case)
 
@@ -283,9 +279,7 @@ def _leading_blank_line(first: bytes, fourth: bytes) -> bytes:
     return b"".join((b"\n", first + b"\n", fourth + b"\n"))
 
 
-@pytest.mark.parametrize(
-    "layout", (_bom_then_blank_lines, _leading_blank_line), ids=("bom_then_blank", "leading_blank")
-)
+@pytest.mark.parametrize("layout", (_bom_then_blank_lines, _leading_blank_line), ids=("bom_then_blank", "leading_blank"))
 def test_router_rewrite_sends_openai_only_the_rows(gateway: Gateway, layout: Callable[[bytes, bytes], bytes]) -> None:
     with wire_server(openai_files_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(

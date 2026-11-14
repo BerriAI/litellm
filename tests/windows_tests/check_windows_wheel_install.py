@@ -30,13 +30,18 @@ WORST_CASE_PREFIX = len(STORE_PYTHON_SITE_PACKAGES.format(profile="x" * 15))
 
 
 def busts_windows_limits(entry, prefix_len=WORST_CASE_PREFIX):
-    return prefix_len + len(entry) >= MAX_PATH or prefix_len + len(os.path.dirname(entry)) >= MAX_DIRECTORY_PATH
+    return (
+        prefix_len + len(entry) >= MAX_PATH
+        or prefix_len + len(os.path.dirname(entry)) >= MAX_DIRECTORY_PATH
+    )
 
 
 def overlong_install_paths(wheel, prefix_len=WORST_CASE_PREFIX):
     with zipfile.ZipFile(wheel) as zf:
         names = zf.namelist()
-    return sorted((n for n in names if busts_windows_limits(n, prefix_len)), key=len, reverse=True)
+    return sorted(
+        (n for n in names if busts_windows_limits(n, prefix_len)), key=len, reverse=True
+    )
 
 
 def _deep_venv_dir(target_prefix=WORST_CASE_PREFIX):
@@ -78,7 +83,9 @@ def main(argv):
         return 1
     python = os.path.join(venv, "Scripts", "python.exe")
     if _run([python, "-m", "pip", "install", wheel]) != 0:
-        print(f"::error::installing {os.path.basename(wheel)} into a deep prefix failed")
+        print(
+            f"::error::installing {os.path.basename(wheel)} into a deep prefix failed"
+        )
         return 1
     if _run([python, "-I", "-c", "import litellm; import litellm.types.utils"]) != 0:
         print("::error::litellm did not import after install (half-unpacked package)")
@@ -94,7 +101,9 @@ def main(argv):
         if result.returncode != 0:
             return result.returncode
 
-    print(f"ok: {os.path.basename(wheel)} installs into a worst-case prefix and imports")
+    print(
+        f"ok: {os.path.basename(wheel)} installs into a worst-case prefix and imports"
+    )
     return 0
 
 

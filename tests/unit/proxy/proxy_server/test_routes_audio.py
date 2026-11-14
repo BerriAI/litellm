@@ -541,11 +541,7 @@ def _streams_when_asked(request: httpx.Request) -> httpx.Response:
 
 def _sse_events(body: str) -> tuple[object, ...]:
     assert body.endswith("data: [DONE]\n\n")
-    return tuple(
-        json.loads(frame.removeprefix("data: "))
-        for frame in body.removesuffix("data: [DONE]\n\n").split("\n\n")
-        if frame
-    )
+    return tuple(json.loads(frame.removeprefix("data: ")) for frame in body.removesuffix("data: [DONE]\n\n").split("\n\n") if frame)
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")

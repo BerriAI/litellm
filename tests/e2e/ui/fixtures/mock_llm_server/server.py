@@ -108,7 +108,10 @@ async def embeddings(request: Request):
         inputs = [inputs]
     return {
         "object": "list",
-        "data": [{"object": "embedding", "index": i, "embedding": [0.0] * 1536} for i in range(len(inputs))],
+        "data": [
+            {"object": "embedding", "index": i, "embedding": [0.0] * 1536}
+            for i in range(len(inputs))
+        ],
         "model": body.get("model", "mock-embedding"),
         "usage": {"prompt_tokens": 5, "total_tokens": 5},
     }

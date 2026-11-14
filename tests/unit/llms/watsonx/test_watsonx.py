@@ -91,7 +91,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -100,7 +99,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -135,7 +133,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -150,7 +147,6 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
-
 @pytest.fixture
 def watsonx_env_vars(monkeypatch):
     """Set required WatsonX env vars so the provider passes validation.
@@ -160,7 +156,6 @@ def watsonx_env_vars(monkeypatch):
     monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
     monkeypatch.delenv("WATSONX_ZENAPIKEY", raising=False)
     monkeypatch.delenv("WATSONX_TOKEN", raising=False)
-
 
 @pytest.fixture
 def watsonx_chat_completion_call():
@@ -220,7 +215,6 @@ def watsonx_chat_completion_call():
 
     return _call
 
-
 @pytest.fixture
 def watsonx_embedding_call():
     def _call(
@@ -279,7 +273,6 @@ def watsonx_embedding_call():
 
     return _call
 
-
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("with_custom_auth_header", [True, False])
 def test_watsonx_custom_auth_header(with_custom_auth_header, watsonx_chat_completion_call):
@@ -293,7 +286,6 @@ def test_watsonx_custom_auth_header(with_custom_auth_header, watsonx_chat_comple
     else:
         assert mock_post.call_args[1]["headers"]["Authorization"] == "Bearer mock_access_token"
 
-
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("env_var_key", ["WATSONX_ZENAPIKEY", "WATSONX_TOKEN"])
 def test_watsonx_token_in_env_var(monkeypatch, watsonx_chat_completion_call, env_var_key):
@@ -306,7 +298,6 @@ def test_watsonx_token_in_env_var(monkeypatch, watsonx_chat_completion_call, env
         assert mock_post.call_args[1]["headers"]["Authorization"] == "ZenApiKey my-custom-token"
     else:
         assert mock_post.call_args[1]["headers"]["Authorization"] == "Bearer my-custom-token"
-
 
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
@@ -499,7 +490,6 @@ def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_co
     assert my_fake_space_id == json_data["space_id"]
     assert not json_data.get("project_id")
 
-
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "model",
@@ -521,7 +511,6 @@ def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call, 
     json_data = json.loads(mock_post.call_args.kwargs["data"])
     assert my_fake_space_id not in json_data
 
-
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "model",
@@ -542,7 +531,6 @@ def test_watsonx_deployment(watsonx_chat_completion_call, model):
 
     # nor space_id or project_id is required by wx.ai API when inferencing deployment
     assert "project_id" not in json_data and "space_id" not in json_data
-
 
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_call):

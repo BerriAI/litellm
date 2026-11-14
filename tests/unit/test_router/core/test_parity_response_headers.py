@@ -16,13 +16,7 @@ from litellm.exceptions import BadRequestError, EndpointNotSupportedByModelError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.fallbacks_helpers import MESSAGES, MakeCore, complete, complete_sync, headers
-from tests.unit.test_router.core.scripted_host import (
-    CORE_BUILDERS,
-    ScriptedHost,
-    completion_response,
-    deployment,
-    server_error,
-)
+from tests.unit.test_router.core.scripted_host import CORE_BUILDERS, ScriptedHost, completion_response, deployment, server_error
 
 GROUP_LIMITS: Final = {"rpm": 5, "tpm": 1000}
 TEAM_OWNED: Final = {"team_id": "T1"}
@@ -137,9 +131,7 @@ async def test_a_guardrail_result_carries_the_router_headers(make_core: MakeCore
 
 # S2 and Y4 are ruled to differ: the Rust core filters every pick, so these run on it only.
 def test_the_rust_core_filters_a_team_owned_deployment_on_a_sync_pick(host: ScriptedHost) -> None:
-    core: Final = CORE_BUILDERS["rust"](
-        host, model_list=[deployment("own", "o1", model_info=TEAM_OWNED)], num_retries=0
-    )
+    core: Final = CORE_BUILDERS["rust"](host, model_list=[deployment("own", "o1", model_info=TEAM_OWNED)], num_retries=0)
     with pytest.raises(RouterRateLimitError):
         _ = complete_sync(core, "own")
     assert host.deployments_called("completion") == []
@@ -161,9 +153,7 @@ async def test_an_async_pick_runs_the_team_filter(make_core: MakeCore) -> None:
 async def test_the_rust_core_refuses_a_team_owned_deployment_named_by_its_id(
     host: ScriptedHost, request_fields: Mapping[str, object]
 ) -> None:
-    core: Final = CORE_BUILDERS["rust"](
-        host, model_list=[deployment("own", "o1", model_info=TEAM_OWNED)], num_retries=0
-    )
+    core: Final = CORE_BUILDERS["rust"](host, model_list=[deployment("own", "o1", model_info=TEAM_OWNED)], num_retries=0)
     with pytest.raises(RouterRateLimitError):
         _ = await complete(core, "o1", **request_fields)
     assert host.deployments_called("acompletion") == []
@@ -212,3 +202,4 @@ def test_a_mocked_model_response_warns_once_per_dump_python_makes(make_core: Mak
         _ = make_core(model_list=[deployment("g", "d1", mock_response=BLOCKED_RESPONSE)], num_retries=0)
     serializer: Final = [w for w in caught if "Pydantic serializer warnings" in str(w.message)]
     assert len(serializer) == PYTHON_DUMPS_OF_A_DEPLOYMENT
+

@@ -64,7 +64,10 @@ class TestOCIEmbedConfig:
             optional_params={"oci_region": "us-chicago-1"},
             litellm_params={},
         )
-        assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
+        assert (
+            url
+            == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
+        )
 
     def test_get_complete_url_respects_api_base(self):
         """api_base is treated as a base URL — the action path is appended."""
@@ -93,7 +96,10 @@ class TestOCIEmbedConfig:
     def test_get_complete_url_full_url_is_not_doubled(self):
         """A fully-formed embedText URL must not have the action path appended twice."""
         cfg = self._config()
-        full_url = "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
+        full_url = (
+            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+            "/20231130/actions/embedText"
+        )
         url = cfg.get_complete_url(
             api_base=full_url,
             api_key=None,
@@ -262,6 +268,7 @@ class TestOCIEmbedConfig:
         assert result.data[1]["index"] == 1
         assert result.model == "cohere.embed-v3.0"
         assert result.usage.prompt_tokens == 10
+
 
     def test_transform_response_http_error_raises(self):
         cfg = self._config()

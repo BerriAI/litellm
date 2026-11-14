@@ -1,6 +1,5 @@
 from unittest.mock import Mock
 
-
 def test_image_generation_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
     """The deployment's AWS profile does not exist, so resolving SigV4 credentials
     raises; a bearer-token deployment must still sign the request with the

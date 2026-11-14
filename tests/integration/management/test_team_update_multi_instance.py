@@ -67,7 +67,9 @@ def _request(proxy: Gateway, route: str, model: str, key: str) -> httpx.Response
             {"model": model, "input": marker, "max_output_tokens": 16, "store": False},
             key=key,
         )
-    return proxy.request("POST", route, {"model": model, "messages": [{"role": "user", "content": marker}]}, key=key)
+    return proxy.request(
+        "POST", route, {"model": model, "messages": [{"role": "user", "content": marker}]}, key=key
+    )
 
 
 def _chat(proxy: Gateway, model: str, key: str) -> httpx.Response:

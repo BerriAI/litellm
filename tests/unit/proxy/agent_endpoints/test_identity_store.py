@@ -74,9 +74,7 @@ def setup_store(
         )
     )
     return (
-        AgentIdentityStore(
-            AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache
-        ),
+        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache),
         agents,
         identities,
         humans,

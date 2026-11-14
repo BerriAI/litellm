@@ -1800,7 +1800,7 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
     )
     assert windows.status_code == 200, windows.text
     advanced: Final = http.patch(
-        f"/management/v1/customer_organizations/org/default_budgets/{first['budget_id']}",
+        f'/management/v1/customer_organizations/org/default_budgets/{first["budget_id"]}',
         json={
             "budget_limits": [
                 {**row, "reset_at": "2028-01-15T00:00:00Z"}
@@ -1912,11 +1912,9 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
-            "customer_member_id": "window-member",
-            "parent_team_ids": ["team"],
+            "customer_member_id": "window-member", "parent_team_ids": ["team"],
             "budget_override": {
-                "max_budget": 50,
-                "budget_duration": "1mo",
+                "max_budget": 50, "budget_duration": "1mo",
                 "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
             },
         },
@@ -1924,11 +1922,8 @@ def test_list_and_detail_expose_each_effective_budget_with_its_own_recorded_spen
     assert created.status_code == 201, created.text
     database.litellm_budgetwindowspend.rows = {
         "window-member": Record(
-            entity_type="customer_member",
-            entity_id="window-member",
-            window_duration="1mo",
-            window_start=NOW,
-            spend=8,
+            entity_type="customer_member", entity_id="window-member", window_duration="1mo",
+            window_start=NOW, spend=8,
         ),
     }
     detail: Final = http.get("/management/v1/customer_members/window-member")

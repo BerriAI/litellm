@@ -46,7 +46,9 @@ _SCENARIOS = [
     [(a, t, s) for (_id, a, t, s) in _SCENARIOS],
     ids=[s[0] for s in _SCENARIOS],
 )
-async def test_team_info_authz_matrix(actor: Actor, target: str, expected_status: int, gateway_client, actors):
+async def test_team_info_authz_matrix(
+    actor: Actor, target: str, expected_status: int, gateway_client, actors
+):
     caller = actors.keys[actor]
     target_team_id = {
         "alpha": actors.team_alpha_id,
@@ -58,7 +60,9 @@ async def test_team_info_authz_matrix(actor: Actor, target: str, expected_status
         f"/team/info?team_id={target_team_id}",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
     )
-    assert resp.status_code == expected_status, f"{actor.value} -> {target}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} -> {target}: {resp.status_code} {resp.text}"
 
     if expected_status == 200:
         body = resp.json()

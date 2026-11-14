@@ -651,10 +651,7 @@ def test_guarded_non_claude_invoke_stream_yields_only_the_text_and_stop_chunks(
 
     assert isinstance(stream, litellm.CustomStreamWrapper)
     assert [
-        (
-            [(choice.delta.content, choice.finish_reason) for choice in chunk.choices],
-            chunk.provider_specific_fields or {},
-        )
+        ([(choice.delta.content, choice.finish_reason) for choice in chunk.choices], chunk.provider_specific_fields or {})
         for chunk in stream
     ] == [([("hi", None)], {}), ([(None, "stop")], {})]
 

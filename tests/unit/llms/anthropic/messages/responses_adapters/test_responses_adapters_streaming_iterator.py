@@ -779,9 +779,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         async def _close_on_the_error_event() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(),
-                model="m",
-                litellm_logging_obj=_logging_obj_with_failure_hook(recorder),
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(recorder)
             )
             sse = wrapper.async_anthropic_sse_wrapper()
             async for frame in sse:
@@ -805,9 +803,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         async def _disconnect_mid_hook() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(),
-                model="m",
-                litellm_logging_obj=_logging_obj_with_failure_hook(_held_hook),
+                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_held_hook)
             )
 
             async def _consume() -> None:

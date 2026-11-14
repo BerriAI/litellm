@@ -307,7 +307,9 @@ def test_every_sharded_root_named_in_the_script_exists_on_disk():
 
 
 def test_the_repo_as_it_stands_has_every_shard_child_assigned():
-    findings = coverage._unassigned_shard_children(coverage._invoked_test_tokens(coverage._all_scalars()))
+    findings = coverage._unassigned_shard_children(
+        coverage._invoked_test_tokens(coverage._all_scalars())
+    )
     assert [f.subject for f in findings] == []
 
 
@@ -320,7 +322,9 @@ def test_shards_are_credited_only_from_explicit_test_paths() -> None:
 
 
 def test_an_ignored_path_is_not_credited_as_invoked() -> None:
-    scalars: Final = (coverage.Scalar(key="test-path", value="tests/unit/a\n--ignore=tests/unit/b/test_x.py"),)
+    scalars: Final = (
+        coverage.Scalar(key="test-path", value="tests/unit/a\n--ignore=tests/unit/b/test_x.py"),
+    )
     assert coverage._invoked_test_tokens(scalars) == frozenset({"tests/unit/a"})
 
 
@@ -362,9 +366,7 @@ def test_a_character_class_glob_in_a_test_path_is_one_token_that_names_only_its_
     assert selection.covers("tests/unit/proxy/test_caching_routes.py") is True
     assert selection.covers("tests/unit/proxy/test_route_llm_request.py") is False
     assert coverage._token_names("tests/unit/proxy/test_[_a-p]*.py", "tests/unit/proxy/test_admin_mcp.py") is True
-    assert (
-        coverage._token_names("tests/unit/proxy/test_[_a-p]*.py", "tests/unit/proxy/test_route_llm_request.py") is False
-    )
+    assert coverage._token_names("tests/unit/proxy/test_[_a-p]*.py", "tests/unit/proxy/test_route_llm_request.py") is False
 
 
 def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
@@ -565,7 +567,9 @@ def test_a_workflow_does_not_credit_a_file_it_never_names(
 
     named: Final = coverage._workflow_named_tokens()
     assert named == frozenset({"tests/local_testing/test_selected.py"})
-    assert not any(coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named)
+    assert not any(
+        coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
+    )
 
 
 def test_slice_audit_rechecks_changed_and_new_files_between_calls(
@@ -579,7 +583,13 @@ def test_slice_audit_rechecks_changed_and_new_files_between_calls(
         yaml.safe_dump(
             {
                 "jobs": {
-                    selector: {"steps": [{"run": f'pytest tests/local_testing/test_*.py -k "{selector}"'}]}
+                    selector: {
+                        "steps": [
+                            {
+                                "run": f'pytest tests/local_testing/test_*.py -k "{selector}"'
+                            }
+                        ]
+                    }
                     for selector in ("selected", "neighbor")
                 }
             }

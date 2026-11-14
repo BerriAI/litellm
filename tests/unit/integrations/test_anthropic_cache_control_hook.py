@@ -1316,9 +1316,7 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
         pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
         pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
         pytest.param(
-            "anthropic/my-unreadable-claude-alias",
-            "my-unreadable-claude-alias",
-            id="cost-map-entry-the-lookup-cannot-read",
+            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
         ),
     ],
 )
@@ -1405,10 +1403,7 @@ _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
 
 
 _CLIENT_MARKED_CONVERSATION: Final = (
-    {
-        "role": "system",
-        "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}],
-    },
+    {"role": "system", "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
     {"role": "user", "content": [{"type": "text", "text": "First", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
     {"role": "assistant", "content": "First answer"},
     {"role": "user", "content": "Second"},
@@ -1497,9 +1492,7 @@ def test_tool_config_injection_point_leaves_client_prompt_cache_breakpoints_on_c
         pytest.param("openai/gpt-5.6", {"api_base": "https://gateway.example.com/v1"}, id="reads-them"),
         pytest.param("openai/gpt-4o", {}, id="openai-model-that-predates-them"),
         pytest.param("hosted_vllm/qwen3", {"api_base": "http://vllm.example.com/v1"}, id="self-hosted"),
-        pytest.param(
-            "azure_ai/qa-unflagged-gpt", {"api_base": "https://qa.services.ai.azure.com/models"}, id="foundry"
-        ),
+        pytest.param("azure_ai/qa-unflagged-gpt", {"api_base": "https://qa.services.ai.azure.com/models"}, id="foundry"),
     ],
 )
 def test_cache_control_injection_points_keep_client_prompt_cache_breakpoints_on_a_route_that_does_not_translate_them(
@@ -1836,14 +1829,11 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
         ([{"type": "thinking", "thinking": "hm", "signature": "s"}], []),
         ([{"type": "text", "text": "Checking."}, "not a content block"], [0]),
     ],
-    ids=[
-        "text-before-trailing-redacted-thinking",
-        "redacted-thinking-only",
-        "signed-thinking-only",
-        "text-before-a-string",
-    ],
+    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only", "text-before-a-string"],
 )
-def test_assistant_injection_never_marks_a_thinking_part(content: list[dict[str, str] | str], marked_parts: list[int]):
+def test_assistant_injection_never_marks_a_thinking_part(
+    content: list[dict[str, str] | str], marked_parts: list[int]
+):
     """Claude 400s a cache_control on a thinking or redacted_thinking block, and Bedrock Converse 400s a cache
     point after reasoning, so the breakpoint goes on the last part that can carry one."""
     messages: Final[list[AllMessageValues]] = [
@@ -5530,9 +5520,7 @@ async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_mode
         await _send_unmarked_system_prompt(router, model, "acompletion")
         return b"prompt_cache_options" in chat.calls.last.request.content
 
-    assert {
-        model: await sends_prompt_cache_options(model) for model in ("openai/gpt-4.1-qa", "openai/gpt-99.0-qa")
-    } == {
+    assert {model: await sends_prompt_cache_options(model) for model in ("openai/gpt-4.1-qa", "openai/gpt-99.0-qa")} == {
         "openai/gpt-4.1-qa": False,
         "openai/gpt-99.0-qa": True,
     }
@@ -5663,9 +5651,7 @@ def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_for_a_mod
     ] == [True, False]
 
 
-def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_model_info_lists_that_provider() -> (
-    None
-):
+def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_model_info_lists_that_provider() -> None:
     assert [
         AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             "qa-self-hosted-gpt",
@@ -5675,9 +5661,10 @@ def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_
         for listed_provider in ("hosted_vllm", "openrouter")
     ] == [True, False]
 
-
 def test_a_custom_handler_provider_declaring_the_flag_keeps_the_anthropic_mark() -> None:
-    litellm.register_model({"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}})
+    litellm.register_model(
+        {"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}}
+    )
 
     assert (
         AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(

@@ -22,7 +22,9 @@ def test_schema_migration_in_sync():
     so those statements are filtered out before the diff is judged.
     """
     db_url = os.environ["DATABASE_URL"]
-    source_migrations_dir = Path("./litellm/proxy-extras/litellm_proxy_extras/migrations")
+    source_migrations_dir = Path(
+        "./litellm/proxy-extras/litellm_proxy_extras/migrations"
+    )
     source_schema_path = Path("./litellm/schema.prisma")
 
     temp_base = Path(tempfile.mkdtemp(prefix="litellm_schema_migration_"))
@@ -34,7 +36,9 @@ def test_schema_migration_in_sync():
         shutil.copytree(source_migrations_dir, migrations_dir)
 
         if not any(migrations_dir.iterdir()):
-            pytest.fail("No existing migrations found. Restore the committed SQL migration history before retrying.")
+            pytest.fail(
+                "No existing migrations found. Restore the committed SQL migration history before retrying."
+            )
 
         subprocess.run(
             ["prisma", "migrate", "deploy", "--schema", str(schema_path)],
@@ -63,7 +67,8 @@ def test_schema_migration_in_sync():
             if drift.strip():
                 pytest.fail(
                     "Schema changes detected that no migration captures. Run "
-                    "`python litellm/scripts/ci_cd/run_migration.py <migration_name>`.\n\n" + drift
+                    "`python litellm/scripts/ci_cd/run_migration.py <migration_name>`.\n\n"
+                    + drift
                 )
         else:
             assert diff.returncode == 0, f"prisma migrate diff errored: {diff.stderr}"

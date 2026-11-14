@@ -159,9 +159,7 @@ def test_composed_lifespan_preserves_request_state_and_teardown(
         assert filtered.status_code == (200 if component_lifespan is None else 404), filtered.text
         assert events == (["startup", "request", "request"] if component_lifespan is None else ["startup", "request"])
     assert events == (
-        ["startup", "request", "request", "shutdown"]
-        if component_lifespan is None
-        else ["startup", "request", "shutdown"]
+        ["startup", "request", "request", "shutdown"] if component_lifespan is None else ["startup", "request", "shutdown"]
     )
 
 
@@ -227,15 +225,16 @@ def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_compone
 
 def test_backend_mount_paths_defined():
     """BACKEND_MOUNT_PATHS constant must exist and be a frozenset."""
-    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), (
+    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), \
         f"BACKEND_MOUNT_PATHS must be a frozenset, got {type(BACKEND_MOUNT_PATHS)}"
-    )
-    assert len(BACKEND_MOUNT_PATHS) > 0, "BACKEND_MOUNT_PATHS must contain at least one Mount path"
+    assert len(BACKEND_MOUNT_PATHS) > 0, \
+        "BACKEND_MOUNT_PATHS must contain at least one Mount path"
 
 
 def test_swagger_mount_in_backend_allowlist():
     """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
-    assert "/swagger" in BACKEND_MOUNT_PATHS, "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
+    assert "/swagger" in BACKEND_MOUNT_PATHS, \
+        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
 
 
 def test_backend_keeps_swagger_mount():
@@ -245,31 +244,32 @@ def test_backend_keeps_swagger_mount():
         for r in app.router.routes
         if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
     }
-    assert "/swagger" in backend_mounts, (
+    assert "/swagger" in backend_mounts, \
         "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
-    )
 
 
 def test_backend_drops_non_allowlisted_mounts():
     """Verify that Mounts NOT in BACKEND_MOUNT_PATHS would be dropped from backend."""
     all_mounts = {
-        getattr(r, "path") for r in app.router.routes if isinstance(r, Mount) and getattr(r, "path", None) is not None
+        getattr(r, "path")
+        for r in app.router.routes
+        if isinstance(r, Mount) and getattr(r, "path", None) is not None
     }
     non_backend_mounts = all_mounts - BACKEND_MOUNT_PATHS
 
-    assert len(non_backend_mounts) > 0, (
+    assert len(non_backend_mounts) > 0, \
         "Expected at least one non-backend Mount (e.g., /ui, /_next) to verify filtering logic"
-    )
     for mount_path in non_backend_mounts:
-        assert mount_path not in BACKEND_MOUNT_PATHS, f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
+        assert mount_path not in BACKEND_MOUNT_PATHS, \
+            f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
 
 
 def test_gateway_mount_paths_defined():
     """GATEWAY_MOUNT_PATHS constant must exist and expose /metrics."""
-    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), (
+    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), \
         f"GATEWAY_MOUNT_PATHS must be a frozenset, got {type(GATEWAY_MOUNT_PATHS)}"
-    )
-    assert "/metrics" in GATEWAY_MOUNT_PATHS, "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
+    assert "/metrics" in GATEWAY_MOUNT_PATHS, \
+        "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
 
 
 def test_gateway_trim_keeps_metrics_mount():
@@ -284,7 +284,8 @@ def test_gateway_trim_keeps_metrics_mount():
     metrics_mount = Mount("/metrics", app=make_asgi_app())
     routes = [*app.router.routes, metrics_mount]
     trimmed = [r for r in routes if _is_gateway_route(r)]
-    assert metrics_mount in trimmed, "/metrics Mount must survive the gateway route trim"
+    assert metrics_mount in trimmed, \
+        "/metrics Mount must survive the gateway route trim"
 
 
 @pytest.mark.parametrize("enabled", (False, True))
@@ -310,9 +311,8 @@ def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> Non
 def test_gateway_drops_ui_and_swagger_mounts():
     """UI static and swagger Mounts must still be trimmed from the gateway."""
     for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
-        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), (
+        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
             f"Mount {path} must not be served by the gateway"
-        )
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
@@ -323,9 +323,8 @@ def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
         getattr(r, "path"): r for r in app.router.routes if str(getattr(r, "path", "")).startswith("/debug/memory/")
     }
     assert {"/debug/memory/summary", "/debug/memory/details", "/debug/memory/gc/configure"} <= set(debug_memory_routes)
-    assert _is_gateway_route(debug_memory_routes["/debug/memory/summary"]), (
+    assert _is_gateway_route(debug_memory_routes["/debug/memory/summary"]), \
         "/debug/memory/summary must survive the gateway route trim"
-    )
     for path in ("/debug/memory/details", "/debug/memory/gc/configure"):
         assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
 
@@ -387,12 +386,8 @@ def test_admin_mcp_survives_only_management_component_lifespans(
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", str(enabled).lower())
     for name in (
-        "PROXY_BASE_URL",
-        "LITELLM_MCP_PUBLIC_URL",
-        "LITELLM_ADMIN_TOOLS",
-        "LITELLM_ADMIN_READ_ONLY",
-        "LITELLM_ADMIN_RESPONSE_VIEW",
-        "LITELLM_ADMIN_SCHEMA_MODE",
+        "PROXY_BASE_URL", "LITELLM_MCP_PUBLIC_URL", "LITELLM_ADMIN_TOOLS", "LITELLM_ADMIN_READ_ONLY",
+        "LITELLM_ADMIN_RESPONSE_VIEW", "LITELLM_ADMIN_SCHEMA_MODE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -406,8 +401,7 @@ def test_admin_mcp_survives_only_management_component_lifespans(
     @application.get("/user/info")
     async def user_info() -> dict[str, object]:
         return {
-            "user_id": "admin",
-            "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
             "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
         }
 
@@ -419,12 +413,9 @@ def test_admin_mcp_survives_only_management_component_lifespans(
                 "/admin/mcp",
                 headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
                 json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
                     "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
+                        "protocolVersion": "2025-03-26", "capabilities": {},
                         "clientInfo": {"name": "component-test", "version": "1"},
                     },
                 },

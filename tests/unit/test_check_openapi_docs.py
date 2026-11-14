@@ -20,14 +20,10 @@ def _post_with_media_types(request_media_type: str, response_media_type: str) ->
     }
 
 
-@pytest.mark.parametrize(
-    "request_type, response_type",
-    [
-        ("application/json", "application/json"),
-        ("application/sdp", "application/sdp"),
-        ("multipart/form-data", "application/json"),
-    ],
-)
+@pytest.mark.parametrize("request_type, response_type", [
+    ("application/json", "application/json"), ("application/sdp", "application/sdp"),
+    ("multipart/form-data", "application/json"),
+])
 def test_a_fully_documented_post_has_no_findings(request_type: str, response_type: str) -> None:
     operation: Final = _post_with_media_types(request_type, response_type)
     assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
@@ -38,15 +34,12 @@ def test_a_documented_created_response_satisfies_the_success_schema_rule() -> No
     assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
 
 
-@pytest.mark.parametrize(
-    "responses",
-    (
-        {},
-        {"201": {"description": "Created"}},
-        {"201": {"content": {"application/json": {"schema": {}}}}},
-        {"422": _RESPONSES["200"]},
-    ),
-)
+@pytest.mark.parametrize("responses", (
+    {},
+    {"201": {"description": "Created"}},
+    {"201": {"content": {"application/json": {"schema": {}}}}},
+    {"422": _RESPONSES["200"]},
+))
 def test_an_error_schema_or_an_untyped_created_response_cannot_replace_a_success_schema(
     responses: Mapping[str, object],
 ) -> None:

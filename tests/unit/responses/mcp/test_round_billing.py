@@ -51,10 +51,7 @@ def test_summed_cost_breakdown_adds_each_charge_and_keeps_the_final_round_rates(
     }
 
     summed: Final = summed_cost_breakdown(
-        first=_round("resp_first", 0.003),
-        first_breakdown=first,
-        final=_round("resp_final", 0.009),
-        final_breakdown=final,
+        first=_round("resp_first", 0.003), first_breakdown=first, final=_round("resp_final", 0.009), final_breakdown=final
     )
 
     assert summed is not None
@@ -268,9 +265,7 @@ def test_billed_chat_usage_sums_every_provider_counter_and_adds_no_field_the_rou
         ),
     )
 
-    billed: Final = _usage_of(
-        billed_for_every_round(first=first, first_breakdown=None, final=final, final_breakdown=None)
-    )
+    billed: Final = _usage_of(billed_for_every_round(first=first, first_breakdown=None, final=final, final_breakdown=None))
     first_usage: Final = _usage_of(first)
     final_usage: Final = _usage_of(final)
 

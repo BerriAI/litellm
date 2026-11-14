@@ -25,6 +25,7 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
 from tests.unit.redis.stores.router_session_pins_memory import memory_pins
 
 
+
 def _repinning_router(enabled: bool | None = True) -> litellm.Router:
     return litellm.Router(
         model_list=[
@@ -482,7 +483,9 @@ async def test_auto_router_session_affinity_writes_scoped_pin_and_follows_it():
     router = _smart_router()
     try:
         served = await _one_turn(router, "smart-router", "write-session", "key-1")
-        assert await _pins(router).get(_session_pin_key("write-session", "key-1")) == {"model_id": served}
+        assert await _pins(router).get(_session_pin_key("write-session", "key-1")) == {
+            "model_id": served
+        }
         assert await _pins(router).get(_session_pin_key("write-session", None)) is None
 
         await _pins(router).set(_session_pin_key("read-session", "key-1"), {"model_id": "deployment-2"}, 3600)

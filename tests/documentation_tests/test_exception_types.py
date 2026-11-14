@@ -19,7 +19,9 @@ error_name_pattern = re.compile(r"\.exceptions\.([A-Za-z]+Error)")
 
 # Extract error names from each item
 error_names = {
-    error_name_pattern.search(str(item)).group(1) for item in public_exceptions if error_name_pattern.search(str(item))
+    error_name_pattern.search(str(item)).group(1)
+    for item in public_exceptions
+    if error_name_pattern.search(str(item))
 }
 
 
@@ -36,7 +38,9 @@ try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
         content = docs_file.read()
 
-        exceptions_section = re.search(r"## LiteLLM Exceptions(.*?)\n##", content, re.DOTALL)
+        exceptions_section = re.search(
+            r"## LiteLLM Exceptions(.*?)\n##", content, re.DOTALL
+        )
         if exceptions_section:
             # Step 2: Extract the table content
             table_content = exceptions_section.group(1)
@@ -55,7 +59,9 @@ try:
             documented_keys.update(exceptions)
 
 except Exception as e:
-    raise Exception(f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}")
+    raise Exception(
+        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
+    )
 
 print(documented_keys)
 print(public_exceptions)
@@ -65,6 +71,8 @@ print(error_names)
 undocumented_keys = error_names - documented_keys
 
 if undocumented_keys:
-    raise Exception(f"\nKeys not documented in 'LiteLLM Exceptions': {undocumented_keys}")
+    raise Exception(
+        f"\nKeys not documented in 'LiteLLM Exceptions': {undocumented_keys}"
+    )
 else:
     print("\nAll keys are documented in 'LiteLLM Exceptions'. - {}".format(error_names))

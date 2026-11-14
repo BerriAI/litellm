@@ -409,14 +409,12 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 PROJECT_ENDPOINT = "https://acct.services.ai.azure.com/api/projects/proj"
 
 _ANSWER_TEXT = (
     "LiteLLM is an open source LLM gateway ([github.com](https://github.com/BerriAI/litellm))\n"
     "The docs live on docs.litellm.ai ([docs.litellm.ai](https://docs.litellm.ai/))"
 )
-
 
 def _annotation(marker: str, url: str, title: str) -> dict:
     start = _ANSWER_TEXT.index(marker)
@@ -427,7 +425,6 @@ def _annotation(marker: str, url: str, title: str) -> dict:
         "start_index": start,
         "end_index": start + len(marker),
     }
-
 
 MOCK_BING_GROUNDING_RESPONSE = {
     "id": "resp_mock",
@@ -462,14 +459,12 @@ MOCK_BING_GROUNDING_RESPONSE = {
     "usage": {"input_tokens": 100, "output_tokens": 50},
 }
 
-
 def _mock_response():
     response = Mock()
     response.status_code = 200
     response.headers = {}
     response.content = json.dumps(MOCK_BING_GROUNDING_RESPONSE).encode()
     return response
-
 
 async def _search_what_is_litellm(is_async: bool) -> object:
     if is_async:

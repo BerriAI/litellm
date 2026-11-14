@@ -24,14 +24,10 @@ from litellm.router_strategy.complexity_router.context_compaction import compact
 from litellm.types.utils import ModelResponse
 
 _HEADERS: Final = (
-    (b"authorization", b"Bearer sk-compaction-fixture"),
-    (b"cookie", b"session=fixture"),
-    (b"content-length", b"99999"),
-    (b"x-litellm-call-id", b"parent"),
-    (b"litellm-disable-message-redaction", b"true"),
-    (b"x-litellm-num-retries", b"8"),
-    (b"X-LiteLLM-Timeout", b"600"),
-    (b"x-litellm-stream-timeout", b"500"),
+    (b"authorization", b"Bearer sk-compaction-fixture"), (b"cookie", b"session=fixture"),
+    (b"content-length", b"99999"), (b"x-litellm-call-id", b"parent"),
+    (b"litellm-disable-message-redaction", b"true"), (b"x-litellm-num-retries", b"8"),
+    (b"X-LiteLLM-Timeout", b"600"), (b"x-litellm-stream-timeout", b"500"),
 )
 
 
@@ -45,37 +41,18 @@ async def _child(
         b'"num_retries":0,"timeout":7,"stream_timeout":7,"disable_fallbacks":true,"stream":false,'
         b'"metadata":{"turn_off_message_logging":true}}'
     )
-    return await executor(
-        protocol,
-        MappingProxyType(
-            {
-                "litellm_metadata" if protocol == "messages" and key == "metadata" else key: value
-                for key, value in payload.items()
-                if forged or key != "metadata"
-            }
-        ),
-        parent_model,
-    )
+    return await executor(protocol, MappingProxyType({
+        "litellm_metadata" if protocol == "messages" and key == "metadata" else key: value
+        for key, value in payload.items() if forged or key != "metadata"
+    }), parent_model)
 
 
 def _request(app: FastAPI) -> Request:
-    return Request(
-        TypeAdapter(dict[str, object]).validate_python(
-            MappingProxyType(
-                {
-                    "type": "http",
-                    "app": app,
-                    "scheme": "https",
-                    "server": ("proxy.test", 443),
-                    "path": "/gateway/parent",
-                    "root_path": "/gateway",
-                    "query_string": b"parent=1",
-                    "client": ("192.0.2.1", 4321),
-                    "headers": _HEADERS,
-                }
-            )
-        )
-    )
+    return Request(TypeAdapter(dict[str, object]).validate_python(MappingProxyType({
+        "type": "http", "app": app, "scheme": "https", "server": ("proxy.test", 443),
+        "path": "/gateway/parent", "root_path": "/gateway", "query_string": b"parent=1",
+        "client": ("192.0.2.1", 4321), "headers": _HEADERS,
+    })))
 
 
 @pytest.mark.asyncio
@@ -107,26 +84,19 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 @pytest.mark.parametrize("protocol", ("chat", "messages"))
 @pytest.mark.parametrize("policy", ("allowed", "denied", "forged", "router_alias", "unrelated_alias"))
 async def test_real_proxy_child_auth_privacy_and_body_policy(
-    monkeypatch: pytest.MonkeyPatch,
-    protocol: Literal["chat", "messages"],
-    policy: str,
+    monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
 ) -> None:
     cache: Final = DualCache()
     token: Final = proxy_server.hash_token("sk-compaction-fixture")
-    models: Final = {"denied": ("answer",), "router_alias": ("auto",), "unrelated_alias": ("other-auto",)}.get(
-        policy, ("compactor",)
-    )
+    models: Final = {"denied": ("answer",), "router_alias": ("auto",), "unrelated_alias": ("other-auto",)}.get(policy, ("compactor",))
     auth: Final = UserAPIKeyAuth.model_validate(MappingProxyType({"token": token, "models": models}))
     await cache.async_set_cache(key=token, value=auth)
     dispatched: Final = asyncio.Event()
     allowed: Final = policy in ("allowed", "router_alias")
 
     async def route(
-        data: Mapping[str, object],
-        llm_router: Router | None,
-        user_model: str | None,
-        route_type: str,
-        user_api_key_dict: UserAPIKeyAuth | None,
+        data: Mapping[str, object], llm_router: Router | None, user_model: str | None,
+        route_type: str, user_api_key_dict: UserAPIKeyAuth | None,
     ) -> Awaitable[ModelResponse]:
         dispatched.set()
         assert allowed
@@ -138,16 +108,9 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
         logging: Final = data["litellm_logging_obj"]
         assert isinstance(logging, Logging)
         assert logging.standard_callback_dynamic_params.get("turn_off_message_logging") is True
-        assert should_redact_message_logging(
-            TypeAdapter(dict[str, object]).validate_python(
-                MappingProxyType(
-                    {
-                        "litellm_params": data,
-                        "standard_callback_dynamic_params": logging.standard_callback_dynamic_params,
-                    }
-                )
-            )
-        )
+        assert should_redact_message_logging(TypeAdapter(dict[str, object]).validate_python(MappingProxyType({
+            "litellm_params": data, "standard_callback_dynamic_params": logging.standard_callback_dynamic_params,
+        })))
         return asyncio.sleep(0, result=ModelResponse(id="private-summary", model="compactor"))
 
     monkeypatch.setattr(litellm, "max_budget", 0)
@@ -161,8 +124,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(common_request_processing, "route_request", route)
     with inherit_message_logging_privacy(True):
         call: Final = with_proxy_compaction_executor(
-            _child(protocol, policy == "forged", "auto" if policy.endswith("alias") else None),
-            _request(proxy_server.app),
+            _child(protocol, policy == "forged", "auto" if policy.endswith("alias") else None), _request(proxy_server.app)
         )
         if allowed:
             assert (await call)["id"] == "private-summary"

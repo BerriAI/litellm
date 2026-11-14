@@ -44,11 +44,14 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
     }
     now: Final = datetime.now()
     cache_keys: Final = tuple(
-        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}" for offset in range(60)
+        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}"
+        for offset in range(60)
     )
 
     for cache_key in cache_keys:
-        router.cache.set_cache(key=cache_key, value=usage_by_deployment, ttl=float("inf"))
+        router.cache.set_cache(
+            key=cache_key, value=usage_by_deployment, ttl=float("inf")
+        )
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,

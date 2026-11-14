@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.logging_utils import (
 )
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from datetime import datetime as datetime_assemble_streaming
-from litellm import (
+from litellm import(
     Choices,
     ModelResponse,
     ModelResponseStream,
@@ -277,7 +277,9 @@ def _tool_result_messages(tool_output: str) -> list[AllMessageValues]:  # mutabl
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "dump_rows", "arguments": "{}"}}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "dump_rows", "arguments": "{}"}}
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": tool_output},
     ]
@@ -317,18 +319,12 @@ class TestTruncateBase64InMessagesAsync:
         "row",
         [
             '{"id": 7, "name": "widget", "status": "ok"}\n',
-            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n',
+            "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n",
             "const total = rows.map((r) => r.price).reduce((a, b) => a + b, 0);\n",
             'data: {"choices": [{"delta": {"content": "a; b"}}]}\n\n',
             "Content-Type: text/plain;base64,aGVsbG8=\n",
         ],
-        ids=[
-            "json_rows",
-            "sse_lines",
-            "code_with_semicolons",
-            "sse_lines_with_semicolons",
-            "base64_marker_without_data",
-        ],
+        ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
     )
     def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row: str):
         tool_output: Final = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
@@ -411,15 +407,12 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest_asyncio.fixture(loop_scope="function")
 async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
-
 LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
-
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -458,7 +451,6 @@ def isolate_litellm_state():
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
 
-
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",
@@ -486,7 +478,6 @@ _SCALAR_ATTRS = (
 
 _DEFAULTS: dict = {}
 
-
 @pytest.fixture(scope="module")
 def setup_and_teardown():
     """
@@ -508,7 +499,6 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
@@ -604,7 +594,6 @@ def test_assemble_complete_response_from_streaming_chunks_1(is_async):
     assert isinstance(complete_streaming_response.choices[0], Choices)
 
     pass
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
@@ -708,7 +697,6 @@ def test_assemble_complete_response_from_streaming_chunks_2(is_async):
 
     pass
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
 def test_assemble_complete_response_from_streaming_chunks_3(is_async):
@@ -777,7 +765,6 @@ def test_assemble_complete_response_from_streaming_chunks_3(is_async):
     assert len(list_streaming_chunks_2) == 1
     assert list_streaming_chunks_2[0] == chunk
     assert len(list_streaming_chunks_1) == 1
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])

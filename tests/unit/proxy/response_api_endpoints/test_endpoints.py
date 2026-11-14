@@ -206,7 +206,9 @@ class _FirstFrameHook(CustomLogger):
 
 
 _DATA_ERROR_FRAME: Final = 'data: {"error": {"message": "denied", "type": "guardrail_scan_error", "code": 403}}\n\n'
-_NAMED_ERROR_FRAME: Final = b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "denied", "code": "529"}}\n\n'
+_NAMED_ERROR_FRAME: Final = (
+    b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "denied", "code": "529"}}\n\n'
+)
 
 
 async def _post_through_first_frame_hook(
@@ -2312,19 +2314,11 @@ class TestResponsesWSStreamingFirstMessage:
 @pytest.mark.parametrize(
     ("failure", "expected_status", "expected_type"),
     [
-        (
-            ValueError("No deployments available - crossed budget: Exceeded budget for deployment"),
-            429,
-            "rate_limit_exceeded",
-        ),
+        (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
         (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
         (RuntimeError("boom"), 500, "server_error"),
         (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"), 401, "invalid_request_error"),
-        (
-            ProxyException(message="Authentication Error", type="auth_error", param=None, code=401),
-            401,
-            "invalid_request_error",
-        ),
+        (ProxyException(message="Authentication Error", type="auth_error", param=None, code=401), 401, "invalid_request_error"),
         (HTTPException(status_code=403, detail="key not allowed"), 403, "invalid_request_error"),
     ],
     ids=["crossed-budget", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
@@ -3060,9 +3054,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
         ids=["top-level", "with-extra-body", "metadata", "litellm-metadata", "nested"],
     )
-    async def test_frame_guard_runs_the_guardrails_a_frame_selects_on_top_of_the_admitted_ones(
-        self, selected: dict[str, object]
-    ):
+    async def test_frame_guard_runs_the_guardrails_a_frame_selects_on_top_of_the_admitted_ones(self, selected: dict[str, object]):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         key_required = _FrameGuardrail("key-required")
@@ -3469,9 +3461,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
         ids=["top-level", "metadata", "litellm-metadata"],
     )
-    async def test_frame_guard_runs_the_guardrails_a_nested_frame_selects_beside_its_response(
-        self, top_level: dict[str, object]
-    ):
+    async def test_frame_guard_runs_the_guardrails_a_nested_frame_selects_beside_its_response(self, top_level: dict[str, object]):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         key_required = _FrameGuardrail("key-required")
@@ -3506,11 +3496,7 @@ class TestResponsesWSFirstFrameModelAuth:
             {"type": "response.create", "input": "hi", "metadata": {"disable_global_guardrails": True}},
             {"type": "response.create", "input": "hi", "metadata": {"disable_global_guardrails": "true"}},
             {"type": "response.create", "response": {"input": "hi", "guardrails": ["frame-pick"]}},
-            {
-                "type": "response.create",
-                "litellm_metadata": {"guardrails": ["frame-pick"]},
-                "response": {"input": "hi"},
-            },
+            {"type": "response.create", "litellm_metadata": {"guardrails": ["frame-pick"]}, "response": {"input": "hi"}},
             {"type": "response.create", "input": "hi", "policies": ["frame-policy"]},
             {"type": "response.create", "response": {"input": "hi", "policies": ["frame-policy"]}},
         ],
@@ -3525,9 +3511,7 @@ class TestResponsesWSFirstFrameModelAuth:
             "nested-policies",
         ],
     )
-    async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(
-        self, frame: dict[str, object]
-    ):
+    async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(self, frame: dict[str, object]):
         from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
@@ -3928,9 +3912,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         def route_request(data, **kwargs):
             async def relay():
-                guarded = await data["responses_ws_frame_guard"](
-                    json.dumps({"type": "response.create", "input": "two"})
-                )
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
                 guarded.bill_refusal(refusal)
                 if ending == "crash":
                     raise crash
@@ -4005,9 +3987,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         def route_request(data, **kwargs):
             async def relay():
-                guarded = await data["responses_ws_frame_guard"](
-                    json.dumps({"type": "response.create", "input": "two"})
-                )
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
                 guarded.bill_refusal(refusal)
                 data["litellm_metadata"]["standard_logging_guardrail_information"] = "written by a broken callback"
                 raise RuntimeError("relay crashed")
@@ -5716,9 +5696,7 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 200, response.text
         sent = counter.await_args.kwargs["responses_request"]
-        assert {
-            name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent
-        } == expected
+        assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
 
     def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
         from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
@@ -6264,6 +6242,7 @@ class TestResponsesInputTokens:
             }
         }
 
+
     def test_provider_count_error_body_names_the_call_id_its_header_carries_when_opted_in(self) -> None:
         failing_counter: Final = AsyncMock(
             side_effect=ProxyException(
@@ -6285,9 +6264,7 @@ class TestResponsesInputTokens:
     def test_count_rejection_body_names_the_call_id_its_header_carries_when_opted_in(
         self, body: Mapping[str, object]
     ) -> None:
-        response, counter = self._post_input_tokens(
-            dict(body), general_settings={"include_call_id_in_error_body": True}
-        )
+        response, counter = self._post_input_tokens(dict(body), general_settings={"include_call_id_in_error_body": True})
 
         counter.assert_not_awaited()
         assert response.status_code == 400, response.text
@@ -6423,9 +6400,7 @@ def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_membe
         {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "call_1", "output": "found"},
     ]
-    namespace_tools: Final = [
-        {"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}
-    ]
+    namespace_tools: Final = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
 
     def called_names(tools: object) -> list[str]:
         messages = _responses_input_as_token_count_messages(cast(Any, echo), {"tools": tools})

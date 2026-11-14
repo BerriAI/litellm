@@ -600,7 +600,6 @@ async def test_a_routed_create_on_a_deployment_that_forces_stream_still_streams(
     assert event_types == ("response.output_text.delta", "response.completed")
     assert json.loads(call.request.content)["stream"] is True
 
-
 class _SuccessLog(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

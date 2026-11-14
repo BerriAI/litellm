@@ -74,7 +74,9 @@ def test_transform_create_vector_store_request_basic():
 
     params: VectorStoreCreateOptionalRequestParams = {"name": "test-dataset"}
 
-    url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
+    url, body = config.transform_create_vector_store_request(
+        params, "http://localhost:9380/api/v1/datasets"
+    )
 
     assert url == "http://localhost:9380/api/v1/datasets"
     assert body["name"] == "test-dataset"
@@ -96,7 +98,9 @@ def test_transform_create_vector_store_request_with_metadata():
         },
     }
 
-    url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
+    url, body = config.transform_create_vector_store_request(
+        params, "http://localhost:9380/api/v1/datasets"
+    )
 
     assert body["name"] == "test-dataset-advanced"
     assert body["description"] == "Test dataset"
@@ -114,7 +118,9 @@ def test_transform_create_vector_store_request_missing_name():
     params: VectorStoreCreateOptionalRequestParams = {}
 
     with pytest.raises(ValueError, match="name is required"):
-        config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
+        config.transform_create_vector_store_request(
+            params, "http://localhost:9380/api/v1/datasets"
+        )
 
 
 def test_transform_create_vector_store_request_mutually_exclusive():
@@ -130,7 +136,9 @@ def test_transform_create_vector_store_request_mutually_exclusive():
     }
 
     with pytest.raises(ValueError, match="mutually exclusive"):
-        config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
+        config.transform_create_vector_store_request(
+            params, "http://localhost:9380/api/v1/datasets"
+        )
 
 
 def test_transform_create_vector_store_request_with_pipeline():
@@ -145,7 +153,9 @@ def test_transform_create_vector_store_request_with_pipeline():
         },
     }
 
-    url, body = config.transform_create_vector_store_request(params, "http://localhost:9380/api/v1/datasets")
+    url, body = config.transform_create_vector_store_request(
+        params, "http://localhost:9380/api/v1/datasets"
+    )
 
     assert body["name"] == "test-pipeline-dataset"
     assert body["parse_type"] == 2
@@ -207,7 +217,9 @@ def test_transform_create_vector_store_response_missing_id():
     mock_response.headers = {}
     mock_response.json.return_value = {
         "code": 0,
-        "data": {"name": "test-dataset"},
+        "data": {
+            "name": "test-dataset"
+        },
     }
 
     with pytest.raises(ValueError, match="missing dataset id"):

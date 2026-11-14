@@ -17,6 +17,7 @@ workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../
 sys.path.insert(0, workspace_path)
 
 
+
 class TestJSONProviderLoader:
     """Test JSON provider loading and configuration"""
 
@@ -65,7 +66,9 @@ class TestJSONProviderLoader:
         # Test parameter mapping
         optional_params = {}
         non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
-        result = config.map_openai_params(non_default_params, optional_params, "gpt-4", False)
+        result = config.map_openai_params(
+            non_default_params, optional_params, "gpt-4", False
+        )
 
         # max_completion_tokens should be mapped to max_tokens
         assert "max_tokens" in result
@@ -114,9 +117,9 @@ class TestJSONProviderLoader:
             "parallel_tool_calls",
         ]
         for param in tool_params:
-            assert param not in supported, (
-                f"'{param}' should not be in supported params when function calling is not supported"
-            )
+            assert (
+                param not in supported
+            ), f"'{param}' should not be in supported params when function calling is not supported"
 
         # Non-tool params should still be present
         assert "temperature" in supported
@@ -161,7 +164,9 @@ class TestJSONProviderLoader:
         from litellm import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_chat_config(model="gpt-4", provider=LlmProviders.PUBLICAI)
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gpt-4", provider=LlmProviders.PUBLICAI
+        )
 
         assert config is not None
         assert config.custom_llm_provider == "publicai"
@@ -224,7 +229,9 @@ class TestPinstripes:
 
         optional_params = {}
         non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
-        result = config.map_openai_params(non_default_params, optional_params, "ps/glm-4.5-air", False)
+        result = config.map_openai_params(
+            non_default_params, optional_params, "ps/glm-4.5-air", False
+        )
 
         assert "max_tokens" in result
         assert result["max_tokens"] == 100
@@ -296,7 +303,9 @@ class TestDarkbloom:
         from litellm import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_chat_config(model="gemma-4-26b", provider=LlmProviders.DARKBLOOM)
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gemma-4-26b", provider=LlmProviders.DARKBLOOM
+        )
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"

@@ -255,7 +255,9 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
 
 
 @pytest.mark.asyncio
-async def test_aresponses_forwards_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+async def test_aresponses_forwards_moderation(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -274,7 +276,9 @@ async def test_aresponses_forwards_moderation(monkeypatch: pytest.MonkeyPatch, r
 
 
 @pytest.mark.asyncio
-async def test_aresponses_omits_null_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+async def test_aresponses_omits_null_moderation(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()

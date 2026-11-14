@@ -1193,12 +1193,18 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
             {
                 "input_cost_per_token": 0.01,
                 "output_cost_per_token": 0.02,
-                "tiered_pricing": [{"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}],
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
             },
             0.0,
         ),
         (
-            {"tiered_pricing": [{"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}]},
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
             0.0,
         ),
     ],

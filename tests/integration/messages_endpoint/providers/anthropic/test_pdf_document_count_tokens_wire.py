@@ -155,7 +155,9 @@ def test_utils_token_counter_prices_each_blank_page_as_a_rendered_image(
     assert with_document - without == rendered_tokens(letter_pages), (with_document, without)
 
 
-def test_utils_token_counter_adds_a_page_text_to_its_rendered_image(gateway: Gateway, provider: SharedProvider) -> None:
+def test_utils_token_counter_adds_a_page_text_to_its_rendered_image(
+    gateway: Gateway, provider: SharedProvider
+) -> None:
     text_page: Final = _local(gateway, provider, [pdf_document((Page(text=_TEXT),))])
     blank_page: Final = _local(gateway, provider, [pdf_document((LETTER,))])
     text_source: Final = _local(gateway, provider, [text_document(_TEXT)])
@@ -164,7 +166,9 @@ def test_utils_token_counter_adds_a_page_text_to_its_rendered_image(gateway: Gat
     assert text_page - blank_page == text_source - without, (text_page, blank_page, text_source, without)
 
 
-def test_utils_token_counter_prices_a_page_by_its_rendered_area(gateway: Gateway, provider: SharedProvider) -> None:
+def test_utils_token_counter_prices_a_page_by_its_rendered_area(
+    gateway: Gateway, provider: SharedProvider
+) -> None:
     mixed: Final = (LETTER, NARROW, LETTER)
     without: Final = _local(gateway, provider, [])
     narrow: Final = _local(gateway, provider, [pdf_document((NARROW,))])

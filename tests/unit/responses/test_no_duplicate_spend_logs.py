@@ -36,7 +36,9 @@ async def test_async_no_duplicate_spend_logs():
             self.tracking_id = tracking_id
             self.log_count = 0
 
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
             # Only count logs for our specific test request
             litellm_call_id = kwargs.get("litellm_call_id", "")
             if litellm_call_id == self.tracking_id:

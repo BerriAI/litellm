@@ -204,7 +204,9 @@ async def test_a_num_retries_below_one_leaves_the_failure_standing(
 
 
 @pytest.mark.asyncio
-async def test_a_retry_policy_outranks_a_num_retries_that_is_no_count(make_core: MakeCore, host: ScriptedHost) -> None:
+async def test_a_retry_policy_outranks_a_num_retries_that_is_no_count(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
     core: Final = make_core(
         model_list=[deployment("g", "a"), deployment("g", "b")],
         num_retries=0,

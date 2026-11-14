@@ -98,7 +98,9 @@ def test_module_singleton_is_agents_http_handler_instance():
 class TestCreateAgent:
     def test_sync_returns_parsed_create_response(self, handler, config, litellm_params):
         client = _make_sync_client()
-        client.post.return_value = _make_response(200, json_data={"id": "agent-x", "base_agent": "gemini-2.5-flash"})
+        client.post.return_value = _make_response(
+            200, json_data={"id": "agent-x", "base_agent": "gemini-2.5-flash"}
+        )
         logging_obj = _make_logging_obj()
 
         result = handler.create_agent(
@@ -121,7 +123,9 @@ class TestCreateAgent:
         logging_obj.pre_call.assert_called_once()
         logging_obj.post_call.assert_called_once()
 
-    def test_sync_dispatches_to_async_when_is_async(self, handler, config, litellm_params):
+    def test_sync_dispatches_to_async_when_is_async(
+        self, handler, config, litellm_params
+    ):
         client = _make_sync_client()
 
         result = handler.create_agent(
@@ -141,7 +145,9 @@ class TestCreateAgent:
     def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
-        client.post.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.post.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             handler.create_agent(
@@ -153,9 +159,13 @@ class TestCreateAgent:
             )
 
     @pytest.mark.asyncio
-    async def test_async_returns_parsed_create_response(self, handler, config, litellm_params):
+    async def test_async_returns_parsed_create_response(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
-        client.post.return_value = _make_response(200, json_data={"id": "agent-y", "base_agent": "gemini-2.5-flash"})
+        client.post.return_value = _make_response(
+            200, json_data={"id": "agent-y", "base_agent": "gemini-2.5-flash"}
+        )
 
         result = await handler.async_create_agent(
             agents_api_config=config,
@@ -171,10 +181,14 @@ class TestCreateAgent:
         client.post.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_async_maps_http_error_via_config(self, handler, config, litellm_params):
+    async def test_async_maps_http_error_via_config(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         bad = _make_response(500, text="server error")
-        client.post.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.post.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             await handler.async_create_agent(
@@ -214,7 +228,9 @@ class TestListAgents:
         assert result.next_page_token == "tok"
         client.get.assert_called_once()
 
-    def test_sync_dispatches_to_async_when_is_async(self, handler, config, litellm_params):
+    def test_sync_dispatches_to_async_when_is_async(
+        self, handler, config, litellm_params
+    ):
         client = _make_sync_client()
 
         result = handler.list_agents(
@@ -233,7 +249,9 @@ class TestListAgents:
     def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(403, text="forbidden")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             handler.list_agents(
@@ -246,7 +264,9 @@ class TestListAgents:
     @pytest.mark.asyncio
     async def test_async_returns_list_response(self, handler, config, litellm_params):
         client = _make_async_client()
-        client.get.return_value = _make_response(200, json_data={"agents": [{"id": "a-1"}]})
+        client.get.return_value = _make_response(
+            200, json_data={"agents": [{"id": "a-1"}]}
+        )
 
         result = await handler.async_list_agents(
             agents_api_config=config,
@@ -260,10 +280,14 @@ class TestListAgents:
         client.get.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_async_maps_http_error_via_config(self, handler, config, litellm_params):
+    async def test_async_maps_http_error_via_config(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         bad = _make_response(429, text="rate limited")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             await handler.async_list_agents(
@@ -297,7 +321,9 @@ class TestGetAgent:
         kwargs = client.get.call_args.kwargs
         assert kwargs["url"].endswith("/v1beta/agents/agent-x")
 
-    def test_sync_dispatches_to_async_when_is_async(self, handler, config, litellm_params):
+    def test_sync_dispatches_to_async_when_is_async(
+        self, handler, config, litellm_params
+    ):
         result = handler.get_agent(
             agents_api_config=config,
             name="agent-x",
@@ -314,7 +340,9 @@ class TestGetAgent:
     def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             handler.get_agent(
@@ -342,10 +370,14 @@ class TestGetAgent:
         assert result.id == "agent-y"
 
     @pytest.mark.asyncio
-    async def test_async_maps_http_error_via_config(self, handler, config, litellm_params):
+    async def test_async_maps_http_error_via_config(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         bad = _make_response(404, text="not found")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             await handler.async_get_agent(
@@ -381,7 +413,9 @@ class TestDeleteAgent:
         kwargs = client.delete.call_args.kwargs
         assert kwargs["url"].endswith("/v1beta/agents/agent-x")
 
-    def test_sync_dispatches_to_async_when_is_async(self, handler, config, litellm_params):
+    def test_sync_dispatches_to_async_when_is_async(
+        self, handler, config, litellm_params
+    ):
         result = handler.delete_agent(
             agents_api_config=config,
             name="agent-x",
@@ -398,7 +432,9 @@ class TestDeleteAgent:
     def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(403, text="forbidden")
-        client.delete.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.delete.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             handler.delete_agent(
@@ -427,10 +463,14 @@ class TestDeleteAgent:
         assert result.deleted is True
 
     @pytest.mark.asyncio
-    async def test_async_maps_http_error_via_config(self, handler, config, litellm_params):
+    async def test_async_maps_http_error_via_config(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         bad = _make_response(500, text="server error")
-        client.delete.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.delete.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             await handler.async_delete_agent(
@@ -453,7 +493,9 @@ class TestListAgentVersions:
         client.get.return_value = _make_response(
             200,
             json_data={
-                "agentVersions": [{"agent": "agent-x", "name": "agents/agent-x/versions/v1"}],
+                "agentVersions": [
+                    {"agent": "agent-x", "name": "agents/agent-x/versions/v1"}
+                ],
                 "nextPageToken": "tok",
             },
         )
@@ -472,7 +514,9 @@ class TestListAgentVersions:
         kwargs = client.get.call_args.kwargs
         assert kwargs["url"].endswith("/v1beta/agents/agent-x/versions")
 
-    def test_sync_dispatches_to_async_when_is_async(self, handler, config, litellm_params):
+    def test_sync_dispatches_to_async_when_is_async(
+        self, handler, config, litellm_params
+    ):
         result = handler.list_agent_versions(
             agents_api_config=config,
             name="agent-x",
@@ -489,7 +533,9 @@ class TestListAgentVersions:
     def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             handler.list_agent_versions(
@@ -501,7 +547,9 @@ class TestListAgentVersions:
             )
 
     @pytest.mark.asyncio
-    async def test_async_returns_versions_response(self, handler, config, litellm_params):
+    async def test_async_returns_versions_response(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         client.get.return_value = _make_response(200, json_data={"agentVersions": []})
 
@@ -517,10 +565,14 @@ class TestListAgentVersions:
         assert result.agent_versions == []
 
     @pytest.mark.asyncio
-    async def test_async_maps_http_error_via_config(self, handler, config, litellm_params):
+    async def test_async_maps_http_error_via_config(
+        self, handler, config, litellm_params
+    ):
         client = _make_async_client()
         bad = _make_response(500, text="server error")
-        client.get.side_effect = httpx.HTTPStatusError("boom", request=MagicMock(), response=bad)
+        client.get.side_effect = httpx.HTTPStatusError(
+            "boom", request=MagicMock(), response=bad
+        )
 
         with pytest.raises(GeminiError):
             await handler.async_list_agent_versions(

@@ -238,6 +238,7 @@ class TestGroqStructuredOutputs:
         """
         config = GroqChatConfig()
 
+
         model = "llama-3.3-70b-versatile"
 
         non_default_params = {
@@ -306,6 +307,7 @@ class TestGroqStructuredOutputs:
             drop_params=False,
         )
 
+
         assert "tools" in result
         assert len(result["tools"]) == 1
         assert result["tools"][0]["function"]["name"] == "json_tool_call"
@@ -318,6 +320,7 @@ class TestGroqStructuredOutputs:
         support native json_schema (e.g., gpt-oss-120b).
         """
         config = GroqChatConfig()
+
 
         model = "openai/gpt-oss-120b"
 
@@ -342,6 +345,8 @@ class TestGroqStructuredOutputs:
             drop_params=False,
         )
 
+
+
         assert result.get("json_mode") is not True
 
         if "tools" in result:
@@ -361,7 +366,10 @@ class TestGroqReasoning:
         Test that Groq's 'reasoning' field in streaming chunks is properly mapped
         to LiteLLM's 'reasoning_content' field.
         """
-        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = GroqChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
 
         groq_chunk = {
             "id": "chatcmpl-test",
@@ -380,9 +388,14 @@ class TestGroqReasoning:
             ],
         }
 
+
         parsed_chunk = handler.chunk_parser(groq_chunk)
 
-        assert parsed_chunk.choices[0].delta.reasoning_content == "This is reasoning content"
+
+        assert (
+            parsed_chunk.choices[0].delta.reasoning_content
+            == "This is reasoning content"
+        )
 
         assert not hasattr(parsed_chunk.choices[0].delta, "reasoning")
 
@@ -390,7 +403,10 @@ class TestGroqReasoning:
         """
         Test that chunks without reasoning field still work correctly.
         """
-        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = GroqChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
 
         groq_chunk = {
             "id": "chatcmpl-test",
@@ -409,7 +425,9 @@ class TestGroqReasoning:
             ],
         }
 
+
         parsed_chunk = handler.chunk_parser(groq_chunk)
+
 
         assert parsed_chunk.choices[0].delta.content == "Regular content"
         assert parsed_chunk.choices[0].delta.role == "assistant"
@@ -420,7 +438,10 @@ class TestGroqReasoning:
         """
         Test that reasoning field is properly mapped even when tool_calls are present.
         """
-        handler = GroqChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = GroqChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
 
         groq_chunk = {
             "id": "chatcmpl-test",
@@ -449,13 +470,21 @@ class TestGroqReasoning:
             ],
         }
 
+
         parsed_chunk = handler.chunk_parser(groq_chunk)
 
-        assert parsed_chunk.choices[0].delta.reasoning_content == "Reasoning before tool call"
+
+        assert (
+            parsed_chunk.choices[0].delta.reasoning_content
+            == "Reasoning before tool call"
+        )
 
         assert parsed_chunk.choices[0].delta.tool_calls is not None
         assert len(parsed_chunk.choices[0].delta.tool_calls) == 1
-        assert parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"] == "test_function"
+        assert (
+            parsed_chunk.choices[0].delta.tool_calls[0]["function"]["name"]
+            == "test_function"
+        )
 
 
 def test_tool_search_reply_sent_to_groq_drops_litellm_response_fields():

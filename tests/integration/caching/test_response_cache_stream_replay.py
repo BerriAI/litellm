@@ -101,7 +101,9 @@ _Stream = tuple[frozenset[str], tuple[dict[str, JsonValue], ...]]
 def _stream(gateway: Gateway, model: str, text: str) -> _Stream:
     """The chunk ids and every choice's delta with its finish reason, after the whole stream was read."""
     with (
-        OpenAI(base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1", api_key=gateway.key, max_retries=0) as client,
+        OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1", api_key=gateway.key, max_retries=0
+        ) as client,
         client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": text}], stream=True
         ) as stream,

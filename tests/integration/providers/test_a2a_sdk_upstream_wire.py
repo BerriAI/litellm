@@ -134,7 +134,9 @@ async def test_a2a_logging_payload():
         slp.get("custom_llm_provider") if isinstance(slp, dict) else getattr(slp, "custom_llm_provider", None)
     )
     call_type = slp.get("call_type") if isinstance(slp, dict) else getattr(slp, "call_type", None)
-    response_cost = slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
+    response_cost = (
+        slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
+    )
 
     assert logged_model is not None and "a2a_agent/" in logged_model
     assert logged_provider == "a2a_agent"
@@ -237,10 +239,15 @@ def _langgraph_upstream(request: Request) -> Reply:
     assert messages[0]["role"] == "human"
     if request.target == "/runs/wait":
         return Reply(
-            body=json.dumps({"messages": [{"type": "ai", "role": "assistant", "content": "2 + 2 = 4."}]}).encode()
+            body=json.dumps(
+                {"messages": [{"type": "ai", "role": "assistant", "content": "2 + 2 = 4."}]}
+            ).encode()
         )
     assert request.target == "/runs/stream"
-    sse = 'data: {"content":"1, "}\n\ndata: {"content":"2, 3, 4, 5."}\n\n'
+    sse = (
+        'data: {"content":"1, "}\n\n'
+        'data: {"content":"2, 3, 4, 5."}\n\n'
+    )
     return Reply(body=sse.encode(), content_type="text/event-stream")
 
 

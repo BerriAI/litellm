@@ -55,8 +55,12 @@ class TestGeminiVideoConfig:
         """Test that missing API key raises error."""
         headers = {}
 
-        with pytest.raises(ValueError, match="GEMINI_API_KEY or GOOGLE_API_KEY is required"):
-            self.config.validate_environment(headers=headers, model="veo-3.0-generate-preview", api_key=None)
+        with pytest.raises(
+            ValueError, match="GEMINI_API_KEY or GOOGLE_API_KEY is required"
+        ):
+            self.config.validate_environment(
+                headers=headers, model="veo-3.0-generate-preview", api_key=None
+            )
 
     def test_get_complete_url(self):
         """Test URL construction for video generation."""
@@ -71,7 +75,9 @@ class TestGeminiVideoConfig:
 
     def test_get_complete_url_default_api_base(self):
         """Test URL construction with default API base."""
-        url = self.config.get_complete_url(model="gemini/veo-3.0-generate-preview", api_base=None, litellm_params={})
+        url = self.config.get_complete_url(
+            model="gemini/veo-3.0-generate-preview", api_base=None, litellm_params={}
+        )
 
         assert url.startswith("https://generativelanguage.googleapis.com")
         assert "veo-3.0-generate-preview:predictLongRunning" in url
@@ -403,7 +409,9 @@ class TestGeminiVideoConfig:
         assert isinstance(result, VideoObject)
         assert result.usage is not None, "Usage should be set"
         assert "duration_seconds" in result.usage, "duration_seconds should be in usage"
-        assert result.usage["duration_seconds"] == 5.0, f"Expected 5.0, got {result.usage['duration_seconds']}"
+        assert (
+            result.usage["duration_seconds"] == 5.0
+        ), f"Expected 5.0, got {result.usage['duration_seconds']}"
 
     def test_transform_video_create_response_usage_includes_video_resolution(self):
         """Resolution from request parameters is copied into usage for cost tracking."""
@@ -511,9 +519,9 @@ class TestGeminiVideoConfig:
         # When no duration is provided, it defaults to 8 seconds (Google Veo default)
         assert result.usage is not None
         assert "duration_seconds" in result.usage
-        assert result.usage["duration_seconds"] == 8.0, (
-            "Should default to 8 seconds when not provided (Google Veo default)"
-        )
+        assert (
+            result.usage["duration_seconds"] == 8.0
+        ), "Should default to 8 seconds when not provided (Google Veo default)"
 
     def test_transform_video_status_retrieve_request(self):
         """Test transformation of status retrieve request."""
@@ -555,7 +563,11 @@ class TestGeminiVideoConfig:
             "name": "operations/generate_1234567890",
             "done": True,
             "metadata": {"createTime": "2024-11-04T10:00:00.123456Z"},
-            "response": {"generateVideoResponse": {"generatedSamples": [{"video": {"uri": "files/abc123xyz"}}]}},
+            "response": {
+                "generateVideoResponse": {
+                    "generatedSamples": [{"video": {"uri": "files/abc123xyz"}}]
+                }
+            },
         }
 
         result = self.config.transform_video_status_retrieve_response(
@@ -577,7 +589,11 @@ class TestGeminiVideoConfig:
         mock_status_response.json.return_value = {
             "name": "operations/generate_1234567890",
             "done": True,
-            "response": {"generateVideoResponse": {"generatedSamples": [{"video": {"uri": "files/abc123xyz"}}]}},
+            "response": {
+                "generateVideoResponse": {
+                    "generatedSamples": [{"video": {"uri": "files/abc123xyz"}}]
+                }
+            },
         }
         mock_status_response.raise_for_status = Mock()
         mock_client.get.return_value = mock_status_response
@@ -688,7 +704,11 @@ class TestGeminiVideoIntegration:
             "name": "operations/generate_abc123",
             "done": True,
             "metadata": {"createTime": "2024-11-04T10:00:00.123456Z"},
-            "response": {"generateVideoResponse": {"generatedSamples": [{"video": {"uri": "files/video123"}}]}},
+            "response": {
+                "generateVideoResponse": {
+                    "generatedSamples": [{"video": {"uri": "files/video123"}}]
+                }
+            },
         }
 
         status_obj = config.transform_video_status_retrieve_response(
@@ -713,7 +733,9 @@ class TestGeminiVideoCostTracking:
             model_info={"output_cost_per_second": 0.35},
         )
         expected_veo2 = 0.35 * 5.0  # $1.75
-        assert abs(cost_veo2 - expected_veo2) < 0.001, f"Expected ${expected_veo2}, got ${cost_veo2}"
+        assert (
+            abs(cost_veo2 - expected_veo2) < 0.001
+        ), f"Expected ${expected_veo2}, got ${cost_veo2}"
 
         # Test VEO 3.0 ($0.75/second)
         cost_veo3 = video_generation_cost(
@@ -723,7 +745,9 @@ class TestGeminiVideoCostTracking:
             model_info={"output_cost_per_second": 0.75},
         )
         expected_veo3 = 0.75 * 8.0  # $6.00
-        assert abs(cost_veo3 - expected_veo3) < 0.001, f"Expected ${expected_veo3}, got ${cost_veo3}"
+        assert (
+            abs(cost_veo3 - expected_veo3) < 0.001
+        ), f"Expected ${expected_veo3}, got ${cost_veo3}"
 
         # Test VEO 3.1 Standard ($0.40/second)
         cost_veo31 = video_generation_cost(
@@ -733,7 +757,9 @@ class TestGeminiVideoCostTracking:
             model_info={"output_cost_per_second": 0.40},
         )
         expected_veo31 = 0.40 * 10.0  # $4.00
-        assert abs(cost_veo31 - expected_veo31) < 0.001, f"Expected ${expected_veo31}, got ${cost_veo31}"
+        assert (
+            abs(cost_veo31 - expected_veo31) < 0.001
+        ), f"Expected ${expected_veo31}, got ${cost_veo31}"
 
         # Test VEO 3.1 Fast ($0.15/second)
         cost_veo31_fast = video_generation_cost(
@@ -743,9 +769,9 @@ class TestGeminiVideoCostTracking:
             model_info={"output_cost_per_second": 0.15},
         )
         expected_veo31_fast = 0.15 * 6.0  # $0.90
-        assert abs(cost_veo31_fast - expected_veo31_fast) < 0.001, (
-            f"Expected ${expected_veo31_fast}, got ${cost_veo31_fast}"
-        )
+        assert (
+            abs(cost_veo31_fast - expected_veo31_fast) < 0.001
+        ), f"Expected ${expected_veo31_fast}, got ${cost_veo31_fast}"
 
     def test_cost_calculation_veo_lite_1080p_tier(self):
         """Veo 3.1 Lite uses output_cost_per_second_1080p when video_resolution is 1080p."""
@@ -811,7 +837,9 @@ class TestGeminiVideoCostTracking:
 
         # Verify cost calculation (VEO 3.0 is $0.75/second)
         expected_cost = 0.75 * 5.0  # $3.75
-        assert abs(cost - expected_cost) < 0.001, f"Expected ${expected_cost}, got ${cost}"
+        assert (
+            abs(cost - expected_cost) < 0.001
+        ), f"Expected ${expected_cost}, got ${cost}"
 
 
 if __name__ == "__main__":
@@ -829,6 +857,4 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = GeminiVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
-        {}, "video-model", True
-    )
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

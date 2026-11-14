@@ -105,6 +105,7 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     assert response.total_tokens > 0
 
 
+
 def _vertex_glm_router_with_its_own_tokenizer() -> Router:
     return Router(
         model_list=[

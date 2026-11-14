@@ -1614,7 +1614,9 @@ def test_continue_on_input_failure_observes_flagged_input_and_response(
     reply: Final = f"synthetic flagged response {identity}"
     scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
     guarded_call_id: Final = f"{scenario_id}-guarded"
-    upstream_handle: Final = register_scenario(scenario_id, _provider_response("chat", scenario_id, reply, False))
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
 
     def policy(_request: Request) -> Reply:
         return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic flagged denial"}')
@@ -1674,7 +1676,9 @@ def test_continue_on_input_failure_observes_flagged_input_and_response(
                     assert tuple(
                         (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
                         for entry in entries
-                    ) == tuple((identity, "logging_only", "guardrail_intervened") for _ in expected_directions), entries
+                    ) == tuple(
+                        (identity, "logging_only", "guardrail_intervened") for _ in expected_directions
+                    ), entries
     finally:
         delete_scenario(upstream_handle)
 
@@ -1711,7 +1715,9 @@ def test_continue_on_input_failure_recovers_from_raising_input_scan(
     reply: Final = f"synthetic outage response {identity}"
     scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
     guarded_call_id: Final = f"{scenario_id}-guarded"
-    upstream_handle: Final = register_scenario(scenario_id, _provider_response("chat", scenario_id, reply, False))
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
 
     def policy(request: Request) -> Reply:
         payload: Final = JSON_OBJECT.validate_json(request.body)

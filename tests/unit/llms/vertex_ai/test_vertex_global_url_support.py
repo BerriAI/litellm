@@ -129,7 +129,9 @@ class TestChatCompletionURLs:
         if vertex_location == "global":
             assert url.startswith("https://aiplatform.googleapis.com")
         else:
-            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+            assert url.startswith(
+                f"https://{vertex_location}-aiplatform.googleapis.com"
+            )
 
 
 class TestEmbeddingURLs:
@@ -164,7 +166,9 @@ class TestEmbeddingURLs:
             ),
         ],
     )
-    def test_embedding_url_construction(self, vertex_location, model, expected_url_pattern):
+    def test_embedding_url_construction(
+        self, vertex_location, model, expected_url_pattern
+    ):
         """Test that embedding URLs are correctly constructed for regional and global locations."""
         url, endpoint = _get_embedding_url(
             model=model,
@@ -181,7 +185,9 @@ class TestEmbeddingURLs:
             assert url.startswith("https://aiplatform.googleapis.com")
             assert "-aiplatform.googleapis.com" not in url
         else:
-            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+            assert url.startswith(
+                f"https://{vertex_location}-aiplatform.googleapis.com"
+            )
 
     @pytest.mark.parametrize(
         "vertex_location",

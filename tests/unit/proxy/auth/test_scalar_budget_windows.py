@@ -24,28 +24,21 @@ class BudgetRow(BaseModel):
     max_budget: float | None = 0
     budget_limits: BudgetLimits | None = None
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reader", ("end_user", "team_member", "model_access_group"))
 @pytest.mark.parametrize("has_windows", (False, True))
 async def test_scalar_readers_reject_windows_instead_of_returning_no_budget(
     reader: Literal["end_user", "team_member", "model_access_group"], has_windows: bool
 ) -> None:
-    row: Final = BudgetRow.model_validate(
-        {
-            "max_budget": 0,
-            "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}] if has_windows else None,
-        }
-    )
+    row: Final = BudgetRow.model_validate({
+        "max_budget": 0,
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}] if has_windows else None,
+    })
     db: Final = SimpleNamespace(
         litellm_budgettable=SimpleNamespace(find_unique=AsyncMock(return_value=row)),
-        litellm_modelaccessgroupbudgettable=SimpleNamespace(
-            find_many=AsyncMock(
-                return_value=[
-                    SimpleNamespace(access_group_name="group", spend=0, litellm_budget_table=row),
-                ]
-            )
-        ),
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(return_value=[
+            SimpleNamespace(access_group_name="group", spend=0, litellm_budget_table=row),
+        ])),
     )
     client: Final = require_attributes(SimpleNamespace(db=db), PrismaClient, "db")
     cache: Final = UserApiKeyCache()

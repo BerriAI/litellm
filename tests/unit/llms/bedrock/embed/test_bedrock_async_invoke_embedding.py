@@ -12,18 +12,24 @@ from litellm.types.llms.base import HiddenParams
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock async invoke responses
-async_invoke_response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"}
+async_invoke_response = {
+    "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
+}
 
 async_invoke_status_response = {
     "status": "InProgress",
     "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
-    "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}},
+    "outputDataConfig": {
+        "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}
+    },
 }
 
 async_invoke_completed_response = {
     "status": "Completed",
     "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
-    "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}},
+    "outputDataConfig": {
+        "s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}
+    },
 }
 
 # Test data
@@ -97,7 +103,9 @@ class TestBedrockAsyncInvokeEmbedding:
             ("bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0", "audio"),
         ],
     )
-    def test_async_invoke_twelvelabs_embedding_request_transformation(self, model, input_type):
+    def test_async_invoke_twelvelabs_embedding_request_transformation(
+        self, model, input_type
+    ):
         """Test that async invoke requests are properly transformed for TwelveLabs."""
         from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import (
             TwelveLabsMarengoEmbeddingConfig,
@@ -400,7 +408,10 @@ class TestBedrockAsyncInvokeEmbedding:
 
             # For async invoke, the endpoint should be modified
             async_endpoint = f"{endpoint_url}/async-invoke"
-            assert async_endpoint == "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"
+            assert (
+                async_endpoint
+                == "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"
+            )
 
 
 @pytest.mark.asyncio

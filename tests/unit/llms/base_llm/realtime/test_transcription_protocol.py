@@ -74,14 +74,8 @@ def test_absent_turn_detection_is_not_disabled():
         ("[]", "must be a JSON object"),
         (json.dumps({"type": "response.create"}), "expected session.update"),
         (_session_update({}), "requires a session object"),
-        (
-            _session_update({"input_audio_format": "pcm16", "audio": {"input": {"format": "pcm16"}}}),
-            "either beta or GA",
-        ),
-        (
-            _session_update({"input_audio_transcription": {}, "audio": {"input": {"transcription": {}}}}),
-            "either beta or GA",
-        ),
+        (_session_update({"input_audio_format": "pcm16", "audio": {"input": {"format": "pcm16"}}}), "either beta or GA"),
+        (_session_update({"input_audio_transcription": {}, "audio": {"input": {"transcription": {}}}}), "either beta or GA"),
         (_session_update({"audio": {"input": {"format": {"rate": "fast"}}}}), "must be an integer"),
         (_session_update({"audio": {"input": {"format": {"rate": True}}}}), "must be an integer"),
         (_session_update({"audio": {"input": {"transcription": {"language": 7}}}}), "must be a string"),
@@ -116,18 +110,14 @@ def test_decode_pcm16_append_enforces_the_backlog_limit():
 
 
 def test_transcription_session_reflects_negotiated_settings():
-    manual = transcription_session(
-        session_id="sess_1", model="chirp_3", sample_rate=16_000, language=None, server_vad=False
-    )
+    manual = transcription_session(session_id="sess_1", model="chirp_3", sample_rate=16_000, language=None, server_vad=False)
     assert manual["id"] == "sess_1"
     assert manual["audio"]["input"] == {
         "format": {"type": "audio/pcm", "rate": 16_000},
         "transcription": {"model": "chirp_3"},
         "turn_detection": None,
     }
-    vad = transcription_session(
-        session_id="sess_1", model="chirp_3", sample_rate=24_000, language="en-US", server_vad=True
-    )
+    vad = transcription_session(session_id="sess_1", model="chirp_3", sample_rate=24_000, language="en-US", server_vad=True)
     assert vad["audio"]["input"]["transcription"] == {"model": "chirp_3", "language": "en-US"}
     assert vad["audio"]["input"]["turn_detection"] == {"type": "server_vad"}
 
@@ -135,8 +125,4 @@ def test_transcription_session_reflects_negotiated_settings():
 def test_completed_event_carries_usage_only_when_billed():
     assert "usage" not in completed_event("item_1", "hello", None)
     billed = completed_event("item_1", "hello", {"type": "duration", "seconds": 2.5})
-    assert (billed["item_id"], billed["transcript"], billed["usage"]) == (
-        "item_1",
-        "hello",
-        {"type": "duration", "seconds": 2.5},
-    )
+    assert (billed["item_id"], billed["transcript"], billed["usage"]) == ("item_1", "hello", {"type": "duration", "seconds": 2.5})

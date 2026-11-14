@@ -8,6 +8,7 @@ its result dict in all scenarios, populated with any token hashes that could
 not be deleted.
 """
 
+
 import pytest
 
 
@@ -202,9 +203,9 @@ async def test_delete_tokens_non_admin_token_not_in_db_returns_failed_tokens(
     )
 
     assert "failed_tokens" in result
-    assert "hashed-token-2" in result["failed_tokens"], (
-        "token-2 was not found in the DB and must appear in failed_tokens"
-    )
+    assert (
+        "hashed-token-2" in result["failed_tokens"]
+    ), "token-2 was not found in the DB and must appear in failed_tokens"
     assert "hashed-token-1" in result["deleted_keys"]
 
 
@@ -249,7 +250,7 @@ async def test_delete_tokens_admin_partial_db_failure_returns_failed_tokens(
     )
 
     assert "failed_tokens" in result
-    assert "hashed-token-2" in result["failed_tokens"], (
-        "token-2 was not deleted by the DB and must appear in failed_tokens for admins too"
-    )
+    assert (
+        "hashed-token-2" in result["failed_tokens"]
+    ), "token-2 was not deleted by the DB and must appear in failed_tokens for admins too"
     assert "hashed-token-1" in result["deleted_keys"]

@@ -1572,10 +1572,7 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
     [
         ({"extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}}, "header-component"),
         (
-            {
-                "model_id": "own-component",
-                "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"},
-            },
+            {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
             "own-component",
         ),
         (

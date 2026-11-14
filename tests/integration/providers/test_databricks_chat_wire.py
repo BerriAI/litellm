@@ -359,10 +359,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "databricks-meta-llama-3-3-70b-instruct",
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    }
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
                 ],
                 "response_format": {"type": "json_object"},
             },
@@ -377,10 +374,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "databricks-qwen35-122b-a10b",
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    }
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
                 ],
                 "response_format": {"type": "json_object"},
                 "stream": True,
@@ -398,10 +392,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
                 "messages": [
                     {"role": "user", "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}]},
                     {"role": "assistant", "content": "Got it."},
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    },
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
                 ],
                 "response_format": {"type": "json_object"},
             },
@@ -421,14 +412,8 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             {
                 "messages": [
                     {"role": "user", "content": "Say hi"},
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}],
-                    },
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    },
+                    {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+                    {"role": "system", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
                 ],
                 "response_format": {"type": "json_object"},
             },
@@ -465,10 +450,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "databricks-meta-llama-3-3-70b-instruct",
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    },
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
                     {
                         "role": "assistant",
                         "content": "",
@@ -488,10 +470,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "openai-gpt-external",
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-                    }
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
                 ],
                 "response_format": {"type": "json_object"},
             },
@@ -508,10 +487,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
                 "input": [
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": "Reply"},
-                            {"type": "input_text", "text": " in JSON"},
-                        ],
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
                     }
                 ],
                 "text": {"format": {"type": "json_object"}},
@@ -529,10 +505,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
                 "input": [
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": "Reply"},
-                            {"type": "input_text", "text": " in JSON"},
-                        ],
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
                     },
                     {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Plan."}]},
                 ],

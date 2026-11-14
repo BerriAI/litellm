@@ -49,10 +49,7 @@ def _form(resources_number: int, drawing: bytes) -> bytes:
 
 
 def _count_pdf(pdf_base64: str) -> int:
-    document: Final = {
-        "type": "document",
-        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_base64},
-    }
+    document: Final = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_base64}}
     return token_counter(model="gpt-4o", messages=[{"role": "user", "content": [document]}])
 
 

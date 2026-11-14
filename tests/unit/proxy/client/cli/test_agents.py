@@ -483,10 +483,9 @@ http_headers = { "x-team" = "qa" }
         assert "env_key" not in launched
         assert launched["requires_openai_auth"] is True
         assert launched["base_url"] == "http://localhost:4000/v1"
-        assert (
-            config["model_providers"]["litellm_subscription"]
-            == tomllib.loads(user_config)["model_providers"]["litellm_subscription"]
-        )
+        assert config["model_providers"]["litellm_subscription"] == tomllib.loads(user_config)["model_providers"][
+            "litellm_subscription"
+        ]
 
     @pytest.mark.parametrize("agent", ["claude", "opencode", "pi", "mytool"])
     def test_subscription_adds_no_args_for_agents_without_a_proxy_provider(self, agent):
@@ -1060,16 +1059,7 @@ class TestCodexModelSync:
             (OSError("codex vanished"), ["low", "high"]),
             (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), ["low", "high"]),
         ],
-        ids=[
-            "current",
-            "first-custom",
-            "pre-custom",
-            "pre-release",
-            "no-number",
-            "failed",
-            "unrunnable",
-            "undecodable",
-        ],
+        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable", "undecodable"],
     )
     def test_unknown_model_offers_the_group_efforts_the_installed_codex_parses(self, tmp_path, version, levels):
         _, result = self._sync(

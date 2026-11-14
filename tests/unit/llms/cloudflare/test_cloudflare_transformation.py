@@ -287,7 +287,9 @@ def test_completion_cloudflare(sync_mode):
             )
             mock_post.assert_called_once()
     else:
-        with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
             response = asyncio.run(
                 acompletion(
                     model="cloudflare/@cf/meta/llama-2-7b-chat-int8",

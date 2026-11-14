@@ -183,7 +183,5 @@ class TestGuardrailCostSpend:
         base_cost: Final = _base_cost(row, chat.usage.prompt_tokens, chat.usage.completion_tokens)
         breakdown: Final = row.breakdown
         assert breakdown.guardrail_cost is not None and breakdown.guardrail_cost > 0
-        assert breakdown.total_cost is not None and approx_equal(
-            breakdown.total_cost, base_cost + breakdown.guardrail_cost
-        )
+        assert breakdown.total_cost is not None and approx_equal(breakdown.total_cost, base_cost + breakdown.guardrail_cost)
         assert row.spend is not None and approx_equal(row.spend, breakdown.total_cost)

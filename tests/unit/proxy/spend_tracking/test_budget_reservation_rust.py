@@ -167,9 +167,7 @@ async def test_release_unbound_budget_reservation_frees_the_counter(spend_counte
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(
-    spend_counter_store: SpendCounterStore,
-):
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_store: SpendCounterStore):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
@@ -239,7 +237,9 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         },
     ]
     assert spend_counter_store.get_local("spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(reserved_cost)
+    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(
+        reserved_cost
+    )
 
 
 class _AnnualWindowDatabase:

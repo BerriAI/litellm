@@ -190,9 +190,9 @@ def test_container_routes_refuse_another_users_key_and_serve_the_owner(gateway: 
             {"unified_object_id": container_id, "file_purpose": "container", "created_by": owner_id}
         ]
         create_requests: Final = wire.drain()
-        assert [(request.method, request.target, request.headers["authorization"]) for request in create_requests] == [
-            ("POST", "/v1/containers", f"Bearer {provider_key}")
-        ]
+        assert [
+            (request.method, request.target, request.headers["authorization"]) for request in create_requests
+        ] == [("POST", "/v1/containers", f"Bearer {provider_key}")]
         assert json.loads(create_requests[0].body) == {
             "name": "c-0",
             "expires_after": {"anchor": "last_active_at", "minutes": 20},

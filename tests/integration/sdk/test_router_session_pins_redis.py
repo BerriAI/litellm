@@ -125,14 +125,18 @@ async def test_session_selection_observes_another_workers_repin_only_when_enable
         pins.set_local(_session_key(session_id), {"model_id": "original"}, 3600)
         await _pins(redis).set(_session_key(session_id), {"model_id": "replacement"}, 3600)
 
-        assert await _selected(_repin_check(pins, enabled), session_id) == ("replacement" if enabled else "original",)
+        assert await _selected(_repin_check(pins, enabled), session_id) == (
+            "replacement" if enabled else "original",
+        )
     finally:
         redis.redis_client.delete(_spelled(session_id))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("has_pin", [False, True])
-async def test_redis_read_failures_preserve_session_routing(redis: RedisCache, session_id: str, has_pin: bool) -> None:
+async def test_redis_read_failures_preserve_session_routing(
+    redis: RedisCache, session_id: str, has_pin: bool
+) -> None:
     pins: Final = _pins(redis)
     callback: Final = _repin_check(pins)
     try:

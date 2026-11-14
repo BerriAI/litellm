@@ -35,21 +35,14 @@ def test_compaction_output_item_carries_the_newest_block_that_holds_a_summary(ne
     ("response", "holds"),
     [
         pytest.param(
-            {
-                "choices": [
-                    {"message": {"role": "assistant", "provider_specific_fields": {"compaction_blocks": [_BLOCK]}}}
-                ]
-            },
+            {"choices": [{"message": {"role": "assistant", "provider_specific_fields": {"compaction_blocks": [_BLOCK]}}}]},
             True,
             id="chat_answer_compacted",
         ),
         pytest.param({"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}, False, id="chat_answer"),
         pytest.param({"object": "response", "output": [_ITEM]}, True, id="responses_output_compacted"),
         pytest.param(
-            {
-                "object": "response",
-                "output": [{"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAA"}],
-            },
+            {"object": "response", "output": [{"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAA"}]},
             False,
             id="responses_output_with_an_opaque_compaction",
         ),
@@ -75,9 +68,9 @@ def test_response_holds_compaction_block_reads_chat_and_responses_shaped_rows(re
     ],
 )
 def test_only_a_compaction_item_litellm_can_decode_holds_a_summary(encrypted_content: object, holds: bool) -> None:
-    assert holds_compaction_summary(
-        [{"type": "compaction", "id": "cmp_1", "encrypted_content": encrypted_content}]
-    ) is (holds)
+    assert holds_compaction_summary([{"type": "compaction", "id": "cmp_1", "encrypted_content": encrypted_content}]) is (
+        holds
+    )
 
 
 def test_with_compaction_summary_rewrites_the_summary_and_keeps_the_affinity_wrap() -> None:

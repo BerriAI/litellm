@@ -122,9 +122,7 @@ class ActorFactory:
         self.resources.defer(lambda: self.idp.with_strict_cleanup().delete_group(group_id))
         return Tenant(organization_id=organization_id, team_id=team_id, group_id=group_id)
 
-    @step(
-        "Create an actor in the {role} role, with its identity provider user, internal user and any tenant memberships"
-    )
+    @step("Create an actor in the {role} role, with its identity provider user, internal user and any tenant memberships")
     def create(
         self, role: ActorRole, *, tenants: tuple[Tenant, ...] = (), profile: ActorProfile = "database_role"
     ) -> Actor:

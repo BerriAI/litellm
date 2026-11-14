@@ -175,9 +175,7 @@ def _dropped_first(model: str) -> bytes:
     )
 
 
-@pytest.mark.parametrize(
-    "content", (_kept_and_dropped, _dropped_first), ids=("dropped_row_second", "dropped_row_first")
-)
+@pytest.mark.parametrize("content", (_kept_and_dropped, _dropped_first), ids=("dropped_row_second", "dropped_row_first"))
 @pytest.mark.parametrize("route", UPLOAD_ROUTES)
 def test_guardrail_dropped_and_blank_rows_never_reach_openai(
     rig: _Rig, route: UploadRoute, content: Callable[[str], bytes]
@@ -255,7 +253,9 @@ def test_worker_killed_mid_upload_leaves_the_sibling_naming_lines_and_landing_ea
         ThreadPoolExecutor(max_workers=16) as pool,
     ):
         with wire_server(gcs_peer, port=rig.vertex_port) as wire:
-            answers: Final = tuple(pool.map(partial(_upload_bad_file, client, rig.gateway), bad_lines))
+            answers: Final = tuple(
+                pool.map(partial(_upload_bad_file, client, rig.gateway), bad_lines)
+            )
             for line, answer in zip(bad_lines, answers, strict=True):
                 _assert_names_its_line(answer, line)
             assert wire.drain() == ()
@@ -276,10 +276,7 @@ def test_worker_killed_mid_upload_leaves_the_sibling_naming_lines_and_landing_ea
                     release.set()
                     outcomes: Final = tuple(future.result(timeout=120) for future in pending)
                 served: Final = tuple(outcome for outcome in outcomes if outcome is not None)
-                assert len(served) == held_by[survivor_pid], (
-                    held_by,
-                    [outcome and outcome.text for outcome in outcomes],
-                )
+                assert len(served) == held_by[survivor_pid], (held_by, [outcome and outcome.text for outcome in outcomes])
                 assert all(outcome.status_code == 200 for outcome in served), [outcome.text for outcome in served]
                 landed: Final = _landed_ids(held.drain())
                 assert sorted(landed) == sorted(held_ids)

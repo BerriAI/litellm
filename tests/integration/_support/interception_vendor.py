@@ -109,7 +109,9 @@ def _chat(name: str, body: Mapping[str, JsonValue]) -> Reply:
                 "function": {"name": SEARCH_TOOL, "arguments": json.dumps({"query": query(name, turn=2)})},
             }
             message: Final = JSON_OBJECT.validate_python({"role": "assistant", "content": None, "tool_calls": [call]})
-            return _chat_completion(_minted(f"chatcmpl-{name}-2-"), message, "tool_calls", FOLLOWUP_USAGE)
+            return _chat_completion(
+                _minted(f"chatcmpl-{name}-2-"), message, "tool_calls", FOLLOWUP_USAGE
+            )
         return _chat_completion(
             _minted(f"chatcmpl-{name}-2-"), {"role": "assistant", "content": answer(name)}, "stop", FOLLOWUP_USAGE
         )

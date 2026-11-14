@@ -5,6 +5,7 @@ text completion path.
 Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
+
 import json
 from typing import Final
 
@@ -77,7 +78,9 @@ def test_completion_forwards_extra_headers_to_provider(mock_completions_endpoint
 
 
 @respx.mock
-async def test_acompletion_forwards_client_headers_to_provider(mock_completions_endpoint, monkeypatch):
+async def test_acompletion_forwards_client_headers_to_provider(
+    mock_completions_endpoint, monkeypatch
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     await atext_completion(
         model="gpt-3.5-turbo-instruct",
@@ -302,9 +305,11 @@ async def test_async_text_completion_stream_returns_text_and_one_finish_reason(m
     chunks: Final = [chunk async for chunk in stream]
 
     assert [chunk.choices[0].text for chunk in chunks if chunk.choices[0].text] == ["hello"]
-    assert tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason is not None) == (
-        "stop",
-    )
+    assert tuple(
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
     assert len(route.calls) == 1
 
 
@@ -323,7 +328,9 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
         )
     )
 
-    stream: Final = await atext_completion(model="gpt-3.5-turbo", prompt="say hello", stream=True, max_tokens=5)
+    stream: Final = await atext_completion(
+        model="gpt-3.5-turbo", prompt="say hello", stream=True, max_tokens=5
+    )
     chunks: Final = [chunk async for chunk in stream]
     response: Final = litellm.stream_chunk_builder(chunks=chunks)
 
@@ -333,9 +340,11 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
         completion_response=response,
         custom_cost_per_token={"input_cost_per_token": 5e-07, "output_cost_per_token": 1.5e-06},
     ) == pytest.approx(1 * 1.5e-06)
-    assert tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason is not None) == (
-        "stop",
-    )
+    assert tuple(
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
     assert len(route.calls) == 1
 
 
@@ -371,4 +380,6 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
         1,
         3,
     )
-    assert json.loads(route.calls[0].request.content)["stream_options"] == {"include_usage": True}
+    assert json.loads(route.calls[0].request.content)["stream_options"] == {
+        "include_usage": True
+    }

@@ -1,3 +1,5 @@
+
+
 import pytest
 
 
@@ -40,7 +42,9 @@ User: {{user_message}}"""
     mock_client.get_file_content.assert_called_with("test_prompt.prompt", ref=None)
 
     # Rendering
-    rendered = manager.prompt_manager.render_template("test_prompt", {"user_message": "What is AI?"})
+    rendered = manager.prompt_manager.render_template(
+        "test_prompt", {"user_message": "What is AI?"}
+    )
     assert "You are a helpful assistant." in rendered
     assert "What is AI?" in rendered
 
@@ -60,7 +64,9 @@ def test_gitlab_prompt_manager_with_prompts_path(mock_client_class):
 
     manager = GitLabPromptManager(config, prompt_id="greet/hi")
     # Expected path: prompts/chat/greet/hi.prompt
-    mock_client.get_file_content.assert_called_with("prompts/chat/greet/hi.prompt", ref=None)
+    mock_client.get_file_content.assert_called_with(
+        "prompts/chat/greet/hi.prompt", ref=None
+    )
 
     rendered = manager.prompt_manager.render_template("greet/hi", {"name": "World"})
     assert rendered == "Hello World!"
@@ -78,7 +84,9 @@ def test_gitlab_prompt_manager_error_handling_load(mock_client_class):
 
     config = {"project": "g/s/r", "access_token": "tkn"}
 
-    with pytest.raises(Exception, match="Failed to load prompt 'gitlab::oops' from GitLab"):
+    with pytest.raises(
+        Exception, match="Failed to load prompt 'gitlab::oops' from GitLab"
+    ):
         _ = GitLabPromptManager(config, prompt_id="oops").prompt_manager
 
 
@@ -393,7 +401,9 @@ def test_gitlab_prompt_version_manager_override_used_when_no_prompt_version_or_k
         prompt_variables={"q": "hey"},
     )
 
-    mock_client.get_file_content.assert_any_call("promptC.prompt", ref="manager-override-ref")
+    mock_client.get_file_content.assert_any_call(
+        "promptC.prompt", ref="manager-override-ref"
+    )
 
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
@@ -447,4 +457,6 @@ def test_gitlab_prompt_version_with_prompts_path(mock_client_class):
     )
 
     # Path should include prompts_path and end with .prompt
-    mock_client.get_file_content.assert_any_call("prompts/chat/folder/sub/my_prompt.prompt", ref="commit-sha-999")
+    mock_client.get_file_content.assert_any_call(
+        "prompts/chat/folder/sub/my_prompt.prompt", ref="commit-sha-999"
+    )

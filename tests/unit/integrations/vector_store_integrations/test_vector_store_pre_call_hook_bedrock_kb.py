@@ -139,7 +139,9 @@ async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(
 @pytest.mark.asyncio
 async def test_file_search_filters_reach_the_kb_as_a_bedrock_equals_filter(respx_mock: respx.MockRouter) -> None:
     kb: Final = _kb_route(respx_mock)
-    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE))
+    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+    )
 
     response: Final = await litellm.acompletion(
         model="anthropic/claude-haiku-4-5-20251001",

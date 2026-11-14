@@ -101,8 +101,7 @@ class TestPerplexityReasoning:
         openai_client = OpenAI(api_key="fake-api-key")
 
         with patch.object(
-            openai_client,
-            "post",
+            openai_client, "post",
             side_effect=_return_pydantic_obj,
         ) as mock_client:
             response = completion(

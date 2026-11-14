@@ -290,18 +290,10 @@ def test_access_group_membership_follows_edits(gateway: Gateway) -> None:
 
 def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = tmp_path / "peer.yaml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "model_list": [],
-                "general_settings": {
-                    "master_key": gateway.key,
-                    "store_model_in_db": True,
-                    "proxy_config_reload_interval_seconds": 3600,
-                },
-            }
-        )
-    )
+    config.write_text(yaml.safe_dump({
+        "model_list": [],
+        "general_settings": {"master_key": gateway.key, "store_model_in_db": True, "proxy_config_reload_interval_seconds": 3600},
+    }))
     with (
         owned_proxy(gateway, tmp_path, {}, config=config, database_setup=()) as peer,
         mcp_peer() as first,

@@ -71,7 +71,9 @@ def managed_model(client: BatchClient) -> Iterator[str]:
         route=Route.FILES,
     )
 )
-def test_upload_without_target_model_names_rejected(client: BatchClient, scoped_key: str, managed_model: str) -> None:
+def test_upload_without_target_model_names_rejected(
+    client: BatchClient, scoped_key: str, managed_model: str
+) -> None:
     result = client.upload_file(
         content=batch_jsonl(managed_model),
         form=FileUploadForm(purpose="batch"),
@@ -87,7 +89,9 @@ def test_upload_without_target_model_names_rejected(client: BatchClient, scoped_
         route=Route.FILES,
     )
 )
-def test_upload_with_model_param_rejected(client: BatchClient, scoped_key: str, managed_model: str) -> None:
+def test_upload_with_model_param_rejected(
+    client: BatchClient, scoped_key: str, managed_model: str
+) -> None:
     result = client.upload_file(
         content=batch_jsonl(managed_model),
         form=FileUploadForm(purpose="batch", target_model_names=managed_model),

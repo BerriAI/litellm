@@ -237,6 +237,7 @@ def test_cohere_embed_passthrough_is_costed_from_billed_units(
     assert logged["kwargs"]["response_cost"] == pytest.approx(expected_cost)
 
 
+
 def _normalize_cohere_embed(url_route: str, body: Mapping[str, object], model: str) -> Mapping[str, object]:
     return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
         httpx_response=httpx.Response(200, json=body, request=httpx.Request("POST", url_route)),
@@ -260,9 +261,7 @@ def test_cohere_v3_image_embed_passthrough_is_costed_per_billed_image() -> None:
         "meta": {"api_version": {"version": "2"}, "billed_units": {"images": 1}},
         "response_type": "embeddings_by_type",
     }
-    per_image: Final = litellm.get_model_info("embed-english-v3.0", custom_llm_provider="cohere")[
-        "input_cost_per_image"
-    ]
+    per_image: Final = litellm.get_model_info("embed-english-v3.0", custom_llm_provider="cohere")["input_cost_per_image"]
 
     logged: Final = _normalize_cohere_embed("https://api.cohere.com/v2/embed", body, "embed-english-v3.0")
 
@@ -278,9 +277,7 @@ def test_cohere_embed_passthrough_rows_keep_their_embedding_type() -> None:
 
     logged: Final = _normalize_cohere_embed("https://api.cohere.com/v2/embed", body, "embed-v4.0")
 
-    assert [
-        (row["type"], row["index"], row["embedding"]) for row in logged["standard_logging_response_object"].data
-    ] == [
+    assert [(row["type"], row["index"], row["embedding"]) for row in logged["standard_logging_response_object"].data] == [
         ("float", 0, [0.1, 0.2]),
         ("float", 1, [0.3, 0.4]),
         ("int8", 0, [1, 2]),
@@ -322,7 +319,6 @@ def test_cohere_embed_job_passthrough_logs_the_plain_passthrough_row(
 
     assert logged["standard_logging_response_object"] is None
     assert "response_cost" not in logged["kwargs"]
-
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -55,7 +55,9 @@ async def test_team_permissions_list_authz_matrix(
         f"/team/permissions_list?team_id={resources.prefix}",
         headers={"Authorization": f"Bearer {actors.keys[actor].cleartext}"},
     )
-    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value}: {resp.status_code} {resp.text}"
     if expected_status == 200:
         assert resp.json()["team_id"] == resources.prefix
 
@@ -74,9 +76,13 @@ async def test_team_permissions_update_authz_matrix(
         headers={"Authorization": f"Bearer {actors.keys[actor].cleartext}"},
         json={"team_id": resources.prefix, "team_member_permissions": [_PERM]},
     )
-    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    row = await db.db.litellm_teamtable.find_unique(
+        where={"team_id": resources.prefix}
+    )
     assert row is not None
     if expected_status == 200:
         assert _PERM in (row.team_member_permissions or [])
@@ -84,7 +90,9 @@ async def test_team_permissions_update_authz_matrix(
         assert _PERM not in (row.team_member_permissions or []), "denied but mutated"
 
 
-async def test_team_permissions_available_team_self_join_divergence(gateway_client, db, resources, actors, tmp_path):
+async def test_team_permissions_available_team_self_join_divergence(
+    gateway_client, db, resources, actors, tmp_path
+):
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
     caller = actors.keys[Actor.CROSS_ORG_USER]
 
@@ -132,9 +140,13 @@ async def test_team_permissions_bulk_update_authz_matrix(
         headers={"Authorization": f"Bearer {actors.keys[actor].cleartext}"},
         json={"team_ids": [resources.prefix], "permissions": [_PERM]},
     )
-    assert resp.status_code == expected_status, f"{actor.value}: {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value}: {resp.status_code} {resp.text}"
 
-    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    row = await db.db.litellm_teamtable.find_unique(
+        where={"team_id": resources.prefix}
+    )
     assert row is not None
     if expected_status == 200:
         assert _PERM in (row.team_member_permissions or [])

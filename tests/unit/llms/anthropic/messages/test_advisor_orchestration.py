@@ -802,7 +802,9 @@ def test_resolve_advisor_credentials_validates_api_base_before_use():
             "litellm.llms.anthropic.messages.native.interceptors.advisor._allow_client_side_advisor_credentials",
             return_value=True,
         ),
-        patch("litellm.llms.anthropic.messages.native.interceptors.advisor.validate_url") as mock_validate,
+        patch(
+            "litellm.llms.anthropic.messages.native.interceptors.advisor.validate_url"
+        ) as mock_validate,
     ):
         result = _resolve_advisor_credentials(ADVISOR_TOOL_WITH_CREDS)
     mock_validate.assert_called_once_with("https://other.example")
@@ -1050,7 +1052,9 @@ async def test_executor_failure_is_not_tagged():
 # ---------------------------------------------------------------------------
 
 
-def _router_with_advisor_deployment(advisor_model="claude-opus-4-8", deployment_model=None, model_group_alias=None):
+def _router_with_advisor_deployment(
+    advisor_model="claude-opus-4-8", deployment_model=None, model_group_alias=None
+):
     """Build a Router whose only deployment is the advisor model on Foundry.
 
     The Router resolves ``litellm.anthropic_messages`` per call, so each test

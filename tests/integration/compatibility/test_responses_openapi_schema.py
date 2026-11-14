@@ -13,9 +13,7 @@ def _ok_schema_properties(openapi: dict[str, JsonValue], operation: dict[str, Js
     schema: Final = object_value(object_value(object_value(ok["content"])["application/json"])["schema"])
     if "$ref" in schema:
         name: Final = string_value(schema["$ref"]).rsplit("/", 1)[-1]
-        return object_value(
-            object_value(object_value(object_value(openapi["components"])["schemas"])[name])["properties"]
-        )
+        return object_value(object_value(object_value(object_value(openapi["components"])["schemas"])[name])["properties"])
     assert "properties" in schema, ok
     return object_value(schema["properties"])
 

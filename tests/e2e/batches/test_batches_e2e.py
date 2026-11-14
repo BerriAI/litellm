@@ -115,7 +115,9 @@ def _backoff_seconds(attempt: int) -> float:
     return delays[min(attempt, len(delays) - 1)]
 
 
-def cancel_batch(client: BatchClient, batch_id: str, *, key: str, provider: str | None) -> BatchObject:
+def cancel_batch(
+    client: BatchClient, batch_id: str, *, key: str, provider: str | None
+) -> BatchObject:
     last = client.cancel_batch(batch_id, key=key, provider=provider)
     for attempt in range(BATCH_OP_RETRIES - 1):
         match last:
@@ -129,7 +131,9 @@ def cancel_batch(client: BatchClient, batch_id: str, *, key: str, provider: str 
     return unwrap(last)
 
 
-def retrieve_batch(client: BatchClient, batch_id: str, *, key: str, provider: str | None) -> BatchObject:
+def retrieve_batch(
+    client: BatchClient, batch_id: str, *, key: str, provider: str | None
+) -> BatchObject:
     last = client.retrieve_batch(batch_id, key=key, provider=provider)
     for attempt in range(BATCH_OP_RETRIES - 1):
         match last:
@@ -143,7 +147,9 @@ def retrieve_batch(client: BatchClient, batch_id: str, *, key: str, provider: st
     return unwrap(last)
 
 
-def create_batch_resilient(client: BatchClient, cap: Capability, file_id: str, key: str) -> StreamingResponse:
+def create_batch_resilient(
+    client: BatchClient, cap: Capability, file_id: str, key: str
+) -> StreamingResponse:
     last = create_for_scenario(client, cap, file_id, key)
     for attempt in range(BATCH_OP_RETRIES - 1):
         if last.ok:
@@ -169,7 +175,9 @@ def render_jsonl(model: str) -> bytes:
     return (json.dumps(line) + "\n").encode()
 
 
-def upload_for_scenario(client: BatchClient, cap: Capability, content: bytes, key: str) -> Result[FileObject]:
+def upload_for_scenario(
+    client: BatchClient, cap: Capability, content: bytes, key: str
+) -> Result[FileObject]:
     if cap.scenario == "encoded":
         return client.upload_file(
             content=content,
@@ -191,11 +199,17 @@ def upload_for_scenario(client: BatchClient, cap: Capability, content: bytes, ke
     )
 
 
-def create_for_scenario(client: BatchClient, cap: Capability, file_id: str, key: str) -> StreamingResponse:
+def create_for_scenario(
+    client: BatchClient, cap: Capability, file_id: str, key: str
+) -> StreamingResponse:
     if cap.scenario == "model_param":
-        return client.create_batch(body=BatchCreateBody(input_file_id=file_id, model=cap.model), key=key)
+        return client.create_batch(
+            body=BatchCreateBody(input_file_id=file_id, model=cap.model), key=key
+        )
     if cap.scenario == "provider_fallback":
-        return client.create_batch(body=BatchCreateBody(input_file_id=file_id), key=key, provider=cap.provider)
+        return client.create_batch(
+            body=BatchCreateBody(input_file_id=file_id), key=key, provider=cap.provider
+        )
     return client.create_batch(body=BatchCreateBody(input_file_id=file_id), key=key)
 
 
@@ -216,16 +230,22 @@ def assert_file_object(file: FileObject, *, provider: str) -> None:
         assert file.expires_at is not None, "Azure batch input has no automatic expiry"
         assert file.created_at is not None
         assert file.expires_at - file.created_at == AZURE_FILE_EXPIRY_SECONDS
-    assert file.created_at is not None and file.created_at > 0, "file.created_at missing"
+    assert (
+        file.created_at is not None and file.created_at > 0
+    ), "file.created_at missing"
 
 
 def assert_batch_object(batch: BatchObject) -> None:
     assert batch.object == "batch", f"batch.object={batch.object!r}"
     if batch.endpoint:
-        assert batch.endpoint == "/v1/chat/completions", f"batch.endpoint={batch.endpoint!r}"
+        assert (
+            batch.endpoint == "/v1/chat/completions"
+        ), f"batch.endpoint={batch.endpoint!r}"
     assert batch.completion_window == "24h", f"window={batch.completion_window!r}"
     assert batch.input_file_id, "batch.input_file_id missing"
-    assert batch.created_at is not None and batch.created_at > 0, "batch.created_at missing"
+    assert (
+        batch.created_at is not None and batch.created_at > 0
+    ), "batch.created_at missing"
 
 
 @pytest.mark.parametrize(
@@ -249,11 +269,13 @@ def test_batch_lifecycle(
     provider = op_provider(cap)
 
     file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
-    resources.defer(lambda: cleanup_file(client, file.id, key=key, provider=cap.file_provider))
-    assert_file_object(file, provider=cap.provider)
-    assert matches_id_shape(FILE_ID_SHAPE[cap.scenario], file.id), (
-        f"{cap.id}: file id {file.id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
+    resources.defer(
+        lambda: cleanup_file(client, file.id, key=key, provider=cap.file_provider)
     )
+    assert_file_object(file, provider=cap.provider)
+    assert matches_id_shape(
+        FILE_ID_SHAPE[cap.scenario], file.id
+    ), f"{cap.id}: file id {file.id!r} is not a {FILE_ID_SHAPE[cap.scenario]} id"
 
     created = create_batch_resilient(client, cap, file.id, key)
     require_successful_call(created)
@@ -265,27 +287,34 @@ def test_batch_lifecycle(
     )
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
-    assert batch.status in CREATED_BATCH_STATUSES, f"freshly created batch has non-transitional status {batch.status!r}"
+    assert (
+        batch.status in CREATED_BATCH_STATUSES
+    ), f"freshly created batch has non-transitional status {batch.status!r}"
     assert_batch_object(batch)
-    assert matches_id_shape(BATCH_ID_SHAPE[cap.scenario], batch.id), (
-        f"{cap.id}: batch id {batch.id!r} is not a {BATCH_ID_SHAPE[cap.scenario]} id"
-    )
+    assert matches_id_shape(
+        BATCH_ID_SHAPE[cap.scenario], batch.id
+    ), f"{cap.id}: batch id {batch.id!r} is not a {BATCH_ID_SHAPE[cap.scenario]} id"
     if cap.scenario == "provider_fallback":
-        assert raw_id_matches_provider(cap.provider, batch.id), (
-            f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
-        )
+        assert raw_id_matches_provider(
+            cap.provider, batch.id
+        ), f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
 
     fetched = retrieve_batch(client, batch.id, key=key, provider=provider)
     assert_batch_object(fetched)
     assert fetched.id == batch.id
-    assert fetched.input_file_id == batch.input_file_id, "retrieve changed input_file_id"
+    assert (
+        fetched.input_file_id == batch.input_file_id
+    ), "retrieve changed input_file_id"
     assert fetched.status, "retrieved batch has no status"
 
     if cap.can_cancel and cap.provider in _CANCEL_ASSERTED_PROVIDERS:
         time.sleep(BATCH_CANCEL_DELAY_SECONDS)
         pre_cancel = retrieve_batch(client, batch.id, key=key, provider=provider)
-        assert pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL, (
-            f"batch reached {pre_cancel.status!r} before cancel; provider likely rejected the input"
+        assert (
+            pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL
+        ), (
+            f"batch reached {pre_cancel.status!r} before cancel; "
+            "provider likely rejected the input"
         )
         if pre_cancel.status != "completed":
             cancelled = cancel_batch(client, batch.id, key=key, provider=provider)
@@ -309,7 +338,11 @@ def test_batch_lifecycle(
         if listed.object is not None:
             assert listed.object == "list", f"list envelope object={listed.object!r}"
         match = next((b for b in listed.data if b.id == batch.id), None)
-        if match is None and managed_filter_unsupported and cap.scenario == "provider_fallback":
+        if (
+            match is None
+            and managed_filter_unsupported
+            and cap.scenario == "provider_fallback"
+        ):
             # provider_fallback keeps the provider's raw batch id (not re-encoded
             # into a managed/proxy id). When the gateway rejects provider-scoped
             # list, the only available list is the unfiltered managed view, which
@@ -342,9 +375,9 @@ def test_batch_key_model_access_denied(
         model=AZURE_BATCH_MODEL,
         key=key,
     )
-    assert is_result_access_denied(denied_upload), (
-        f"restricted key uploaded a file for a disallowed model: {denied_upload}"
-    )
+    assert is_result_access_denied(
+        denied_upload
+    ), f"restricted key uploaded a file for a disallowed model: {denied_upload}"
 
     raw_file = unwrap(
         client.upload_file(
@@ -354,12 +387,16 @@ def test_batch_key_model_access_denied(
             provider="openai",
         )
     ).id
-    resources.defer(lambda: cleanup_file(client, raw_file, key=key, provider="openai"))
-
-    denied_create = client.create_batch(body=BatchCreateBody(input_file_id=raw_file, model=AZURE_BATCH_MODEL), key=key)
-    assert is_model_access_denied(denied_create), (
-        f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
+    resources.defer(
+        lambda: cleanup_file(client, raw_file, key=key, provider="openai")
     )
+
+    denied_create = client.create_batch(
+        body=BatchCreateBody(input_file_id=raw_file, model=AZURE_BATCH_MODEL), key=key
+    )
+    assert is_model_access_denied(
+        denied_create
+    ), f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
 
 
 @pytest.mark.covers(
@@ -449,13 +486,18 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     environment and OOMed the e2e runner on stage.
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
-    key = client.proxy.generate_key(KeyGenerateBody(models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id))
+    key = client.proxy.generate_key(
+        KeyGenerateBody(models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id)
+    )
     resources.defer(lambda: client.proxy.delete_key(key))
 
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     window_end = window_start + timedelta(hours=2)
     before = frozenset(
-        row.request_id for row in unattributed_rows(client.proxy.spend_logs_window(start=window_start, end=window_end))
+        row.request_id
+        for row in unattributed_rows(
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
+        )
     )
 
     file = unwrap(
@@ -477,7 +519,9 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
 
     new_orphans = [
         row
-        for row in unattributed_rows(client.proxy.spend_logs_window(start=window_start, end=window_end))
+        for row in unattributed_rows(
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
+        )
         if row.request_id not in before
     ]
     assert not new_orphans, (
@@ -515,7 +559,9 @@ class TestBatchFileContent:
             models=(OPENAI_BATCH_BACKEND,),
         )
     )
-    def test_file_content_matches_upload(self, client: BatchClient, resources: ResourceManager) -> None:
+    def test_file_content_matches_upload(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
         proxy_name = f"e2e-file-content-{unique_marker()}"
         model_id = client.create_model(proxy_name, openai_batch_params())
         resources.defer(lambda: client.delete_model(model_id))
@@ -541,7 +587,9 @@ class TestBatchFileContent:
         )
         expected = payload.decode().rstrip("\n")
         got = downloaded.body.rstrip("\n")
-        assert got == expected, "downloaded file content must match the uploaded JSONL bytes"
+        assert got == expected, (
+            "downloaded file content must match the uploaded JSONL bytes"
+        )
 
     @pytest.mark.parametrize(
         "provider",
@@ -576,14 +624,17 @@ class TestBatchFileContent:
         )
         resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider=provider.name)
-        assert is_managed_id(file.id), f"{provider.name}: unified upload must return a managed file id, got {file.id!r}"
+        assert is_managed_id(file.id), (
+            f"{provider.name}: unified upload must return a managed file id, got {file.id!r}"
+        )
 
         downloaded = client.proxy.transport.download(
             f"/v1/files/{file.id}/content",
             headers=client.proxy.transport.bearer(key),
         )
         assert downloaded.status_code == 200, (
-            f"{provider.name}: file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+            f"{provider.name}: file content must be 200, "
+            f"got {downloaded.status_code}: {downloaded.body[:300]}"
         )
         body = downloaded.body.strip()
         assert body, f"{provider.name}: file content download returned an empty body"
@@ -593,7 +644,9 @@ class TestBatchFileContent:
             )
         else:
             for line in body.splitlines():
-                assert json.loads(line), f"{provider.name}: content line is not JSON: {line[:200]}"
+                assert json.loads(line), (
+                    f"{provider.name}: content line is not JSON: {line[:200]}"
+                )
 
 
 class TestOpenAIFiles:
@@ -639,13 +692,19 @@ class TestOpenAIFiles:
                 provider="openai",
             )
         )
-        resources.defer(lambda: cleanup_file(client, file.id, key=key, provider="openai"))
+        resources.defer(
+            lambda: cleanup_file(client, file.id, key=key, provider="openai")
+        )
 
         listed = unwrap(client.list_files(key=key))
-        assert listed.object is None or listed.object == "list", f"list envelope object={listed.object!r}"
+        assert listed.object is None or listed.object == "list", (
+            f"list envelope object={listed.object!r}"
+        )
         match = next((entry for entry in listed.data if entry.id == file.id), None)
         assert match is not None, f"uploaded file {file.id!r} absent from GET /v1/files"
-        assert match.purpose == "batch", f"listed file must round-trip the upload purpose, got {match.purpose!r}"
+        assert match.purpose == "batch", (
+            f"listed file must round-trip the upload purpose, got {match.purpose!r}"
+        )
 
     @pytest.mark.covers(
         "llm.files.openai.list_isolation.nonstream.works",
@@ -711,8 +770,12 @@ class TestOpenAIFiles:
 
         fetched = unwrap(client.retrieve_file(file.id, key=key))
         assert fetched.id == file.id, "retrieve must echo the uploaded file id"
-        assert fetched.purpose == "batch", f"retrieve must round-trip purpose, got {fetched.purpose!r}"
-        assert fetched.filename == UPLOAD_FILENAME, f"retrieve must round-trip filename, got {fetched.filename!r}"
+        assert fetched.purpose == "batch", (
+            f"retrieve must round-trip purpose, got {fetched.purpose!r}"
+        )
+        assert fetched.filename == UPLOAD_FILENAME, (
+            f"retrieve must round-trip filename, got {fetched.filename!r}"
+        )
 
 
 BATCH_RL_REQUEST_LINES = 3
@@ -768,7 +831,9 @@ class TestBatchRateLimitErrorMapping:
     ) -> None:
         user_id = f"e2e-batch-rl-map-{unique_marker()}"
         key = client.proxy.generate_key(
-            KeyGenerateBody(models=[], rpm_limit=BATCH_RL_RPM_LIMIT, tpm_limit=1_000_000, user_id=user_id)
+            KeyGenerateBody(
+                models=[], rpm_limit=BATCH_RL_RPM_LIMIT, tpm_limit=1_000_000, user_id=user_id
+            )
         )
         resources.defer(lambda: client.proxy.delete_key(key))
 
@@ -790,13 +855,16 @@ class TestBatchRateLimitErrorMapping:
         )
         body_lower = created.body.lower()
         assert "batch rate limit exceeded" in body_lower, (
-            f"429 body must name the batch rate limit so clients can branch on it; got: {created.body[:400]}"
+            f"429 body must name the batch rate limit so clients can branch on it; "
+            f"got: {created.body[:400]}"
         )
         assert str(BATCH_RL_REQUEST_LINES) in created.body, (
-            f"429 body should report the batch request count ({BATCH_RL_REQUEST_LINES}); got: {created.body[:400]}"
+            f"429 body should report the batch request count ({BATCH_RL_REQUEST_LINES}); "
+            f"got: {created.body[:400]}"
         )
         assert "rpm" in body_lower or "requests remaining" in body_lower, (
-            f"429 body must describe the RPM budget remaining so clients can pace; got: {created.body[:400]}"
+            f"429 body must describe the RPM budget remaining so clients can pace; "
+            f"got: {created.body[:400]}"
         )
         retry_after = created.headers.get("retry-after")
         if retry_after is not None:
@@ -909,9 +977,13 @@ class TestBatchEnqueuedTokenLimit:
     def test_exhausted_allowance_blocks_until_cancel_refunds(
         self, client: BatchClient, resources: ResourceManager, batch_deployments: None
     ) -> None:
-        sizing_key = self._generate_enqueued_key(client, resources, limit=1, marker="size")
+        sizing_key = self._generate_enqueued_key(
+            client, resources, limit=1, marker="size"
+        )
         sizing_file = self._upload_batch_file(client, resources, sizing_key)
-        sized = client.create_batch(body=BatchCreateBody(input_file_id=sizing_file.id), key=sizing_key)
+        sized = client.create_batch(
+            body=BatchCreateBody(input_file_id=sizing_file.id), key=sizing_key
+        )
         assert sized.status_code == 429, (
             f"a 1-token allowance must reject any batch before it reaches the "
             f"provider, got {sized.status_code}: {sized.body[:400]}"
@@ -921,12 +993,15 @@ class TestBatchEnqueuedTokenLimit:
         )
         requires = _BATCH_REQUIRES_TOKENS.search(sized.body)
         assert requires is not None, (
-            f"429 body must report the batch token requirement so callers can size allowances, got: {sized.body[:400]}"
+            f"429 body must report the batch token requirement so callers can size "
+            f"allowances, got: {sized.body[:400]}"
         )
         batch_tokens = int(requires.group(1))
         assert batch_tokens > 1
 
-        key = self._generate_enqueued_key(client, resources, limit=batch_tokens + batch_tokens // 2, marker="refund")
+        key = self._generate_enqueued_key(
+            client, resources, limit=batch_tokens + batch_tokens // 2, marker="refund"
+        )
         file = self._upload_batch_file(client, resources, key)
 
         first = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
@@ -945,7 +1020,8 @@ class TestBatchEnqueuedTokenLimit:
 
         cancelled = cancel_batch(client, first_batch.id, key=key, provider=None)
         assert cancelled.status in {"cancelling", "cancelled"}, (
-            f"cancel must reach a cancel state for the refund to fire, got {cancelled.status}"
+            f"cancel must reach a cancel state for the refund to fire, "
+            f"got {cancelled.status}"
         )
 
         retried = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
@@ -1002,7 +1078,9 @@ class TestBedrockBatchAssumeRole:
             mode=Mode.BATCH,
         )
     )
-    def test_unified_batch_create_with_assume_role(self, client: BatchClient, resources: ResourceManager) -> None:
+    def test_unified_batch_create_with_assume_role(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
         role_arn = os.environ["AWS_ROLE_NAME"]
         session_name = f"e2e-batch-sts-{unique_marker()}"[:64]
         model_name = batch_model_name("bedrock-sts-batch")
@@ -1028,9 +1106,12 @@ class TestBedrockBatchAssumeRole:
 
         assert batch.id, f"assume-role create returned no batch id: {created.body[:200]}"
         assert is_managed_id(batch.id), (
-            f"assume-role create via target_model_names must return a managed batch id, got {batch.id!r}"
+            f"assume-role create via target_model_names must return a managed batch id, "
+            f"got {batch.id!r}"
         )
-        assert batch.status in CREATED_BATCH_STATUSES, f"assume-role batch has non-transitional status {batch.status!r}"
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"assume-role batch has non-transitional status {batch.status!r}"
+        )
         assert_batch_object(batch)
 
         fetched = unwrap(client.retrieve_batch(batch.id, key=key))
@@ -1072,7 +1153,9 @@ class TestBedrockBatchSplitS3Credentials:
             models=(ASSUME_ROLE_RAW_MODEL,),
         )
     )
-    def test_file_lifecycle_signs_s3_with_s3_credentials(self, client: BatchClient, resources: ResourceManager) -> None:
+    def test_file_lifecycle_signs_s3_with_s3_credentials(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
         model_name = batch_model_name("bedrock-split-s3-batch")
         model_id = client.create_model(model_name, _split_s3_identity_params())
         resources.defer(lambda: client.delete_model(model_id))
@@ -1195,7 +1278,9 @@ class TestBedrockBatchGovCloud:
         assert is_managed_id(batch.id), (
             f"GovCloud create via target_model_names must return a managed batch id, got {batch.id!r}"
         )
-        assert batch.status in CREATED_BATCH_STATUSES, f"GovCloud batch has non-transitional status {batch.status!r}"
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"GovCloud batch has non-transitional status {batch.status!r}"
+        )
         assert_batch_object(batch)
 
         fetched: Final = unwrap(client.retrieve_batch(batch.id, key=key))
@@ -1227,7 +1312,9 @@ class TestGeminiFiles:
             models=(GEMINI_FILES_RAW_MODEL,),
         )
     )
-    def test_gemini_file_upload(self, client: BatchClient, resources: ResourceManager) -> None:
+    def test_gemini_file_upload(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
         model_name = batch_model_name("gemini-files")
         model_id = client.create_model(
             model_name,
@@ -1419,9 +1506,7 @@ class TestHostedVllmBatch:
         assert len(error_lines) == 1, f"one failing line must yield one error line, got {error_lines!r}"
         error_line = BatchOutputLine.model_validate_json(error_lines[0])
         assert error_line.custom_id == HOSTED_VLLM_BAD_LINE_CUSTOM_ID
-        assert error_line.response.status_code == 400, (
-            f"error line must carry the provider's 4xx: {error_lines[0][:400]}"
-        )
+        assert error_line.response.status_code == 400, f"error line must carry the provider's 4xx: {error_lines[0][:400]}"
 
 
 BATCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "expired", "cancelled"})
@@ -1519,8 +1604,12 @@ class TestBatchFailurePaths:
         batch = BatchObject.model_validate_json(created.body)
 
         fetched = _poll_until_terminal(client, batch.id, key)
-        assert fetched.status == "failed", f"endpoint-mismatched batch must fail, got {fetched.status!r}"
-        assert fetched.output_file_id is None, f"failed batch must have no output file, got {fetched.output_file_id!r}"
+        assert fetched.status == "failed", (
+            f"endpoint-mismatched batch must fail, got {fetched.status!r}"
+        )
+        assert fetched.output_file_id is None, (
+            f"failed batch must have no output file, got {fetched.output_file_id!r}"
+        )
         assert fetched.errors is not None and fetched.errors.data, (
             "failed batch must surface structured errors so users can fix the JSONL"
         )
@@ -1567,7 +1656,9 @@ class TestBatchFailurePaths:
             f"upload did not encode the azure deployment into the file id: {file.id!r}"
         )
 
-        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id, model=OPENAI_BATCH_MODEL), key=key)
+        created = client.create_batch(
+            body=BatchCreateBody(input_file_id=file.id, model=OPENAI_BATCH_MODEL), key=key
+        )
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
         resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
@@ -1629,15 +1720,21 @@ class TestBatchSecondHop:
             )
         )
         resources.defer(lambda: cleanup_file(client, file.id, key=key))
-        assert is_managed_id(file.id), f"second-hop unified upload must return a managed file id, got {file.id!r}"
+        assert is_managed_id(file.id), (
+            f"second-hop unified upload must return a managed file id, got {file.id!r}"
+        )
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
         resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
-        assert is_managed_id(batch.id), f"second-hop create must return a managed batch id, got {batch.id!r}"
-        assert batch.status in CREATED_BATCH_STATUSES, f"second-hop batch has non-transitional status {batch.status!r}"
+        assert is_managed_id(batch.id), (
+            f"second-hop create must return a managed batch id, got {batch.id!r}"
+        )
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"second-hop batch has non-transitional status {batch.status!r}"
+        )
         assert_batch_object(batch)
 
         fetched = retrieve_batch(client, batch.id, key=key, provider=None)
@@ -1669,11 +1766,19 @@ TERMINAL_BAND_MAX_AGE_SECONDS = 73 * 3600
 
 
 def _marker_batches(client: BatchClient, key: str) -> list[BatchObject]:
-    listed = unwrap(client.list_batches(key=key, model=OPENAI_BATCH_MODEL, limit=TERMINAL_LIST_LIMIT))
-    return [b for b in listed.data if (b.metadata or {}).get(TERMINAL_MARKER_KEY) == TERMINAL_MARKER_VALUE]
+    listed = unwrap(
+        client.list_batches(key=key, model=OPENAI_BATCH_MODEL, limit=TERMINAL_LIST_LIMIT)
+    )
+    return [
+        b
+        for b in listed.data
+        if (b.metadata or {}).get(TERMINAL_MARKER_KEY) == TERMINAL_MARKER_VALUE
+    ]
 
 
-def _await_completed_marker(client: BatchClient, key: str) -> tuple[BatchObject | None, list[BatchObject]]:
+def _await_completed_marker(
+    client: BatchClient, key: str
+) -> tuple[BatchObject | None, list[BatchObject]]:
     deadline = time.monotonic() + TERMINAL_POLL_SECONDS
     while True:
         markers = _marker_batches(client, key)
@@ -1774,7 +1879,9 @@ class TestBatchTerminalState:
             return
 
         fetched = retrieve_batch(client, completed.id, key=key, provider=None)
-        assert fetched.status == "completed", f"listed-completed marker retrieved as {fetched.status!r}"
+        assert fetched.status == "completed", (
+            f"listed-completed marker retrieved as {fetched.status!r}"
+        )
         assert fetched.output_file_id, "completed batch has no output_file_id"
         usage: Final = fetched.usage
         assert usage is not None and usage.input_tokens and usage.output_tokens, (
@@ -1792,7 +1899,9 @@ class TestBatchTerminalState:
             f"output content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
         )
         first_line = BatchOutputLine.model_validate_json(downloaded.body.strip().splitlines()[0])
-        assert first_line.response.status_code == 200, f"batch output line reports failure: {downloaded.body[:400]}"
+        assert first_line.response.status_code == 200, (
+            f"batch output line reports failure: {downloaded.body[:400]}"
+        )
         assert first_line.response.body is not None and first_line.response.body.choices, (
             "batch output line has no choices"
         )
@@ -1807,8 +1916,12 @@ class TestBatchTerminalState:
             f"request_id {fetched.id}_batch_cost; cost write-back is broken (LIT-5730)"
         )
         cost_row = priced[0]
-        assert cost_row.call_type == "aretrieve_batch", f"batch cost row call_type={cost_row.call_type!r}"
-        assert (cost_row.total_tokens or 0) > 0, f"batch cost row has no token usage: {cost_row.total_tokens!r}"
+        assert cost_row.call_type == "aretrieve_batch", (
+            f"batch cost row call_type={cost_row.call_type!r}"
+        )
+        assert (cost_row.total_tokens or 0) > 0, (
+            f"batch cost row has no token usage: {cost_row.total_tokens!r}"
+        )
 
 
 NATIVE_VERTEX_BATCH_ROWS: Final = b"".join(
@@ -1858,7 +1971,9 @@ class TestVertexNativePassthrough:
         file = unwrap(
             client.upload_file(
                 content=NATIVE_VERTEX_BATCH_ROWS,
-                form=FileUploadForm(purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True),
+                form=FileUploadForm(
+                    purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True
+                ),
                 key=key,
             )
         )

@@ -1,5 +1,6 @@
 """Unit tests for MCP OAuth passthrough cold-start route behavior."""
 
+
 import pytest
 
 from litellm.proxy._types import MCPTransport
@@ -34,7 +35,9 @@ def _make_scope(path: str, headers: list = None) -> dict:
         ),
     ],
 )
-def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(route, expected_metadata_path):
+def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
+    route, expected_metadata_path
+):
     """No auth headers on a passthrough server route emits matching metadata."""
     from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
         _is_mcp_passthrough_cold_start,
@@ -56,7 +59,9 @@ def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(route,
         extra_headers=["Authorization"],
         oauth_passthrough=True,
     )
-    global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
+    global_mcp_server_manager.registry[passthrough_server.server_id] = (
+        passthrough_server
+    )
 
     if route.startswith("/mcp/"):
         scope = _make_scope(route)
@@ -71,12 +76,17 @@ def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(route,
     base_url = "http://localhost:4000"
     path = scope.get("_original_path") or scope.get("path", "") or ""
     if path.startswith(f"/{server_name}/mcp"):
-        resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
+        resource_metadata_url = (
+            f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
+        )
     else:
-        resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
+        resource_metadata_url = (
+            f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
+        )
 
     assert resource_metadata_url == f"{base_url}{expected_metadata_path}", (
-        f"resource_metadata_url {resource_metadata_url!r} does not match expected {base_url + expected_metadata_path!r}"
+        f"resource_metadata_url {resource_metadata_url!r} does not match "
+        f"expected {base_url + expected_metadata_path!r}"
     )
 
 

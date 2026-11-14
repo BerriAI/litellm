@@ -53,9 +53,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     ],
 )
 def test_tpm_projection_blanks_only_declared_media_transport(
-    part: Mapping[str, object],
-    projected: Mapping[str, object],
-    media: Mapping[str, object],
+    part: Mapping[str, object], projected: Mapping[str, object], media: Mapping[str, object],
 ) -> None:
     text: Final = {"type": "text", "text": "data:image/png;base64,IMAGE"}
     request: Final = [{"role": "user", "content": [text, {**part, "cache_control": {"type": "ephemeral"}}]}]
@@ -72,34 +70,19 @@ def test_tpm_projection_retains_nested_and_native_history_around_media() -> None
     empty_image: Final = {"type": "image_url", "image_url": {"url": "", "detail": "high"}}
     document: Final = {"type": "document", "title": "keep", "source": {"type": "content", "content": [image]}}
     empty_document: Final = {**document, "source": {"type": "content", "content": [empty_image]}}
-    tool: Final = {
-        "type": "tool_result",
-        "tool_use_id": "call",
-        "content": [document, {"type": "text", "text": "keep"}],
-    }
+    tool: Final = {"type": "tool_result", "tool_use_id": "call", "content": [document, {"type": "text", "text": "keep"}]}
     empty_tool: Final = {**tool, "content": [empty_document, {"type": "text", "text": "keep"}]}
     request: Final = [
         {"role": "user", "content": [tool]},
         {"type": "function_call_output", "call_id": "call", "output": [image]},
         {"type": "custom_tool_call_output", "call_id": "custom", "output": [image]},
-        {
-            "type": "computer_call_output",
-            "call_id": "computer",
-            "output": {
-                "type": "computer_screenshot",
-                "image_url": "data:image/png;base64,IMAGE",
-            },
-        },
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE",
+        }},
         {"type": "image_generation_call", "id": "ig", "result": "IMAGE", "status": "completed"},
-        {
-            "type": "code_interpreter_call",
-            "id": "ci",
-            "code": "keep()",
-            "outputs": [
-                {"type": "logs", "logs": "keep"},
-                {"type": "image", "url": "https://example.com/image.png"},
-            ],
-        },
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": "https://example.com/image.png"},
+        ]},
     ]
     original: Final = copy.deepcopy(request)
     projected, media = split_media_for_tpm(request)
@@ -107,29 +90,16 @@ def test_tpm_projection_retains_nested_and_native_history_around_media() -> None
         {"role": "user", "content": [empty_tool]},
         {"type": "function_call_output", "call_id": "call", "output": [empty_image]},
         {"type": "custom_tool_call_output", "call_id": "custom", "output": [empty_image]},
-        {
-            "type": "computer_call_output",
-            "call_id": "computer",
-            "output": {
-                "type": "computer_screenshot",
-                "image_url": "",
-            },
-        },
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "",
+        }},
         {"type": "image_generation_call", "id": "ig", "result": "", "status": "completed"},
-        {
-            "type": "code_interpreter_call",
-            "id": "ci",
-            "code": "keep()",
-            "outputs": [
-                {"type": "logs", "logs": "keep"},
-                {"type": "image", "url": ""},
-            ],
-        },
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": ""},
+        ]},
     ]
     assert media == (
-        image,
-        image,
-        image,
+        image, image, image,
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
         {"type": "image_url", "image_url": {"url": "data:application/octet-stream;base64,IMAGE", "detail": "auto"}},
         {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}},
@@ -145,15 +115,12 @@ def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None
         {"type": "function_call", "call_id": "call", "name": "keep", "arguments": {"content": [image]}},
         {"type": "file_search_call", "results": [{"text": "keep", "content": [image]}]},
         {"type": "image_generation_call", "id": "ig", "status": "in_progress", "result": None},
-        {
-            "role": "user",
-            "content": [
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
-                {"type": "document", "source": {"type": "text", "data": json.dumps(image)}},
-                {"type": "file", "file": {"format": "application/pdf", "file_data": "PDF"}},
-                {"type": "text", "text": "keep", "metadata": {"content": [image]}},
-            ],
-        },
+        {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
+            {"type": "document", "source": {"type": "text", "data": json.dumps(image)}},
+            {"type": "file", "file": {"format": "application/pdf", "file_data": "PDF"}},
+            {"type": "text", "text": "keep", "metadata": {"content": [image]}},
+        ]},
     ]
     projected, media = split_media_for_tpm(request)
     assert projected is request

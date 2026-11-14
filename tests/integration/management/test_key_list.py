@@ -55,12 +55,16 @@ async def _all_visible_hashes(gateway_client, caller_cleartext) -> set:
     list(_VISIBILITY.items()),
     ids=[a.value for a in _VISIBILITY],
 )
-async def test_key_list_visibility(actor: Actor, expected_visible: FrozenSet[Actor], gateway_client, actors):
+async def test_key_list_visibility(
+    actor: Actor, expected_visible: FrozenSet[Actor], gateway_client, actors
+):
     caller = actors.keys[actor]
     hashed_to_actor = {actors.keys[a].hashed: a for a in Actor}
 
     returned_hashes = await _all_visible_hashes(gateway_client, caller.cleartext)
-    visible_seeded = {hashed_to_actor[h] for h in returned_hashes if h in hashed_to_actor}
+    visible_seeded = {
+        hashed_to_actor[h] for h in returned_hashes if h in hashed_to_actor
+    }
     assert visible_seeded == set(expected_visible), (
         f"{actor.value}: expected {sorted(a.value for a in expected_visible)}, "
         f"got {sorted(a.value for a in visible_seeded)}"
@@ -119,7 +123,9 @@ async def test_key_list_admin_key_alias_substring_match(gateway_client, resource
     assert narrow & seeded == {hash_token(a)}
 
 
-async def test_key_list_admin_key_alias_exact_without_substring_flag(gateway_client, resources, actors):
+async def test_key_list_admin_key_alias_exact_without_substring_flag(
+    gateway_client, resources, actors
+):
     """Regression guard for the prior exact-match contract: without
     substring_matching, even a PROXY_ADMIN's key_alias filter is exact, so a
     fragment of a seeded alias does not select it."""
@@ -137,11 +143,15 @@ async def test_key_list_admin_key_alias_exact_without_substring_flag(gateway_cli
     exact = await _list_hashes(gateway_client, admin.cleartext, f"key_alias={full_alias}")
     assert key_hash in exact
 
-    fragment = await _list_hashes(gateway_client, admin.cleartext, f"key_alias={resources.prefix}-exactfla")
+    fragment = await _list_hashes(
+        gateway_client, admin.cleartext, f"key_alias={resources.prefix}-exactfla"
+    )
     assert key_hash not in fragment
 
 
-async def test_key_list_non_admin_key_alias_is_exact_match(gateway_client, resources, actors):
+async def test_key_list_non_admin_key_alias_is_exact_match(
+    gateway_client, resources, actors
+):
     """A non-admin's key_alias filter is exact-match only — substring filtering
     is restricted to admins. The full alias matches; a fragment does not."""
     caller = actors.keys[Actor.INTERNAL_USER]
@@ -158,7 +168,9 @@ async def test_key_list_non_admin_key_alias_is_exact_match(gateway_client, resou
     exact = await _list_hashes(gateway_client, caller.cleartext, f"key_alias={alias}")
     assert key_hash in exact
 
-    fragment = await _list_hashes(gateway_client, caller.cleartext, f"key_alias={resources.prefix}-exac")
+    fragment = await _list_hashes(
+        gateway_client, caller.cleartext, f"key_alias={resources.prefix}-exac"
+    )
     assert key_hash not in fragment
 
 
@@ -190,7 +202,9 @@ async def test_key_list_non_admin_cannot_filter_other_team(gateway_client, actor
     """A non-admin filtering by a team it does not belong to is rejected 403."""
     resp = await gateway_client.get(
         f"/key/list?team_id={actors.team_beta_id}",
-        headers={"Authorization": f"Bearer {actors.keys[Actor.INTERNAL_USER].cleartext}"},
+        headers={
+            "Authorization": f"Bearer {actors.keys[Actor.INTERNAL_USER].cleartext}"
+        },
     )
     assert resp.status_code == 403, resp.text
 

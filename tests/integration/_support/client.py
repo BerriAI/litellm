@@ -308,10 +308,8 @@ class Scenario:
 
         eventually(
             lambda: self._deployment_ids_by_worker(name),
-            lambda answers: (
-                len({pid for pid, _ in answers}) >= self.gateway.workers
-                and all(identity in model_ids for _, model_ids in answers)
-            ),
+            lambda answers: len({pid for pid, _ in answers}) >= self.gateway.workers
+            and all(identity in model_ids for _, model_ids in answers),
             seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
         )
 

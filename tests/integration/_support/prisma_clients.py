@@ -12,7 +12,9 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 @asynccontextmanager
 async def connected_prisma(database_url: str | None = None) -> AsyncIterator[Prisma]:
-    client: Final = Prisma(datasource=DatasourceOverride(url=database_url)) if database_url is not None else Prisma()
+    client: Final = Prisma(
+        datasource=DatasourceOverride(url=database_url)
+    ) if database_url is not None else Prisma()
     await client.connect()
     try:
         yield client

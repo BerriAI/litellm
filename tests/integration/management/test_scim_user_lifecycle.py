@@ -212,7 +212,7 @@ def test_okta_create_provisions_the_user_into_its_group_and_rejects_a_duplicate(
         assert readback_response.status_code == 200, readback_response.text
         readback_user: Final = ScimUserResponse.model_validate(readback_response.json())
         metadata_rows: Final = read_rows(
-            "SELECT created_at::text AS created_at, updated_at::text AS updated_at "
+            'SELECT created_at::text AS created_at, updated_at::text AS updated_at '
             'FROM "LiteLLM_UserTable" WHERE user_id = %s',
             (user_name,),
         )
@@ -316,7 +316,9 @@ def test_scim_create_adopts_an_existing_user_by_email_and_keeps_its_key_and_team
         assert readback.status_code == 200, readback.text
         readback_user: Final = ScimUserResponse.model_validate(readback.json())
         assert readback_user.id == existing_user, readback.text
-        assert readback_user.groups == [ScimGroupRef(value=team, display=team_alias, type="direct")], readback.text
+        assert readback_user.groups == [
+            ScimGroupRef(value=team, display=team_alias, type="direct")
+        ], readback.text
         assert len(read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email = %s', (user_email,))) == 1
         assert (
             read_rows(
@@ -366,7 +368,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
         assert created.status_code == 201, created.text
         created_user: Final = ScimUserResponse.model_validate(created.json())
-        assert created_user.groups == [ScimGroupRef(value=team_a, display=alias_a, type="direct")], created.text
+        assert created_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], created.text
         key_a: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=team_a, models=[model_a])
         _assert_serving(gateway, model_a, key_a)
 
@@ -380,9 +384,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
             external_id
         ), without_groups.text
         without_groups_user: Final = ScimUserResponse.model_validate(without_groups.json())
-        assert without_groups_user.groups == [ScimGroupRef(value=team_a, display=alias_a, type="direct")], (
-            without_groups.text
-        )
+        assert without_groups_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], without_groups.text
         without_groups_readback: Final = _scim_request(
             gateway,
             "GET",
@@ -390,7 +394,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert without_groups_readback.status_code == 200, without_groups_readback.text
         without_groups_readback_user: Final = ScimUserResponse.model_validate(without_groups_readback.json())
-        assert without_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a, type="direct")], (
+        assert without_groups_readback_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], (
             without_groups_readback.text
         )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
@@ -404,13 +410,15 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert empty_groups.status_code == 200, empty_groups.text
         empty_groups_user: Final = ScimUserResponse.model_validate(empty_groups.json())
-        assert empty_groups_user.groups == [ScimGroupRef(value=team_a, display=alias_a, type="direct")], (
-            empty_groups.text
-        )
+        assert empty_groups_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], empty_groups.text
         empty_groups_readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert empty_groups_readback.status_code == 200, empty_groups_readback.text
         empty_groups_readback_user: Final = ScimUserResponse.model_validate(empty_groups_readback.json())
-        assert empty_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a, type="direct")], (
+        assert empty_groups_readback_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], (
             empty_groups_readback.text
         )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
@@ -424,13 +432,15 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert moved.status_code == 200, moved.text
         moved_user: Final = ScimUserResponse.model_validate(moved.json())
-        assert moved_user.groups == [ScimGroupRef(value=team_b, display=alias_b, type="direct")], moved.text
+        assert moved_user.groups == [
+            ScimGroupRef(value=team_b, display=alias_b, type="direct")
+        ], moved.text
         moved_readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert moved_readback.status_code == 200, moved_readback.text
         moved_readback_user: Final = ScimUserResponse.model_validate(moved_readback.json())
-        assert moved_readback_user.groups == [ScimGroupRef(value=team_b, display=alias_b, type="direct")], (
-            moved_readback.text
-        )
+        assert moved_readback_user.groups == [
+            ScimGroupRef(value=team_b, display=alias_b, type="direct")
+        ], moved_readback.text
         assert not _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
         assert _has_team_member(gateway, team_b, user_name), _team_members(gateway, team_b)
         refused: Final = gateway.request(

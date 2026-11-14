@@ -16,9 +16,7 @@ from integration._support.redis_process import owned_redis
 
 
 @pytest.mark.covers("other.routing.redis.owned_outage_recovers_serving_and_response_cache")
-def test_owned_redis_outage_recovers_requests_and_real_response_cache(
-    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_owned_redis_outage_recovers_requests_and_real_response_cache(gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original: Final = os.environ["DATABASE_URL"]
     identity: Final = "integration_recovery_" + uuid.uuid4().hex
     parsed: Final = urlsplit(original)
@@ -28,31 +26,13 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(
         try:
             with owned_redis(tmp_path) as cache, monkeypatch.context() as environment:
                 environment.setenv("DATABASE_URL", database_url)
-                with (
-                    owned_proxy(
-                        gateway,
-                        tmp_path,
-                        {
-                            "DATABASE_URL": database_url,
-                            "REDIS_HOST": cache.host,
-                            "REDIS_PORT": str(cache.port),
-                            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1",
-                        },
-                        remove_environment=("DATABASE_URL_READ_REPLICA",),
-                    ) as candidate,
-                    candidate.scenario() as scenario,
-                    httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
-                ):
+                with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1"}, remove_environment=("DATABASE_URL_READ_REPLICA",)) as candidate, candidate.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
                     model: Final = scenario.model()
                     key: Final = scenario.key(models=[model])
                     for generation in ("before", "after"):
                         with Redis(host=cache.host, port=cache.port, socket_timeout=1) as client:
                             eventually(client.ping, bool)
-                            eventually(
-                                lambda: client.pubsub_numsub("litellm_proxy.auth_cache_invalidation")[0][1],
-                                lambda count: count >= 1,
-                                seconds=8,
-                            )
+                            eventually(lambda: client.pubsub_numsub("litellm_proxy.auth_cache_invalidation")[0][1], lambda count: count >= 1, seconds=8)
                         upstream.delete("/__observations").raise_for_status()
                         first: Final = candidate.chat(model, key=key, text=identity + generation)
                         second: Final = candidate.chat(model, key=key, text=identity + generation)
@@ -61,12 +41,8 @@ def test_owned_redis_outage_recovers_requests_and_real_response_cache(
                         assert len(upstream.get("/__observations").json()["requests"]) == 1
                         with Redis(host=cache.host, port=cache.port, socket_timeout=1) as client:
                             eventually(
-                                lambda first=first: tuple(
-                                    client.get(name) for name in client.scan_iter() if client.type(name) == b"string"
-                                ),
-                                lambda values, first=first: any(
-                                    str(first["id"]).encode() in value for value in values if value is not None
-                                ),
+                                lambda first=first: tuple(client.get(name) for name in client.scan_iter() if client.type(name) == b"string"),
+                                lambda values, first=first: any(str(first["id"]).encode() in value for value in values if value is not None),
                                 seconds=10,
                             )
                         if generation == "before":

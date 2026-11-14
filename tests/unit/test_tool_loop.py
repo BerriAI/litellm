@@ -393,7 +393,9 @@ def test_a_choice_on_a_model_alias_reaches_the_loop(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"the-alias": "openai/gpt-5-mini"})
-    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=_openai_response("done")))
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_openai_response("done"))
+    )
 
     assert (
         litellm.run_tool_loop(
@@ -564,7 +566,9 @@ def test_responses_bridge_replays_reasoning_items_across_rounds(respx_mock: resp
     second_input: Final = _request_bodies(respx_mock)[1]["input"]
     item_types: Final = [item.get("type") for item in second_input]
     reasoning_index: Final = next(i for i, item in enumerate(second_input) if item.get("type") == "reasoning")
-    function_call_index: Final = next(i for i, item in enumerate(second_input) if item.get("type") == "function_call")
+    function_call_index: Final = next(
+        i for i, item in enumerate(second_input) if item.get("type") == "function_call"
+    )
     reasoning_item: Final = second_input[reasoning_index]
     assert reasoning_item["id"] == "rs_abc123"
     assert reasoning_item["encrypted_content"] == "enc_xyz"
@@ -581,9 +585,7 @@ def test_responses_bridge_replays_tool_search_items_across_rounds(respx_mock: re
                 "type": "tool_search_output",
                 "id": "tso_1",
                 "execution": "server",
-                "tools": [
-                    {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "get_weather"}]}
-                ],
+                "tools": [{"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "get_weather"}]}],
             },
             {
                 "type": "function_call",
@@ -876,12 +878,7 @@ def test_responses_bridge_replays_commentary_reasoning_and_tool_call_in_order(re
             "phase": "commentary",
         },
         {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
-        {
-            "type": "function_call",
-            "call_id": "call_weather_paris",
-            "name": "get_weather",
-            "arguments": '{"city": "Paris"}',
-        },
+        {"type": "function_call", "call_id": "call_weather_paris", "name": "get_weather", "arguments": '{"city": "Paris"}'},
         {
             "type": "function_call_output",
             "call_id": "call_weather_paris",

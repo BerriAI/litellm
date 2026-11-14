@@ -1463,13 +1463,17 @@ async def test_router_streaming_uses_lowest_latency_deployment() -> None:
 
     assert selected["model_info"]["id"] == "fast"
     assert response._hidden_params["model_id"] == "fast"
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello world"
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks
+    ) == "Hello world"
 
 
 def test_latency_cache_honors_custom_ttl() -> None:
     clock: Final = Mock(return_value=100.0)
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
-    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"ttl": 3})
+    handler: Final = LowestLatencyLoggingHandler(
+        router_cache=cache, routing_args={"ttl": 3}
+    )
 
     handler.log_success_event(
         kwargs={
@@ -1583,9 +1587,7 @@ async def test_responses_and_chat_latency_use_comparable_token_units(
         litellm.ModelResponse(),
         ResponsesAPIResponse(id="resp-missing", created_at=0, output=[], usage=None),
         ResponsesAPIResponse(
-            id="resp-zero",
-            created_at=0,
-            output=[],
+            id="resp-zero", created_at=0, output=[],
             usage=ResponseAPIUsage(input_tokens=10, output_tokens=0, total_tokens=10),
         ),
     ],
@@ -1623,9 +1625,7 @@ async def test_legacy_latency_does_not_starve_deployments_after_upgrade(
         {"model_name": "mixed", "model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")
     ]
     native: Final = ResponsesAPIResponse(
-        id="resp-upgrade",
-        created_at=0,
-        output=[],
+        id="resp-upgrade", created_at=0, output=[],
         usage=ResponseAPIUsage(input_tokens=10, output_tokens=100, total_tokens=110),
     )
     for iteration in range(2):
@@ -1706,9 +1706,7 @@ async def test_timeout_penalty_updates_normalized_latency_and_avoids_failed_depl
             "exception": litellm.Timeout(message="request timed out", model="test", llm_provider="openai"),
             "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": "native"}},
         },
-        response_obj=None,
-        start_time=0.0,
-        end_time=3.0,
+        response_obj=None, start_time=0.0, end_time=3.0,
     )
     recorded: Final = cache.get_cache(key="mixed_map")["native"]
     assert recorded["latency_normalized"] == [*existing_samples[-1:], 1000.0]

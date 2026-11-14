@@ -257,9 +257,7 @@ class TestTransformResponse:
             config.transform_audio_transcription_response(raw_response)
 
     def test_non_json_error_omits_response_body(self, config):
-        raw_response = httpx.Response(
-            status_code=200, text='{"candidates": [{"content": {"parts": [{"text": "sensitive'
-        )
+        raw_response = httpx.Response(status_code=200, text='{"candidates": [{"content": {"parts": [{"text": "sensitive')
         with pytest.raises(VertexAIError) as excinfo:
             config.transform_audio_transcription_response(raw_response)
         assert "sensitive" not in str(excinfo.value)

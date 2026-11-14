@@ -70,7 +70,9 @@ def test_images_bad_model(gateway: Gateway) -> None:
     ),
     ids=("chat", "completions", "embeddings", "images"),
 )
-def test_missing_model_parameter_returns_bad_request(gateway: Gateway, path: str, body: dict[str, JsonValue]) -> None:
+def test_missing_model_parameter_returns_bad_request(
+    gateway: Gateway, path: str, body: dict[str, JsonValue]
+) -> None:
     response = gateway.request("POST", path, body)
     assert response.status_code == 400, response.text
     error = object_value(response.json())["error"]

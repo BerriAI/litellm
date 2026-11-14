@@ -150,11 +150,7 @@ class _SingleKeyRedisFake:
         kind: Final = (
             "reserve"
             if "INCRBY" in script
-            else "refund"
-            if "DECRBY" in script
-            else "pop"
-            if "GET" in script
-            else "save"
+            else "refund" if "DECRBY" in script else "pop" if "GET" in script else "save"
         )
 
         async def run(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
@@ -301,7 +297,9 @@ async def test_local_ghost_left_by_landed_save_never_refunds_twice():
 
     assert await store.pop_reservation("batch_ghost") is None
     assert (
-        await store.internal_usage_cache.async_get_cache(key=record_key, litellm_parent_otel_span=None, local_only=True)
+        await store.internal_usage_cache.async_get_cache(
+            key=record_key, litellm_parent_otel_span=None, local_only=True
+        )
         is None
     )
     assert await store.pop_reservation("batch_ghost") is None

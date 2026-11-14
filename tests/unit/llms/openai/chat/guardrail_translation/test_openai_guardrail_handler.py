@@ -156,13 +156,12 @@ def _tool_call_ids_names_and_arguments(
     tool_calls: Iterable[ChatCompletionToolCallChunk],
 ) -> list[tuple[str | None, str | None, str]]:
     return [
-        (tool_call["id"], tool_call["function"]["name"], tool_call["function"]["arguments"]) for tool_call in tool_calls
+        (tool_call["id"], tool_call["function"]["name"], tool_call["function"]["arguments"])
+        for tool_call in tool_calls
     ]
 
 
-def _hosted_web_call_inputs(
-    web_search_calls: Iterable[ResponseFunctionWebSearch],
-) -> list[tuple[str, str, Optional[str]]]:
+def _hosted_web_call_inputs(web_search_calls: Iterable[ResponseFunctionWebSearch]) -> list[tuple[str, str, Optional[str]]]:
     return [
         (call.id, call.status, call.action.query if call.action.type == "search" else call.action.url)
         for call in web_search_calls
@@ -248,7 +247,9 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
         tool = guardrail.last_inputs["tools"][0]
         assert tool["type"] == "function"
         assert tool["function"]["name"] == "get_weather"
-        assert tool["function"]["description"] == "Get the current weather in a location"
+        assert (
+            tool["function"]["description"] == "Get the current weather in a location"
+        )
         assert "parameters" in tool["function"]
 
     @pytest.mark.asyncio
@@ -303,7 +304,10 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
 
         assert guardrail.last_inputs is not None
         # tools should not be in inputs if not provided
-        assert "tools" not in guardrail.last_inputs or guardrail.last_inputs.get("tools") is None
+        assert (
+            "tools" not in guardrail.last_inputs
+            or guardrail.last_inputs.get("tools") is None
+        )
 
     @pytest.mark.asyncio
     async def test_tools_and_tool_calls_both_passed(self):
@@ -375,7 +379,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
                             "type": "function",
                             "function": {
                                 "name": "get_weather",
-                                "arguments": json.dumps({"location": "San Francisco", "unit": "celsius"}),
+                                "arguments": json.dumps(
+                                    {"location": "San Francisco", "unit": "celsius"}
+                                ),
                             },
                         }
                     ],
@@ -449,7 +455,10 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
 
         # Should have 1 tool call
         assert len(guardrail.last_inputs["tool_calls"]) == 1
-        assert guardrail.last_inputs["tool_calls"][0]["function"]["name"] == "get_current_weather"
+        assert (
+            guardrail.last_inputs["tool_calls"][0]["function"]["name"]
+            == "get_current_weather"
+        )
 
         # Verify text content was modified
         assert data["messages"][0]["content"] == "WHAT'S THE WEATHER?"
@@ -590,6 +599,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
         assert data["messages"][1]["content"] == "HI THERE!"
 
 
+
 class TestOpenAIChatCompletionsHandlerToolCallsOutput:
     """Test output processing with tool calls"""
 
@@ -669,7 +679,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                                 type="function",
                                 function=Function(
                                     name="web_search",
-                                    arguments=json.dumps({"keywords": "litellm documentation"}),
+                                    arguments=json.dumps(
+                                        {"keywords": "litellm documentation"}
+                                    ),
                                 ),
                             )
                         ],
@@ -692,7 +704,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert len(guardrail.last_inputs["tool_calls"]) == 1
 
         # Verify both were modified
-        assert response.choices[0].message.content == "I'LL SEARCH FOR THAT INFORMATION."
+        assert (
+            response.choices[0].message.content == "I'LL SEARCH FOR THAT INFORMATION."
+        )
         response_tool_call = response.choices[0].message.tool_calls[0]
         args = json.loads(response_tool_call.function.arguments)
         assert args["keywords"] == "LITELLM DOCUMENTATION"
@@ -882,7 +896,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                             ChatCompletionMessageToolCall(
                                 id="call_email",
                                 type="function",
-                                function=Function(name="send_email", arguments=original),
+                                function=Function(
+                                    name="send_email", arguments=original
+                                ),
                             )
                         ],
                     ),
@@ -920,12 +936,16 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
                             ChatCompletionMessageToolCall(
                                 id="call_1",
                                 type="function",
-                                function=Function(name="send_email", arguments=first_args),
+                                function=Function(
+                                    name="send_email", arguments=first_args
+                                ),
                             ),
                             ChatCompletionMessageToolCall(
                                 id="call_2",
                                 type="function",
-                                function=Function(name="send_email", arguments=second_args),
+                                function=Function(
+                                    name="send_email", arguments=second_args
+                                ),
                             ),
                         ],
                     ),
@@ -1694,10 +1714,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
             )
 
-        search: Final = {
-            **_server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"}),
-            "index": 0,
-        }
+        search: Final = (
+            {**_server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"}), "index": 0}
+        )
         return [
             chunk(Delta(content="Searching")),
             chunk(Delta(content=None, provider_specific_fields={"server_tool_calls": [search]})),
@@ -2585,7 +2604,9 @@ class TestCheckStreamingHasEnded:
 
         handler = OpenAIChatCompletionsHandler()
         chunks = [
-            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")])
+            ModelResponseStream(
+                choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")]
+            )
         ]
         assert handler._check_streaming_has_ended(chunks) is True
 

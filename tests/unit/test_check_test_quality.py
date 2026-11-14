@@ -70,7 +70,16 @@ def test_assertion_inside_a_module_local_helper_clears_the_rule(tmp_path):
 
 def test_helper_chain_is_followed_transitively(tmp_path):
     source = (
-        "def _inner(x):\n    assert x == 1\n\n\ndef _outer(x):\n    _inner(x)\n\n\ndef test_chain():\n    _outer(1)\n"
+        "def _inner(x):\n"
+        "    assert x == 1\n"
+        "\n"
+        "\n"
+        "def _outer(x):\n"
+        "    _inner(x)\n"
+        "\n"
+        "\n"
+        "def test_chain():\n"
+        "    _outer(1)\n"
     )
     assert _codes(tmp_path, source) == []
 
@@ -128,13 +137,29 @@ def test_a_method_named_like_a_module_helper_does_not_shadow_it(tmp_path):
 
 def test_helper_without_assertions_does_not_clear_the_rule(tmp_path):
     source = (
-        "def _just_calls(client):\n    client.go()\n\n\ndef test_nothing_anywhere(client):\n    _just_calls(client)\n"
+        "def _just_calls(client):\n"
+        "    client.go()\n"
+        "\n"
+        "\n"
+        "def test_nothing_anywhere(client):\n"
+        "    _just_calls(client)\n"
     )
     assert _codes(tmp_path, source) == ["TQ001"]
 
 
 def test_mutually_recursive_helpers_terminate(tmp_path):
-    source = "def _a(x):\n    _b(x)\n\n\ndef _b(x):\n    _a(x)\n\n\ndef test_cycle():\n    _a(1)\n"
+    source = (
+        "def _a(x):\n"
+        "    _b(x)\n"
+        "\n"
+        "\n"
+        "def _b(x):\n"
+        "    _a(x)\n"
+        "\n"
+        "\n"
+        "def test_cycle():\n"
+        "    _a(1)\n"
+    )
     assert _codes(tmp_path, source) == ["TQ001"]
 
 
@@ -414,7 +439,9 @@ def test_the_names_come_from_the_loop_tuple_as_well_as_the_direct_keys(tmp_path)
 
 
 def test_the_same_global_saved_twice_counts_once(tmp_path):
-    source = _SNAPSHOT_CONFTEST.replace('("api_base", "num_retries")', '("api_base", "num_retries", "drop_params")')
+    source = _SNAPSHOT_CONFTEST.replace(
+        '("api_base", "num_retries")', '("api_base", "num_retries", "drop_params")'
+    )
     assert _conftest_codes(tmp_path, source) == ["TQ007", "TQ007", "TQ007"]
 
 
@@ -546,9 +573,7 @@ def _corpus(tmp_path: Path, count: int) -> tuple[Path, ...]:
 def _run_checker(target: Path) -> list[str]:
     completed = subprocess.run(
         [sys.executable, str(_MODULE_PATH), str(target)],
-        capture_output=True,
-        text=True,
-        timeout=300,
+        capture_output=True, text=True, timeout=300,
     )
     return completed.stdout.splitlines()
 
@@ -558,7 +583,9 @@ def test_worker_count_stays_serial_below_the_threshold():
 
 
 def test_worker_count_fans_out_at_the_threshold():
-    assert checker._worker_count(checker.PARALLEL_MIN_PATHS) == max(1, min(os.cpu_count() or 1, checker.MAX_WORKERS))
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS) == max(
+        1, min(os.cpu_count() or 1, checker.MAX_WORKERS)
+    )
 
 
 def test_worker_count_never_exceeds_the_cap():
@@ -612,10 +639,7 @@ _VIOLATING_SNIPPETS: Final = MappingProxyType(
             'import subprocess, sys\nsubprocess.run([sys.executable, "-c", "pass"])\n',
         ),
         "TQ010": ("tests/integration/chaos/test_snippet.py", "import os, signal\n\nos.kill(1, signal.SIGKILL)\n"),
-        "TQ011": (
-            "tests/integration/chaos/test_snippet.py",
-            "def test_fast():\n    elapsed = run()\n    assert elapsed < 2\n",
-        ),
+        "TQ011": ("tests/integration/chaos/test_snippet.py", "def test_fast():\n    elapsed = run()\n    assert elapsed < 2\n"),
         "TQ012": (
             "tests/integration/_support/snippet.py",
             "def port():\n    probe.bind(('127.0.0.1', 0))\n    return probe.getsockname()[1]\n",

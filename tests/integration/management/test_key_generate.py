@@ -55,9 +55,13 @@ async def test_key_generate_authz_matrix(
         headers={"Authorization": f"Bearer {seeded.cleartext}"},
         json=body,
     )
-    assert resp.status_code == expected_status, f"{actor.value} {body!r} → {resp.status_code}: {resp.text}"
+    assert (
+        resp.status_code == expected_status
+    ), f"{actor.value} {body!r} → {resp.status_code}: {resp.text}"
 
-    rows = await db.db.litellm_verificationtoken.find_many(where={"key_alias": resources.prefix})
+    rows = await db.db.litellm_verificationtoken.find_many(
+        where={"key_alias": resources.prefix}
+    )
     if expected_status == 200:
         cleartext = resp.json()["key"]
         assert cleartext.startswith("sk-")

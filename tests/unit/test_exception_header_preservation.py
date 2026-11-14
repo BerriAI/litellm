@@ -44,7 +44,9 @@ class TestExceptionHeaderPreservation:
             request=transport.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
 
-    def test_bad_request_error_preserves_headers(self, mock_response_with_headers: httpx.Response):
+    def test_bad_request_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
         """BadRequestError should preserve headers from the provider response."""
         error = BadRequestError(
             message="Invalid request",
@@ -60,7 +62,9 @@ class TestExceptionHeaderPreservation:
         assert error.response.headers.get("x-ms-region") == "eastus"
         assert error.response.headers.get("x-ratelimit-remaining-requests") == "99"
 
-    def test_payment_required_error_preserves_headers(self, mock_response_with_headers: httpx.Response):
+    def test_payment_required_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
         """PaymentRequiredError should keep the provider response like its BadRequestError parent."""
         error = PaymentRequiredError(
             message="Insufficient credit",
@@ -75,7 +79,9 @@ class TestExceptionHeaderPreservation:
         assert error.request_id == mock_response_with_headers.headers["x-request-id"]
         assert error.response.headers.get("x-ms-region") == "eastus"
 
-    def test_content_policy_violation_error_preserves_headers(self, mock_response_with_headers: httpx.Response):
+    def test_content_policy_violation_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
         """ContentPolicyViolationError should preserve headers from the provider response."""
         error = ContentPolicyViolationError(
             message="Content policy violation",
@@ -88,7 +94,9 @@ class TestExceptionHeaderPreservation:
         assert error.response.headers.get("x-request-id") == "req-abc123"
         assert error.response.headers.get("x-ms-region") == "eastus"
 
-    def test_context_window_exceeded_error_preserves_headers(self, mock_response_with_headers: httpx.Response):
+    def test_context_window_exceeded_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
         """ContextWindowExceededError should preserve headers from the provider response."""
         error = ContextWindowExceededError(
             message="Context window exceeded",
@@ -101,7 +109,9 @@ class TestExceptionHeaderPreservation:
         assert error.response.headers.get("x-request-id") == "req-abc123"
         assert error.response.headers.get("x-ms-region") == "eastus"
 
-    def test_image_fetch_error_preserves_headers(self, mock_response_with_headers: httpx.Response):
+    def test_image_fetch_error_preserves_headers(
+        self, mock_response_with_headers: httpx.Response
+    ):
         """ImageFetchError should preserve headers from the provider response."""
         error = ImageFetchError(
             message="Failed to fetch image",
@@ -204,7 +214,10 @@ class TestExceptionAttributes:
         )
 
         assert error.provider_specific_fields == provider_fields
-        assert error.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
+        assert (
+            error.provider_specific_fields["innererror"]["code"]
+            == "ResponsibleAIPolicyViolation"
+        )
 
     def test_bad_request_error_attributes(self):
         """BadRequestError should set all expected attributes."""
@@ -229,7 +242,9 @@ class TestExceptionAttributes:
         MidStreamFallbackError should preserve the original status code and keep
         message/request/response fields consistent after super().__init__().
         """
-        original_req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        original_req = httpx.Request(
+            "POST", "https://api.openai.com/v1/chat/completions"
+        )
         original_resp = httpx.Response(status_code=429, request=original_req)
 
         rate_limit_error = RateLimitError(

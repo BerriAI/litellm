@@ -56,10 +56,10 @@ def _ownership_config(directory: Path) -> Path:
 
 def _project_rows(project_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        "SELECT p.project_id, p.project_alias, p.description, p.team_id, p.models, p.blocked, "
+        'SELECT p.project_id, p.project_alias, p.description, p.team_id, p.models, p.blocked, '
         'p.budget_id, b.max_budget FROM "LiteLLM_ProjectTable" AS p '
         'LEFT JOIN "LiteLLM_BudgetTable" AS b ON b.budget_id = p.budget_id '
-        "WHERE p.project_id = %s",
+        'WHERE p.project_id = %s',
         (project_id,),
     )
 
@@ -1099,12 +1099,14 @@ def test_project_delete_with_attached_key_refuses_and_preserves_state(gateway: G
         model: Final = scenario.model()
         team: Final = scenario.team(models=[model])
         budget: Final = scenario.budget()
-        project: Final = scenario.project(team, budget_id=budget, project_alias="delete-project", models=[model])
+        project: Final = scenario.project(
+            team, budget_id=budget, project_alias="delete-project", models=[model]
+        )
         key: Final = scenario.key(team_id=team, project_id=project, models=[model])
         digest: Final = sha256(key.encode()).hexdigest()
         project_before: Final = _project_rows(project)
         key_before: Final = read_rows(
-            "SELECT token, key_alias, models, metadata, max_budget, team_id, project_id, budget_id "
+            'SELECT token, key_alias, models, metadata, max_budget, team_id, project_id, budget_id '
             'FROM "LiteLLM_VerificationToken" WHERE token = %s',
             (digest,),
         )
@@ -1115,14 +1117,11 @@ def test_project_delete_with_attached_key_refuses_and_preserves_state(gateway: G
         denied: Final = gateway.request("DELETE", "/project/delete", {"project_ids": [project]})
         assert denied.status_code == 400, denied.text
         assert _project_rows(project) == project_before
-        assert (
-            read_rows(
-                "SELECT token, key_alias, models, metadata, max_budget, team_id, project_id, budget_id "
-                'FROM "LiteLLM_VerificationToken" WHERE token = %s',
-                (digest,),
-            )
-            == key_before
-        )
+        assert read_rows(
+            'SELECT token, key_alias, models, metadata, max_budget, team_id, project_id, budget_id '
+            'FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (digest,),
+        ) == key_before
 
 
 def test_key_generate_rejects_foreign_team_project(ownership_gateway: Gateway) -> None:
@@ -1170,13 +1169,10 @@ def test_key_generate_rejects_missing_team_for_owned_project(ownership_gateway: 
         )
         _discard_unexpected_key(ownership_gateway, unbound)
         assert unbound.status_code == 400, unbound.text
-        assert (
-            read_rows(
-                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s AND team_id IS NULL',
-                (project_b,),
-            )
-            == []
-        )
+        assert read_rows(
+            'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s AND team_id IS NULL',
+            (project_b,),
+        ) == []
 
 
 def test_key_generate_same_team_project_key_can_chat(ownership_gateway: Gateway) -> None:
@@ -1279,7 +1275,9 @@ def test_key_regenerate_rejects_foreign_project_without_changing_key(ownership_g
         team_a: Final = scenario.team(models=[model])
         team_b: Final = scenario.team(models=[model])
         project_b: Final = scenario.project(team_b, models=[model])
-        generated: Final = ownership_gateway.request("POST", "/key/generate", {"team_id": team_a, "models": [model]})
+        generated: Final = ownership_gateway.request(
+            "POST", "/key/generate", {"team_id": team_a, "models": [model]}
+        )
         assert generated.status_code == 200, generated.text
         key: Final = string_value(JSON_OBJECT.validate_json(generated.content)["key"])
         scenario.cleanups.callback(scenario.delete_key, key)
@@ -1299,9 +1297,7 @@ def test_key_regenerate_rejects_foreign_project_without_changing_key(ownership_g
         assert _deprecated_key_rows(key) == before_deprecated
 
 
-def _regenerate_as(
-    candidate: Gateway, route: str, target: str, caller: str, body: dict[str, JsonValue]
-) -> httpx.Response:
+def _regenerate_as(candidate: Gateway, route: str, target: str, caller: str, body: dict[str, JsonValue]) -> httpx.Response:
     if route == "body":
         return candidate.request("POST", "/key/regenerate", {"key": target, **body}, key=caller)
     return candidate.request("POST", f"/key/{target}/regenerate", body, key=caller)
@@ -1558,13 +1554,10 @@ def test_key_generate_duplicate_alias_error_precedes_project_ownership(
         assert response.status_code == 400, response.text
         assert f"Key with alias '{key_alias}' already exists" in response.text
         assert len(existing_alias_rows) == 1
-        assert (
-            read_rows(
-                'SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s',
-                (key_alias,),
-            )
-            == existing_alias_rows
-        )
+        assert read_rows(
+            'SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s',
+            (key_alias,),
+        ) == existing_alias_rows
         assert len(_key_rows(existing_key)) == 1
         assert (
             read_rows(
@@ -1584,7 +1577,9 @@ def test_key_generate_budget_ceiling_precedes_project_ownership(
         owner_team: Final = scenario.team(models=[model])
         project: Final = scenario.project(owner_team, models=[model])
         caller_id: Final = scenario.member(caller_team, role="admin")
-        caller_token: Final = _cli_session_token(caller_id, caller_team, monkeypatch=monkeypatch, max_budget=1)
+        caller_token: Final = _cli_session_token(
+            caller_id, caller_team, monkeypatch=monkeypatch, max_budget=1
+        )
         response: Final = ownership_gateway.request(
             "POST",
             "/key/generate",
@@ -1724,13 +1719,10 @@ def test_project_update_allows_moving_project_without_keys(ownership_gateway: Ga
         moved_project: Final = _project_rows(unattached_project)
         assert len(moved_project) == 1
         assert moved_project[0]["team_id"] == team_b
-        assert (
-            read_rows(
-                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
-                (unattached_project,),
-            )
-            == []
-        )
+        assert read_rows(
+            'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+            (unattached_project,),
+        ) == []
 
 
 def test_project_update_rejects_moving_project_with_teamless_key(ownership_gateway: Gateway) -> None:

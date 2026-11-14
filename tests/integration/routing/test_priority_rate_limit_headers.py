@@ -172,7 +172,9 @@ def test_streaming_chat_completion_success_logs_v3_rate_limit_remaining_values_f
         assert response.status_code == 200, response.text
         assert '"content":"streamed"' in response.text, response.text
         assert len(wire.drain()) == 1
-        batches: Final[list[Request]] = []
+        batches: Final[
+            list[Request]
+        ] = []
 
         def delivered() -> tuple[dict, ...]:
             batches.extend(endpoint.drain())

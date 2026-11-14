@@ -389,11 +389,7 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
             return candidate.request(
                 "POST",
                 "/v1/chat/completions",
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": marker}],
-                    "prompt_variables": {"word": marker},
-                },
+                {"model": model, "messages": [{"role": "user", "content": marker}], "prompt_variables": {"word": marker}},
             )
 
         control: Final = timed(lambda: cold_prompt_chat(steady))
@@ -494,7 +490,9 @@ def _await_span(received: list[Request], destination: Wire, call_id: str) -> Spa
         pytest.param(
             "/v1/responses", "responses", "both", "caller", "caller", "/v1/responses", id="responses_caller_ids"
         ),
-        pytest.param("/v1/messages", "messages", "both", "caller", "caller", "/v1/responses", id="messages_caller_ids"),
+        pytest.param(
+            "/v1/messages", "messages", "both", "caller", "caller", "/v1/responses", id="messages_caller_ids"
+        ),
         pytest.param(
             "/v1/chat/completions", "chat", "none", "header", "baggage", "/v1/chat/completions", id="chat_header_ids"
         ),
@@ -968,19 +966,15 @@ def test_audit_caller_metadata_wins_through_official_sdk_clients(audit_rig: _Aud
             }
             headers: Final = _w3c_headers(uuid.uuid4().hex, "baggage-" + marker + "-" + client_kind)
             if client_kind == "chat_openai_sync":
-                return (
-                    caller_trace,
-                    caller_session,
-                    (
-                        openai.OpenAI(base_url=f"{base_url}/v1", api_key=candidate.key)
-                        .chat.completions.with_raw_response.create(
-                            model=model,
-                            messages=[{"role": "user", "content": marker + "-chat"}],
-                            extra_body={"metadata": body_metadata, "cache": {"no-cache": True}},
-                            extra_headers=headers,
-                        )
-                        .headers
-                    ),
+                return caller_trace, caller_session, (
+                    openai.OpenAI(base_url=f"{base_url}/v1", api_key=candidate.key)
+                    .chat.completions.with_raw_response.create(
+                        model=model,
+                        messages=[{"role": "user", "content": marker + "-chat"}],
+                        extra_body={"metadata": body_metadata, "cache": {"no-cache": True}},
+                        extra_headers=headers,
+                    )
+                    .headers
                 )
             if client_kind == "responses_openai_async":
 
@@ -997,20 +991,16 @@ def test_audit_caller_metadata_wins_through_official_sdk_clients(audit_rig: _Aud
 
                 return caller_trace, caller_session, asyncio.run(responses_call())
             if client_kind == "messages_anthropic_sync":
-                return (
-                    caller_trace,
-                    caller_session,
-                    (
-                        anthropic.Anthropic(base_url=base_url, api_key=candidate.key)
-                        .messages.with_raw_response.create(
-                            model=model,
-                            max_tokens=16,
-                            messages=[{"role": "user", "content": marker + "-messages"}],
-                            extra_body={"metadata": body_metadata},
-                            extra_headers=headers,
-                        )
-                        .headers
-                    ),
+                return caller_trace, caller_session, (
+                    anthropic.Anthropic(base_url=base_url, api_key=candidate.key)
+                    .messages.with_raw_response.create(
+                        model=model,
+                        max_tokens=16,
+                        messages=[{"role": "user", "content": marker + "-messages"}],
+                        extra_body={"metadata": body_metadata},
+                        extra_headers=headers,
+                    )
+                    .headers
                 )
 
             async def messages_call() -> httpx.Headers:
@@ -1050,7 +1040,9 @@ def test_audit_caller_metadata_wins_through_official_sdk_clients(audit_rig: _Aud
 
         spans: Final = eventually(spans_named, lambda values: len(values) == len(expected), seconds=60)
         for span in spans:
-            call_id: Final = str(_attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id"))
+            call_id: Final = str(
+                _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")
+            )
             caller_trace, caller_session, client_kind = expected[call_id]
             assert span.trace_id.hex() == caller_trace, f"{client_kind}: trace id"
             assert _attribute(span.attributes, "session.id") == caller_session, f"{client_kind}: session.id"
@@ -1087,7 +1079,9 @@ def _otel_spans(batches: Sequence[Request]) -> tuple[dict[str, JsonValue], ...]:
         payload: Final = TypeAdapter(JsonValue).validate_json(batch.body)
         envelopes: Final = payload if isinstance(payload, list) else [payload]
         for envelope in envelopes:
-            for resource in TypeAdapter(list[JsonValue]).validate_python(object_value(envelope)["resourceSpans"]):
+            for resource in TypeAdapter(list[JsonValue]).validate_python(
+                object_value(envelope)["resourceSpans"]
+            ):
                 for scope in object_value(resource)["scopeSpans"]:
                     spans.extend(TypeAdapter(list[JsonValue]).validate_python(object_value(scope)["spans"]))
     return tuple(_OTEL_SPAN.validate_python(span) for span in spans)
@@ -1132,7 +1126,9 @@ def test_audit_otel_span_carries_caller_ids(
         def exported() -> tuple[dict[str, JsonValue], ...]:
             received.extend(destination.drain())
             return tuple(
-                span for span in _otel_spans(received) if _otel_attribute(span, "gen_ai.response.id") == response_id
+                span
+                for span in _otel_spans(received)
+                if _otel_attribute(span, "gen_ai.response.id") == response_id
             )
 
         spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=60)
@@ -1183,7 +1179,9 @@ def test_audit_generate_policy_derives_session_from_caller_trace(
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
-        model: Final = audit_generate_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        model: Final = audit_generate_rig.scenario.model(
+            api_base=provider.url + "/v1", api_key=provider_secret
+        )
         response: Final = audit_generate_rig.candidate.request(
             "POST",
             endpoint,
@@ -1200,6 +1198,7 @@ def test_audit_generate_policy_derives_session_from_caller_trace(
         assert row["session_id"] == expected, f"call {call_id}: spend session {row}"
 
 
+
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS)
 def test_audit_generate_policy_is_stable_across_repeated_caller_trace(
     audit_generate_rig: _AuditRig, endpoint: str, kind: str, expected_target: str
@@ -1210,7 +1209,9 @@ def test_audit_generate_policy_is_stable_across_repeated_caller_trace(
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
-        model: Final = audit_generate_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        model: Final = audit_generate_rig.scenario.model(
+            api_base=provider.url + "/v1", api_key=provider_secret
+        )
         responses: Final = tuple(
             audit_generate_rig.candidate.request(
                 "POST",
@@ -1238,7 +1239,9 @@ def test_audit_generate_policy_fresh_session_without_any_ids(
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
-        model: Final = audit_generate_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        model: Final = audit_generate_rig.scenario.model(
+            api_base=provider.url + "/v1", api_key=provider_secret
+        )
         sessions: Final[list[str | None]] = []  # mutable-ok: collects the two observed sessions in order
         for attempt in ("first", "second"):
             response: Final = audit_generate_rig.candidate.request(
@@ -1256,7 +1259,9 @@ def test_audit_generate_policy_fresh_session_without_any_ids(
 @pytest.mark.parametrize(
     ("case", "metadata", "baggage", "expected_status", "expected_session"),
     (
-        pytest.param("r1", "caller_session", None, 200, "caller_session", id="r1_caller_session_no_baggage"),
+        pytest.param(
+            "r1", "caller_session", None, 200, "caller_session", id="r1_caller_session_no_baggage"
+        ),
         pytest.param("r2", "empty_session", "baggage", 200, "baggage", id="r2_empty_session_baggage"),
         pytest.param("r3", "none", None, 400, None, id="r3_nothing_rejected"),
     ),
@@ -1281,9 +1286,7 @@ def test_audit_reject_policy(
         "empty_session": {"session_id": ""},
         "none": None,
     }[metadata]
-    expected: Final = (
-        {"caller_session": caller_session, "baggage": baggage_session}[expected_session] if expected_session else None
-    )
+    expected: Final = {"caller_session": caller_session, "baggage": baggage_session}[expected_session] if expected_session else None
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
@@ -1314,16 +1317,16 @@ def test_audit_reject_policy(
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS)
-def test_audit_omit_policy_records_no_session(
-    audit_omit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str
-) -> None:
+def test_audit_omit_policy_records_no_session(audit_omit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str) -> None:
     marker: Final = "auditomit" + uuid.uuid4().hex
     provider_secret: Final = "synthetic-provider-secret-" + marker
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
         model: Final = audit_omit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
-        response: Final = audit_omit_rig.candidate.request("POST", endpoint, _trace_body(kind, model, marker, None))
+        response: Final = audit_omit_rig.candidate.request(
+            "POST", endpoint, _trace_body(kind, model, marker, None)
+        )
         assert response.status_code == 200, response.text
         call_id: Final = response.headers["x-litellm-call-id"]
         assert targets == [expected_target], targets
@@ -1437,7 +1440,9 @@ def test_audit_identical_requests_twice_log_per_call(
             response: Final = audit_rig.candidate.request(
                 "POST",
                 endpoint,
-                _trace_body(kind, model, marker, {"trace_id": caller_trace, "session_id": caller_session}),
+                _trace_body(
+                    kind, model, marker, {"trace_id": caller_trace, "session_id": caller_session}
+                ),
                 headers=_w3c_headers(header_trace, baggage_session),
             )
             assert response.status_code == 200, f"{attempt}: {response.text}"
@@ -1590,9 +1595,7 @@ def test_audit_sink_rejection_does_not_break_the_caller(gateway: Gateway, tmp_pa
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])
-def test_audit_string_metadata_body_does_not_crash(
-    audit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str
-) -> None:
+def test_audit_string_metadata_body_does_not_crash(audit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str) -> None:
     marker: Final = "auditstr" + uuid.uuid4().hex
     provider_secret: Final = "synthetic-provider-secret-" + marker
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
@@ -1604,9 +1607,7 @@ def test_audit_string_metadata_body_does_not_crash(
         response: Final = candidate.request(
             "POST", endpoint, body, headers=_w3c_headers(uuid.uuid4().hex, "baggage-" + marker)
         )
-        assert response.status_code < 500, (
-            f"metadata string must not crash the proxy: {response.status_code} {response.text}"
-        )
+        assert response.status_code < 500, f"metadata string must not crash the proxy: {response.status_code} {response.text}"
         follow_up: Final = candidate.request(
             "POST", "/v1/chat/completions", _trace_body("chat", model, marker + "-follow", None)
         )
@@ -1614,9 +1615,7 @@ def test_audit_string_metadata_body_does_not_crash(
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])
-def test_audit_key_metadata_session_still_honoured(
-    audit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str
-) -> None:
+def test_audit_key_metadata_session_still_honoured(audit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str) -> None:
     marker: Final = "auditkey" + uuid.uuid4().hex
     provider_secret: Final = "synthetic-provider-secret-" + marker
     key_session: Final = f"key-session-{marker}"
@@ -1654,7 +1653,9 @@ def test_audit_cache_hit_call_keeps_winning_ids(
     baggage_session: Final = "baggage-" + marker
     caller_trace: Final = uuid.uuid4().hex
     caller_session: Final = f"my-session-id-{marker}"
-    metadata: Final = {"trace_id": caller_trace, "session_id": caller_session} if metadata_mode == "both" else None
+    metadata: Final = (
+        {"trace_id": caller_trace, "session_id": caller_session} if metadata_mode == "both" else None
+    )
     expected_trace: Final = caller_trace if metadata_mode == "both" else header_trace
     expected_session: Final = caller_session if metadata_mode == "both" else baggage_session
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
@@ -1663,9 +1664,7 @@ def test_audit_cache_hit_call_keeps_winning_ids(
         candidate: Final = audit_rig.candidate
         model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
-        body: Final = {
-            key: value for key, value in _trace_body(kind, model, marker, metadata).items() if key != "cache"
-        }
+        body: Final = {key: value for key, value in _trace_body(kind, model, marker, metadata).items() if key != "cache"}
         headers: Final = _w3c_headers(header_trace, baggage_session)
         first: Final = candidate.request("POST", endpoint, body, headers=headers)
         assert first.status_code == 200, first.text
@@ -1679,7 +1678,9 @@ def test_audit_cache_hit_call_keeps_winning_ids(
         span: Final = _await_span(received, audit_rig.destination, call_id)
         if metadata_mode == "both":
             assert span.trace_id.hex() == expected_trace, f"cache hit {call_id}: trace id"
-            assert _attribute(span.attributes, "session.id") == expected_session, f"cache hit {call_id}: session.id"
+            assert _attribute(span.attributes, "session.id") == expected_session, (
+                f"cache hit {call_id}: session.id"
+            )
         else:
             span_session: Final = _attribute(span.attributes, "session.id")
             print(
@@ -1702,7 +1703,9 @@ def test_audit_concurrent_requests_each_keep_their_caller_ids(audit_rig: _AuditR
         model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
         jobs: Final = tuple(
             (index, endpoint, kind, uuid.uuid4().hex, f"my-session-id-{marker}-{index}")
-            for index, (endpoint, kind, _) in tuple(enumerate(tuple(row.values for row in _AUDIT_ENDPOINTS) * 4))[:10]
+            for index, (endpoint, kind, _) in tuple(
+                enumerate(tuple(row.values for row in _AUDIT_ENDPOINTS) * 4)
+            )[:10]
         )
 
         def fire(job: tuple[int, str, str, str, str]) -> tuple[str, str, httpx.Response]:
@@ -1710,7 +1713,9 @@ def test_audit_concurrent_requests_each_keep_their_caller_ids(audit_rig: _AuditR
             response: Final = candidate.request(
                 "POST",
                 endpoint,
-                _trace_body(kind, model, f"{marker}-{index}", {"trace_id": caller_trace, "session_id": caller_session}),
+                _trace_body(
+                    kind, model, f"{marker}-{index}", {"trace_id": caller_trace, "session_id": caller_session}
+                ),
                 headers=_w3c_headers(header_trace, baggage_session),
             )
             return caller_trace, caller_session, response
@@ -1800,11 +1805,11 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
         delivered: Final = eventually(
             lambda: (
-                received.extend(accepted.get_nowait() for _ in range(accepted.qsize()))
-                or tuple(
+                received.extend(accepted.get_nowait() for _ in range(accepted.qsize())) or tuple(
                     span
                     for span in _spans(received)
-                    if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") in expected_by_call
+                    if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")
+                    in expected_by_call
                 )
             ),
             lambda spans: len(spans) >= len(answered),
@@ -1822,7 +1827,9 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
             f"each call id must arrive on exactly one span: {spans_per_call}"
         )
         for span in delivered:
-            span_call: Final = str(_attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id"))
+            span_call: Final = str(
+                _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")
+            )
             assert _attribute(span.attributes, "session.id") == expected_by_call[span_call], (
                 f"call {span_call}: session.id"
             )
@@ -1889,7 +1896,8 @@ def test_audit_surviving_worker_keeps_serving_after_kill(gateway: Gateway, tmp_p
             span: Final = _await_span(received, destination, call_id)
             assert _attribute(span.attributes, "session.id") == caller_session, f"{call_id}: session.id"
         expected_by_call: Final = {
-            response.headers["x-litellm-call-id"]: caller_session for caller_session, response in answered
+            response.headers["x-litellm-call-id"]: caller_session
+            for caller_session, response in answered
         }
         spend_rows: Final = eventually(
             lambda: read_rows(

@@ -36,7 +36,9 @@ pytestmark = [
 
 
 def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=check
+    )
 
 
 @pytest.fixture()
@@ -57,16 +59,8 @@ def offline_postgres():
     _docker("network", "create", "--internal", network)
     try:
         _docker(
-            "run",
-            "-d",
-            "--name",
-            pg,
-            "--network",
-            network,
-            "-e",
-            "POSTGRES_PASSWORD=pw",
-            "-e",
-            "POSTGRES_DB=litellm",
+            "run", "-d", "--name", pg, "--network", network,
+            "-e", "POSTGRES_PASSWORD=pw", "-e", "POSTGRES_DB=litellm",
             POSTGRES_IMAGE,
         )
         _wait_until_ready(pg)
@@ -79,19 +73,15 @@ def offline_postgres():
 def _wait_until_ready(pg: str, attempts: int = 60) -> None:
     for _ in range(attempts):
         running = _docker(
-            "ps",
-            "--filter",
-            f"name={pg}",
-            "--filter",
-            "status=running",
-            "--format",
-            "{{.Names}}",
-            check=False,
+            "ps", "--filter", f"name={pg}", "--filter", "status=running",
+            "--format", "{{.Names}}", check=False,
         ).stdout
         if pg not in running:
             logs = _docker("logs", pg, check=False).stdout + _docker("logs", pg, check=False).stderr
             pytest.fail(f"postgres container is not running:\n{logs}")
-        ready = _docker("exec", pg, "pg_isready", "-U", "postgres", "-d", "litellm", check=False)
+        ready = _docker(
+            "exec", pg, "pg_isready", "-U", "postgres", "-d", "litellm", check=False
+        )
         if ready.returncode == 0:
             return
         subprocess.run(["sleep", "1"])
@@ -100,14 +90,7 @@ def _wait_until_ready(pg: str, attempts: int = 60) -> None:
 
 def _table_count(pg: str) -> int:
     result = _docker(
-        "exec",
-        pg,
-        "psql",
-        "-U",
-        "postgres",
-        "-d",
-        "litellm",
-        "-tAc",
+        "exec", pg, "psql", "-U", "postgres", "-d", "litellm", "-tAc",
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';",
     )
     return int(result.stdout.strip() or "0")
@@ -124,20 +107,11 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
     assert IMAGE is not None
 
     migrate = _docker(
-        "run",
-        "--rm",
-        "--network",
-        network,
-        "--user",
-        NON_ROOT_UID,
-        "-e",
-        f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
-        "-e",
-        "LITELLM_MASTER_KEY=sk-offline-migration-test",
-        "-e",
-        "DISABLE_SCHEMA_UPDATE=false",
-        IMAGE,
-        *MIGRATION_ARGS,
+        "run", "--rm", "--network", network, "--user", NON_ROOT_UID,
+        "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
+        "-e", "LITELLM_MASTER_KEY=sk-offline-migration-test",
+        "-e", "DISABLE_SCHEMA_UPDATE=false",
+        IMAGE, *MIGRATION_ARGS,
         check=False,
     )
     tables = _table_count(pg)
@@ -175,15 +149,8 @@ def test_baked_query_engine_paths_resolve_for_any_uid():
     """
     assert IMAGE is not None
     probe = _docker(
-        "run",
-        "--rm",
-        "--user",
-        NON_ROOT_UID,
-        "--entrypoint",
-        "python",
-        IMAGE,
-        "-c",
-        QUERY_ENGINE_PROBE,
+        "run", "--rm", "--user", NON_ROOT_UID, "--entrypoint", "python",
+        IMAGE, "-c", QUERY_ENGINE_PROBE,
         check=False,
     )
 
@@ -213,8 +180,7 @@ def test_runtime_cache_env_not_read_only():
     assert IMAGE is not None
     env = _docker("run", "--rm", "--entrypoint", "env", IMAGE).stdout
     offenders = [
-        line
-        for line in env.splitlines()
+        line for line in env.splitlines()
         if line.startswith(("XDG_CACHE_HOME=", "XDG_DATA_HOME=", "HOME="))
         and line.split("=", 1)[1].startswith("/opt/prisma")
     ]

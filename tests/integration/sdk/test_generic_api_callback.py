@@ -70,9 +70,7 @@ async def test_generic_api_keeps_failure_arriving_during_success_batch(log_forma
                 first_flush: Final = flushes.create_task(logger.flush_queue())
                 try:
                     await first_arrived.wait()
-                    await logger.async_log_failure_event(
-                        {"standard_logging_object": {"id": "during"}}, None, None, None
-                    )
+                    await logger.async_log_failure_event({"standard_logging_object": {"id": "during"}}, None, None, None)
                 finally:
                     release.set()
                 await first_flush

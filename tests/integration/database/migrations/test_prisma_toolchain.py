@@ -116,13 +116,27 @@ def _make_incomplete_cache(cache_dir: Path) -> None:
     (cache_dir / "bin").mkdir()
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 def test_bootstrap_clears_the_cache_before_invoking_prisma(
     toolchain_env: tuple[Path, Path],
 ) -> None:
     cache_dir, log_path = toolchain_env
     _make_incomplete_cache(cache_dir)
 
-    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+    result = ensure_prisma_toolchain(
+        prisma_command="prisma", prisma_env=dict(os.environ)
+    )
 
     assert result.healed_incomplete_cache is True
     assert result.ready is True
@@ -138,18 +152,24 @@ def test_bootstrap_is_not_bounded_by_the_per_command_timeout(
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
     monkeypatch.setenv("FAKE_PRISMA_SLEEP", "3")
 
-    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+    result = ensure_prisma_toolchain(
+        prisma_command="prisma", prisma_env=dict(os.environ)
+    )
 
     assert result.ready is True
     assert len(_fake_prisma_calls(log_path)) == 1
 
 
-def test_bootstrap_stops_at_its_own_timeout(toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bootstrap_stops_at_its_own_timeout(
+    toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv(PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR, str(COMMAND_TIMEOUT_SECONDS))
     monkeypatch.setenv("FAKE_PRISMA_SLEEP", str(HUNG_BOOTSTRAP_SECONDS))
 
     started = time.monotonic()
-    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+    result = ensure_prisma_toolchain(
+        prisma_command="prisma", prisma_env=dict(os.environ)
+    )
     elapsed = time.monotonic() - started
 
     assert result.ready is False
@@ -247,6 +267,14 @@ def test_db_push_timeout_hint_names_the_per_command_budget(
     ]
 
 
+
+
+
+
+
+
+
+
 FAKE_PRISMA_MODULE_MAIN = """import json
 import sys
 
@@ -284,7 +312,9 @@ def test_run_prisma_uses_the_module_when_the_console_script_is_not_on_path(
     assert json.loads(result.stdout) == {"module_argv": ["migrate", "deploy"]}
 
 
-def test_run_prisma_prefers_the_console_script_on_path(toolchain_env: tuple[Path, Path], tmp_path: Path) -> None:
+def test_run_prisma_prefers_the_console_script_on_path(
+    toolchain_env: tuple[Path, Path], tmp_path: Path
+) -> None:
     _, log_path = toolchain_env
     module_root = _write_fake_prisma_module(tmp_path)
 
@@ -296,3 +326,11 @@ def test_run_prisma_prefers_the_console_script_on_path(toolchain_env: tuple[Path
 
     assert [call["args"] for call in _fake_prisma_calls(log_path)] == [["--version"]]
     assert "module_argv" not in result.stdout
+
+
+
+
+
+
+
+

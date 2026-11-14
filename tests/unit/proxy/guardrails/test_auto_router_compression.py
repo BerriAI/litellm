@@ -93,17 +93,13 @@ class TestPolicyForModel:
 
     def test_no_marker_deployment_returns_none(self):
         router = _FakeRouter([{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
-        assert (
-            policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
-        )
+        assert policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
 
     def test_marker_deployment_without_policy_returns_none(self):
         router = _FakeRouter(
             [{"model_name": "smart-router", "litellm_params": {"model": "auto_router/complexity_router"}}]
         )
-        assert (
-            policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
-        )
+        assert policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
 
     def test_marker_deployment_with_policy_is_found(self):
         router = _FakeRouter(
@@ -143,17 +139,14 @@ class TestPolicyForModel:
                 _marker({"auto_router_routing_compression": "headroom-default"}),
             ]
         )
-        policy = policy_for_model(
-            llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",)
-        )
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",))
         assert policy == AutoRouterCompressionPolicy(routing="headroom-default", model=None)
 
     def test_no_untagged_fallback_means_no_policy(self):
         """No matching marker means no policy, not an unrelated slice's compression."""
         router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"])])
         assert (
-            policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",))
-            is None
+            policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",)) is None
         )
 
     def test_tag_scoped_marker_takes_precedence_over_untagged(self):
@@ -165,9 +158,7 @@ class TestPolicyForModel:
                 _marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"]),
             ]
         )
-        policy = policy_for_model(
-            llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("eu",)
-        )
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("eu",))
         assert policy == AutoRouterCompressionPolicy(routing="headroom-eu", model=None)
 
 

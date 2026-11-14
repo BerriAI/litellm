@@ -133,7 +133,9 @@ async def test_dual_cache_batch_get_cache(redis_response_cache: Cache) -> None:
     dual_cache.in_memory_cache.set_cache(in_memory_key, {"source": "memory"})
     await redis_response_cache.cache.async_set_cache(redis_key, {"source": "redis"})
 
-    result: Final = await dual_cache.async_batch_get_cache(keys=[in_memory_key, redis_key, missing_key])
+    result: Final = await dual_cache.async_batch_get_cache(
+        keys=[in_memory_key, redis_key, missing_key]
+    )
 
     assert result == [{"source": "memory"}, {"source": "redis"}, None]
 
@@ -342,8 +344,12 @@ def test_redis_cache_basic(redis_response_cache: Cache) -> None:
 
 def test_redis_cache_completion(redis_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": f"redis completion {uuid.uuid4().hex}"}]
-    first: Final = completion(model="gpt-4o-mini", messages=messages, caching=True, mock_response="first")
-    cached: Final = completion(model="gpt-4o-mini", messages=messages, caching=True, mock_response="cached")
+    first: Final = completion(
+        model="gpt-4o-mini", messages=messages, caching=True, mock_response="first"
+    )
+    cached: Final = completion(
+        model="gpt-4o-mini", messages=messages, caching=True, mock_response="cached"
+    )
     changed_params: Final = completion(
         model="gpt-4o-mini",
         messages=messages,
@@ -432,7 +438,9 @@ async def test_redis_proxy_batch_redis_get_cache(redis_response_cache: Cache) ->
 
 def test_sync_cache_control_overrides(redis_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": f"sync cache control {uuid.uuid4().hex}"}]
-    first: Final = completion(model="gpt-4o-mini", messages=messages, caching=True, mock_response="cached")
+    first: Final = completion(
+        model="gpt-4o-mini", messages=messages, caching=True, mock_response="cached"
+    )
     bypassed: Final = completion(
         model="gpt-4o-mini",
         messages=messages,
@@ -458,7 +466,9 @@ def redis_search_enabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_redis_semantic_cache_acompletion(monkeypatch: pytest.MonkeyPatch, redis_search_enabled: None) -> None:
+async def test_redis_semantic_cache_acompletion(
+    monkeypatch: pytest.MonkeyPatch, redis_search_enabled: None
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "scripted-embedding-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     index_name: Final = f"semantic-{uuid.uuid4().hex}"
@@ -502,7 +512,9 @@ async def test_redis_semantic_cache_acompletion(monkeypatch: pytest.MonkeyPatch,
     assert second.choices[0].message.content == "Summer sun shines bright and warm."
 
 
-def test_redis_semantic_cache_completion(monkeypatch: pytest.MonkeyPatch, redis_search_enabled: None) -> None:
+def test_redis_semantic_cache_completion(
+    monkeypatch: pytest.MonkeyPatch, redis_search_enabled: None
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "scripted-embedding-key")
     monkeypatch.setattr(
         litellm,

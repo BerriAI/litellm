@@ -221,9 +221,7 @@ def test_non_gemini_response_keeps_original_bytes_and_mpeg_content_type() -> Non
     ("requested_model", "served_model"),
     [(GEMINI_TTS_MODEL, "served-speech-alias"), ("requested-speech-alias", GEMINI_TTS_MODEL)],
 )
-def test_gemini_response_wraps_wav_when_either_model_name_is_gemini_tts(
-    requested_model: str, served_model: str
-) -> None:
+def test_gemini_response_wraps_wav_when_either_model_name_is_gemini_tts(requested_model: str, served_model: str) -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
         model_response=_model_response(served_model, PCM_BYTES),
         model=requested_model,

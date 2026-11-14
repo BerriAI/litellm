@@ -360,12 +360,7 @@ def _burst(
 ) -> tuple[_BurstResult, ...]:
     nonce: Final = uuid.uuid4().hex
     crafted: Final = tuple(
-        (
-            f"crafted-{path}-{index}",
-            path,
-            _body(path, rejected_model, uuid.uuid4().hex, stream=index % 2 == 1),
-            open_key,
-        )
+        (f"crafted-{path}-{index}", path, _body(path, rejected_model, uuid.uuid4().hex, stream=index % 2 == 1), open_key)
         for path in (CHAT, MESSAGES, RESPONSES)
         for index in range(4)
     )

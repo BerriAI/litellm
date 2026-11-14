@@ -109,7 +109,10 @@ async def test_router_text_completion_reuses_provider_connection() -> None:
             num_retries=0,
         )
         responses: Final = tuple(
-            [await router.atext_completion(model="text-model", prompt=prompt) for prompt in prompts]
+            [
+                await router.atext_completion(model="text-model", prompt=prompt)
+                for prompt in prompts
+            ]
         )
         requests: Final = wire.drain()
         connections: Final = wire.connections()
@@ -117,7 +120,9 @@ async def test_router_text_completion_reuses_provider_connection() -> None:
     assert tuple(response.choices[0].text for response in responses) == tuple(
         f"response to {prompt}" for prompt in prompts
     )
-    assert tuple(_JSON_OBJECT.validate_json(request.body)["prompt"] for request in requests) == prompts
+    assert tuple(
+        _JSON_OBJECT.validate_json(request.body)["prompt"] for request in requests
+    ) == prompts
     assert len(requests) == len(prompts)
     assert connections == 1
 
@@ -146,7 +151,9 @@ async def test_router_raises_timeout_for_scripted_slow_endpoint() -> None:
             )
         requests: Final = wire.drain()
 
-    assert tuple(request.target for request in requests) == ("/timeout/v1/chat/completions",)
+    assert tuple(request.target for request in requests) == (
+        "/timeout/v1/chat/completions",
+    )
     assert json.loads(requests[0].body)["model"] == _MODEL
 
 

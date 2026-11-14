@@ -346,10 +346,7 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
         {
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "city",
-                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
-                },
+                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
             }
         },
         {"reasoning_effort": "low"},

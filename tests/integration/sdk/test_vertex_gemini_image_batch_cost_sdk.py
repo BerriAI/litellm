@@ -366,7 +366,9 @@ def _subprocess_environment(
         "VERTEX_API_BASE": api.url,
         "VERTEX_CREDENTIALS": credentials,
         "VERTEX_PROJECT": _PROJECT,
-        "USE_EXPLICIT_IMAGE_BATCH_RATE_OVERRIDE": ("1" if scenario.use_explicit_image_batch_rate_override else "0"),
+        "USE_EXPLICIT_IMAGE_BATCH_RATE_OVERRIDE": (
+            "1" if scenario.use_explicit_image_batch_rate_override else "0"
+        ),
         "TRANSFORM_OUTPUT": "1" if transform_output else "0",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "PYTHONPATH": python_path,
@@ -412,9 +414,9 @@ def test_aretrieve_batch_costs_native_gemini_image_tokens(
                     if line.startswith(_CALLBACK_PREFIX)
                 )
                 expected_registry_key: Final = f"vertex_ai/{_MODEL}"
-                assert registry_events == ({"key": expected_registry_key, "provider": "vertex_ai-language-models"},), (
-                    outcome.stdout
-                )
+                assert registry_events == (
+                    {"key": expected_registry_key, "provider": "vertex_ai-language-models"},
+                ), outcome.stdout
                 assert len(callback_events) == 1, (outcome.stdout, outcome.stderr)
                 event: Final = callback_events[0]
                 assert event["response_cost"] == pytest.approx(

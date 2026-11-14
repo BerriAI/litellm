@@ -37,9 +37,13 @@ from fixture_bundle import (
 NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def write_manifest(root: Path, recorded_at: datetime, *, format_version: int = BUNDLE_FORMAT_VERSION) -> None:
+def write_manifest(
+    root: Path, recorded_at: datetime, *, format_version: int = BUNDLE_FORMAT_VERSION
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    manifest = Manifest(format_version=format_version, recorded_at=recorded_at, harness_version="abc1234")
+    manifest = Manifest(
+        format_version=format_version, recorded_at=recorded_at, harness_version="abc1234"
+    )
     (root / MANIFEST_FILENAME).write_text(manifest.model_dump_json(), encoding="utf-8")
 
 
@@ -164,11 +168,9 @@ class TestRecordAndLoad:
             )
         loaded = load_bundle(root)
         assert isinstance(loaded, LoadedBundle)
-        assert [interaction.request.path for interaction in loaded.interactions[slug_for_test(key)]] == [
-            "/first",
-            "/second",
-            "/third",
-        ]
+        assert [
+            interaction.request.path for interaction in loaded.interactions[slug_for_test(key)]
+        ] == ["/first", "/second", "/third"]
 
     def test_interactions_group_per_test(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"

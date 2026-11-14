@@ -127,13 +127,7 @@ async def test_afile_retrieve_rejects_a_provider_file_without_its_size():
 
 VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"
 VLLM_ROUTER_FILE: Final = MappingProxyType(
-    {
-        "id": "file-b73f4c",
-        "bytes": 156,
-        "created_at": 1793238707,
-        "filename": "batch_requests.jsonl",
-        "purpose": "batch",
-    }
+    {"id": "file-b73f4c", "bytes": 156, "created_at": 1793238707, "filename": "batch_requests.jsonl", "purpose": "batch"}
 )
 
 

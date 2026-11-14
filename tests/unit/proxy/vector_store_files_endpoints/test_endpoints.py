@@ -134,11 +134,15 @@ async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
 ) -> None:
     managed_file_id: Final = _unified_file_id()
     expected_provider_ids: Final = tuple(
-        managed_file_id if provider_file_id == RAW_FILE_ID else provider_file_id for provider_file_id in provider_ids
+        managed_file_id if provider_file_id == RAW_FILE_ID else provider_file_id
+        for provider_file_id in provider_ids
     )
     provider_response: Final[VectorStoreFileListResponse] = {
         "object": "list",
-        "data": [_vector_store_file_row(provider_file_id) for provider_file_id in provider_ids],
+        "data": [
+            _vector_store_file_row(provider_file_id)
+            for provider_file_id in provider_ids
+        ],
         "first_id": provider_ids[0],
         "last_id": provider_ids[1],
         "has_more": True,
@@ -155,7 +159,10 @@ async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
 
     expected_response: Final[VectorStoreFileListResponse] = {
         "object": "list",
-        "data": [_vector_store_file_row(provider_file_id) for provider_file_id in expected_provider_ids],
+        "data": [
+            _vector_store_file_row(provider_file_id)
+            for provider_file_id in expected_provider_ids
+        ],
         "first_id": expected_provider_ids[0],
         "last_id": expected_provider_ids[1],
         "has_more": True,
@@ -208,14 +215,17 @@ async def test_vector_store_file_list_only_maps_round_trippable_ids() -> None:
     assert response == expected_response
 
 
-def test_vector_store_file_list_translates_managed_cursors_and_preserves_raw_after() -> None:
+def test_vector_store_file_list_translates_managed_cursors_and_preserves_raw_after() -> (
+    None
+):
     managed_file_id: Final = _unified_file_id()
 
-    assert _with_provider_file_id_cursors({"after": managed_file_id, "before": managed_file_id}) == {
-        "after": RAW_FILE_ID,
-        "before": RAW_FILE_ID,
+    assert _with_provider_file_id_cursors(
+        {"after": managed_file_id, "before": managed_file_id}
+    ) == {"after": RAW_FILE_ID, "before": RAW_FILE_ID}
+    assert _with_provider_file_id_cursors({"after": RAW_FILE_ID}) == {
+        "after": RAW_FILE_ID
     }
-    assert _with_provider_file_id_cursors({"after": RAW_FILE_ID}) == {"after": RAW_FILE_ID}
 
 
 @pytest.mark.asyncio
@@ -765,9 +775,7 @@ async def test_managed_file_id_on_a_store_holding_only_the_upload_copy_reaches_t
 
     with respx.mock(assert_all_called=False) as respx_mock:
         team_deployment: Final = respx_mock.route(host="team-openai.example")
-        upstream: Final = respx_mock.route(
-            url=f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy"
-        ).mock(
+        upstream: Final = respx_mock.route(url=f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
             side_effect=lambda request: httpx.Response(
                 200, json=dict(reply) if request.method == method else dict(_vector_store_file_row("file-proxy-copy"))
             )
@@ -782,15 +790,7 @@ async def test_managed_file_id_on_a_store_holding_only_the_upload_copy_reaches_t
             ),
             llm_router=router,
         )
-        await (
-            await route_request(
-                {**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}},
-                router,
-                None,
-                route_type,
-                user_api_key_dict=caller,
-            )
-        )
+        await (await route_request({**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}}, router, None, route_type, user_api_key_dict=caller))
 
     assert team_deployment.call_count == 0
     assert upstream.calls.last.request.method == method

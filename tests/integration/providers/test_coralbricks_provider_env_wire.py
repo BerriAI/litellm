@@ -61,12 +61,8 @@ def env_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[EnvRig]:
     with gateway_from_environment() as rig_gateway, wire_server(marker_provider()) as env_wire:
         config: Final = env_config(env_wire, directory)
         with owned_proxy_process(
-            rig_gateway,
-            directory,
-            {},
-            remove_environment=("CORALBRICKS_API_KEY", "CORALBRICKS_API_BASE"),
-            config=config,
-            workers=2,
+            rig_gateway, directory, {}, remove_environment=("CORALBRICKS_API_KEY", "CORALBRICKS_API_BASE"),
+            config=config, workers=2,
         ) as owned:
             ready(owned.gateway, CONFIG_MODEL, seconds=120)
             yield EnvRig(owned.gateway, env_wire)
@@ -82,12 +78,7 @@ def body_for(target: str, model: str, marker: str) -> dict[str, JsonValue]:
         case "/v1/responses":
             return {"model": model, "input": question, "cache": NO_CACHE}
         case "/v1/messages":
-            return {
-                "model": model,
-                "max_tokens": 64,
-                "messages": [{"role": "user", "content": question}],
-                "cache": NO_CACHE,
-            }
+            return {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": question}], "cache": NO_CACHE}
         case _:
             return {"model": model, "messages": [{"role": "user", "content": question}], "cache": NO_CACHE}
 
@@ -118,9 +109,7 @@ def row_id(target: str, marker: str, served: dict[str, JsonValue]) -> str:
     ("target", "call_type"),
     (("/v1/chat/completions", "acompletion"), ("/v1/responses", "aresponses"), ("/v1/messages", "anthropic_messages")),
 )
-def test_config_model_without_credentials_uses_the_env_key_and_base(
-    env_rig: EnvRig, target: str, call_type: str
-) -> None:
+def test_config_model_without_credentials_uses_the_env_key_and_base(env_rig: EnvRig, target: str, call_type: str) -> None:
     marker: Final = uuid.uuid4().hex
     env_rig.env_wire.drain()
     served: Final = env_rig.gateway.post(target, body_for(target, CONFIG_MODEL, marker))

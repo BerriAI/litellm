@@ -143,10 +143,7 @@ def test_namespace_keeps_its_custom_member_when_every_function_member_is_dropped
 
     merged = merge_guardrailed_tools(original, groups, [groups[0][1], groups[1][0]])
 
-    assert list(merged) == [
-        {"type": "namespace", "name": "ns", "description": "NS", "tools": [custom_member]},
-        _function("a"),
-    ]
+    assert list(merged) == [{"type": "namespace", "name": "ns", "description": "NS", "tools": [custom_member]}, _function("a")]
 
 
 def test_namespace_custom_member_is_dropped_when_the_guardrail_drops_its_chat_form():
@@ -189,10 +186,7 @@ def test_text_appended_after_the_grammar_block_lands_on_the_member_without_the_b
 
     assert merged[0]["tools"][0]["description"] == "Run a command [checked]"
     reflattened = _flat(_groups(merged))
-    assert (
-        reflattened[0]["function"]["description"]
-        == "Shell\n\nRun a command [checked]\n\nFormat:\n```lark\nstart: X\n```"
-    )
+    assert reflattened[0]["function"]["description"] == "Shell\n\nRun a command [checked]\n\nFormat:\n```lark\nstart: X\n```"
 
 
 def test_member_extras_edited_by_the_guardrail_land_on_that_member():

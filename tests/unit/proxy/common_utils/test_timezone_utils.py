@@ -153,7 +153,9 @@ def test_get_budget_reset_settings_reads_globals():
 
 
 def test_compute_budget_reset_at_applies_offset():
-    settings = BudgetResetSettings(timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0))
+    settings = BudgetResetSettings(
+        timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0)
+    )
     reset_at = compute_budget_reset_at("1d", settings)
     jerusalem = reset_at.astimezone(ZoneInfo("Asia/Jerusalem"))
     assert jerusalem.hour == 12

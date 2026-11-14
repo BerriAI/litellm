@@ -86,7 +86,9 @@ async def test_proxy_logging_pre_call_hook_load_balancing():
             assert total == 50, f"Expected 50 total calls, got {total}"
 
             min_calls = min(guardrail_1.calls, guardrail_2.calls)
-            assert min_calls >= 10, f"Expected at least 10 calls to each guardrail, got min={min_calls}"
+            assert (
+                min_calls >= 10
+            ), f"Expected at least 10 calls to each guardrail, got min={min_calls}"
 
     finally:
         litellm.callbacks = original_callbacks

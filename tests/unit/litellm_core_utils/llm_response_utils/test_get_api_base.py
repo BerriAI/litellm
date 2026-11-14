@@ -84,10 +84,7 @@ class TestDeclaredAuthenticatingProvider:
 @pytest.mark.parametrize(
     "model, expected",
     [
-        (
-            "gemini/gemini-2.5-pro",
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
-        ),
+        ("gemini/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
         ("openai/gpt-4o", "https://api.openai.com"),
     ],
 )

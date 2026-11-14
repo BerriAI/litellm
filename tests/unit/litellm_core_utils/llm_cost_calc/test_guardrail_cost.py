@@ -352,6 +352,7 @@ def test_native_trace_entry_redacts_the_pii_matches_before_they_reach_spend_logs
     assert entry["guardrail_usage"]["sensitiveInformationPolicyUnits"] == 2
 
 
+
 @pytest.mark.parametrize(("spend", "expected"), [(1.0, 0.3), (0.2, 0.2), (-1.0, 0.0)])
 def test_guardrail_share_of_spend_is_the_billed_guardrail_cost_capped_at_the_row_spend(
     spend: float, expected: float

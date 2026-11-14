@@ -52,7 +52,9 @@ def _expect_prompt_block(client: BudgetClient, key: str, subject: str) -> None:
             return
         require_successful_call(result)
         time.sleep(2)
-    pytest.fail(f"{subject} was not blocked by the shared user budget within {SECOND_KEY_BLOCK_ATTEMPTS} calls")
+    pytest.fail(
+        f"{subject} was not blocked by the shared user budget within {SECOND_KEY_BLOCK_ATTEMPTS} calls"
+    )
 
 
 class TestUserBudgetAcrossKeys:

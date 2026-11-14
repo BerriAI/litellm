@@ -293,9 +293,7 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                 "organization": _Error(
                     message=denied_message, type="team_model_access_denied", param="model", code="403"
                 ),
-                "project": _Error(
-                    message=denied_message, type="project_model_access_denied", param="model", code="403"
-                ),
+                "project": _Error(message=denied_message, type="project_model_access_denied", param="model", code="403"),
                 "user": _Error(message=denied_message, type="user_model_access_denied", param="model", code="403"),
                 "access_group": _Error(
                     message=denied_message, type="team_model_access_denied", param="model", code="403"
@@ -305,27 +303,24 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
             assert {result.kind: result.error for result in results} == expected_denials, json.dumps(
                 {result.kind: result.error.model_dump() for result in results}
             )
-            provider_requests: Final = tuple(chain.from_iterable(baseline_requests)) + tuple(
-                chain.from_iterable(result.requests for result in results)
-            )
+            provider_requests: Final = tuple(
+                chain.from_iterable(baseline_requests)
+            ) + tuple(chain.from_iterable(result.requests for result in results))
             expected_request: Final = (
                 "POST",
                 "/v1/chat/completions",
                 f"Bearer {_PROVIDER_API_KEY}",
             )
-            expected_requests: Final = (
-                tuple((*expected_request, _expected_provider_body(f"after rename {caller.kind}")) for caller in callers)
-                * 2
-            )
-            assert (
-                tuple(
-                    (
-                        request.method,
-                        request.target,
-                        request.headers["authorization"],
-                        _JSON_BODY.validate_json(request.body),
-                    )
-                    for request in provider_requests
+            expected_requests: Final = tuple(
+                (*expected_request, _expected_provider_body(f"after rename {caller.kind}"))
+                for caller in callers
+            ) * 2
+            assert tuple(
+                (
+                    request.method,
+                    request.target,
+                    request.headers["authorization"],
+                    _JSON_BODY.validate_json(request.body),
                 )
-                == expected_requests
-            )
+                for request in provider_requests
+            ) == expected_requests

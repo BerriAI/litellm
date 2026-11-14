@@ -25,7 +25,9 @@ from integration.cost_calculation.cases.openai import _responses_json_body, _res
 from pydantic import JsonValue
 
 
-def _response_for_model(response: JsonResponse, model: str, *, service_tier: str | None = None) -> JsonResponse:
+def _response_for_model(
+    response: JsonResponse, model: str, *, service_tier: str | None = None
+) -> JsonResponse:
     return response.model_copy(
         update={
             "body": {
@@ -3661,6 +3663,7 @@ AZURE_GPT_6_LUNA_STREAM: Final = CostTrackingTestCase(
 )
 
 
+
 AZURE_GPT_6_ASTRA_INPUT_TEXT: Final = CostTrackingTestCase(
     name="azure-gpt-6-astra-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -3873,6 +3876,7 @@ AZURE_GPT_6_ASTRA_STREAM: Final = CostTrackingTestCase(
 )
 
 
+
 AZURE_GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     name="azure-gpt-6.1-sol-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -4083,6 +4087,7 @@ AZURE_GPT_6_1_SOL_STREAM: Final = CostTrackingTestCase(
         spend=0.00936, input_cost=0.004416, output_cost=0.004944, prompt_tokens=1840, completion_tokens=412
     ),
 )
+
 
 
 AZURE_GPT_6_SOL_REASONING: Final = CostTrackingTestCase(
@@ -5537,6 +5542,7 @@ AZURE_GPT_6_LUNA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
 )
 
 
+
 AZURE_GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
     AZURE_GPT_6_ASTRA_INPUT_TEXT,
     "azure-gpt-6-astra-tiered_input_above_272k",
@@ -5571,6 +5577,7 @@ AZURE_GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
 )
 
 
+
 AZURE_GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
     AZURE_GPT_6_1_SOL_INPUT_TEXT,
     "azure-gpt-6.1-sol-tiered_input_above_272k",
@@ -5603,6 +5610,7 @@ AZURE_GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
     },
     ExactExpected(spend=0.657744, input_cost=0.6528, output_cost=0.004944, prompt_tokens=272000, completion_tokens=412),
 )
+
 
 
 AZURE_GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
@@ -5683,7 +5691,9 @@ AZURE_GPT_5_6_TERRA_STREAM: Final = AZURE_GPT_6_LUNA_STREAM.model_copy(
     update={
         "name": "azure-gpt-5.6-terra-stream",
         "model": "azure/gpt-5.6-terra",
-        "response": _stream_for_model(cast(SseResponse, AZURE_GPT_6_LUNA_STREAM.response), "gpt-5.6-terra-2026-07-09"),
+        "response": _stream_for_model(
+            cast(SseResponse, AZURE_GPT_6_LUNA_STREAM.response), "gpt-5.6-terra-2026-07-09"
+        ),
         "expected": ExactExpected(
             spend=0.0094864,
             input_cost=0.004048,
@@ -5844,7 +5854,9 @@ AZURE_GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
         "total_tokens": 300412,
         "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
     },
-    ExactExpected(spend=1.3281576, input_cost=1.32, output_cost=0.0081576, prompt_tokens=300000, completion_tokens=412),
+    ExactExpected(
+        spend=1.3281576, input_cost=1.32, output_cost=0.0081576, prompt_tokens=300000, completion_tokens=412
+    ),
 )
 AZURE_GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
     AZURE_GPT_5_6_TERRA_INPUT_TEXT,
@@ -6066,9 +6078,13 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_1_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
-    BridgeCostParityTestCase(native=AZURE_GPT_5_6_TERRA_INPUT_TEXT, bridged=AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=AZURE_GPT_5_6_TERRA_INPUT_TEXT, bridged=AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON
+    ),
     BridgeCostParityTestCase(native=AZURE_GPT_6_1_SOL_STREAM, bridged=AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_STREAM, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_STREAM, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
-    BridgeCostParityTestCase(native=AZURE_GPT_5_6_TERRA_STREAM, bridged=AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(
+        native=AZURE_GPT_5_6_TERRA_STREAM, bridged=AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
 )

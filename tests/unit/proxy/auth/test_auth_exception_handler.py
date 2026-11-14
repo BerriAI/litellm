@@ -225,12 +225,22 @@ async def test_handle_authentication_error_transient_outage_503_keeps_retry_word
     "prisma_error",
     [
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        UniqueViolationError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        ForeignKeyViolationError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        MissingRequiredValueError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        TableNotFoundError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        RecordNotFoundError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
     ],
 )
 async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
@@ -433,7 +443,9 @@ async def test_handle_authentication_error_budget_exceeded():
     # Test with budget exceeded error
     from litellm.exceptions import BudgetExceededError
 
-    budget_error = BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100)
+    budget_error = BudgetExceededError(
+        message="Budget exceeded", current_cost=100, max_budget=100
+    )
 
     with pytest.raises(ProxyException) as exc_info:
         await handler.handle_authentication_error(
@@ -1293,7 +1305,9 @@ async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_meta
     "auth_error,expect_traceback,expect_level",
     [
         pytest.param(
-            ProxyException(message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401),
+            ProxyException(
+                message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
+            ),
             False,
             "WARNING",
             id="proxy_exception_401_warning_no_traceback",
@@ -1325,9 +1339,7 @@ async def test_auth_failure_row_keeps_spend_logs_metadata_header_on_litellm_meta
         ),
     ],
 )
-async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
-    auth_error, expect_traceback, expect_level, caplog
-):
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, expect_level, caplog):
     """Regression for LIT-6043: expected 4xx auth rejections must not format a
     traceback via logger.exception; malformed virtual keys log at WARNING."""
     handler = UserAPIKeyAuthExceptionHandler()
@@ -1351,10 +1363,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
             try:
                 raise auth_error
             except Exception as caught:
-                with (
-                    caplog.at_level(expect_level, logger="LiteLLM Proxy"),
-                    pytest.raises((ProxyException, HTTPException)),
-                ):
+                with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
                     await handler.handle_authentication_error(
                         caught,
                         MagicMock(),

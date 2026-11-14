@@ -49,8 +49,6 @@ def _owners(*backup_paths):
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
-
-
 @pytest.fixture
 def paths(tmp_path):
     return tmp_path / "claude" / "settings.json", tmp_path / "backup.json"
@@ -59,9 +57,7 @@ def paths(tmp_path):
 def _static_configure(base_url, settings_path, owners, state_path=None):
     """`lite configure claude --api-key`'s shape: a virtual key as a static token, no pinned model."""
     state = state_path if state_path is not None else settings_path.parent.parent / "state.json"
-    configure_claude_settings(
-        base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners
-    )
+    configure_claude_settings(base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners)
 
 
 class TestConfigureClaudeSettings:
@@ -106,9 +102,7 @@ class TestConfigureClaudeSettings:
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(
-            json.dumps(
-                {"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}}
-            )
+            json.dumps({"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}})
         )
 
         _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
@@ -870,9 +864,7 @@ class TestStatusLine:
         assert "Keeping the status line" in capsys.readouterr().err
 
     @pytest.mark.parametrize("package_version", ("unknown", "", "invalid-version"))
-    @pytest.mark.parametrize(
-        "existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n")
-    )
+    @pytest.mark.parametrize("existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n"))
     def test_an_unknown_cli_version_can_install_and_refresh_an_unversioned_footer(
         self, tmp_path: Path, package_version: str, existing: bytes | None
     ) -> None:
@@ -917,9 +909,7 @@ class TestStatusLine:
             return install_statusline_script(script, package_version=second_version)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            first: Final = pool.submit(
-                install_statusline_script, script, package_version=first_version, write=paused_write
-            )
+            first: Final = pool.submit(install_statusline_script, script, package_version=first_version, write=paused_write)
             try:
                 assert first_writing.wait(5), "First installer did not reach the write"
                 second: Final = pool.submit(second_install)
@@ -931,10 +921,7 @@ class TestStatusLine:
             assert first.result(timeout=5) == statusline_command(script)
             assert second.result(timeout=5) == statusline_command(script)
 
-        assert (
-            script.read_bytes()
-            == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
-        )
+        assert script.read_bytes() == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
 
     def test_a_failed_install_keeps_the_footer_and_releases_the_lock(self, tmp_path: Path) -> None:
         script: Final = tmp_path / "statusline.py"

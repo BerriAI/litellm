@@ -121,12 +121,7 @@ def chat_reply(identity: str, model: str, text: str = ANSWER) -> Reply:
 
 
 def chat_stream_reply(identity: str, model: str, text: str = ANSWER, pause: float = 0) -> Reply:
-    chunk: Final[dict[str, JsonValue]] = {
-        "id": identity,
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": model,
-    }
+    chunk: Final[dict[str, JsonValue]] = {"id": identity, "object": "chat.completion.chunk", "created": 1, "model": model}
     frames: Final[tuple[dict[str, JsonValue], ...]] = (
         {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]},
         {**chunk, "choices": [{"index": 0, "delta": {"content": text}}]},

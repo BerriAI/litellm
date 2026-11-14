@@ -106,13 +106,7 @@ def jsonl(*lines: bytes) -> bytes:
 
 
 def upload(
-    gateway: Gateway,
-    route: Route | None,
-    model: str,
-    content: bytes,
-    *,
-    client: httpx.Client | None = None,
-    **extra: str,
+    gateway: Gateway, route: Route | None, model: str, content: bytes, *, client: httpx.Client | None = None, **extra: str
 ) -> httpx.Response:
     fields: Final = {"purpose": "batch", **({route: model} if route is not None else {}), **extra}
     return (client or gateway.client).post(

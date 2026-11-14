@@ -76,7 +76,9 @@ def test_get_routes_invalid_method_405(client):
     """POST against the GET-only /routes endpoint is rejected (error path)."""
     response = client.post("/routes")
     assert response.status_code == 405
-    body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    body = response.json() if response.headers.get("content-type", "").startswith(
+        "application/json"
+    ) else {}
     assert isinstance(body, dict)
 
 
@@ -332,7 +334,9 @@ def test_get_image_invalid_local_path_falls_back(client, monkeypatch):
     assert response.status_code == 200
     shape = {
         "status": response.status_code,
-        "media_type_image": response.headers.get("content-type", "").startswith("image/"),
+        "media_type_image": response.headers.get("content-type", "").startswith(
+            "image/"
+        ),
         "has_body": len(response.content) > 0,
     }
     assert shape == {"status": 200, "media_type_image": True, "has_body": True}

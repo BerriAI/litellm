@@ -445,9 +445,7 @@ async def test_only_proxy_admin_creates_a_key_whose_logging_references_a_credent
         "credential_list",
         [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
     )
-    reference: Final = {
-        "logging": [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]
-    }
+    reference: Final = {"logging": [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]}
     calls: list[dict[str, object]] = []
 
     async def generate_key(**kwargs: object) -> dict[str, object]:

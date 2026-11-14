@@ -22,16 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Final, Literal
 
 import pytest
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    TypeAdapter,
-    ValidationError,
-    field_validator,
-)
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
 from e2e_metadata import step
@@ -154,6 +145,7 @@ class LangfuseObservation(BaseModel):
     usage: object | None = None
     usage_details: object | None = Field(default=None, alias="usageDetails")
     model: str | None = None
+
 
     @field_validator("input", "output", "metadata", mode="before")
     @classmethod

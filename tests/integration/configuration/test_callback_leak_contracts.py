@@ -65,9 +65,9 @@ def _grows(series: tuple[int, ...]) -> bool:
 
 def _grows_only_in_last_interval(series: tuple[int, ...]) -> bool:
     deltas: Final = _deltas(series)
-    return all(delta >= 0 for delta in deltas) and [index for index, delta in enumerate(deltas) if delta > 0] == [
-        len(deltas) - 1
-    ]
+    return all(delta >= 0 for delta in deltas) and [
+        index for index, delta in enumerate(deltas) if delta > 0
+    ] == [len(deltas) - 1]
 
 
 def _leaking(samples: Samples) -> dict[str, tuple[int, ...]]:

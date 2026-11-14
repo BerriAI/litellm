@@ -28,10 +28,9 @@ async def test_hosted_vllm_omits_empty_tools_at_http_edge(
     tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
     messages: Final = [
         {"role": "user", "content": "Look up x"},
-        {
-            "role": "assistant",
-            "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
-        },
+        {"role": "assistant", "tool_calls": [
+            {"id": "call_123", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        ]},
         {"role": "tool", "tool_call_id": "call_123", "content": "OK"},
         {"role": "user", "content": "Say OK"},
     ]
@@ -42,45 +41,30 @@ async def test_hosted_vllm_omits_empty_tools_at_http_edge(
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.put_nowait(request)
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "test",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
-            },
-        )
+        return httpx.Response(200, json={
+            "id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "test",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        })
 
     if asynchronous:
         async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
         try:
             await litellm.acompletion(
-                model="hosted_vllm/test",
-                api_base="https://upstream.test/v1",
-                api_key="test-key",
-                messages=messages,
-                client=async_client,
-                **options,
+                model="hosted_vllm/test", api_base="https://upstream.test/v1", api_key="test-key",
+                messages=messages, client=async_client, **options,
             )
         finally:
             await async_client.close()
     else:
         with httpx.Client(transport=httpx.MockTransport(respond)) as sync_client:
             litellm.completion(
-                model="hosted_vllm/test",
-                api_base="https://upstream.test/v1",
-                api_key="test-key",
-                messages=messages,
-                client=HTTPHandler(client=sync_client),
-                **options,
+                model="hosted_vllm/test", api_base="https://upstream.test/v1", api_key="test-key",
+                messages=messages, client=HTTPHandler(client=sync_client), **options,
             )
     sent: Final = requests.get_nowait()
     assert str(sent.url) == "https://upstream.test/v1/chat/completions"
     assert json.loads(sent.content) == {
-        "model": "test",
-        "messages": messages,
+        "model": "test", "messages": messages,
         **({"tools": tools} if tools_state == "nonempty" else {}),
         **({"tool_choice": "required"} if dependent_options and tools_state == "nonempty" else {}),
         **({"parallel_tool_calls": False} if dependent_options and tools_state != "empty" else {}),

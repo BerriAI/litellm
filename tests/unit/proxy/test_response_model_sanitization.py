@@ -672,12 +672,7 @@ def test_restamp_streaming_chunk_rewrites_nested_model_when_lifecycle_event_kept
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
-    partial_response = {
-        "id": "resp_test",
-        "object": "response",
-        "status": "in_progress",
-        "model": "gpt-backend-2026-01-01",
-    }
+    partial_response = {"id": "resp_test", "object": "response", "status": "in_progress", "model": "gpt-backend-2026-01-01"}
     chunk = OpenAIResponsesAPIConfig().transform_streaming_response(
         model="gpt-backend",
         parsed_chunk={"type": "response.created", "sequence_number": 0, "response": partial_response},

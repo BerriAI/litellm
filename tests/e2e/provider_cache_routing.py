@@ -51,9 +51,7 @@ def bedrock_mount(params: LiteLLMParamsBody) -> str | None:
 
 
 def route_bedrock(
-    params: LiteLLMParamsBody,
-    base_for: Callable[[str], str | None],
-    mode: ModelMode | None,
+    params: LiteLLMParamsBody, base_for: Callable[[str], str | None], mode: ModelMode | None,
 ) -> LiteLLMParamsBody:
     """Deployments that carry their own AWS identity stay off the edge. The edge
     re-signs with the run pod's role, so routing an `aws_role_name` deployment
@@ -72,11 +70,7 @@ def route_bedrock(
 
 
 def route_cache_model(
-    params: LiteLLMParamsBody,
-    base_for: Callable[[str], str | None],
-    *,
-    enabled: bool,
-    mode: ModelMode | None = None,
+    params: LiteLLMParamsBody, base_for: Callable[[str], str | None], *, enabled: bool, mode: ModelMode | None = None,
 ) -> LiteLLMParamsBody:
     if not enabled or LIVE_PROVIDER_REQUIRED.get() or params.mock_response is not None:
         return params

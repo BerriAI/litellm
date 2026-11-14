@@ -200,8 +200,6 @@ def test_count_tokens_whose_upstream_answers_503_stays_503_api_error(rig: _Rig) 
     assert error["type"] == "api_error", response.text
     assert "scripted 503" in string_value(error["message"]), response.text
     assert rig.targets_called() == (_COUNT_TOKENS_TARGET,)
-
-
 @pytest.mark.parametrize(
     ("group", "status", "error_type"),
     (
