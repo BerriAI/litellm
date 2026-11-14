@@ -368,6 +368,43 @@ def test_bedrock_system_prompt_variants_keep_continue_message(
     ]
 
 
+def test_bedrock_tool_result_s3_video_reaches_the_converse_request_as_a_video_block() -> None:
+    clip: Final = "s3://media-bucket/clips/demo.mp4"
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.amazon.nova-2-lite-v1:0",
+        messages=[
+            {"role": "user", "content": "What happens in the clip?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fetch_clip", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "video attached"}, {"type": "file", "file": {"file_id": clip}}],
+            },
+        ],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "fetch_clip", "parameters": {"type": "object", "properties": {}}},
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][-1]["content"][0]["toolResult"]["content"] == [
+        {"text": "video attached"},
+        {"video": {"format": "mp4", "source": {"s3Location": {"uri": clip}}}},
+    ]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_json_schema_description_is_sent_in_request(respx_mock: respx.Router) -> None:
     description: Final = "Find the meaning inside a poem"
@@ -4271,6 +4308,18 @@ def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMess
             ]
         case "system_after_assistant":
             return [question, {"role": "assistant", "content": "Checking."}, {"role": "system", "content": guarded}]
+        case "system_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+            ]
+        case "assistant_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "assistant", "content": guarded},
+            ]
     raise AssertionError(placement)
 
 
@@ -4399,6 +4448,90 @@ async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_
         block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
     )
     assert sent_guarded_texts == guarded_texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["system_after_unanswered_tool_call", "assistant_after_unanswered_tool_call"])
+async def test_guarded_part_after_an_unanswered_tool_call_without_tools_keeps_the_full_input_check(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert any(_GUARDED_PART_TEXT in block.get("text", "") for block in sent_blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("system_content", "keeps_guard_content"),
+    [
+        ("Be brief.", True),
+        ([{"type": "text", "text": "Be brief."}], True),
+        ("", False),
+        ([{"type": "text", "text": ""}], False),
+    ],
+    ids=["string", "text_part", "empty_string", "empty_text_part"],
+)
+async def test_a_trailing_system_turn_with_text_to_guard_keeps_a_guarded_assistant_part_guarded(
+    use_async: bool, system_content: object, keeps_guard_content: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+            {"role": "system", "content": system_content},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
+    assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_guarded_part_sent_as_text_keeps_its_cache_point(use_async: bool):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "system",
+                "content": [
+                    {"type": "guarded_text", "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}}
+                ],
+            },
+            {"role": "assistant", "content": "Ok."},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    text_index: Final = sent_blocks.index({"text": _GUARDED_PART_TEXT})
+    assert sent_blocks[text_index + 1] == {"cachePoint": {"type": "default"}}
 
 
 @pytest.mark.asyncio

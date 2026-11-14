@@ -251,6 +251,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
         self._done_tool_search_call_ids: frozenset[str] = frozenset()
 
+    def close(self) -> None:
+        self.litellm_custom_stream_wrapper.close()
+
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
 
