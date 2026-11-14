@@ -5956,6 +5956,19 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     return _SETTINGS_MAPPING.validate_python(value)
 
 
+def _warn_about_removed_accounting_settings(settings: Mapping[str, object]) -> None:
+    removed: Final = sorted(
+        key for key in settings if key == "accounting_capture" or key.startswith("accounting_sync_ack")
+    )
+    if not removed:
+        return
+    verbose_proxy_logger.warning(
+        "Ignoring removed general_settings keys %s. They have no effect whatever their values, since usage "
+        "accounting no longer reads them, and are safe to delete from the config.",
+        ", ".join(removed),
+    )
+
+
 _SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
 _ENVIRONMENT_VALUES: Final = TypeAdapter(Mapping[str, str])
 
@@ -7479,6 +7492,7 @@ class ProxyConfig:
             initialize_sentry()
 
         typed_general_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+        _warn_about_removed_accounting_settings(typed_general_settings)
         ConfigGeneralSettings.model_validate(
             MappingProxyType(
                 {

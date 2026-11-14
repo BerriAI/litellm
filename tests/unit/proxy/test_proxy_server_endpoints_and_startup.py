@@ -4104,6 +4104,49 @@ async def test_load_config_warns_that_the_source_login_limit_is_off_without_trus
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "removed"),
+    [
+        ({"accounting_capture": {"flush_interval_seconds": 7}}, ("accounting_capture",)),
+        ({"accounting_sync_ack": False}, ("accounting_sync_ack",)),
+        ({"accounting_sync_ack_timeout_seconds": 31.5}, ("accounting_sync_ack_timeout_seconds",)),
+        ({"accounting_sync_ack_failure_policy": "log-only-value"}, ("accounting_sync_ack_failure_policy",)),
+        (
+            {
+                "use_spend_logs_ledger": True,
+                "accounting_sync_ack_failure_policy": "fail_closed",
+                "accounting_capture": None,
+                "accounting_sync_ack": True,
+            },
+            ("accounting_capture", "accounting_sync_ack", "accounting_sync_ack_failure_policy"),
+        ),
+        ({"use_spend_logs_ledger": False, "disable_spend_logs": False}, ()),
+        ({}, ()),
+    ],
+)
+async def test_load_config_warns_about_removed_accounting_settings_by_name_only(
+    tmp_path, caplog, general_settings: dict[str, object], removed: tuple[str, ...]
+):
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    warned: Final = tuple(
+        record.getMessage().removeprefix("Ignoring removed general_settings keys ").partition(". They have")[0]
+        for record in caplog.records
+        if record.getMessage().startswith("Ignoring removed general_settings keys ")
+    )
+    assert warned == ((", ".join(removed),) if removed else ())
+    assert not any(marker in caplog.text for marker in ("flush_interval_seconds", "31.5", "log-only-value"))
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
