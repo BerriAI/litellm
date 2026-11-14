@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 
 class Scope(str, Enum):
@@ -60,6 +60,17 @@ class UnknownParent:
 
 
 RolePolicyError: TypeAlias = UnknownScope | UnknownParent
+
+
+class Policy(Protocol):
+    @property
+    def names(self) -> frozenset[str]: ...
+
+    def scopes_for(self, role: str) -> frozenset[Scope]: ...
+
+    def known(self, raw: tuple[str, ...]) -> frozenset[str]: ...
+
+    def grant(self, roles: frozenset[str]) -> frozenset[Scope]: ...
 
 
 class RolePolicy:
@@ -173,7 +184,7 @@ def parse_scopes(raw: tuple[str, ...] | None) -> frozenset[Scope] | None:
 
 
 def build_principal(
-    policy: RolePolicy,
+    policy: Policy,
     subject: str,
     email: str | None,
     roles: frozenset[str],

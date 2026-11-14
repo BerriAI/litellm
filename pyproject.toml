@@ -56,6 +56,10 @@ Documentation = "https://docs.litellm.ai"
 [project.optional-dependencies]
 switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "sqlalchemy>=2.0.49,<2.1",
+    "alembic>=1.18.4,<2.0",
+    "psycopg>=3.2,<4.0",
+    "psycopg-binary>=3.2,<4.0",
     "casbin==1.43.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
@@ -264,6 +268,8 @@ admin-mcp = [
     "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz#sha256=5803a20a00a18177f4591706956f31be311879543049b8b38143ad90bb1cb0a6 ; python_version >= '3.12'",
 ]
 proxy-dev = [
+    "sqlalchemy==2.0.49",
+    "alembic==1.18.4",
     { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
