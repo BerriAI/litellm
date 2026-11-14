@@ -1,3 +1,4 @@
+import json
 import logging
 import logging.config
 import sys
@@ -865,3 +866,61 @@ def test_redact_internal_details_from_client_message_respects_disable_flag():
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
         text = "config file /etc/litellm/secrets/db.yaml"
         assert redact_internal_details_from_client_message(text) == text
+
+
+_LARGE_CLEAN_PAYLOAD: Final = json.dumps(
+    {"choices": [{"message": {"content": "ok" * 32768, "role": "assistant"}}], "usage": {"total_tokens": 3}}
+)
+_LARGE_SOLID_RUN: Final = "x" * 65536
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_structured_value_verdicts_match_across_backends(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
+    """The rendered-form recheck decides `REDACTED` from the key context alone, so
+    its verdict must be identical to a full rendered scan for every input shape."""
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    assert redact_structured_value("body", _LARGE_CLEAN_PAYLOAD) == _LARGE_CLEAN_PAYLOAD
+    # key-name patterns fire on long values whose first run clears the value class;
+    # a leading `{` is excluded by that class, so a JSON payload stays as-is
+    assert redact_structured_value("api_key", _LARGE_SOLID_RUN) == "REDACTED"
+    assert redact_structured_value("api_key", _LARGE_CLEAN_PAYLOAD) == _LARGE_CLEAN_PAYLOAD
+    assert redact_structured_value("master_key", _LARGE_SOLID_RUN) == "REDACTED"
+    assert redact_structured_value("auth_token", _LARGE_SOLID_RUN) == "REDACTED"
+    # a value shorter than the 8-char minimum run stays clean under key-shaped keys
+    assert redact_structured_value("api_key", "abc") == "abc"
+    # a class-excluded character inside the first run keeps the value clean
+    assert redact_structured_value("api_key", "a b cdefghij") == "a b cdefghij"
+    # an empty value stays clean under a key-shaped key
+    assert redact_structured_value("api_key", "") == ""
+    # a secret inside the value is caught by the value-only scan
+    assert redact_structured_value("body", f"prefix {SECRET} suffix") == "prefix REDACTED suffix"
+    # the service-account blob is caught from the value alone and from the key text
+    blob = '{"type": "service_account", "project_id": "p"}'
+    assert redact_structured_value("dump", blob) == "REDACTED"
+    assert redact_structured_value("dump {", blob) == "REDACTED"
+    # a PEM block whose head sits in the key and whose tail sits in the value
+    # must still be caught even though the value-only scan sees half of it
+    pem_head = "-----BEGIN PRIVATE KEY-----"
+    assert redact_structured_value(pem_head, "abc -----END RSA PRIVATE KEY----- def") == "REDACTED"
+
+
+def test_structured_value_does_not_rescan_a_large_clean_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One JSON log record can carry request payloads of hundreds of KB as extra
+    fields; redacting them scans the value once as a value, and the rendered-form
+    recheck must not pay a second full scan just to re-read the key context."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    from litellm.litellm_core_utils import secret_redaction as sr
+
+    scanned = 0
+    real = sr.python_redact_string
+
+    def counting(value: str) -> str:
+        nonlocal scanned
+        scanned += len(value)
+        return real(value)
+
+    monkeypatch.setattr(sr, "python_redact_string", counting)
+    result = sr.python_redact_structured_value("body", _LARGE_CLEAN_PAYLOAD)
+    assert result == _LARGE_CLEAN_PAYLOAD
+    # the value scan plus a short key-context probe, not a second full scan
+    assert scanned < len(_LARGE_CLEAN_PAYLOAD) + len("body") + 64, f"scanned {scanned} chars"

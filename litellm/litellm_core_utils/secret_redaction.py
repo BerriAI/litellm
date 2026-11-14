@@ -180,6 +180,9 @@ def redact_internal_details(value: str) -> str:
     )
 
 
+_PROBE_VALUE_CHARS: Final = 8  # the longest {n,} run the key-name patterns ask of a value
+
+
 def python_redact_structured_value(key: str | None, value: str) -> str:
     """Scrub *value* as it appeared under *key* inside a structured record.
 
@@ -192,8 +195,18 @@ def python_redact_structured_value(key: str | None, value: str) -> str:
     scrubbed: Final = python_redact_string(value)
     if scrubbed != value or key is None:
         return scrubbed
-    rendered: Final = f"'{key}': '{value}'"
-    return REDACTED if python_redact_string(rendered) != rendered else value
+    if "{" in key or "-----" in key:
+        # The service-account blob (anchored on `{`) and the PEM block (bridged
+        # on `-----`) can span the `': '` separator, so only the whole rendered
+        # string decides them.
+        rendered: Final = f"'{key}': '{value}'"
+        return REDACTED if python_redact_string(rendered) != rendered else value
+    # The value is clean, so a match the rendered form adds must start in the key
+    # text and cross `': '` through a `\s*[:=]\s*['\"]?` gap. Re-rendering the key
+    # with the first _PROBE_VALUE_CHARS of the value decides that without
+    # rescanning the whole value.
+    probe: Final = f"'{key}': '{value[:_PROBE_VALUE_CHARS]}'"
+    return value if python_redact_string(probe) == probe else REDACTED
 
 
 _python_redact_structured_value = python_redact_structured_value
