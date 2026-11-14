@@ -128,16 +128,42 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["reasoning_effort"] == reasoning_effort
 
 
-def test_get_optional_params_reads_a_bare_string_allowlist_as_one_param_name(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "allowlist",
+    ["user", "seed, user", {"user": True}],
+    ids=["bare-string", "comma-separated", "dict"],
+)
+def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
+    monkeypatch: pytest.MonkeyPatch, allowlist: str | dict[str, bool]
+):
     monkeypatch.setattr(litellm, "drop_params", False)
     optional_params: Final = get_optional_params(
         model="cf/llama-3.1-70b-instruct",
         custom_llm_provider="cloudflare",
-        allowed_openai_params="user",
+        allowed_openai_params=allowlist,
         user="end-user-1",
     )
 
     assert optional_params["user"] == "end-user-1"
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [["dimensions"], "dimensions", "dimensions,user", {"dimensions": True}],
+    ids=["list", "bare-string", "comma-separated", "dict"],
+)
+def test_get_optional_params_embeddings_keeps_dimensions_the_allowlist_names(
+    allowlist: list[str] | str | dict[str, bool],
+):
+    optional_params: Final = get_optional_params_embeddings(
+        model="text-embedding-ada-002",
+        custom_llm_provider="openai",
+        dimensions=256,
+        allowed_openai_params=allowlist,
+        drop_params=False,
+    )
+
+    assert optional_params["dimensions"] == 256
 
 
 def test_allowed_openai_params_does_not_forward_unset_params():

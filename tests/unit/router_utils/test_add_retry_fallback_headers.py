@@ -10,10 +10,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     complexity_router_decision_headers,
     ensure_response_additional_headers,
+    get_fallback_error_info,
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.types.decisions import DecisionsResponse
 
 
@@ -206,6 +208,29 @@ def test_add_fallback_headers_serializes_fallback_errors():
         )
         == fallback_errors
     )
+
+
+class _ProviderTypedError(Exception):
+    type = "invalid_request_error"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (
+            UnsupportedParamsError(
+                message="mistral does not support parameters: ['presence_penalty']",
+                llm_provider="mistral",
+                model="mistral-large-latest",
+            ),
+            "UnsupportedParamsError",
+        ),
+        (_ProviderTypedError("bad request"), "invalid_request_error"),
+    ],
+    ids=["no-provider-type", "provider-type"],
+)
+def test_get_fallback_error_info_names_the_error_type_or_its_class(error: Exception, expected_type: str):
+    assert get_fallback_error_info(error)["type"] == expected_type
 
 
 def test_add_retry_headers_to_streaming_wrapper():

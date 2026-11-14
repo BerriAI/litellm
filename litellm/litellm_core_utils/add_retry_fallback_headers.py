@@ -249,7 +249,7 @@ def _ensure_additional_headers_dict(
 
 def get_fallback_error_info(error: Exception) -> FallbackErrorInfo:
     message: Final = cast(object, getattr(error, "message", str(error)))
-    error_type: Final = cast(object, getattr(error, "type", error.__class__.__name__))
+    error_type: Final = cast(object, getattr(error, "type", None)) or error.__class__.__name__
     param: Final = cast(object, getattr(error, "param", None))
     code: Final = cast(object, getattr(error, "status_code", getattr(error, "code", None)))
     return FallbackErrorInfo(
