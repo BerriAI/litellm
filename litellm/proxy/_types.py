@@ -15,9 +15,14 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     NonNegativeInt,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
     field_validator,
     model_validator,
 )
@@ -25,6 +30,7 @@ from typing_extensions import (
     NotRequired,
     ReadOnly,
     Required,
+    Self,
     TypedDict,
 )
 
@@ -37,6 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.models.budget import BudgetLimits
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -724,6 +731,18 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            "/management/v1/customer_organizations",
+            "/management/v1/customer_organizations/daily/activity/aggregated",
+            "/management/v1/customer_organizations/{customer_org_id}",
+            "/management/v1/customer_organizations/daily/activity",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets",
+            "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}",
+            "/management/v1/customer_teams",
+            "/management/v1/customer_teams/{customer_team_id}",
+            "/management/v1/customer_teams/daily/activity",
+            "/management/v1/customer_members",
+            "/management/v1/customer_members/{customer_member_id}",
+            "/management/v1/customer_members/daily/activity",
         ]
         + key_management_routes
         + mcp_management_routes
@@ -879,6 +898,7 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/management/v1/customer_budget_increase_requests",
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
@@ -1841,6 +1861,15 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
+    )
+
+
+class BudgetWriteRequest(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
+    budget_limits: BudgetLimits | None = Field(
+        default=None,
+        description="Independent budget windows. Omit to preserve, or pass null or an empty list to clear.",
     )
 
 
@@ -2865,7 +2894,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     allowed_client_side_s3_buckets: tuple[str, ...] | None = Field(
         None,
-        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed",
+        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed",
     )
     allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = Field(
         None,
@@ -2939,8 +2968,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
     redact_tokens_in_spend_logs: bool = Field(
-        True,
-        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
+        False,
+        description="Set True to mask token-shaped secrets in stored spend log request and response content. Default is False.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
@@ -3334,6 +3363,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     metadata: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -3491,6 +3521,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+    _sent_metadata: bool = PrivateAttr(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -3505,6 +3536,18 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_whether_metadata_was_sent(cls, values: object, handler: ModelWrapValidatorHandler[Self]) -> Self:
+        sent_metadata: Final = not isinstance(values, Mapping) or "metadata" in values
+        request: Final = handler(values)
+        request._sent_metadata = sent_metadata
+        return request
+
+    @property
+    def sent_metadata(self) -> bool:
+        return self._sent_metadata
 
 
 class DeleteProjectRequest(LiteLLMPydanticObjectBase):
@@ -3593,6 +3636,13 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
     response: list[LiteLLM_SpendLogs | Any] | None = None
 
 
+def _none_when_invalid(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
@@ -3607,7 +3657,14 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
 
     tools: list[dict] | None = None
+    tool_choice: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
+    additional_drop_params: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     system: Any | None = None
+    thinking: JsonValue = None
+    reasoning_effort: JsonValue = None
+    parallel_tool_calls: JsonValue = None
+    response_format: JsonValue = None
+    web_search_options: JsonValue = None
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
@@ -3847,6 +3904,13 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_usage: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]
@@ -4488,6 +4552,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
     skill_names: tuple[str, ...] = ()
+    vector_store_ids: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4527,6 +4592,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_skill_names: tuple[str, ...] | None = None
+    access_group_vector_store_ids: tuple[str, ...] | None = None
     # Listed group ids with no row; skill grants are suspended while this is non-empty.
     unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
@@ -4644,7 +4710,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     Headers a user can pass that will get added to litellm metadata for the request
     """
 
-    spend_logs_metadata: dict | None
+    spend_logs_metadata: ReadOnly[object]
     agent_id: str | None
     trace_id: str | None
     session_id: str | None
@@ -5390,6 +5456,12 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
     agent_id: str
 
 
+class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    customer_member_id: ReadOnly[str]
+    customer_team_id: ReadOnly[str]
+    customer_org_id: ReadOnly[str]
+
+
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database
@@ -5406,6 +5478,9 @@ class DBSpendUpdateTransactions(TypedDict):
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
+    customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

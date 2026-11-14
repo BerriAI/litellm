@@ -25,8 +25,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.redis.stores.router_session_pins import RouterSessionPinStore
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -34,8 +33,12 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.dotprompt import prompt_initializer as dotprompt_initializer
+from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
+from litellm.litellm_core_utils import litellm_logging
 from litellm.router import as_output_cap, stamped_client_ceiling
 from litellm.router_api import RoutingContext
+from tests.unit.redis.stores.router_session_pins_memory import memory_pins
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     CUSTOMIZATION_CAPABILITY,
     GATED_AUTO_ROUTER_CAPABILITIES,
@@ -88,6 +91,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TrainedTierArtifact,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -3312,7 +3316,7 @@ class TestCapabilityClassifier:
         bypass: Literal["literal_keyword_match", "session_affinity_pin", "housekeeping"],
     ) -> None:
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(_capability_reply(p_solve=0.8)))
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router: Final = self._router(
             mock_router_instance,
             session_affinity=bypass == "session_affinity_pin",
@@ -5524,6 +5528,143 @@ class TestRouterPreRoutingSharedAliasName:
 
         assert not any(key.startswith("_alias_marker") for key in sent)
 
+_PROMPT_TIER_API_BASE: Final = "https://prompt-tier.test/v1"
+_PROMPT_TIER_SETTINGS: Final = MappingProxyType(
+    {
+        "quick": MappingProxyType({"temperature": 0.42, "max_tokens": 31}),
+        "deep": MappingProxyType({"temperature": 0.82, "max_tokens": 63}),
+    }
+)
+
+
+@pytest.fixture
+def langfuse_prompt_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-prompt-tier")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-prompt-tier")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://langfuse-prompt-tier.test")
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    langfuse_client_init.cache_clear()
+    yield
+    langfuse_client_init.cache_clear()
+
+
+def _prompt_tier_router(integration: Literal["dotprompt", "langfuse"]) -> Router:
+    def tier_deployment(tier: str) -> Mapping[str, object]:
+        return {
+            "model_name": tier,
+            "litellm_params": {
+                "model": f"{'langfuse/' if integration == 'langfuse' else ''}openai/{tier}-tier",
+                "api_base": _PROMPT_TIER_API_BASE,
+                "api_key": "test-key",
+                **({"prompt_id": f"{tier}-prompt"} if integration == "langfuse" else {}),
+            },
+            "model_info": {"max_output_tokens": 4096},
+        }
+
+    tiers: Final = {
+        tier_name: (
+            tier
+            if integration == "langfuse"
+            else {"model_name": tier, "litellm_params": {"prompt_id": f"{tier}-prompt"}}
+        )
+        for tier_name, tier in (("SIMPLE", "quick"), ("REASONING", "deep"))
+    }
+    return Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": "quick",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic",
+                        "context_compaction": False,
+                        "keyword_tier_rules": [
+                            {"keywords": ["markerquick"], "tier": "SIMPLE"},
+                            {"keywords": ["markerdeep"], "tier": "REASONING"},
+                        ],
+                        "tiers": tiers,
+                    },
+                },
+            },
+            tier_deployment("quick"),
+            tier_deployment("deep"),
+        ]
+    )
+
+
+def _registered_dotprompt(name: str, settings: Mapping[str, object], ignore_settings: bool) -> CustomLogger:
+    frontmatter: Final = "".join(f"{key}: {value}\n" for key, value in settings.items())
+    params: Final = PromptLiteLLMParams(
+        prompt_id=f"{name}-prompt",
+        prompt_integration="dotprompt",
+        dotprompt_content=f"---\n{frontmatter}---\nSystem: Prompt {name}.\n",
+        ignore_prompt_manager_optional_params=ignore_settings,
+    )
+    spec: Final = PromptSpec(
+        prompt_id=f"{name}-prompt", litellm_params=params, prompt_info=PromptInfo(prompt_type="config")
+    )
+    return dotprompt_initializer(params, spec)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("langfuse_prompt_env")
+@pytest.mark.parametrize(
+    ("integration", "ignore_settings"),
+    [("dotprompt", False), ("dotprompt", True), ("langfuse", False)],
+    ids=["dotprompt", "dotprompt-ignoring-settings", "langfuse"],
+)
+@pytest.mark.parametrize("tier", ["quick", "deep"])
+async def test_a_tiers_selected_prompt_beats_the_tier_output_ceiling_unless_it_ignores_its_settings(
+    monkeypatch: pytest.MonkeyPatch, integration: Literal["dotprompt", "langfuse"], ignore_settings: bool, tier: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if integration == "dotprompt":
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [
+                _registered_dotprompt(name, settings, ignore_settings)
+                for name, settings in _PROMPT_TIER_SETTINGS.items()
+            ],
+        )
+    router: Final = _prompt_tier_router(integration)
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+        for name, settings in _PROMPT_TIER_SETTINGS.items():
+            upstream.get(host="langfuse-prompt-tier.test", path=f"/api/public/v2/prompts/{name}-prompt").respond(
+                json={
+                    "type": "text",
+                    "name": f"{name}-prompt",
+                    "version": 1,
+                    "config": dict(settings),
+                    "labels": ["production"],
+                    "tags": [],
+                    "prompt": f"Prompt {name}.",
+                }
+            )
+        endpoint: Final = upstream.post(f"{_PROMPT_TIER_API_BASE}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-prompt-tier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": f"{tier}-tier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            }
+        )
+        await router.acompletion(
+            model="smart-router", messages=[{"role": "user", "content": f"marker{tier}"}], temperature=0
+        )
+
+    assert endpoint.call_count == 1
+    sent: Final = json.loads(endpoint.calls[0].request.content)
+    assert sent["model"] == f"{tier}-tier"
+    assert sent["messages"][0] == {"role": "system", "content": f"Prompt {tier}."}
+    expected: Final = {"temperature": 0, "max_tokens": 4096} if ignore_settings else dict(_PROMPT_TIER_SETTINGS[tier])
+    assert {key: sent.get(key) for key in _PROMPT_TIER_SETTINGS[tier]} == expected
+
+
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
         config = ComplexityRouterConfig(
@@ -6720,7 +6861,7 @@ class TestTierModelAffinity:
         deployment_affinity: bool = True,
         plugins: bool = False,
     ) -> ComplexityRouter:
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         _answer_deployments_named(mock_router_instance, [])
         return ComplexityRouter(
             model_name="affinity-router",
@@ -6865,8 +7006,8 @@ class TestTierModelAffinity:
             )
             return [] if unavailable else [{"model_name": model, "model_info": {"id": f"deployment-{model}"}}]
 
-        cache: Final = DualCache()
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins()
+        mock_router_instance.health.return_value.session_pins = cache
         mock_router_instance.select = select
         router: Final = TestModalityRouting._router(
             mock_router_instance,
@@ -6901,7 +7042,7 @@ class TestTierModelAffinity:
             else ("modality_pin_override" if session_affinity else "user_turn_continuation")
         )
         cache_key: Final = router._get_session_affinity_cache_key("replay-session", {"metadata": metadata})
-        assert await cache.async_get_cache(cache_key) == {"model": "model-a", "tier": "SIMPLE"}
+        assert await cache.get(cache_key) == {"model": "model-a", "tier": "SIMPLE"}
 
         next_ask: Final = await self._route(router, metadata, "model-b")
         assert next_ask.model == "model-a"
@@ -6915,7 +7056,7 @@ class TestTierModelAffinity:
         self, mock_router_instance: MagicMock
     ) -> None:
         clock: Final = MagicMock(return_value=100.0)
-        mock_router_instance.health.return_value.store = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+        mock_router_instance.health.return_value.session_pins = memory_pins(clock)
         router: Final = ComplexityRouter(
             model_name="affinity-router",
             ctx=RoutingContext(mock_router_instance),
@@ -6951,8 +7092,8 @@ class TestTierModelAffinity:
     async def test_session_escalation_keeps_the_selected_tier_when_models_overlap(
         self, mock_router_instance: MagicMock
     ) -> None:
-        cache: Final = DualCache()
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins()
+        mock_router_instance.health.return_value.session_pins = cache
         router: Final = ComplexityRouter(
             model_name="affinity-router",
             ctx=RoutingContext(mock_router_instance),
@@ -6976,14 +7117,14 @@ class TestTierModelAffinity:
         metadata: Final = {"session_id": "same-session"}
         assert (await self._route(router, metadata, "higher", "visit_complex")).model == "higher"
         cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
-        await cache.async_set_cache(cache_key, {"model": "base", "tier": "SIMPLE"}, ttl=600)
+        await cache.set(cache_key, {"model": "base", "tier": "SIMPLE"}, 600)
 
         result: Final = await self._route(router, metadata, "shared", "LITELLM ESCALATE")
         assert result.model == "shared"
         assert result.routing_decision["tier"] == "MEDIUM"
         assert result.routing_decision["cause"] == "session_affinity_escalation"
         assert result.litellm_params == {"temperature": 0.4}
-        assert await cache.async_get_cache(cache_key) == {"model": "shared", "tier": "MEDIUM"}
+        assert await cache.get(cache_key) == {"model": "shared", "tier": "MEDIUM"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -7004,8 +7145,8 @@ class TestTierModelAffinity:
         expected_model: str,
         expected_tier: str,
     ) -> None:
-        cache: Final = DualCache()
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins()
+        mock_router_instance.health.return_value.session_pins = cache
         router: Final = ComplexityRouter(
             model_name="affinity-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7016,21 +7157,21 @@ class TestTierModelAffinity:
         )
         metadata: Final = {"session_id": "same-session"}
         cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
-        await cache.async_set_cache(cache_key, {"model": "model-a", "tier": stale_tier}, ttl=600)
+        await cache.set(cache_key, {"model": "model-a", "tier": stale_tier}, 600)
 
         result: Final = await self._route(router, metadata, expected_model, prompt)
 
         assert result.model == expected_model
         assert result.routing_decision["tier"] == expected_tier
         assert result.routing_decision["cause"] == "heuristic_scorer"
-        assert await cache.async_get_cache(cache_key) == {"model": expected_model, "tier": expected_tier}
+        assert await cache.get(cache_key) == {"model": expected_model, "tier": expected_tier}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classification_mode", ["every_request", "user_turn"])
     async def test_custom_tier_keeps_its_own_model(
         self, mock_router_instance: MagicMock, classification_mode: Literal["every_request", "user_turn"]
     ) -> None:
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router: Final = ComplexityRouter(
             model_name="affinity-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7099,7 +7240,7 @@ class TestSessionAffinity:
         """The hook response's session_affinity_ttl_seconds is what the Router stamps as
         the deployment-affinity marker, so both the classify path (turn 1) and the
         session-pin path (turn 2) must carry the configured TTL."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7139,7 +7280,7 @@ class TestSessionAffinity:
     ):
         """Deployment affinity retains a model per tier while classification continues.
         Session affinity keeps the first tier too; plugins suppress both affinity policies."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7166,7 +7307,7 @@ class TestSessionAffinity:
     async def test_hook_response_has_no_session_affinity_ttl_when_disabled_or_plugins(
         self, mock_router_instance, basic_config, session_affinity_config
     ):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         disabled_router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7190,7 +7331,7 @@ class TestSessionAffinity:
     async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
         """With session_affinity off, a shared session can move from REASONING to SIMPLE."""
         assert "session_affinity" not in basic_config
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7210,7 +7351,7 @@ class TestSessionAffinity:
     async def test_proxy_generated_session_id_never_pins(self, mock_router_instance, session_affinity_config):
         """A session id the proxy generated for a request that had none is per request, so
         it must not create a pin even with session_affinity enabled."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7230,7 +7371,7 @@ class TestSessionAffinity:
     async def test_can_be_enabled_to_pin_every_later_turn(self, mock_router_instance, session_affinity_config):
         """Regression: session_affinity=True is the opt-in, so a shared session_id reuses the
         first turn's model instead of reclassifying."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7248,7 +7389,7 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_pins_model_after_first_turn(self, mock_router_instance, session_affinity_config):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7274,7 +7415,7 @@ class TestSessionAffinity:
         TTL, so a session whose only turn landed on the cooldown fallback must classify again once
         the breaker closes instead of holding that fallback's model."""
         now = 100.0
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         mock_router_instance.acompletion = AsyncMock(
             side_effect=[TimeoutError("classifier timed out"), _llm_response('{"tier": "REASONING"}')]
         )
@@ -7309,7 +7450,7 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_a_pinned_turn_reports_the_tier_that_serves_it(self, mock_router_instance, session_affinity_config):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7326,7 +7467,7 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_different_sessions_classify_independently(self, mock_router_instance, session_affinity_config):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7347,8 +7488,8 @@ class TestSessionAffinity:
         self, mock_router_instance: MagicMock, basic_config: dict[str, object], preexisting: bool
     ) -> None:
         clock: Final = MagicMock(return_value=100.0)
-        cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins(clock)
+        mock_router_instance.health.return_value.session_pins = cache
         router: Final = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7361,7 +7502,7 @@ class TestSessionAffinity:
         request_kwargs: Final = self._request_kwargs("session-1")
         key: Final = router._get_session_affinity_cache_key("session-1", request_kwargs)
         if preexisting:
-            cache.in_memory_cache.set_cache(key, "o1-preview", ttl=90)
+            cache.set_local(key, "o1-preview", 90)
         first: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
@@ -7372,145 +7513,17 @@ class TestSessionAffinity:
         )
         assert replay.model == first.model
         clock.return_value = 200.0
-        assert cache.in_memory_cache.get_cache(key) == (
+        assert cache.get_local(key) == (
             "o1-preview" if preexisting else {"model": "gpt-4o-mini", "tier": "SIMPLE"}
         )
         clock.return_value = 271.0
-        assert cache.in_memory_cache.get_cache(key) is None
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("batch_pending", [False, True])
-    @pytest.mark.parametrize("remote_state", ["latest", "interleaved", "outage"])
-    async def test_continuation_follows_redis_and_never_republishes_a_stale_pin(
-        self, mock_router_instance: MagicMock, basic_config: dict[str, object], remote_state: str, batch_pending: bool
-    ) -> None:
-        from fakeredis import FakeRedis
-        from redis.asyncio import BlockingConnectionPool, Connection, Redis
-        from redis.asyncio.retry import Retry
-        from redis.backoff import NoBackoff
-
-        from litellm.caching.redis_batch import request_redis_batch_scope
-
-        clock: Final = MagicMock(return_value=100.0)
-        simple: Final = {"model": "gpt-4o-mini", "tier": "SIMPLE"}
-        latest: Final = {"model": "o1-preview", "tier": "REASONING"}
-        stored: Final = {"pin": json.dumps(simple if remote_state == "interleaved" else latest)}
-        available: Final = asyncio.Event()
-        read_started: Final = asyncio.Event()
-        release_read: Final = asyncio.Event()
-        if remote_state != "outage":
-            available.set()
-        if remote_state != "interleaved":
-            release_read.set()
-
-        async def execute(*args: object, **kwargs: object) -> object:
-            if args[0] in ("EVALSHA", "GET", "MGET"):
-                if not available.is_set():
-                    raise ConnectionError("Redis unavailable")
-                if args[0] == "MGET":
-                    return [json.dumps("other-value")]
-                observed: Final = stored["pin"]
-                read_started.set()
-                await release_read.wait()
-                return observed
-            if args[0] == "SET":
-                stored["pin"] = str(args[2])
-            return b"PONG" if args[0] == "PING" else b"OK"
-
-        pack_commands: Final = MagicMock(side_effect=tuple)
-
-        async def connection() -> MagicMock:
-            replies: Final[asyncio.Queue[object]] = asyncio.Queue()
-
-            async def send_command(*args: object) -> None:
-                await replies.put(await execute(*args))
-
-            async def send_packed_command(commands: Sequence[Sequence[object]]) -> None:
-                for command in commands:
-                    await send_command(*command)
-
-            return MagicMock(
-                spec=Connection,
-                retry=Retry(NoBackoff(), 0),
-                send_command=AsyncMock(side_effect=send_command),
-                pack_commands=pack_commands,
-                send_packed_command=AsyncMock(side_effect=send_packed_command),
-                read_response=AsyncMock(side_effect=replies.get),
-            )
-
-        sync_client: Final = FakeRedis()
-        pool: Final = MagicMock(
-            spec=BlockingConnectionPool,
-            connection_kwargs={"protocol": 2},
-            get_encoder=sync_client.get_encoder,
-            get_connection=AsyncMock(side_effect=connection),
-            release=AsyncMock(),
-        )
-        client: Final = Redis(connection_pool=pool)
-        redis_cache: Final = RedisCache(host="tier-pin-fixture", connection_pool=sync_client.connection_pool)
-        client_key: Final = redis_cache._get_async_client_cache_key()
-        litellm.in_memory_llm_clients_cache.set_cache(key=client_key, value=client)
-        try:
-            cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
-            mock_router_instance.health.return_value.store = cache
-            router: Final = ComplexityRouter(
-                model_name="test-router",
-                ctx=RoutingContext(mock_router_instance),
-                complexity_router_config={
-                    **basic_config,
-                    "classification_mode": "user_turn",
-                    "deployment_affinity": False,
-                    "session_affinity_ttl_seconds": 10,
-                },
-            )
-            request: Final = self._request_kwargs("shared-session")
-            key: Final = router._get_session_affinity_cache_key("shared-session", request)
-            cache.in_memory_cache.set_cache(key, simple, ttl=10)
-            clock.return_value = 105.0
-            messages: Final = [*self.SIMPLE_MESSAGE, {"role": "tool", "content": "done"}]
-            with request_redis_batch_scope() as scope:
-                batch: Final = scope.batch(redis_cache)
-                unrelated: Final = batch.mget(("other",)) if batch_pending else None
-                pending: Final = asyncio.create_task(router.async_pre_routing_hook("m", request, messages))
-                if remote_state == "interleaved":
-                    await asyncio.wait_for(read_started.wait(), timeout=1)
-                    stored["pin"] = json.dumps(latest)
-                    release_read.set()
-                result: Final = await pending
-                if unrelated is not None:
-                    if remote_state == "outage":
-                        with pytest.raises(ConnectionError, match="Redis unavailable"):
-                            await unrelated
-                    else:
-                        assert await unrelated == {"other": "other-value"}
-                assert result.model == (latest["model"] if remote_state == "latest" else simple["model"])
-                assert result.routing_decision["cause"] == "user_turn_continuation"
-                assert json.loads(stored["pin"]) == latest
-                clock.return_value = 111.0
-                assert cache.in_memory_cache.get_cache(key) is not None
-                available.set()
-                recovery_read: Final = batch.mget(("other",)) if batch_pending else None
-                recovered: Final = await router.async_pre_routing_hook("m", request, messages)
-                if recovery_read is not None:
-                    assert await recovery_read == {"other": "other-value"}
-                assert recovered.model == latest["model"]
-                assert cache.in_memory_cache.get_cache(key) == latest
-                assert read_started.is_set()
-                assert tuple(
-                    tuple(args[0] for args in sent.args[0]) for sent in pack_commands.call_args_list
-                ) == (("MGET", "EVALSHA"),) * (2 if batch_pending else 0)
-        finally:
-            for cached_key in tuple(litellm.in_memory_llm_clients_cache.cache_dict):
-                if client_key in cached_key:
-                    litellm.in_memory_llm_clients_cache.delete_cache(cached_key)
-            await client.aclose()
-            sync_client.close()
+        assert cache.get_local(key) is None
 
     @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
         """A session_id is client-supplied and unauthenticated; two different callers
         (API keys) reusing the same session_id must not poison each other's pin."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7533,8 +7546,8 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_no_session_id_falls_back_to_reclassify(self, mock_router_instance, session_affinity_config):
-        cache = AsyncMock()
-        mock_router_instance.health.return_value.store = cache
+        pins: Final = MagicMock(spec=RouterSessionPinStore)
+        mock_router_instance.health.return_value.session_pins = pins
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -7544,15 +7557,14 @@ class TestSessionAffinity:
             model="test-model", request_kwargs={}, messages=self.SIMPLE_MESSAGE
         )
         assert result.model == "gpt-4o-mini"
-        cache.async_get_cache.assert_not_called()
-        cache.async_set_cache.assert_not_called()
+        assert pins.method_calls == []
 
     @pytest.mark.asyncio
     async def test_adaptive_pinned_turn_still_stamps_chosen_model_metadata(self, mock_router_instance):
         """Regression: skipping classification on a pinned turn must not break the
         adaptive bandit's reward-feedback loop, which only records a turn's outcome
         when ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY is present in the request metadata."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         _answer_deployments_named(
             mock_router_instance,
             [
@@ -7961,7 +7973,7 @@ class TestClassificationMode:
         return {"metadata": {"session_id": session_id}}
 
     def _router(self, mock_router_instance, config: dict) -> ComplexityRouter:
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         return ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -8303,7 +8315,7 @@ class TestUserTurnClassifierFailureHoldsTheDefaultModel:
         *classifier_replies: object, default_model: str = "gpt-4o", plan_mode_min_tier: str | None = None
     ) -> tuple[ComplexityRouter, MagicMock]:
         router_instance: Final = MagicMock()
-        router_instance.health.return_value.store = DualCache()
+        router_instance.health.return_value.session_pins = memory_pins()
         router_instance.acompletion = AsyncMock(side_effect=list(classifier_replies))
         router: Final = ComplexityRouter(
             model_name="test-router",
@@ -8619,7 +8631,7 @@ class TestRoutingPlugins:
         (e.g. a budget cap crossed mid-session) was only ever enforced on a session's
         first turn. With plugins configured, every turn must go through
         _classify_and_route (and therefore the plugin pipeline) again."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
 
         class AllowAll:
             async def run(self, context):
@@ -9126,7 +9138,7 @@ class TestEscalationKeywords:
     async def test_escalation_overrides_session_pin_and_persists(self, mock_router_instance, basic_config):
         """Mid-session escalation bumps relative to the pinned model (never below it) and
         the bumped model persists for later turns."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -9189,7 +9201,7 @@ class TestEscalationKeywords:
         survives across the plumbing turns after it, so reading escalation off it re-fires per turn and,
         with the pin persisted, walks the session to the top tier. Escalation reads the newest turn's ask.
         """
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -9291,7 +9303,7 @@ class TestEscalationKeywords:
 
     @pytest.mark.asyncio
     async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -9301,7 +9313,7 @@ class TestEscalationKeywords:
             },
         )
         cache_key = router._get_session_affinity_cache_key("session-top", {})
-        await mock_router_instance.health().store.async_set_cache(key=cache_key, value="o1-b")
+        await mock_router_instance.health().session_pins.set(cache_key, "o1-b", 3600)
         result = await router.async_pre_routing_hook(
             model="test-model",
             request_kwargs=self._request_kwargs("session-top"),
@@ -9622,7 +9634,7 @@ class TestRoutingDecisionContents:
 
     @pytest.mark.asyncio
     async def test_session_pin_decision(self, mock_router_instance, basic_config):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-complexity-router",
             ctx=RoutingContext(mock_router_instance),
@@ -9630,7 +9642,7 @@ class TestRoutingDecisionContents:
         )
         request_kwargs = {"metadata": {"session_id": "session-decision"}}
         cache_key = router._get_session_affinity_cache_key("session-decision", request_kwargs)
-        await mock_router_instance.health().store.async_set_cache(key=cache_key, value="gpt-4o")
+        await mock_router_instance.health().session_pins.set(cache_key, "gpt-4o", 3600)
         response = await router.async_pre_routing_hook(
             model="test-complexity-router",
             request_kwargs=request_kwargs,
@@ -9995,7 +10007,7 @@ class TestEscalationIsRecordedConsistently:
 
     @pytest.mark.asyncio
     async def test_session_pin_at_ceiling_still_records_the_ask(self, mock_router_instance):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -10003,7 +10015,7 @@ class TestEscalationIsRecordedConsistently:
         )
         request_kwargs = {"metadata": {"session_id": "session-ceiling"}}
         cache_key = router._get_session_affinity_cache_key("session-ceiling", request_kwargs)
-        await mock_router_instance.health().store.async_set_cache(key=cache_key, value="o1-preview")
+        await mock_router_instance.health().session_pins.set(cache_key, "o1-preview", 3600)
 
         response = await router.async_pre_routing_hook(
             model="test-router",
@@ -10020,7 +10032,7 @@ class TestEscalationIsRecordedConsistently:
 
     @pytest.mark.asyncio
     async def test_session_pin_below_ceiling_reports_the_bump(self, mock_router_instance):
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = ComplexityRouter(
             model_name="test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -10028,7 +10040,7 @@ class TestEscalationIsRecordedConsistently:
         )
         request_kwargs = {"metadata": {"session_id": "session-below"}}
         cache_key = router._get_session_affinity_cache_key("session-below", request_kwargs)
-        await mock_router_instance.health().store.async_set_cache(key=cache_key, value="gpt-4o-mini")
+        await mock_router_instance.health().session_pins.set(cache_key, "gpt-4o-mini", 3600)
 
         response = await router.async_pre_routing_hook(
             model="test-router",
@@ -10410,7 +10422,9 @@ class TestContextAwareClassifier:
         )
         router: Final = ComplexityRouter(
             model_name="router",
-            ctx=RoutingContext(MagicMock(acompletion=completion, **{"health.return_value.store": DualCache()})),
+            ctx=RoutingContext(
+                MagicMock(acompletion=completion, **{"health.return_value.session_pins": memory_pins()})
+            ),
             complexity_router_config={
                 "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
                 "classifier_type": "llm",
@@ -10507,7 +10521,9 @@ class TestContextAwareClassifier:
         )
         router: Final = ComplexityRouter(
             model_name="router",
-            ctx=RoutingContext(MagicMock(acompletion=completion, **{"health.return_value.store": DualCache()})),
+            ctx=RoutingContext(
+                MagicMock(acompletion=completion, **{"health.return_value.session_pins": memory_pins()})
+            ),
             complexity_router_config={
                 "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
                 "classifier_type": "llm",
@@ -12012,7 +12028,7 @@ class TestClientHousekeepingCalls:
         An agent names the conversation on its first turn, so the cheapest tier would be the pin
         every session starts with and the real work that follows would run there for the whole TTL.
         """
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
         router = ComplexityRouter(
             model_name="test-router",
@@ -12244,7 +12260,7 @@ class TestConversationShapeDiscriminator:
     async def test_a_single_ask_is_a_first_turn(self, mock_router_instance, basic_config):
         """Nothing is cached for any model yet, so the baseline would have paid the same
         cache write and the saving is the plain rate difference."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
             model="test-model",
             request_kwargs={"metadata": {}},
@@ -12256,7 +12272,7 @@ class TestConversationShapeDiscriminator:
     async def test_a_second_ask_means_the_baseline_was_already_warm(self, mock_router_instance, basic_config):
         """An earlier turn was served, so a single-model deployment wrote the prompt then
         and would only read it now; this request's write is what switching cost."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
             model="test-model",
             request_kwargs={"metadata": {}},
@@ -12272,7 +12288,7 @@ class TestConversationShapeDiscriminator:
     async def test_it_needs_no_session_id(self, mock_router_instance, basic_config):
         """The whole point of reading the conversation rather than remembering it: a
         caller that sends no session header is still classified correctly."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         router = self._router(mock_router_instance, basic_config)
         first = await router.async_pre_routing_hook(
             model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello!"}]
@@ -12293,17 +12309,15 @@ class TestConversationShapeDiscriminator:
     async def test_it_touches_no_cache(self, mock_router_instance, basic_config):
         """Reading the request instead of remembering it is what removes the routing-path
         round-trip, and with it a cache failure that would read as a first turn."""
-        cache = AsyncMock()
-        cache.async_get_cache = AsyncMock(return_value=None)
-        mock_router_instance.health.return_value.store = cache
+        pins: Final = MagicMock(spec=RouterSessionPinStore)
+        mock_router_instance.health.return_value.session_pins = pins
         result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
             model="test-model",
             request_kwargs={"metadata": {}},
             messages=[{"role": "user", "content": "Hello!"}],
         )
         assert result.routing_decision["conversation_continuing"] is False
-        assert cache.async_get_cache.await_count == 0
-        assert cache.async_set_cache.await_count == 0
+        assert pins.method_calls == []
 
     @pytest.mark.parametrize(
         "history",
@@ -12733,7 +12747,7 @@ class TestClassifierFallbackChoice:
                 "session_affinity": True,
             },
         )
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         request_kwargs: Dict = {"metadata": {"session_id": "session-flaky"}}
 
         mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
@@ -12772,7 +12786,7 @@ class TestClassifierFallbackChoice:
                 "session_affinity": True,
             },
         )
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         request_kwargs: Dict = {"metadata": {"session_id": "session-steady"}}
 
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
@@ -13822,9 +13836,7 @@ class TestPlanModeTierFloor:
         """Mid-session shift+tab into plan mode: the plan turns route at the floor, but the
         stored pin keeps the session's own model, so the first turn after plan mode exits
         auto-routes back to it instead of staying premium."""
-        from litellm.caching.dual_cache import DualCache
-
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "session_affinity": True}
         router = self._router(mock_router_instance, config)
         session_kwargs = {"metadata": {"session_id": "plan-session"}}
@@ -13863,9 +13875,7 @@ class TestPlanModeTierFloor:
     async def test_plan_mode_first_turn_does_not_seed_the_session_pin(self, mock_router_instance, basic_config):
         """A session whose first turn is already in plan mode must not pin the floored model:
         the first ordinary turn classifies and pins as if plan mode had never happened."""
-        from litellm.caching.dual_cache import DualCache
-
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "session_affinity": True}
         router = self._router(mock_router_instance, config)
         session_kwargs = {"metadata": {"session_id": "plan-first-session"}}
@@ -13887,9 +13897,7 @@ class TestPlanModeTierFloor:
 
     @pytest.mark.asyncio
     async def test_pinned_session_at_or_above_floor_keeps_pin_cause(self, mock_router_instance, basic_config):
-        from litellm.caching.dual_cache import DualCache
-
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         config = {**basic_config, "plan_mode_min_tier": "MEDIUM", "session_affinity": True}
         router = self._router(mock_router_instance, config)
         session_kwargs = {"metadata": {"session_id": "premium-session"}}
@@ -14070,9 +14078,7 @@ class TestPlanModeTierFloor:
         """A plan-mode turn routed at or above the floor keeps its ordinary cause, but it still
         must not pin: on an adaptive router the hard floor shaped that pick, and any sentinel
         turn's pin would carry plan mode past its exit."""
-        from litellm.caching.dual_cache import DualCache
-
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         config = {
             **basic_config,
             "plan_mode_min_tier": "MEDIUM",
@@ -14278,10 +14284,11 @@ async def test_tier_params_mask_credentials_in_routing_decision(route, mock_rout
     )
     request_kwargs = {"metadata": {"session_id": "masked-params-session"}}
     if route == "session":
-        mock_router_instance.health.return_value.store = DualCache()
-        await mock_router_instance.health().store.async_set_cache(
-            key=router._get_session_affinity_cache_key("masked-params-session", request_kwargs),
-            value={"model": "opus", "tier": "REASONING"},
+        mock_router_instance.health.return_value.session_pins = memory_pins()
+        await mock_router_instance.health().session_pins.set(
+            router._get_session_affinity_cache_key("masked-params-session", request_kwargs),
+            {"model": "opus", "tier": "REASONING"},
+            3600,
         )
     message = "reason carefully about this" if route == "keyword" else "hello"
 
@@ -14302,7 +14309,7 @@ async def test_tier_params_mask_credentials_in_routing_decision(route, mock_rout
 
 @pytest.mark.asyncio
 async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_router_instance):
-    mock_router_instance.health.return_value.store = DualCache()
+    mock_router_instance.health.return_value.session_pins = memory_pins()
     router = ComplexityRouter(
         model_name="test-router",
         ctx=RoutingContext(mock_router_instance),
@@ -14316,9 +14323,8 @@ async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_rou
         },
     )
     request_kwargs = {"metadata": {"session_id": "orphan-session"}}
-    await mock_router_instance.health().store.async_set_cache(
-        key=router._get_session_affinity_cache_key("orphan-session", request_kwargs),
-        value="orphan",
+    await mock_router_instance.health().session_pins.set(
+        router._get_session_affinity_cache_key("orphan-session", request_kwargs), "orphan", 3600
     )
 
     response = await router.async_pre_routing_hook(
@@ -14334,7 +14340,7 @@ async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_rou
 
 @pytest.mark.asyncio
 async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mock_router_instance):
-    mock_router_instance.health.return_value.store = DualCache()
+    mock_router_instance.health.return_value.session_pins = memory_pins()
     router = ComplexityRouter(
         model_name="test-router",
         ctx=RoutingContext(mock_router_instance),
@@ -14347,9 +14353,10 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
         },
     )
     request_kwargs = {"metadata": {"session_id": "shared-session"}}
-    await mock_router_instance.health().store.async_set_cache(
-        key=router._get_session_affinity_cache_key("shared-session", request_kwargs),
-        value={"model": "shared", "tier": "SIMPLE"},
+    await mock_router_instance.health().session_pins.set(
+        router._get_session_affinity_cache_key("shared-session", request_kwargs),
+        {"model": "shared", "tier": "SIMPLE"},
+        3600,
     )
 
     response = await router.async_pre_routing_hook(
@@ -14366,8 +14373,8 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
 
 @pytest.mark.asyncio
 async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
-    cache: Final = DualCache()
-    mock_router_instance.health.return_value.store = cache
+    cache: Final = memory_pins()
+    mock_router_instance.health.return_value.session_pins = cache
     router = ComplexityRouter(
         model_name="test-router",
         ctx=RoutingContext(mock_router_instance),
@@ -14381,7 +14388,7 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
     )
     request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
     key: Final = router._get_session_affinity_cache_key("json-round-trip-session", request_kwargs)
-    cache.in_memory_cache.set_cache(key, ["shared", "SIMPLE"])
+    cache.set_local(key, ["shared", "SIMPLE"], 3600)
 
     response = await router.async_pre_routing_hook(
         model="test-router",
@@ -14392,7 +14399,7 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
     assert response is not None
     assert response.model == "shared"
     assert response.litellm_params == {"reasoning_effort": "low"}
-    assert cache.in_memory_cache.get_cache(key) == ["shared", "SIMPLE"]
+    assert cache.get_local(key) == ["shared", "SIMPLE"]
 
 
 HEURISTIC_FIRST_TIERS: dict[str, str] = {
@@ -15531,8 +15538,8 @@ class TestModalityRouting:
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
         elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
-            cache: Final = DualCache()
-            mock_router_instance.health.return_value.store = cache
+            cache: Final = memory_pins()
+            mock_router_instance.health.return_value.session_pins = cache
             config["session_affinity"] = True
             request_kwargs = {"metadata": {"session_id": "s1"}}
             if path == "pin_replacement_gated":
@@ -15553,9 +15560,10 @@ class TestModalityRouting:
             _answer_deployments_named(mock_router_instance, [])
         router = self._router(mock_router_instance, config, vision)
         if path.startswith(("pin_kept", "pin_replacement", "pin_override")):
-            mock_router_instance.health().store.in_memory_cache.set_cache(
+            mock_router_instance.health().session_pins.set_local(
                 router._get_session_affinity_cache_key("s1", request_kwargs),
                 {"model": "text-cheap", "tier": "SIMPLE"},
+                3600,
             )
         result = await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=messages)
         assert result.model == expected_model
@@ -15658,7 +15666,7 @@ class TestModalityRouting:
     async def test_continuation_turn_screenshot_escalates_past_the_held_model(self, mock_router_instance):
         """classification_mode user_turn replays the held model on continuation turns; a
         continuation carrying a screenshot must still be re-placed when that model is text-only."""
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         config = {
             "tiers": dict(self.BASE_TIERS),
             "classification_mode": "user_turn",
@@ -15726,8 +15734,8 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
         """The override is for one request: the session keeps the model it was pinned to."""
-        cache: Final = DualCache()
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins()
+        mock_router_instance.health.return_value.session_pins = cache
         router = self._router(
             mock_router_instance,
             {
@@ -15740,7 +15748,7 @@ class TestModalityRouting:
         )
         request_kwargs = {"metadata": {"session_id": "s1"}}
         key: Final = router._get_session_affinity_cache_key("s1", request_kwargs)
-        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
+        cache.set_local(key, {"model": "text-cheap", "tier": "SIMPLE"}, 3600)
 
         image_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
@@ -15749,7 +15757,7 @@ class TestModalityRouting:
         assert image_turn.routing_decision["cause"] == "modality_pin_override"
         assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
 
-        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.get_local(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
         text_turn = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
@@ -15760,8 +15768,8 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
         """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
-        cache: Final = DualCache()
-        mock_router_instance.health.return_value.store = cache
+        cache: Final = memory_pins()
+        mock_router_instance.health.return_value.session_pins = cache
         router = self._router(
             mock_router_instance,
             {
@@ -15773,12 +15781,12 @@ class TestModalityRouting:
             {"text-cheap": False, "text-big": False},
         )
         key: Final = router._get_session_affinity_cache_key("s1", {"metadata": {"session_id": "s1"}})
-        cache.in_memory_cache.set_cache(key, {"model": "text-cheap", "tier": "SIMPLE"})
+        cache.set_local(key, {"model": "text-cheap", "tier": "SIMPLE"}, 3600)
         with pytest.raises(litellm.BadRequestError, match="no model"):
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
             )
-        assert cache.in_memory_cache.get_cache(key) == {"model": "text-cheap", "tier": "SIMPLE"}
+        assert cache.get_local(key) == {"model": "text-cheap", "tier": "SIMPLE"}
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -16167,7 +16175,7 @@ class TestHealthFallbackDispatch:
             assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
             strategy: Final = router.complexity_routers["health-router"][0].strategy
             key: Final = strategy._get_session_affinity_cache_key("outage", {})
-            assert await router.cache.async_get_cache(key=key) is None
+            assert await router.health().session_pins.get(key) is None
             if source == "health":
                 router.health_state_cache.set_deployment_health_states(
                     {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
@@ -16194,7 +16202,7 @@ class TestHealthFallbackDispatch:
         )
         strategy: Final = router.complexity_routers["health-router"][0].strategy
         key: Final = strategy._get_session_affinity_cache_key("precedence", {})
-        await router.cache.async_set_cache(key=key, value={"model": "primary", "tier": "SIMPLE"}, ttl=600)
+        await router.health().session_pins.set(key, {"model": "primary", "tier": "SIMPLE"}, 600)
         with respx.mock(assert_all_mocked=True) as upstream:
             upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
             for model_id, expected, cause in (
@@ -16206,7 +16214,7 @@ class TestHealthFallbackDispatch:
                 metadata: Final[dict[str, object]] = {"session_id": "precedence"}
                 assert await self._request(router, "chat", False, metadata) == expected
                 assert metadata["routing_decision"]["cause"] == cause
-                assert await router.cache.async_get_cache(key=key) == {"model": "primary", "tier": "SIMPLE"}
+                assert await router.health().session_pins.get(key) == {"model": "primary", "tier": "SIMPLE"}
             assert [c.request.url.host for c in upstream.calls] == ["primary.test", "peer.test", "fallback.test"]
 
     @pytest.mark.asyncio
@@ -16559,7 +16567,7 @@ class TestTierHealthFailover:
         mock_router_instance.select = select
         mock_router_instance.probed_kwargs = probed_kwargs
         mock_router_instance.probed_prompts = probed_prompts
-        mock_router_instance.health.return_value.store = DualCache()
+        mock_router_instance.health.return_value.session_pins = memory_pins()
         return ComplexityRouter(
             model_name="health-test-router",
             ctx=RoutingContext(mock_router_instance),
@@ -16587,9 +16595,7 @@ class TestTierHealthFailover:
         )
         # Seed the pin onto the dead group directly so the replay path is exercised.
         key = router._get_session_affinity_cache_key("sess-dead", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         result = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "sess-dead"}}, messages=self.SIMPLE_MESSAGE
         )
@@ -16652,9 +16658,7 @@ class TestTierHealthFailover:
         )
         pinned = "only" if tiers else "dead-a"
         key = router._get_session_affinity_cache_key("sess-open", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": pinned, "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": pinned, "tier": "SIMPLE"}, 600)
         result = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "sess-open"}}, messages=self.SIMPLE_MESSAGE
         )
@@ -16682,9 +16686,7 @@ class TestTierHealthFailover:
                 request_kwargs={"metadata": {"session_id": session_id}},
                 messages=self.SIMPLE_MESSAGE,
             )
-            return await router.ctx.health().store.async_get_cache(
-                key=router._get_session_affinity_cache_key(session_id, {})
-            )
+            return await router.ctx.health().session_pins.get(router._get_session_affinity_cache_key(session_id, {}))
 
         stored = [await pin_after_session(turn) for turn in range(20)]
         assert all(entry in (None, {"model": "live-b", "tier": "SIMPLE"}) for entry in stored)
@@ -16707,9 +16709,7 @@ class TestTierHealthFailover:
             messages=[{"role": "user", "content": TITLE_ASK}],
         )
         assert result.routing_decision["cause"] in ("housekeeping", "health_failover")
-        stored = await router.ctx.health().store.async_get_cache(
-            key=router._get_session_affinity_cache_key(session_id, {})
-        )
+        stored = await router.ctx.health().session_pins.get(router._get_session_affinity_cache_key(session_id, {}))
         assert stored is None
 
     @pytest.mark.asyncio
@@ -16732,9 +16732,7 @@ class TestTierHealthFailover:
             blocked=("id-b1",),
         )
         key = router._get_session_affinity_cache_key("sess-paused", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         results = [
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "sess-paused"}}, messages=self.SIMPLE_MESSAGE
@@ -16774,9 +16772,7 @@ class TestTierHealthFailover:
             cooling=("id-a1",),
         )
         key = router._get_session_affinity_cache_key("sess-adaptive", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         request_kwargs = {"metadata": {"session_id": "sess-adaptive", "adaptive_router_chosen_model": "dead-a"}}
         result = await router.async_pre_routing_hook(
             model="m", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
@@ -16820,9 +16816,7 @@ class TestTierHealthFailover:
             cooling=("id-v1",),
         )
         key = router._get_session_affinity_cache_key("sess-image", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-vision", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-vision", "tier": "SIMPLE"}, 600)
         image_message = [
             {
                 "role": "user",
@@ -16868,9 +16862,7 @@ class TestTierHealthFailover:
             },
         )
         key = router._get_session_affinity_cache_key("sess-window", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-big", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-big", "tier": "SIMPLE"}, 600)
         results = [
             await router.async_pre_routing_hook(
                 model="m",
@@ -16914,9 +16906,7 @@ class TestTierHealthFailover:
             {"live-b": ["id-b1"]},
         )
         key = router._get_session_affinity_cache_key("sess-unknown", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         result = await router.async_pre_routing_hook(
             model="m", request_kwargs={"metadata": {"session_id": "sess-unknown"}}, messages=self.SIMPLE_MESSAGE
         )
@@ -16943,9 +16933,7 @@ class TestTierHealthFailover:
             excluded=("id-b1",),
         )
         key = router._get_session_affinity_cache_key("sess-tagged", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         results = [
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "sess-tagged"}}, messages=self.SIMPLE_MESSAGE
@@ -16965,9 +16953,7 @@ class TestTierHealthFailover:
             cooling=("id-a1",),
         )
         key = router._get_session_affinity_cache_key("sess-kwargs", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         request_kwargs = {
             "metadata": {"session_id": "sess-kwargs"},
             "_target_order": 1,
@@ -17003,9 +16989,7 @@ class TestTierHealthFailover:
             raises_for={"rpm-full-b": RouterRateLimitErrorBasic(model="rpm-full-b")},
         )
         key = router._get_session_affinity_cache_key("sess-rpm", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         results = [
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "sess-rpm"}}, messages=self.SIMPLE_MESSAGE
@@ -17026,9 +17010,7 @@ class TestTierHealthFailover:
             cooling=("id-a1",),
         )
         key = router._get_session_affinity_cache_key("sess-input", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         result = await router.async_pre_routing_hook(
             model="m",
             request_kwargs={"metadata": {"session_id": "sess-input"}},
@@ -17076,10 +17058,8 @@ class TestTierHealthFailover:
         sessions: Final = tuple(f"sess-exhausted-{sample}" for sample in range(20))
         await asyncio.gather(
             *(
-                router.ctx.health().store.async_set_cache(
-                    key=router._get_session_affinity_cache_key(session_id, {}),
-                    value={"model": "dead-a", "tier": "SIMPLE"},
-                    ttl=600,
+                router.ctx.health().session_pins.set(
+                    router._get_session_affinity_cache_key(session_id, {}), {"model": "dead-a", "tier": "SIMPLE"}, 600
                 )
                 for session_id in sessions
             )
@@ -17123,9 +17103,7 @@ class TestTierHealthFailover:
             cooling=("id-a1",),
         )
         key = router._get_session_affinity_cache_key("sess-missing", {})
-        await router.ctx.health().store.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
+        await router.ctx.health().session_pins.set(key, {"model": "dead-a", "tier": "SIMPLE"}, 600)
         results = [
             await router.async_pre_routing_hook(
                 model="m", request_kwargs={"metadata": {"session_id": "sess-missing"}}, messages=self.SIMPLE_MESSAGE

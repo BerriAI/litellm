@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 use super::{
     handler::shape_anthropic_messages_request,
     scalar::{is_one, python_str, python_value},
-    thinking::translate_thinking,
+    thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::beta_headers::accepted_or_unlisted;
 use crate::base_llm::messages::{
@@ -599,6 +599,11 @@ pub fn drop_unsupported_params(
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
     let capabilities = &context.thinking.capabilities;
+    let request = if context.drop_params {
+        drop_unsupported_effort(request, capabilities)
+    } else {
+        request
+    };
     let model = request.model.clone();
     let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
         if context.drop_params {
@@ -711,6 +716,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use crate::base_llm::messages::context::SupportedEffortTiers;
     use litellm_http::request::header_values;
 
     type Env = &'static [(&'static str, &'static str)];
@@ -813,6 +819,30 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn adaptive_without_xhigh() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_adaptive_thinking: true,
+            supports_legacy_thinking: true,
+            supports_output_config: true,
+            effort_tiers: SupportedEffortTiers {
+                max: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[fixture]
+    fn effort_without_adaptive() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            supports_output_config: true,
+            ..Default::default()
+        }
+    }
+
     #[rstest]
     #[case::alone(json!({"max_tokens": null}))]
     #[case::ahead_of_the_param_gate(json!({"max_tokens": null, "speed": "fast"}))]
@@ -846,6 +876,16 @@ mod tests {
     )]
     #[case::speed_on_a_fast_mode_model(fast_mode(), false, json!({"speed": "fast"}))]
     #[case::speed_on_a_fast_mode_model_under_drop_params(fast_mode(), true, json!({"speed": "fast"}))]
+    #[case::effort_tier_the_model_lacks_is_left_to_the_provider(
+        adaptive_without_xhigh(),
+        false,
+        json!({"output_config": {"effort": "xhigh"}})
+    )]
+    #[case::effort_tier_the_model_has_under_drop_params(
+        adaptive_without_xhigh(),
+        true,
+        json!({"output_config": {"effort": "max"}})
+    )]
     #[case::native_context_management_edits(unmapped(), false, json!({"context_management": {"edits": [{
         "type": "clear_tool_uses_20250919",
         "trigger": {"type": "input_tokens", "value": 30000},
@@ -900,12 +940,46 @@ mod tests {
         json!({"speed": "fast", "temperature": 1.0}),
         json!({"temperature": 1.0})
     )]
+    #[case::reasoning_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"reasoning_effort": "xhigh"}),
+        json!({})
+    )]
+    #[case::output_config_effort_tier_the_adaptive_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"output_config": {"effort": "xhigh", "format": {"type": "json_schema"}}}),
+        json!({"output_config": {"format": {"type": "json_schema"}}})
+    )]
+    #[case::output_config_effort_tier_the_effort_model_lacks(
+        effort_without_adaptive(),
+        json!({"output_config": {"effort": "max"}}),
+        json!({})
+    )]
     fn removed_params_are_dropped_under_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
         #[case] expected: Value,
     ) {
         assert_eq!(transform(fields, capabilities, true), Ok(body(expected)));
+    }
+
+    #[rstest]
+    fn drop_params_keeps_the_effort_sized_budget_on_a_model_without_adaptive_thinking(
+        effort_without_adaptive: MessagesModelCapabilities,
+    ) {
+        let adaptive = json!({"max_tokens": 64000, "thinking": {"type": "adaptive"}});
+        let with_xhigh = merged(
+            adaptive.clone(),
+            json!({"output_config": {"effort": "xhigh"}}),
+        );
+
+        let dropped = transform(with_xhigh.clone(), effort_without_adaptive, true);
+
+        assert_eq!(
+            dropped,
+            transform(with_xhigh, effort_without_adaptive, false)
+        );
+        assert_ne!(dropped, transform(adaptive, effort_without_adaptive, true));
     }
 
     #[rstest]

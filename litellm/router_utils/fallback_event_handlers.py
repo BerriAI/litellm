@@ -1,11 +1,12 @@
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from functools import partial, reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the router passes the request kwargs as an untyped dict
 
 import httpx
 from pydantic import TypeAdapter
@@ -13,6 +14,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers, kwargs_after, run_subscribers
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
@@ -37,6 +41,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
 )
+from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.router import (
     FallbackSkipReason,
     LiteLLMParamsTypedDict,
@@ -975,60 +980,99 @@ async def run_async_fallback(
     raise error_from_fallbacks
 
 
-async def log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
-    """
-    Log a successful fallback event to all registered callbacks.
+async def log_success_fallback_event(
+    original_model_group: str,
+    kwargs: dict,  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+):
+    await _log_fallback_event(
+        True,
+        original_model_group,
+        cast(  # cast-ok: the request kwargs dict, keyed by parameter name
+            dict[str, object], kwargs
+        ),
+        original_exception,
+    )
 
-    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
-    CustomLogger instances from all callback lists.
 
-    Args:
-        original_model_group (str): The original model group before fallback.
-        kwargs (dict): kwargs for the request
+async def log_failure_fallback_event(
+    original_model_group: str,
+    kwargs: dict,  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+):
+    await _log_fallback_event(
+        False,
+        original_model_group,
+        cast(  # cast-ok: the request kwargs dict, keyed by parameter name
+            dict[str, object], kwargs
+        ),
+        original_exception,
+    )
 
-    Note:
-        Errors during logging are caught and reported but do not interrupt the process.
-    """
-    # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
-    for _callback_custom_logger in custom_loggers:
-        try:
-            await _callback_custom_logger.log_success_fallback_event(
-                original_model_group=original_model_group,
-                kwargs=kwargs,
-                original_exception=original_exception,
+async def _log_fallback_event(
+    succeeded: bool,
+    original_model_group: str,
+    kwargs: dict[str, object],  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+) -> None:
+    callbacks: Final = reduce(_with_event_logger, litellm.logging_callback_manager.get_all_callbacks(), ())
+    fields: Final = MappingProxyType(
+        {
+            Field.deprecated_kwargs: kwargs,
+            Field.model: original_model_group,
+            Field.error: original_exception,
+            Field.outcome: Outcome.fallback_success if succeeded else Outcome.fallback_failure,
+        }
+    )
+    subscribers: Final = hook_subscribers(Hook.router_event, callbacks, admit=Admit.every_logger)
+    _ = kwargs_after(
+        await run_subscribers(
+            subscribers, fields, partial(_start_fallback_event, succeeded, original_model_group, original_exception)
+        )
+    )
+
+
+def _with_event_logger(kept: tuple[object, ...], callback: object) -> tuple[object, ...]:
+    if not isinstance(callback, CustomLogger | CustomLoggerV2) or callback in kept:
+        return kept
+    return (*kept, callback)
+
+
+def _start_fallback_event(
+    succeeded: bool, original_model_group: str, original_exception: Exception, callback: object, kwargs: object
+) -> Awaitable[None] | None:
+    if not isinstance(callback, CustomLogger):
+        return None
+    return _deliver_fallback_event(
+        callback,
+        succeeded,
+        original_model_group,
+        kwargs,  # pyright: ignore[reportArgumentType]  # the request kwargs as the router passed them
+        original_exception,
+    )
+
+
+async def _deliver_fallback_event(
+    callback: CustomLogger,
+    succeeded: bool,
+    original_model_group: str,
+    kwargs: dict[str, object],  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+) -> None:
+    try:
+        if succeeded:
+            await callback.log_success_fallback_event(
+                original_model_group=original_model_group, kwargs=kwargs, original_exception=original_exception
             )
-        except Exception as e:
-            verbose_router_logger.error("Error in log_success_fallback_event: %s", e)
-
-
-async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
-    """
-    Log a failed fallback event to all registered callbacks.
-
-    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
-    CustomLogger instances from all callback lists.
-
-    Args:
-        original_model_group (str): The original model group before fallback.
-        kwargs (dict): kwargs for the request
-
-    Note:
-        Errors during logging are caught and reported but do not interrupt the process.
-    """
-    # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
-
-    for _callback_custom_logger in custom_loggers:
-        try:
-            await _callback_custom_logger.log_failure_fallback_event(
-                original_model_group=original_model_group,
-                kwargs=kwargs,
-                original_exception=original_exception,
+        else:
+            await callback.log_failure_fallback_event(
+                original_model_group=original_model_group, kwargs=kwargs, original_exception=original_exception
             )
-        except Exception as e:
-            verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
+    except Exception as e:
+        verbose_router_logger.error(
+            "Error in log_success_fallback_event: %s" if succeeded else "Error in log_failure_fallback_event: %s", e
+        )
 
 
 def check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:

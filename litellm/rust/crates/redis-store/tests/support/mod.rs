@@ -13,7 +13,7 @@ use litellm_redis_client::{
 use litellm_redis_store::{
     Number, Remote, TierPolicy,
     router_cooldowns::Cooldown,
-    router_usage::{Counter, Kind},
+    router_usage::{Counter, Kind, Scope},
 };
 use litellm_redis_testing::RedisDeployment;
 
@@ -212,21 +212,49 @@ pub fn usage() -> [UsageCase; 2] {
     [
         UsageCase {
             counter: Counter {
+                scope: Scope::GlobalRouter,
                 deployment_id: "dep".to_owned(),
                 model: Some("anthropic/claude-sonnet-5-5".to_owned()),
-                minute: "12-34".to_owned(),
+                window: "12-34".to_owned(),
                 kind: Kind::Tpm,
             },
             key: "global_router:dep:anthropic/claude-sonnet-5-5:tpm:12-34",
         },
         UsageCase {
             counter: Counter {
+                scope: Scope::GlobalRouter,
                 deployment_id: "dep".to_owned(),
                 model: None,
-                minute: "09-05".to_owned(),
+                window: "09-05".to_owned(),
                 kind: Kind::Rpm,
             },
             key: "global_router:dep:None:rpm:09-05",
+        },
+    ]
+}
+
+/// main's usage-based-routing-v2 and model rate limit check keys, which carry no prefix.
+pub fn deployment_usage() -> [UsageCase; 2] {
+    [
+        UsageCase {
+            counter: Counter {
+                scope: Scope::Deployment,
+                deployment_id: "dep".to_owned(),
+                model: Some("openai/gpt-5.4-nano".to_owned()),
+                window: "12-34".to_owned(),
+                kind: Kind::Rpm,
+            },
+            key: "dep:openai/gpt-5.4-nano:rpm:12-34",
+        },
+        UsageCase {
+            counter: Counter {
+                scope: Scope::Deployment,
+                deployment_id: "dep".to_owned(),
+                model: None,
+                window: "2026-11-10".to_owned(),
+                kind: Kind::Tpd,
+            },
+            key: "dep:None:tpd:2026-11-10",
         },
     ]
 }

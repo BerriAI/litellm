@@ -9,6 +9,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
     mcp_server_display_names,
+    vector_store_display_names,
 )
 from litellm.types.agents import AgentResponse
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -127,4 +128,77 @@ async def test_key_alias_only_for_keys_that_have_one():
 async def test_key_empty_ids_skip_the_db():
     table = _table()
     assert dict(await key_display_names(_prisma(litellm_verificationtoken=table), ())) == {}
+    table.find_many.assert_not_awaited()
+
+
+def _store_row(vector_store_id: str, vector_store_name: str | None = None) -> types.SimpleNamespace:
+    return types.SimpleNamespace(vector_store_id=vector_store_id, vector_store_name=vector_store_name)
+
+
+@pytest.mark.asyncio
+async def test_vector_store_name_comes_from_its_db_row() -> None:
+    prisma = _prisma(litellm_managedvectorstorestable=_table([_store_row("s1", "Parks knowledge base")]))
+    assert dict(await vector_store_display_names(prisma, ("s1",), ())) == {"s1": "Parks knowledge base"}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_declared_in_config_keeps_its_config_name() -> None:
+    """The vector store list shows the config file's entry for such a store, so the label must match it."""
+    prisma = _prisma(litellm_managedvectorstorestable=_table([_store_row("s1", "db-name")]))
+    declared = (
+        {
+            "vector_store_id": "s1",
+            "custom_llm_provider": "openai",
+            "vector_store_name": "config-name",
+            "is_config": True,
+        },
+    )
+    assert dict(await vector_store_display_names(prisma, ("s1",), declared)) == {"s1": "config-name"}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_declared_in_config_without_a_name_hides_its_row_name() -> None:
+    """The vector store list shows the config entry in place of the row, so a nameless entry has no label."""
+    prisma = _prisma(litellm_managedvectorstorestable=_table([_store_row("s1", "db-name")]))
+    declared = ({"vector_store_id": "s1", "custom_llm_provider": "openai", "is_config": True},)
+    assert dict(await vector_store_display_names(prisma, ("s1",), declared)) == {}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_loaded_from_the_db_does_not_override_its_row() -> None:
+    """The in-memory copy of a DB store can lag behind a rename on another pod."""
+    prisma = _prisma(litellm_managedvectorstorestable=_table([_store_row("s1", "renamed")]))
+    stale = ({"vector_store_id": "s1", "custom_llm_provider": "openai", "vector_store_name": "old-name"},)
+    assert dict(await vector_store_display_names(prisma, ("s1",), stale)) == {"s1": "renamed"}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_without_a_name_yields_no_label() -> None:
+    prisma = _prisma(litellm_managedvectorstorestable=_table([_store_row("s1")]))
+    declared = ({"vector_store_id": "s2", "custom_llm_provider": "openai", "is_config": True},)
+    assert dict(await vector_store_display_names(prisma, ("s1", "s2"), declared)) == {}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_only_requested_ids_are_returned_and_the_query_is_deduped() -> None:
+    table = _table([_store_row("s1", "A")])
+    declared = (
+        {
+            "vector_store_id": "other",
+            "custom_llm_provider": "openai",
+            "vector_store_name": "unasked",
+            "is_config": True,
+        },
+    )
+    names = await vector_store_display_names(
+        _prisma(litellm_managedvectorstorestable=table), ("s1", "s1", "missing"), declared
+    )
+    assert dict(names) == {"s1": "A"}
+    assert sorted(table.find_many.call_args.kwargs["where"]["vector_store_id"]["in"]) == ["missing", "s1"]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_empty_ids_skip_the_db() -> None:
+    table = _table()
+    assert dict(await vector_store_display_names(_prisma(litellm_managedvectorstorestable=table), (), ())) == {}
     table.find_many.assert_not_awaited()

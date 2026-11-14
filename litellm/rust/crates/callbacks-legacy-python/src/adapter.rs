@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call,
+    finalize, is_internal_call, messages_input,
     python::{Logging, Streaming},
     setup,
 };
@@ -216,12 +216,18 @@ impl LegacyLogging {
         &self,
         py: Python<'py>,
         body: &Bound<'py, PyDict>,
+        sent: &Value,
+        as_called: &serde_json::Map<String, Value>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let description = match self.operation {
             LoggingOperation::Completion => "Chat completions",
             LoggingOperation::Responses => "Responses",
             LoggingOperation::Messages => {
-                return Logging::MessagesInput.call(py, (body, self.call.kwargs().bind(py)));
+                let order: Vec<String> = Logging::MessagesInputOrder
+                    .call(py, (body, self.call.kwargs().bind(py)))?
+                    .extract()?;
+                let content = messages_input::serialized(&order, sent, as_called)?;
+                return messages_input::logged(py, &content);
             }
             LoggingOperation::Ocr => "OCR document processing",
         };
@@ -598,8 +604,12 @@ impl LegacyLogging {
             to_py(py, &wire.body)?.into_bound(py)
         }
         .cast_into::<PyDict>()?;
+        let mut as_called = serde_json::Map::new();
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
             if let Some(value) = self.caller_value(py, name, sent)? {
+                if lossless && messages_input::is_caller_scalar(&value) {
+                    as_called.insert(name.clone(), json_from_py(&value)?);
+                }
                 body.set_item(name, value)?;
             }
         }
@@ -620,7 +630,7 @@ impl LegacyLogging {
             url: wire.url.clone(),
             context: context.clone(),
         });
-        let input = self.logged_input(py, &body)?;
+        let input = self.logged_input(py, &body, &wire.body, &as_called)?;
         self.logger()?.pre_call(
             py,
             &input,
@@ -752,10 +762,16 @@ impl LegacyLogging {
                 let sent = self.request.as_ref().map(|request| SentRequest {
                     url: &request.url,
                     headers: &request.headers,
-                    body: &request.body,
+                    body: &head.sent_body,
                 });
-                self.logger()?
-                    .record_response(py, head.status, &head.headers, &raw.body, sent)?;
+                self.logger()?.record_response(
+                    py,
+                    head.status,
+                    &head.headers,
+                    &raw.body,
+                    head.streamed,
+                    sent,
+                )?;
             }
             return Ok(HookStep::Ready(()));
         }
@@ -1734,7 +1750,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
     #[case::messages(
         crate::LoggingOperation::Messages,
-        r#"[{'role': 'user', 'content': '{"pages": [1]}'}]"#
+        r#"[{'role': 'user', 'content': '{"pages":[1]}'}]"#
     )]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
@@ -1778,6 +1794,48 @@ prepared = {'pages': replacement}
 assert logger.pre['complete_input_dict']['pages'] is replacement
 assert str(logger.pre_input) == description
 assert original == [0]
+",
+            );
+        });
+    }
+
+    #[rstest]
+    fn the_messages_input_is_the_body_before_pre_call_edits_with_the_callers_scalars() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+kwargs['temperature'] = 1
+def on_pre_call(additional_args):
+    additional_args['complete_input_dict']['system'] = 'edited'
+",
+            );
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let wire = WireRequest {
+                body: json!({"model": "m", "system": "caf\u{e9} \u{1f600}", "temperature": 1.0}),
+                ..route_wire()
+            };
+
+            let (_, step) = send_and_receive(py, &mut logging, wire, &route_context());
+
+            let HookStep::Ready(sent) = step else {
+                panic!("pre_call answers at once");
+            };
+            assert_eq!(sent.body["system"], "edited");
+            run(
+                py,
+                &locals,
+                c"
+assert logger.pre_input == [
+    {'role': 'user', 'content': '{\"model\":\"m\",\"system\":\"caf\u{e9} \u{1f600}\",\"temperature\":1}'}
+], logger.pre_input
 ",
             );
         });

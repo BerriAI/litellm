@@ -13,11 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prometheus_client import REGISTRY
 
-from litellm.caching.redis_batch import (
-    active_post_call_redis_batch,
-    flush_post_call_redis_batches,
-    request_redis_batch_scope,
-)
+from litellm.caching.redis_batch import flush_post_call_redis_batches, request_redis_batch_scope
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
@@ -41,7 +37,7 @@ from litellm.types.proxy.carried_budget_state import (
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
-from tests.unit.caching.test_redis_batch import FakeNatives, fake_send, make
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 TEAM_RESET_AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -478,15 +474,13 @@ async def test_gauges_do_not_add_the_own_charge_twice_once_the_pipeline_went_out
 async def test_an_unrelated_post_call_flush_does_not_make_the_gauge_drop_its_own_unsent_charge(
     prometheus_logger, getters, redis_spend_counters
 ):
-    """An unrelated write went out first, then another request's 2.0 reached the counters. This request's 2.0 counts
+    """A post-call flush went out first, then another request's 2.0 reached the counters. This request's 2.0 counts
     once whether it is undeclared, declared but unsent, or settled."""
     _stub_gauges(prometheus_logger)
     _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
-    unrelated_cache, _ = make()
     metadata: Final = _request_metadata(_token_committed_at_auth())
 
     with _request_scope():
-        active_post_call_redis_batch(unrelated_cache).increment("unrelated-write", 1.0)
         await flush_post_call_redis_batches()
         await _emit(prometheus_logger, metadata)
         undeclared: Final = _remaining(prometheus_logger)

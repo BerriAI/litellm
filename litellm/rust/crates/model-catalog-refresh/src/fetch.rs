@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use backon::Retryable;
+use litellm_auth_gcp::GcpTokenSource;
 use litellm_error::Report;
 use litellm_http::Client;
 use url::Url;
@@ -18,6 +20,15 @@ pub enum S3Access {
     Environment { region: Option<String> },
     /// A config the caller built with its region, endpoint and credentials
     Config(Box<litellm_s3::sdk::Config>),
+}
+
+#[derive(Clone)]
+pub enum GcsAccess {
+    Environment,
+    Config {
+        endpoint: String,
+        token_source: Arc<dyn GcpTokenSource>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +49,7 @@ pub enum Start {
 pub async fn fetch(
     client: &Client,
     s3: &S3Access,
+    gcs: &GcsAccess,
     url: &str,
     policy: RetryPolicy,
     start: Start,
@@ -58,8 +70,11 @@ pub async fn fetch(
         made.fetch_add(1, Ordering::Relaxed);
         async {
             match &source {
-                Source::Http(http) => attempt::http(client, http.clone(), policy.timeout).await,
+                Source::Http(http) => {
+                    attempt::http(client, http.clone(), None, policy.timeout).await
+                }
                 Source::S3(object) => attempt::s3(client, s3, object, policy.timeout).await,
+                Source::Gcs(object) => attempt::gcs(client, gcs, object, policy.timeout).await,
             }
         }
     };

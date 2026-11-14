@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
+import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
 vi.mock("../utils/roles", async (importOriginal) => {
@@ -15,6 +16,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
+    isProxyAdminRole: (role: string) => role === "admin",
     isUserTeamAdminForAnyTeam: actual.isUserTeamAdminForAnyTeam,
   };
 });
@@ -154,6 +156,7 @@ describe("Sidebar (leftnav)", () => {
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
     uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
+    localStorage.removeItem("litellm_plugin_mode");
   });
 
   it("uses SI terminology in section and page labels when the proxy asks for it", () => {
@@ -173,6 +176,19 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
+  it("should make customer organizations reachable from the Customer Portal sidebar", () => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    navState.pathname = "/ui/customers/manage";
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active", "true");
+    expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
   it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
@@ -747,6 +763,17 @@ describe("Sidebar (leftnav)", () => {
 });
 
 describe("getBreadcrumb", () => {
+  it("should identify the customer organizations list and its hierarchy routes", () => {
+    expect(getBreadcrumb("/ui/customers/usage")).toEqual({
+      section: "Customer Portal",
+      title: "Customer organizations",
+    });
+    expect(getBreadcrumb("/ui/customers/manage")).toEqual({
+      section: "Customer Portal",
+      title: "Customer organizations",
+    });
+    expect(getBreadcrumb("/ui/customers/")).toEqual({ section: "Customer Portal", title: "Customer organizations" });
+  });
   it("resolves a top-level route to its section + title", () => {
     expect(getBreadcrumb("/ui/api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
     expect(getBreadcrumb("/ui/logs")).toEqual({ section: "Observability", title: "Logs" });

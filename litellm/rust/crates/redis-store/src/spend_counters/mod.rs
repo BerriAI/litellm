@@ -65,7 +65,10 @@ impl SpendCounters {
 
     fn ttl(&self, counter: &SpendCounter, default_ttl: Duration) -> Duration {
         match counter {
-            SpendCounter::Committed(_) => default_ttl.max(Duration::from_millis(
+            SpendCounter::Committed(_)
+            | SpendCounter::CustomerOrg(_)
+            | SpendCounter::CustomerTeam(_)
+            | SpendCounter::CustomerMember(_) => default_ttl.max(Duration::from_millis(
                 self.committed_ttl_millis.load(Ordering::Relaxed),
             )),
             _ => default_ttl,
@@ -263,17 +266,9 @@ impl SpendCounters {
         spend: Number,
     ) -> Result<Option<Number>, Error> {
         let key = counter.key();
-        {
-            let _guard = self.cache.memory().guard();
-            if self
-                .cache
-                .memory()
-                .get(&key)?
-                .is_none_or(|cached| cached.as_f64() < spend.as_f64())
-            {
-                self.cache.memory().set(&key, spend, None)?;
-            }
-        }
+        self.cache
+            .memory()
+            .set_if(&key, spend, None, |cached| cached.as_f64() < spend.as_f64())?;
         let Some(remote) = self.cache.redis().get() else {
             return Ok(None);
         };
@@ -416,5 +411,25 @@ impl SpendCounters {
         if let Err(error) = self.delete(counters).await {
             tracing::debug!(%error, "dropping spend counters from Redis failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SpendCounter, SpendCounters};
+    use rstest::rstest;
+    use std::time::Duration;
+
+    #[rstest]
+    #[case::organization(SpendCounter::CustomerOrg("tenant:lifetime".into()))]
+    #[case::team(SpendCounter::CustomerTeam("team:lifetime".into()))]
+    #[case::member(SpendCounter::CustomerMember("member:lifetime".into()))]
+    fn customer_counters_outlive_the_pending_database_flush(#[case] counter: SpendCounter) {
+        let store = SpendCounters::new(None);
+        store.set_committed_ttl(Duration::from_secs(120));
+        assert_eq!(
+            store.ttl(&counter, Duration::from_secs(1)),
+            Duration::from_secs(120)
+        );
     }
 }

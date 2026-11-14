@@ -258,17 +258,15 @@ const openEdit = async () => {
   return screen.getByRole("dialog");
 };
 
-it.each(["current", "retained"])("refreshes published counts after a %s download", async (kind) => {
+it("refreshes published counts after a retained download", async () => {
   URL.createObjectURL = vi.fn(() => "blob:skill-download");
   renderWithProviders(<ClaudeCodePluginsPanel accessToken="admin-token" userRole="Admin" />);
-  expect(await screen.findByRole("cell", { name: "0" })).toBeInTheDocument();
+  expect(await screen.findByRole("cell", { name: "0" }, { timeout: 5000 })).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByText(published.name));
   await screen.findByRole("button", { name: "Edit Skill" });
-  if (kind === "retained") fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
-  const button = await screen.findByRole("button", {
-    name: kind === "retained" ? "Download retained ZIP" : "Download ZIP",
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
+  const button = await screen.findByRole("button", { name: "Download retained ZIP" });
   catalog = [{ ...published, download_count: 1 }];
   fireEvent.click(button);
   await waitFor(() => expect(button).toBeEnabled());

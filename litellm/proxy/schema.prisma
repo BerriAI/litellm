@@ -11,7 +11,14 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
+  customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
+  customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
+  customer_members LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudget")
+  customer_member_overrides LiteLLM_CustomerMemberTable[] @relation("CustomerMemberBudgetOverride")
+  customer_team_overrides LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudgetOverride")
   budget_id String @id @default(uuid())
+  name String?
   max_budget Float?
   soft_budget Float?
   max_parallel_requests Int?
@@ -22,7 +29,10 @@ model LiteLLM_BudgetTable {
   model_tpm_limit Json?
   model_rpm_limit Json?
   budget_duration String?
+  budget_limits Json?
+  cap_policy String?
   budget_reset_at DateTime?
+  budget_reset_count Int @default(0)
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   temp_budget_increase Float?
   temp_budget_expiry DateTime?
@@ -38,6 +48,83 @@ model LiteLLM_BudgetTable {
   model_access_groups LiteLLM_ModelAccessGroupBudgetTable[] // multiple model access groups can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
+}
+
+model LiteLLM_CustomerOrganizationTable {
+  spend Float @default(0.0)
+  budget_template_ids String[] @default([])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerOrganizationBudget", fields: [budget_id], references: [budget_id])
+  customer_org_id String @id @default(uuid())
+  alias String?
+  default_budget_template_id String?
+  default_budget_template LiteLLM_BudgetTable? @relation("CustomerOrganizationDefaultBudget", fields: [default_budget_template_id], references: [budget_id])
+  teams LiteLLM_CustomerTeamTable[]
+  members LiteLLM_CustomerMemberTable[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+  @@index([spend])
+}
+
+model LiteLLM_CustomerTeamTable {
+  spend Float @default(0.0)
+  spend_reset_window String?
+  customer_team_id String @id @default(uuid())
+  alias String?
+  parent_org_id String
+  parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerTeamBudget", fields: [budget_id], references: [budget_id])
+  budget_override_id String?
+  budget_override LiteLLM_BudgetTable? @relation("CustomerTeamBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+  @@index([parent_org_id])
+  @@index([spend])
+}
+
+model LiteLLM_CustomerMemberTable {
+  spend Float @default(0.0)
+  spend_reset_window String?
+  customer_member_id String @id @default(uuid())
+  alias String?
+  parent_org_id String
+  parent_org LiteLLM_CustomerOrganizationTable @relation(fields: [parent_org_id], references: [customer_org_id])
+  parent_team_ids String[] @default([])
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("CustomerMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_override_id String?
+  budget_override LiteLLM_BudgetTable? @relation("CustomerMemberBudgetOverride", fields: [budget_override_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
+  budget_increase_requests LiteLLM_CustomerBudgetIncreaseRequest[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+  @@index([parent_org_id])
+  @@index([spend])
+}
+
+model LiteLLM_CustomerBudgetIncreaseRequest {
+  request_id String @id @default(uuid())
+  customer_member_id String
+  customer_member LiteLLM_CustomerMemberTable @relation(fields: [customer_member_id], references: [customer_member_id], onDelete: Cascade)
+  requested_max_budget Float
+  expires_at DateTime?
+  reason String?
+  status String @default("pending_review")
+  submitted_by String
+  submitted_at DateTime @default(now())
+  reviewed_by String?
+  reviewed_at DateTime?
+  review_notes String?
+  @@index([status])
+  @@index([customer_member_id])
 }
 
 // Models on proxy
@@ -299,6 +386,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
@@ -672,6 +760,7 @@ model LiteLLM_EndUserTable {
   user_id String @id
   alias    String? // admin-facing alias
   spend      Float    @default(0.0)
+  spend_reset_window String?
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   models String[] @default([])
@@ -975,6 +1064,45 @@ model LiteLLM_DailyOrganizationSpend {
 }
 
 // Track daily end user (customer) spend metrics per model and key
+model LiteLLM_DailyCustomerMemberSpend {
+  id                  String   @id
+  date                String
+  customer_org_id     String
+  customer_team_id    String   @default("")
+  customer_member_id  String   @default("")
+  model               String   @default("")
+  model_group         String   @default("")
+  custom_llm_provider String   @default("")
+  mcp_namespaced_tool_name String @default("")
+  endpoint            String   @default("")
+  api_key             String   @default("")
+  spend               Float    @default(0.0)
+  prompt_tokens       BigInt   @default(0)
+  completion_tokens   BigInt   @default(0)
+  cache_read_input_tokens BigInt @default(0)
+  cache_creation_input_tokens BigInt @default(0)
+  compression_saved_tokens BigInt @default(0)
+  compression_savings_spend Float @default(0.0)
+  prompt_caching_savings_spend Float @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
+  autorouter_savings_spend Float @default(0.0)
+  guardrail_spend Float @default(0.0)
+  api_requests        BigInt   @default(0)
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  total_response_time_ms BigInt @default(0)
+  timed_requests      BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@index([date])
+  @@index([customer_org_id, date])
+  @@index([customer_team_id, date])
+  @@index([customer_member_id, date])
+  @@index([api_key])
+  @@index([model])
+}
+
 model LiteLLM_DailyEndUserSpend {
   id                  String   @id @default(uuid())
   end_user_id         String?
@@ -1630,6 +1758,7 @@ model LiteLLM_AccessGroupTable {
   mcp_tool_permissions    Json?
   access_agent_ids        String[] @default([])
   access_skill_names      String[] @default([])
+  access_vector_store_ids String[] @default([])
 
   assigned_team_ids         String[] @default([])
   assigned_key_ids          String[] @default([])

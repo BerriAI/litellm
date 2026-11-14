@@ -6,7 +6,6 @@ import errno
 import functools
 import inspect
 import ipaddress
-import json
 import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -1263,14 +1262,14 @@ async def transport_send(
     request: Mapping[str, object],
     url: str,
     headers: Sequence[tuple[str, str]],
-    body: object,
+    body: bytes,
     stream: bool,
 ) -> Sent:
     try:
         response: Final = await handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped dict params
             url=_sent_url(request, url),
             headers=dict(headers),
-            data=body if isinstance(body, bytes) else json.dumps(body),
+            data=body,
             stream=stream,
             logging_obj=cast(  # cast-ok: the call's logger, handed on as Python's handler hands it
                 "LiteLLMLoggingObj | None", request.get("litellm_logging_obj")
