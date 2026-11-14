@@ -4,13 +4,14 @@ Tests for Vertex AI partner models count_tokens location resolution.
 Ref: https://github.com/BerriAI/litellm/issues/23872
 """
 
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler as count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
     VertexAIPartnerModelsTokenCounter,
     count_tokens_request_body,
@@ -356,6 +357,52 @@ def test_count_tokens_counts_the_thinking_history_vertex_messages_sends():
 
     assert body["messages"] == sent["messages"]
     assert body["messages"] != GEMINI_THOUGHT_HISTORY
+
+
+class _OfflineTokenCounter(VertexAIPartnerModelsTokenCounter):
+    async def _ensure_access_token_async(
+        self,
+        credentials: object,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return "fake-token", "fake-project"
+
+
+class _CountResponse:
+    status_code: Final = 200
+    text: Final = ""
+
+    def json(self) -> dict[str, int]:
+        return {"input_tokens": 10}
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_posts_the_thinking_history_vertex_messages_sends(monkeypatch):
+    model: Final = "claude-sonnet-5-5"
+    posted: Final[list[object]] = []
+
+    class _RecordingClient:
+        async def post(self, url: str, json: object = None, **kwargs: object) -> _CountResponse:
+            posted.append(json)
+            return _CountResponse()
+
+    monkeypatch.setattr(count_tokens_handler, "get_async_httpx_client", lambda **kwargs: _RecordingClient())
+    sent: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=GEMINI_THOUGHT_HISTORY,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    await _OfflineTokenCounter().handle_count_tokens_request(
+        model=model,
+        request_data={"model": model, "messages": GEMINI_THOUGHT_HISTORY},
+        litellm_params={"vertex_location": "us-east5"},
+    )
+
+    assert [body["messages"] for body in posted if isinstance(body, dict)] == [sent["messages"]]
 
 
 def test_count_tokens_keeps_unsigned_thinking_for_a_model_that_is_not_claude():
