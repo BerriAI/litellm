@@ -18,14 +18,13 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
@@ -45,7 +44,6 @@ from .s3_cache import S3Cache
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
-_ITEM_USAGE_ADAPTER: Final = TypeAdapter(tuple[Usage, ...])
 
 
 @contextmanager
@@ -819,15 +817,7 @@ class Cache:
 
     @staticmethod
     def _provider_item_usage(result: EmbeddingResponse, idx_in_result_data: int, num_items: int) -> Usage | None:
-        hidden_params: Final = get_hidden_params(result)
-        if hidden_params is None:
-            return None
-        try:
-            item_usages: Final = _ITEM_USAGE_ADAPTER.validate_python(
-                hidden_params.get(EMBEDDING_ITEM_USAGE_HIDDEN_PARAM, ())
-            )
-        except ValidationError:
-            return None
+        item_usages: Final = result.item_usage
         return item_usages[idx_in_result_data] if len(item_usages) == num_items else None
 
     def _get_per_item_prompt_tokens_details(

@@ -2413,6 +2413,11 @@ class EmbeddingResponse(OpenAIObject):
 
     _response_headers: dict | None = None
     _response_ms: float | None = None
+    _item_usage: tuple[Usage, ...] = ()
+
+    @property
+    def item_usage(self) -> tuple[Usage, ...]:
+        return self._item_usage
 
     def __init__(
         self,
@@ -2422,6 +2427,7 @@ class EmbeddingResponse(OpenAIObject):
         data: list | list[Embedding] | None = None,
         hidden_params=None,
         _response_headers=None,
+        item_usage: tuple[Usage, ...] = (),
         **params,
     ) -> None:
         object: Final = "list"
@@ -2447,6 +2453,7 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
+        self._item_usage = item_usage
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

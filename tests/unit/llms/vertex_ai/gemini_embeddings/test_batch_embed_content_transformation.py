@@ -836,8 +836,35 @@ async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_with
 
 @pytest.mark.asyncio
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("batch", "usage_metadata", "expected_hits"),
+    [
+        pytest.param(
+            ["a red apple", IMAGE_DATA_URI, "a green pear"],
+            {
+                "promptTokenCount": 267,
+                "promptTokenDetails": [
+                    {"modality": "TEXT", "tokenCount": 9},
+                    {"modality": "IMAGE", "tokenCount": 258},
+                ],
+            },
+            (("a red apple", (5, 5, 0)), (IMAGE_DATA_URI, (258, 0, 258))),
+            id="modality-details",
+        ),
+        pytest.param(
+            ["a red apple", "a green pear"],
+            {"promptTokenCount": 7},
+            (("a red apple", (4, 0, 0)), ("a green pear", (3, 0, 0))),
+            id="prompt-count-only",
+        ),
+    ],
+)
 async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality_tokens(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    batch: list[str],
+    usage_metadata: dict[str, object],
+    expected_hits: tuple[tuple[str, tuple[int, int, int]], ...],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
@@ -846,59 +873,59 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
     ).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}, {"values": [0.5, 0.6]}],
-                "usageMetadata": {
-                    "promptTokenCount": 267,
-                    "promptTokenDetails": [
-                        {"modality": "TEXT", "tokenCount": 9},
-                        {"modality": "IMAGE", "tokenCount": 258},
-                    ],
-                },
-            },
+            json={"embeddings": [{"values": [0.1, 0.2]} for _ in batch], "usageMetadata": usage_metadata},
         )
     )
 
     async def embed(input: list[str]) -> EmbeddingResponse:
         return await litellm.aembedding(model="gemini/gemini-embedding-2", input=input, api_key="gemini-test-key")
 
-    await embed(["a red apple", IMAGE_DATA_URI, "a green pear"])
+    await embed(batch)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
-    text_hit: Final = await embed(["a red apple"])
-    image_hit: Final = await embed([IMAGE_DATA_URI])
+    hits: Final = [(item, await embed([item])) for item, _ in expected_hits]
 
     assert route.call_count == 1
-    assert [
+    assert tuple(
         (
-            hit.usage.prompt_tokens,
-            hit.usage.prompt_tokens_details.text_tokens,
-            hit.usage.prompt_tokens_details.image_tokens,
+            item,
+            (
+                hit.usage.prompt_tokens,
+                hit.usage.prompt_tokens_details.text_tokens,
+                hit.usage.prompt_tokens_details.image_tokens,
+            ),
         )
-        for hit in (text_hit, image_hit)
-    ] == [(5, 5, 0), (258, 0, 258)]
+        for item, hit in hits
+    ) == expected_hits
 
 
 @pytest.mark.parametrize("use_embed_content", [False, True])
-def test_a_malformed_usage_detail_entry_keeps_googles_prompt_count(use_embed_content: bool) -> None:
+def test_a_usage_detail_entry_without_a_token_count_keeps_googles_other_counts(use_embed_content: bool) -> None:
     usage_metadata: Final = {
-        "promptTokenCount": 258,
-        "promptTokenDetails": [{"modality": "TEXT"}, {"modality": "IMAGE", "tokenCount": 258}],
+        "promptTokenCount": 261,
+        "promptTokenDetails": [
+            {"modality": "TEXT", "tokenCount": 3},
+            {"modality": "AUDIO"},
+            {"modality": "IMAGE", "tokenCount": 258},
+        ],
     }
     response: Final = (
         process_embed_content_response(
-            input=[IMAGE_DATA_URI],
+            input=["a red apple", IMAGE_DATA_URI],
             model_response=EmbeddingResponse(),
             model="gemini-embedding-2",
             response_json={"embedding": {"values": [0.1]}, "usageMetadata": usage_metadata},
         )
         if use_embed_content
         else process_response(
-            input=[IMAGE_DATA_URI],
+            input=["a red apple", IMAGE_DATA_URI],
             model_response=EmbeddingResponse(),
             model="gemini-embedding-2",
-            _predictions={"embeddings": [{"values": [0.1]}], "usageMetadata": usage_metadata},
+            _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": usage_metadata},
         )
     )
 
-    assert response.usage.prompt_tokens == 258
-    assert response.usage.prompt_tokens_details.image_tokens == 258
+    assert (
+        response.usage.prompt_tokens,
+        response.usage.prompt_tokens_details.text_tokens,
+        response.usage.prompt_tokens_details.image_tokens,
+    ) == (261, 3, 258)

@@ -140,8 +140,6 @@ class HealthCheckCacheParams(LiteLLMBaseModel):
 
 EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
 
-EMBEDDING_ITEM_USAGE_HIDDEN_PARAM: Final = "embedding_item_usage"
-
 CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 

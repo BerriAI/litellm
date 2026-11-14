@@ -12,7 +12,6 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
-from litellm.types.caching import EMBEDDING_ITEM_USAGE_HIDDEN_PARAM
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
     BlobType,
@@ -484,6 +483,8 @@ def transform_openai_input_gemini_embed_content(
 _IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
 _Modality = Literal["text", "image", "audio", "video", "other"]
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
+_detail_entries_adapter: Final = TypeAdapter(tuple[object, ...])
+_detail_adapter: Final = TypeAdapter(PromptTokensDetails)
 
 
 def _validated_usage_metadata(fields: Mapping[str, object]) -> UsageMetadata | None:
@@ -493,14 +494,27 @@ def _validated_usage_metadata(fields: Mapping[str, object]) -> UsageMetadata | N
         return None
 
 
+def _valid_detail(entry: object) -> PromptTokensDetails | None:
+    try:
+        return _detail_adapter.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _valid_details(raw_details: object) -> tuple[PromptTokensDetails, ...]:
+    try:
+        entries: Final = _detail_entries_adapter.validate_python(raw_details)
+    except ValidationError:
+        return ()
+    return tuple(detail for detail in map(_valid_detail, entries) if detail is not None)
+
+
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     fields: Final = _as_mapping(raw_usage_metadata)
     if fields is None or "promptTokenCount" not in fields:
         return None
-    details: Final = fields.get("promptTokensDetails", fields.get("promptTokenDetails"))
-    return _validated_usage_metadata({**fields, "promptTokensDetails": details or []}) or _validated_usage_metadata(
-        {**fields, "promptTokensDetails": []}
-    )
+    details: Final = _valid_details(fields.get("promptTokensDetails", fields.get("promptTokenDetails")))
+    return _validated_usage_metadata({**fields, "promptTokensDetails": details})
 
 
 def _flatten_input(input: GeminiEmbeddingInput) -> tuple[GeminiEmbeddingElement, ...]:
@@ -754,8 +768,6 @@ def process_response(
             for idx, embedding in enumerate(_predictions["embeddings"])
         ],
         usage=usage,
-        hidden_params={
-            **(get_hidden_params(model_response) or {}),
-            EMBEDDING_ITEM_USAGE_HIDDEN_PARAM: _per_item_usage(input, usage, resolved_files or {}),
-        },
+        hidden_params={**(get_hidden_params(model_response) or {})},
+        item_usage=_per_item_usage(input, usage, resolved_files or {}),
     )
