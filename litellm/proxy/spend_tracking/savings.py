@@ -689,9 +689,13 @@ def compute_savings_spend(
             cost_breakdown=cost_breakdown,
         )
     )
-    return SavingsSpend(
+    savings: Final = SavingsSpend(
         compression=compression,
         prompt_caching=prompt_caching,
         autorouter=0.0 if autorouter is None else autorouter,
         gateway_injected_caching=gateway_injected_caching,
     )
+    if all(isfinite(value) for value in savings):
+        return savings
+    verbose_proxy_logger.warning("Spend tracking - recording non-finite savings %s as 0 for model=%s", savings, model)
+    return SavingsSpend(*(value if isfinite(value) else 0.0 for value in savings))

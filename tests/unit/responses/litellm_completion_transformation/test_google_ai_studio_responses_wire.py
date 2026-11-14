@@ -85,6 +85,34 @@ async def test_web_search_preview_is_sent_as_google_search() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["", [], [{"type": "input_text", "text": ""}]])
+async def test_empty_responses_tool_output_reaches_gemini_without_json_text(
+    output: str | list[dict[str, str]],
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_function_call_response("signature"))
+        )
+        response: Final = await litellm.aresponses(
+            model="gemini/gemini-2.5-flash",
+            api_key="test-key",
+            input=[
+                {"role": "user", "content": "Check the weather"},
+                {"type": "function_call", "call_id": "call_empty", "name": "get_weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_empty", "output": output},
+            ],
+        )
+        request_body: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert request_body["contents"] == [
+        {"role": "user", "parts": [{"text": "Check the weather"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "get_weather", "response": {"content": ""}}}]},
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("assistant_content", "assistant_parts"),
     [

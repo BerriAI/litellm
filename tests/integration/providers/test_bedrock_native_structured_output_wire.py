@@ -18,8 +18,10 @@ from pydantic import JsonValue, TypeAdapter
 _HAIKU: Final = "us.anthropic.claude-haiku-5-5"
 _FABLE: Final = "us.anthropic.claude-fable-5"
 _SONNET: Final = "us.anthropic.claude-sonnet-4-6"
-_OPUS: Final = "us.anthropic.claude-opus-5-5"
-_OPT_IN: Final = _OPUS
+_NEITHER_KEY: Final = "us.anthropic.claude-opus-4-7"
+_OPT_IN: Final = _NEITHER_KEY
+_BEDROCK_KEY_ONLY: Final = "us.anthropic.claude-sonnet-5-5"
+_UNFORCEABLE_TOOL: Final = "anthropic.claude-opus-5-5"
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _DEEPSEEK: Final = "deepseek.v3.2"
 _AWS: Final[dict[str, JsonValue]] = {
@@ -536,6 +538,12 @@ def _resolves(schema: Mapping[str, JsonValue], ref: str) -> bool:
     return ref.startswith(prefix) and ref.removeprefix(prefix) in object_value(schema.get("$defs") or {})
 
 
+def _tool_choice(body: Mapping[str, JsonValue], invoke: bool) -> JsonValue:
+    if invoke:
+        return body.get("tool_choice")
+    return object_value(body.get("toolConfig") or {}).get("toolChoice")
+
+
 def _assert_native_without_tools(body: Mapping[str, JsonValue], invoke: bool, schema: Mapping[str, JsonValue]) -> None:
     assert _native_schema(body, invoke) == schema, body
     assert _JSON_TOOL not in _tools(body, invoke), body
@@ -615,10 +623,13 @@ def test_messages_thinking_on_a_bedrock_converse_native_model_gets_native_output
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gateway: Gateway, route: str) -> None:
+@pytest.mark.parametrize("backend", [_OPUS_4_8, _HAIKU], ids=["opus_4_8", "haiku_5_5"])
+def test_bedrock_native_model_with_no_thinking_param_gets_native_output(
+    gateway: Gateway, route: str, backend: str
+) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire, route, _HAIKU)
+        model: Final = _deployment(scenario, wire, route, backend)
         response: Final = gateway.request(
             "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
         )
@@ -627,18 +638,58 @@ def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gatewa
         assert not message.get("tool_calls"), response.text
         _, body = _one_call(wire, marker_hex)
         invoke: Final = route == "invoke"
-        assert _native_schema(body, invoke) is None, body
-        assert _tools(body, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], body
+        _assert_native_without_tools(body, invoke, _SCHEMA)
+        if invoke:
+            assert body["anthropic_beta"] == ["structured-outputs-2025-11-13"], body
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_json_schema_without_thinking_on_a_model_that_cannot_force_the_json_tool_gets_native_output(
+    gateway: Gateway, route: str
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        _assert_native_without_tools(body, route == "invoke", _SCHEMA)
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_a_model_that_cannot_force_the_json_tool_retries_a_rejected_native_output_with_an_unforced_json_tool(
+    gateway: Gateway, route: str
+) -> None:
+    marker, marker_hex = _marker()
+    invoke: Final = route == "invoke"
+    with wire_server(_rejecting_native_output(_FABLE_REJECTION)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        rejected, retried = (_JSON.validate_json(request.body) for request in wire.drain())
+        assert _native_schema(rejected, invoke) == _SCHEMA, rejected
+        assert _native_schema(retried, invoke) is None, retried
+        assert _tools(retried, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], retried
+        assert _tool_choice(retried, invoke) is None, retried
 
 
 @pytest.mark.parametrize(
     ("backend", "model_info", "native"),
     [
-        (_OPUS, None, False),
+        (_NEITHER_KEY, None, False),
         (_OPT_IN, {"supports_bedrock_native_structured_output": True}, True),
         (_OPUS_4_8, {"supports_bedrock_native_structured_output": False}, False),
+        (
+            _OPUS_4_8,
+            {"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False},
+            True,
+        ),
     ],
-    ids=["neither_key", "deployment_opt_in", "deployment_opt_out"],
+    ids=["neither_key", "deployment_opt_in", "deployment_opt_out", "explicit_native_with_bedrock_key_off"],
 )
 def test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to(
     gateway: Gateway, backend: str, model_info: Mapping[str, JsonValue] | None, native: bool
@@ -797,6 +848,25 @@ def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_ca
         assert _thinking_requested(body, False), body
 
 
+def test_a_caller_tool_next_to_json_schema_without_thinking_on_a_model_that_cannot_force_the_json_tool(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "converse", _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, tools=[_USER_TOOL_SPEC], response_format=_response_format(_SCHEMA)),
+        )
+        (call,) = list_value(_chat_message(response)["tool_calls"])
+        function: Final = object_value(object_value(call)["function"])
+        assert function["name"] == _USER_TOOL, response.text
+        _, body = _one_call(wire, marker_hex)
+        assert _tools(body, False).keys() == {_USER_TOOL}, body
+        assert _native_schema(body, False) == _SCHEMA, body
+
+
 @pytest.mark.parametrize(
     ("schema", "expected"),
     [(_UNCLEANED_SCHEMA, _UNCLEANED_SCHEMA), (_NULLABLE_SCHEMA, _CLOSED_NULLABLE_SCHEMA)],
@@ -829,7 +899,7 @@ def test_messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_think
 ) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire, "invoke", _HAIKU)
+        model: Final = _deployment(scenario, wire, "invoke", _BEDROCK_KEY_ONLY)
         response: Final = gateway.request(
             "POST",
             "/v1/messages",
@@ -877,9 +947,9 @@ def test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy
     ("route", "backend", "thinking", "schema", "native"),
     [
         ("converse", _SONNET, False, _NUMERIC_FORMATS_SCHEMA, True),
-        ("invoke", _HAIKU, True, _NUMERIC_FORMATS_SCHEMA, True),
+        ("invoke", _BEDROCK_KEY_ONLY, True, _NUMERIC_FORMATS_SCHEMA, True),
         ("converse", _SONNET, False, _WIDE_SCHEMA, True),
-        ("converse", _HAIKU, True, _WIDE_SCHEMA, False),
+        ("converse", _BEDROCK_KEY_ONLY, True, _WIDE_SCHEMA, False),
     ],
     ids=["numeric_formats_old_key", "numeric_formats_new_key_invoke", "wide_old_key", "wide_new_key"],
 )
@@ -978,7 +1048,7 @@ def test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it(
     ids=["other_400", "native_model"],
 )
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output(
+def test_bedrock_400_is_not_retried_unless_it_rejects_native_output(
     gateway: Gateway, route: str, backend: str, rejection: str
 ) -> None:
     marker, marker_hex = _marker()
@@ -989,10 +1059,19 @@ def test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output(
             "/v1/chat/completions",
             _chat_body(model, marker, thinking=_ADAPTIVE, response_format=_response_format(_SCHEMA)),
         )
-        assert response.status_code == 400, response.text
-        assert rejection.split(": ", 1)[1] in response.text, response.text
-        _, body = _one_call(wire, marker_hex)
-        assert _native_schema(body, route == "invoke") == _SCHEMA, body
+        invoke: Final = route == "invoke"
+        if rejection == _MAX_TOKENS_400:
+            assert response.status_code == 400, response.text
+            assert rejection.split(": ", 1)[1] in response.text, response.text
+            _, body = _one_call(wire, marker_hex)
+            _assert_native_without_tools(body, invoke, _SCHEMA)
+            return
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        rejected, retried = (_JSON.validate_json(request.body) for request in wire.drain())
+        _assert_native_without_tools(rejected, invoke, _SCHEMA)
+        assert _native_schema(retried, invoke) is None, retried
+        assert _tools(retried, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], retried
+        assert marker_hex in json.dumps(retried), retried
 
 
 def _always_rejecting(message: str) -> Callable[[Request], Reply]:
@@ -1007,7 +1086,7 @@ def _always_rejecting(message: str) -> Callable[[Request], Reply]:
     [(_OPUS_4_8, _MAX_TOKENS_400), (_SONNET, _FABLE_REJECTION)],
     ids=["other_400", "native_model"],
 )
-def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output(
+def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_native_output(
     gateway: Gateway, backend: str, rejection: str
 ) -> None:
     marker, marker_hex = _marker()
@@ -1020,7 +1099,17 @@ def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless
         )
         assert response.status_code == 400, response.text
         assert rejection.split(": ", 1)[1] in response.text, response.text
-        _one_call(wire, marker_hex)
+        if rejection == _MAX_TOKENS_400:
+            _, body = _one_call(wire, marker_hex)
+            _assert_native_without_tools(body, True, _SCHEMA)
+            return
+        rejected, retried = (_JSON.validate_json(request.body) for request in wire.drain())
+        _assert_native_without_tools(rejected, True, _SCHEMA)
+        assert _native_schema(retried, True) is None, retried
+        assert not _tools(retried, True), retried
+        prompt: Final = json.dumps(retried["messages"])
+        assert marker_hex in prompt, retried
+        assert all(name in prompt for name in object_value(_SCHEMA["properties"])), retried
 
 
 def test_a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params(gateway: Gateway) -> None:

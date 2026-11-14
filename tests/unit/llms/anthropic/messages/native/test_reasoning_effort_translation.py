@@ -1,5 +1,8 @@
 """Tests for ``reasoning_effort`` translation on the Anthropic /v1/messages route."""
 
+import logging
+from typing import Final
+
 import pytest
 
 from litellm.constants import (
@@ -44,6 +47,49 @@ def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
     assert "reasoning_effort" not in result
     assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
+
+
+def _reasoning_effort_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort=" in record.getMessage()
+    )
+
+
+@pytest.mark.parametrize("reasoning_effort", [5, {"effort": "high"}])
+def test_reasoning_effort_that_is_not_a_string_is_dropped_with_one_warning(
+    reasoning_effort: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={"max_tokens": 1024, "reasoning_effort": reasoning_effort},
+            litellm_params={},
+            headers={},
+        )
+
+    warnings: Final = _reasoning_effort_drop_warnings(caplog)
+    assert "reasoning_effort" not in result
+    assert "output_config" not in result
+    assert len(warnings) == 1
+    assert f"reasoning_effort={reasoning_effort!r}" in warnings[0]
+    assert "claude-opus-4-7" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort", ["high", {"summary": "concise"}])
+def test_reasoning_effort_that_is_a_string_or_names_no_level_logs_no_drop(
+    reasoning_effort: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={"max_tokens": 1024, "reasoning_effort": reasoning_effort},
+            litellm_params={},
+            headers={},
+        )
+
+    assert _reasoning_effort_drop_warnings(caplog) == ()
 
 
 def test_reasoning_effort_none_clears_thinking_and_output_config():
