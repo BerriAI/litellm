@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger_v2.call import CallContext
@@ -20,6 +21,7 @@ from litellm.types.utils import CallTypes
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _NATIVE_STASH,  # pyright: ignore[reportPrivateUsage]  # the replicas read the native's stash in the limiter's own shape
     ParallelSlotAcquisition,
+    RateLimitDescriptor,
     RateLimitedModel,
     RateLimitResponse,
     RequestRateLimiterStash,
@@ -40,6 +42,7 @@ from litellm.rust_bridge._native import NativeParallelRequestLimiter
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 _READS: Final = frozenset({Field.deprecated_kwargs})
+_DESCRIPTORS: Final = TypeAdapter(list[RateLimitDescriptor])
 
 
 def _view(
@@ -109,6 +112,16 @@ def get_request_stash() -> RequestRateLimiterStash | None:
         batch_enqueued_reservation=exported["batch_enqueued_reservation"],
         batch_tpd_refund_ops=tuple(_reservation_operation(op) for op in exported["batch_tpd_refunds"]),
     )
+
+
+def rate_limit_descriptors() -> list[RateLimitDescriptor] | None:
+    live: Final = _live_request_stash()
+    if live is None or live.native_state is None or not _NATIVES:
+        return None
+    native: Final = _NATIVES[-1]
+    if not native.owned(live.native_state):
+        return None
+    return _DESCRIPTORS.validate_python(native.descriptors(live.native_state)) or None
 
 
 class RustParallelRequestLimiter(_PROXY_MaxParallelRequestsHandler_v3):
@@ -246,4 +259,5 @@ __all__ = [
     "estimate_input_and_output_tokens",
     "estimate_tokens_for_request",
     "get_request_stash",
+    "rate_limit_descriptors",
 ]
