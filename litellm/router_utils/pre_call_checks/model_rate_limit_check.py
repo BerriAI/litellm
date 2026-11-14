@@ -17,7 +17,8 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -36,7 +37,14 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, is_health_check_probe_log
+
+
+class _LoggedKwargs(TypedDict, total=False):
+    standard_logging_object: ReadOnly[object]
+
+
+_LOGGED_KWARGS_ADAPTER: Final = TypeAdapter(_LoggedKwargs)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -430,12 +438,14 @@ class ModelRateLimitingCheck(CustomLogger):
             return deployment
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             await async_io_token_reconcile_success(self.usage, kwargs, response_obj)
 
-            if standard_logging_object is None:
+            if standard_logging_object is None or is_health_check_probe_log(
+                _LOGGED_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+            ):
                 return
 
             model_id: Final[object] = standard_logging_object.get("model_id")
@@ -474,7 +484,7 @@ class ModelRateLimitingCheck(CustomLogger):
             await async_io_token_refund_failure(self.usage, kwargs)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Sync version of tracking TPM usage after successful request.
         Always tracks tokens - the pre-call check handles enforcement.
@@ -483,7 +493,9 @@ class ModelRateLimitingCheck(CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             io_token_reconcile_success(self.usage, kwargs, response_obj)
 
-            if standard_logging_object is None:
+            if standard_logging_object is None or is_health_check_probe_log(
+                _LOGGED_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+            ):
                 return
 
             model_id: Final[object] = standard_logging_object.get("model_id")

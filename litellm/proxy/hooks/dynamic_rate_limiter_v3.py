@@ -75,6 +75,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, Usage
+from litellm.utils import is_health_check_probe_log
 
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
@@ -1501,6 +1502,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             callback_kwargs: Final = callback_kwargs_mapping(kwargs)
+            if is_health_check_probe_log(callback_kwargs.get("standard_logging_object")):
+                return
             settlement_metadata: Final = (
                 _SettlementLoggingObject.model_validate(callback_kwargs.get("standard_logging_object") or {}).metadata
                 or _SettlementMetadata()

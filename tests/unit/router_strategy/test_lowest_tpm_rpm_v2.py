@@ -22,6 +22,7 @@ from PIL import Image
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
@@ -775,3 +776,49 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [True, False])
+@pytest.mark.parametrize(
+    ("user_api_key_hash", "counts_tokens"),
+    [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, False), ("hashed-user-key", True)],
+)
+async def test_a_health_check_probe_does_not_count_toward_its_deployment_usage(
+    user_api_key_hash: str, counts_tokens: bool, use_async: bool
+) -> None:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    usage: Final = _memory_usage()
+    logger: Final = LowestTPMLoggingHandler(usage=usage)
+    base: Final = create_standard_logging_payload()
+    payload: Final = {
+        **base,
+        "model_group": "plain",
+        "model_id": "primary",
+        "total_tokens": 50,
+        "hidden_params": {**base["hidden_params"], "litellm_model_name": "openai/gpt-4o"},
+        "metadata": {**base["metadata"], "user_api_key_hash": user_api_key_hash},
+    }
+
+    kwargs: Final = {
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "metadata": {"model_group": "plain"},
+            "model_info": {"id": "primary"},
+        },
+        "standard_logging_object": payload,
+    }
+    response: Final = {"usage": {"total_tokens": 50}}
+    minute_before: Final = get_utc_datetime().strftime("%H-%M")
+    if use_async:
+        await logger.async_log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
+    else:
+        logger.log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
+    minute_after: Final = get_utc_datetime().strftime("%H-%M")
+
+    counted: Final = [
+        usage.get_local(UsageCounter.for_deployment("primary", "openai/gpt-4o", "tpm", minute))
+        for minute in {minute_before, minute_after}
+    ]
+    assert any(counted) is counts_tokens, f"{user_api_key_hash} left the deployment tpm counter at {counted}"

@@ -26,6 +26,7 @@ from prisma.errors import ClientNotConnectedError
 import litellm
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     InitPassThroughEndpointHelpers,
@@ -291,6 +292,32 @@ def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.in_memory_llm_clients_cache.flush_cache()
     yield
     litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+class SuccessLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[dict[str, object]] = []  # mutable-ok: the logging worker appends each call it delivers
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.append(kwargs)
+
+    async def delivered(self, count: int) -> list[dict[str, object]]:
+        for _ in range(500):
+            if len(self.logged) >= count:
+                return self.logged
+            await asyncio.sleep(0.01)
+        pytest.fail(f"expected {count} logged calls, got {len(self.logged)}")
+
+
+@pytest.fixture
+def success_logs(monkeypatch: pytest.MonkeyPatch) -> SuccessLogRecorder:
+    recorder: Final = SuccessLogRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    litellm.logging_callback_manager.add_litellm_async_success_callback(recorder)
+    return recorder
 
 
 @pytest.fixture(autouse=True)

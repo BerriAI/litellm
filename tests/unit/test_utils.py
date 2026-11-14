@@ -102,7 +102,7 @@ from litellm.utils import (
     ProviderConfigManager,
     _check_provider_match,
     get_potential_model_names,
-    _is_litellm_router_call,
+    is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
@@ -5732,7 +5732,7 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     ],
 )
 def test_is_litellm_router_call_reads_both_metadata_buckets(kwargs: Mapping[str, object], expected: bool) -> None:
-    assert _is_litellm_router_call(kwargs) is expected
+    assert is_litellm_router_call(kwargs) is expected
 
 
 @pytest.mark.asyncio

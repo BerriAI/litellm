@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, re
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.types.utils import CallTypes
+from litellm.utils import is_health_check_probe
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
@@ -51,6 +52,7 @@ class _ModelInfo(TypedDict, total=False):
 class _Metadata(TypedDict, total=False):
     model_group: ReadOnly[str | None]
     model_info: ReadOnly[_ModelInfo | None]
+    user_api_key_hash: ReadOnly[object]
 
 
 class _LitellmParams(TypedDict, total=False):
@@ -116,6 +118,8 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     except ValidationError:
         return None
     litellm_params: Final = call.get("litellm_params") or _LitellmParams()
+    if is_health_check_probe(litellm_params.get("litellm_metadata")):
+        return None
     routing_metadata: Final = (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
     model_group: Final = next((group for group in map(_model_group, routing_metadata) if group is not None), None)
     deployment_id: Final = next(

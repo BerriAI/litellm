@@ -55,6 +55,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
+from litellm.utils import is_health_check_probe_log
 
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
@@ -603,7 +604,11 @@ class RouterBudgetLimiting(CustomLogger):
                 job=job,
             )
 
-        deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id)
+        deployment_budget_config: Final = (
+            None
+            if is_health_check_probe_log(callback_fields.get("standard_logging_object"))
+            else self._get_budget_config_for_deployment(model_id)
+        )
         if deployment_budget_config:
             # increment spend for specific deployment id
             deployment_spend_key: Final = f"deployment_spend:{model_id}:{deployment_budget_config.budget_duration}"

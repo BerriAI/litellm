@@ -16,6 +16,7 @@ import pytest
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.utils import BudgetConfig
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
@@ -41,6 +42,7 @@ def _success_kwargs(
     response_cost: float = 0.25,
     model_id: str = "deployment-1",
     guardrail_information: tuple[dict[str, object], ...] = (),
+    user_api_key_hash: str | None = None,
 ) -> dict[str, object]:
     provider_params: Final[dict[str, str]] = (
         {} if provider_in_litellm_params is None else {"custom_llm_provider": provider_in_litellm_params}
@@ -55,6 +57,7 @@ def _success_kwargs(
             "model_id": model_id,
             "custom_llm_provider": provider_in_payload,
             "guardrail_information": guardrail_information,
+            "metadata": {"user_api_key_hash": user_api_key_hash},
         },
     }
 
@@ -169,6 +172,42 @@ async def test_deployment_budget_tracked_when_provider_is_unresolvable(disable_b
     )
 
     assert await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d") == 0.25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_api_key_hash", "expected_spend"),
+    [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, None), ("hashed-user-key", 0.25)],
+)
+async def test_a_health_check_probe_does_not_spend_its_deployment_budget(
+    disable_budget_sync: None, user_api_key_hash: str, expected_spend: float | None
+) -> None:
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "some-model",
+                "litellm_params": {"model": "openai/gpt-4o", "max_budget": 10.0, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+
+    await _log_success(
+        limiter,
+        _success_kwargs(
+            provider_in_litellm_params="openai",
+            provider_in_payload="openai",
+            call_type="acompletion",
+            user_api_key_hash=user_api_key_hash,
+        ),
+    )
+
+    spend: Final = await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d")
+    provider_spend: Final = await limiter.dual_cache.async_get_cache("provider_spend:openai:1d")
+    assert spend == expected_spend, f"{user_api_key_hash} left deployment spend at {spend}"
+    assert provider_spend == 0.25, f"{user_api_key_hash} left provider spend at {provider_spend}"
 
 
 _MONTHLY_DEPLOYMENT: Final = {

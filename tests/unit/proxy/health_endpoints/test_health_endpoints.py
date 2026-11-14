@@ -46,7 +46,7 @@ from litellm.types.workload_identity import (
 from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
-from tests.unit.proxy.conftest import create_proxy_test_client
+from tests.unit.proxy.conftest import SuccessLogRecorder, create_proxy_test_client
 
 
 @pytest.mark.asyncio
@@ -821,6 +821,67 @@ MANTLE_CLAUDE_DEPLOYMENT: Final = MappingProxyType(
         "model_info": {"id": "mantle-claude-id"},
     }
 )
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_never_logs_or_forwards_an_identity_sent_by_the_caller(
+    httpx_transport: None, success_logs: SuccessLogRecorder
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "plain",
+                "litellm_params": {
+                    "model": "openai/provider-a-model",
+                    "api_base": "https://probe-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "plain-id"},
+            }
+        ]
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            respx.mock(assert_all_called=True) as upstream,
+        ):
+            chat_route: Final = upstream.post("https://probe-upstream.invalid/v1/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "provider-a-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+            result: Final = await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={
+                    "model": "openai/provider-a-model",
+                    "litellm_metadata": {"model_info": {"id": "someone-elses-deployment"}, "model_group": "spoofed"},
+                },
+                model_info={"id": "plain-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            )
+            delivered: Final = await success_logs.delivered(1)
+    finally:
+        router.discard()
+
+    assert result["status"] == "success", result
+    sent_body: Final = json.loads(chat_route.calls.last.request.content)
+    assert not {"metadata", "litellm_metadata"} & sent_body.keys(), sent_body
+    logged: Final = [
+        (log["standard_logging_object"]["model_id"], log["standard_logging_object"]["model_group"]) for log in delivered
+    ]
+    assert logged == [("plain-id", "")], "the probe is logged under the tested deployment, never the spoofed one"
 
 
 @pytest.mark.asyncio

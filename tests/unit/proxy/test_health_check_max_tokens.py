@@ -13,6 +13,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -20,6 +21,7 @@ from litellm.proxy.health_check import (
     resolve_health_check_mode,
     update_litellm_params_for_health_check,
 )
+from tests.unit.proxy.conftest import SuccessLogRecorder
 
 
 @pytest.mark.asyncio
@@ -503,6 +505,125 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert "max_tokens" not in probed_params
     assert probed_params["custom_llm_provider"] == "bedrock"
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "logged_identity"),
+    [
+        ({"id": "standby-deployment", "mode": "chat"}, ("standby-deployment", "")),
+        ({"mode": "chat"}, ("", "")),
+    ],
+)
+async def test_a_probe_logs_its_deployment_identity_without_sending_it_upstream_or_to_cooldowns(
+    httpx_transport: None,
+    success_logs: SuccessLogRecorder,
+    model_info: dict[str, object],
+    logged_identity: tuple[str, str],
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        chat_route: Final = upstream.post("https://probe-upstream.invalid/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "provider-b-pay",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "plain",
+                "litellm_params": {
+                    "model": "openai/provider-b-pay",
+                    "api_base": "https://probe-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": model_info,
+            }
+        )
+    await GLOBAL_LOGGING_WORKER.flush()
+    delivered: Final = await success_logs.delivered(1)
+
+    assert "error" not in result, result
+    sent_body: Final = json.loads(chat_route.calls.last.request.content)
+    assert not {"metadata", "litellm_metadata", "model_info"} & sent_body.keys(), sent_body
+    logged: Final = [
+        (log["standard_logging_object"]["model_id"], log["standard_logging_object"]["model_group"]) for log in delivered
+    ]
+    assert logged == [logged_identity]
+    cooldown_ids: Final = [log["litellm_params"]["model_info"].get("id") for log in delivered]
+    assert cooldown_ids == [None], "the router's cooldown callbacks key on litellm_params.model_info.id"
+
+
+@pytest.mark.asyncio
+async def test_a_stamped_probe_still_retries_a_transient_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        chat_route: Final = upstream.post("https://flaky-upstream.invalid/v1/chat/completions").mock(
+            side_effect=[
+                httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl-probe",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "provider-a-model",
+                        "choices": [
+                            {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                ),
+            ]
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "plain",
+                "litellm_params": {
+                    "model": "openai/provider-a-model",
+                    "api_base": "https://flaky-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "provider-a-primary", "mode": "chat"},
+            }
+        )
+
+    assert "error" not in result, result
+    assert chat_route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_stamped_image_probe_still_retries_a_transient_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as upstream:
+        image_route: Final = upstream.post("https://flaky-upstream.invalid/v1/images/generations").mock(
+            side_effect=[
+                httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                httpx.Response(200, json={"created": 1, "data": [{"b64_json": "iVBORw0KGgo="}]}),
+            ]
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "model_name": "images",
+                "litellm_params": {
+                    "model": "openai/provider-a-image",
+                    "api_base": "https://flaky-upstream.invalid/v1",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "provider-a-image", "mode": "image_generation"},
+            }
+        )
+
+    assert "error" not in result, result
+    assert image_route.call_count == 2
 
 
 _MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {

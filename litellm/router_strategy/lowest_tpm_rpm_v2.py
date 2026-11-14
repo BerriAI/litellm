@@ -29,7 +29,7 @@ from litellm.redis.stores.router_usage import (
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
-from litellm.utils import get_utc_datetime, print_verbose
+from litellm.utils import get_utc_datetime, is_health_check_probe_log, print_verbose
 
 from .base_routing_strategy import BaseRoutingStrategy
 
@@ -47,6 +47,7 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
 
 class _SuccessKwargs(TypedDict, total=False):
     litellm_params: ReadOnly[Mapping[str, object] | None]
+    standard_logging_object: ReadOnly[object]
 
 
 _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
@@ -267,7 +268,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -280,7 +281,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             model_group: Final = standard_logging_object.get("model_group")
             model: Final[object] = standard_logging_object["hidden_params"].get("litellm_model_name")
             id: object = standard_logging_object.get("model_id")
-            if model_group is None or id is None or model is None:
+            if (
+                model_group is None
+                or id is None
+                or model is None
+                or is_health_check_probe_log(
+                    _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+                )
+            ):
                 return
             elif isinstance(id, int):
                 id = str(id)
@@ -322,7 +330,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             model: Final = standard_logging_object["hidden_params"]["litellm_model_name"]
             model_id: Final = standard_logging_object.get("model_id")
             total_tokens: Final = standard_logging_object.get("total_tokens")
-            if model_group is None or not isinstance(model_id, (str, int)) or not isinstance(total_tokens, int):
+            if (
+                model_group is None
+                or not isinstance(model_id, (str, int))
+                or not isinstance(total_tokens, int)
+                or is_health_check_probe_log(
+                    _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("standard_logging_object")
+                )
+            ):
                 return
             counted_tokens: Final = get_counted_usage_tokens(
                 _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_params") or {},

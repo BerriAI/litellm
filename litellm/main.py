@@ -214,6 +214,7 @@ from litellm.utils import (
     get_secret,
     get_standard_openai_params,
     is_explicitly_disabled_factory,
+    is_litellm_router_call,
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
@@ -5911,7 +5912,7 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        is_router_call: Final = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        is_router_call: Final = is_litellm_router_call(kwargs)
         if is_router_call:
             max_retries = 0
         elif num_retries is not None:

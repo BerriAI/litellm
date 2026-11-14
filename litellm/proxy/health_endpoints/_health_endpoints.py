@@ -2606,14 +2606,19 @@ async def test_model_connection(
             )
 
         # Get model name from litellm_params
-        request_litellm_params: Final = litellm_params or {}
+        request_litellm_params: Final = {
+            key: value
+            for key, value in _OBJECT_MAPPING.validate_python(litellm_params or {}).items()
+            if key != "litellm_metadata"
+        }
         # Reject request-supplied os.environ/ references. Config values are
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
         if model_info:
             _reject_os_environ_references(model_info)
-        model_name: Final = request_litellm_params.get("model")
+        requested_model: Final = request_litellm_params.get("model")
+        model_name: Final = requested_model if isinstance(requested_model, str) else None
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)

@@ -74,6 +74,7 @@ from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
@@ -2203,8 +2204,23 @@ def _get_call_type_from_public_name(function_name: str) -> str:
             return function_name
 
 
-def _is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:
-    """Router completion stamps the group on metadata, generic endpoints on litellm_metadata."""
+def _mapping_value(value: object, key: str) -> object:
+    return cast(Mapping[str, object], value).get(key) if isinstance(value, Mapping) else None  # cast-ok: untyped dict
+
+
+def is_health_check_probe(metadata: object) -> bool:
+    return _mapping_value(metadata, "user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+
+def is_health_check_probe_log(standard_logging_object: object) -> bool:
+    return is_health_check_probe(_mapping_value(standard_logging_object, "metadata"))
+
+
+def is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:
+    """Router completion stamps the group on metadata, generic endpoints on litellm_metadata.
+    A health check probe carries its deployment's group only for logging, so it is not a router call."""
+    if is_health_check_probe(kwargs.get("litellm_metadata")):
+        return False
     metadata_buckets: Final = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
     return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
 
@@ -2465,7 +2481,7 @@ def client(original_function):
                     litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_completion_litellm_router_call: Final = is_litellm_router_call(kwargs)
                 if (
                     num_retries
                     and not is_completion_litellm_router_call
@@ -2503,7 +2519,7 @@ def client(original_function):
                 if not is_resent_failure(e):
                     litellm.num_retries = None  # set retries to None to prevent infinite loops
 
-                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_responses_litellm_router_call: Final = is_litellm_router_call(kwargs)
                 if (
                     num_retries
                     and not is_responses_litellm_router_call
@@ -2778,7 +2794,7 @@ def client(original_function):
             if retry_call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict")
 
-                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_acompletion_litellm_router_call: Final = is_litellm_router_call(kwargs)
 
                 if (
                     num_retries
@@ -2814,7 +2830,7 @@ def client(original_function):
                     result = await original_function(*args, **kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
-                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_aresponses_litellm_router_call: Final = is_litellm_router_call(kwargs)
 
                 if (
                     num_retries

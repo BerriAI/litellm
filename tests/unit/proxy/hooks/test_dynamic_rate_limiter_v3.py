@@ -12,7 +12,9 @@ from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 from prometheus_client import CollectorRegistry
 
 import litellm
@@ -33,6 +35,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitEntry, RateLimitScope
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from tests.unit.proxy.conftest import SuccessLogRecorder
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, Resolved, counter_pairs
 
 
@@ -3732,6 +3735,58 @@ async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_m
     group: Final = handler.llm_router.registry().group("shared-model")
     assert group is not None
     assert await handler._check_model_saturation("shared-model", group) == pytest.approx(0.7)
+
+
+async def _model_tokens_remaining(handler: PROXY_DynamicRateLimitHandlerV3, model: str) -> int:
+    group: Final = handler.llm_router.registry().group(model)
+    assert group is not None
+    descriptor: Final = handler._create_model_tracking_descriptor(model, group, high_limit_multiplier=1)
+    response: Final = await handler.v3_limiter.should_rate_limit([descriptor], read_only=True, skip_parallel_check=True)
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "tokens")
+
+
+@pytest.mark.asyncio
+async def test_a_background_health_check_probe_does_not_use_its_model_groups_capacity(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, success_logs: SuccessLogRecorder
+) -> None:
+    from litellm.proxy.health_check import _run_model_health_check
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+    model: Final = "probed-group"
+    deployment: Final[dict[str, object]] = {
+        "model_name": model,
+        "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-fixture", "tpm": 1000},
+        "model_info": {"id": "probed-deployment"},
+    }
+    router: Final = Router(model_list=[deployment])
+    handler: Final = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    handler.update_variables(llm_router=router)
+    litellm.logging_callback_manager.add_litellm_async_success_callback(handler)
+
+    assert await _run_model_health_check(deployment) == {}
+    await success_logs.delivered(1)
+    after_probe: Final = await _model_tokens_remaining(handler, model)
+    await router.acompletion(model=model, messages=[{"role": "user", "content": "hi"}])
+    await success_logs.delivered(2)
+    after_user_request: Final = await _model_tokens_remaining(handler, model)
+
+    assert after_probe == 1000
+    assert after_user_request == 1000 - 15
 
 
 @pytest.mark.asyncio

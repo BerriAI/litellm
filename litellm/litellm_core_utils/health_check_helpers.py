@@ -192,9 +192,15 @@ class HealthCheckHelpers:
         from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         _metadata_variable_name: Final = "litellm_metadata"
+        as_object: Final = TypeAdapter(dict[str, object]).validate_python
+        params: Final = as_object(model_params)
+        incoming: Final = as_object(params.get(_metadata_variable_name) or {})
         litellm_metadata: Final[Mapping[str, object]] = {
             **HealthCheckHelpers._get_metadata_for_health_check_call(),
-            "model_info": TypeAdapter(dict[str, object]).validate_python(model_params).get("model_info") or {},
+            "model_info": {
+                **as_object(params.get("model_info") or {}),
+                **as_object(incoming.get("model_info") or {}),
+            },
         }
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
