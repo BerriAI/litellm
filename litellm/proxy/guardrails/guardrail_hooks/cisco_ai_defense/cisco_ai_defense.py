@@ -1927,7 +1927,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         tool_text: Final = CiscoAIDefenseGuardrail._extract_tool_definition_text(data)
         if tool_text:
-            messages.append({"role": "system", "content": tool_text})
+            messages.append({"role": "tool", "content": tool_text})
 
         return messages
 
