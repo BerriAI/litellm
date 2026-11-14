@@ -928,6 +928,11 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
+    {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
+)
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
@@ -953,8 +958,9 @@ def unpack_defs(
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
 
-    ``keep_ref_siblings`` keeps the keys next to a ``$ref`` (a field's
-    ``description``, say) over the inlined target, as the OpenAI SDK does.
+    ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
+    ``description``, say) over the inlined target's, while the target's
+    constraints such as ``required`` stay as they are.
     """
 
     import copy
@@ -1014,7 +1020,7 @@ def unpack_defs(
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(
-                    {**target_schema, **{k: v for k, v in node.items() if k != "$ref"}}
+                    {**target_schema, **{k: v for k, v in node.items() if k in _JSON_SCHEMA_ANNOTATION_KEYWORDS}}
                     if keep_ref_siblings
                     else target_schema
                 )

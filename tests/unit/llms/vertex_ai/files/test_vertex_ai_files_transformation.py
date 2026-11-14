@@ -2698,6 +2698,21 @@ def test_a_dollar_key_inside_a_json_schema_literal_answers_400_even_with_drop_pa
     assert exc_info.value.status_code == 400
 
 
+def test_drop_params_drops_annotations_inside_properties_named_like_json_schema_keywords(config) -> None:
+    properties: Final = {name: {"type": "string"} for name in ("const", "default", "enum", "example", "examples")}
+    annotated: Final = {name: {**schema, "$comment": "a field"} for name, schema in properties.items()}
+
+    (row,) = _uploaded_rows(
+        config,
+        {**_GEMINI_DEPLOYMENT, "drop_params": True},
+        [_schema_entry({"type": "object", "properties": annotated})],
+    )
+
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == {"type": "object", "properties": properties}
+
+
 def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations(config) -> None:
     answer: Final = {
         "type": "object",

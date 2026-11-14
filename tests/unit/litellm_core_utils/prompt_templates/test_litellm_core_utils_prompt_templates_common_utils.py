@@ -1257,7 +1257,7 @@ def test_defs_unpacked_resolves_a_name_both_blocks_define_to_its_defs_schema() -
     assert defs_unpacked(schema) == {"type": "object", "properties": {"a": {"type": "string"}}}
 
 
-def test_defs_unpacked_keeps_the_keys_next_to_a_ref() -> None:
+def test_defs_unpacked_keeps_the_annotations_next_to_a_ref() -> None:
     city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "description": "A city"}
     schema: Final = {
         "type": "object",
@@ -1268,3 +1268,17 @@ def test_defs_unpacked_keeps_the_keys_next_to_a_ref() -> None:
         "type": "object",
         "properties": {"capital": {**city, "description": "The capital city"}},
     }
+
+
+def test_defs_unpacked_keeps_the_target_constraints_over_the_keys_next_to_a_ref() -> None:
+    city: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["name"],
+    }
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City", "required": ["country"], "type": "string"}},
+        "$defs": {"City": city},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"capital": city}}

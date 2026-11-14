@@ -125,6 +125,9 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_SCHEMA_ANNOTATIONS: Final = frozenset({"$schema", "$id", "$comment", "$anchor"})
 _JSON_SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "example", "examples"})
+_JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS: Final = frozenset(
+    {"properties", "patternProperties", "dependentSchemas", "definitions"}
+)
 _INLINABLE_JSON_SCHEMA_REF: Final = re.compile(r"#/(\$defs|definitions)/[^/]+")
 
 
@@ -864,6 +867,11 @@ class _SchemaLiteral:
     value: object
 
 
+@dataclass(frozen=True, slots=True)
+class _NamedSchemas:
+    value: object
+
+
 def _with_only_inlinable_refs(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
     refs: Final = sorted(
         str(value)
@@ -897,9 +905,31 @@ def _bigquery_loadable_literal(value: object) -> object:
     return {key: _SchemaLiteral(child) for key, child in value.pairs}
 
 
-def _bigquery_loadable_schema_node(node: _SchemaObject | _SchemaLiteral, drop_params: bool) -> object:
+def _bigquery_loadable_named_schemas(value: object) -> object:
+    if not isinstance(value, _SchemaObject):
+        return value
+    refused: Final = sorted(name for name, _ in value.pairs if "$" in name)
+    if refused:
+        raise ValueError(
+            f"json_schema property names {refused} cannot go in a Vertex AI batch, because BigQuery column names "
+            "cannot hold '$'"
+        )
+    return dict(value.pairs)
+
+
+def _schema_child(key: str, value: object) -> object:
+    if key in _JSON_SCHEMA_LITERAL_KEYWORDS:
+        return _SchemaLiteral(value)
+    if key in _JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS:
+        return _NamedSchemas(value)
+    return value
+
+
+def _bigquery_loadable_schema_node(node: _SchemaObject | _SchemaLiteral | _NamedSchemas, drop_params: bool) -> object:
     if isinstance(node, _SchemaLiteral):
         return _bigquery_loadable_literal(node.value)
+    if isinstance(node, _NamedSchemas):
+        return _bigquery_loadable_named_schemas(node.value)
     pairs: Final = node.pairs
     annotations: Final = frozenset(
         key for key, value in pairs if key in _JSON_SCHEMA_ANNOTATIONS and isinstance(value, str)
@@ -908,18 +938,14 @@ def _bigquery_loadable_schema_node(node: _SchemaObject | _SchemaLiteral, drop_pa
     if refused:
         raise ValueError(
             f"json_schema keys {refused} cannot go in a Vertex AI batch, because BigQuery column names cannot hold "
-            "'$'. Refs into $defs are inlined, so these are recursive refs, a nested $defs block, or names holding '$'"
+            "'$'. Refs into $defs are inlined, so these are recursive refs, a nested $defs block, or other '$' keywords"
         )
     if annotations and not drop_params:
         raise ValueError(
             f"json_schema keys {sorted(annotations)} cannot go in a Vertex AI batch, because BigQuery column names "
             "cannot hold '$'. Remove them, or set drop_params to drop them"
         )
-    return {
-        key: _SchemaLiteral(value) if key in _JSON_SCHEMA_LITERAL_KEYWORDS else value
-        for key, value in pairs
-        if key not in annotations
-    }
+    return {key: _schema_child(key, value) for key, value in pairs if key not in annotations}
 
 
 def _bigquery_loadable_schema(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
