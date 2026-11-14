@@ -370,6 +370,23 @@ class PassthroughEndpointRouter:
         )
         self.deployment_key_to_vertex_credentials[deployment_key] = vertex_pass_through_credentials
 
+    def remove_vertex_credentials(
+        self,
+        project_id: str,
+        location: str,
+    ):
+        """
+        Remove the vertex credentials for the given project-id, location
+        """
+        deployment_key: Final = self._get_deployment_key(
+            project_id=project_id,
+            location=location,
+        )
+        if deployment_key is None:
+            verbose_router_logger.debug("No deployment key found for project-id, location")
+            return
+        self.deployment_key_to_vertex_credentials.pop(deployment_key, None)
+
     def _get_deployment_key(self, project_id: str | None, location: str | None) -> str | None:
         """
         Get the deployment key for the given project-id, location
