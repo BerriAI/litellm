@@ -15,7 +15,7 @@ use litellm_callbacks::CallbackError;
 use serde_json::Value;
 
 pub use crate::{
-    attempt::{AttemptFacts, Residual},
+    attempt::AttemptFacts,
     callback::{Attempt, Event, LogSink, Prometheus, Stop, StopKind},
     store::{
         Action, Clock, FamilySpec, Forwarded, Kind, ManualClock, Op, Store, StoreError,
@@ -162,14 +162,11 @@ mod tests {
             })),
             cost: decoded(json!({"response_cost": 0.5})),
             tags: Some(Vec::new()),
-            residual: decoded(json!({
-                "settings": {},
-                "payload_labels": {
-                    "model_group": "group",
-                    "model_id": "id",
-                    "api_base": "base",
-                    "custom_llm_provider": "openai",
-                },
+            deployment_labels: decoded(json!({
+                "model_group": "group",
+                "model_id": "id",
+                "api_base": "base",
+                "custom_llm_provider": "openai",
             })),
             ..AttemptFacts::default()
         }

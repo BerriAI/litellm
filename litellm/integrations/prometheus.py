@@ -8,7 +8,7 @@ import math
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -1666,8 +1666,6 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_org_id=user_api_key_org_id,
                 end_user_id=end_user_id,
             ),
-            input_sequence_length_label=self._emit_input_sequence_length_label,
-            now=datetime.now(timezone.utc).astimezone().replace(tzinfo=None),
         )
         if not native_store.companion_in_line(self, litellm.logging_callback_manager.async_event_callbacks("success")):
             await native_store.run_alone(self.v2_companion, kwargs, "success", response_obj, start_time, end_time)

@@ -9,7 +9,7 @@ from types import SimpleNamespace, UnionType
 from typing import Annotated, Final, Union, get_args, get_origin
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger_v2 import derivations
@@ -87,6 +87,7 @@ _SCALARS: Final[Mapping[object, object]] = {
     int: 7,
     float: 1.5,
     tuple[str, ...]: ["member"],
+    JsonValue: "text",
 }
 _WRONG: Final[Mapping[object, object]] = {
     Scalar: _Unprintable(),

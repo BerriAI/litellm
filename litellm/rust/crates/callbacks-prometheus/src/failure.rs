@@ -20,7 +20,7 @@ impl Failure<'_> {
     pub fn run(&self) -> Result<(), CallbackError> {
         let facts = self.facts;
         let identity = metadata(facts)?;
-        let labels = &facts.residual.payload_labels;
+        let labels = &facts.deployment_labels;
         let user_id = stamped(identity, "user_api_key_user_id", identity.user_id.as_ref())?;
         let hashed_api_key = stamped(identity, "user_api_key_hash", identity.key_hash.as_ref())?;
         let api_key_alias = stamped(identity, "user_api_key_alias", identity.key_alias.as_ref())?;

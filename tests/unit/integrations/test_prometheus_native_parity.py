@@ -371,7 +371,7 @@ def _owner(kwargs: dict[str, object]) -> Logging:
         stream=kwargs["stream"] is True,
         call_type="acompletion",
         start_time=kwargs["start_time"],  # pyright: ignore[reportArgumentType]  # every corpus event carries a datetime
-        litellm_call_id=str(kwargs.get("litellm_call_id", "parity")),
+        litellm_call_id=str(kwargs.get("litellm_call_id")),
         function_id="parity",
     )
     owner.model_call_details = kwargs
@@ -1146,7 +1146,6 @@ def test_a_named_stop_is_logged_as_the_error_python_raised(original: Exception) 
         companion=None,  # pyright: ignore[reportArgumentType]  # the stop decoding never reads the companion
         call_id="c",
         event="success",
-        wire={},
         after=_never,
         budget=None,
     )

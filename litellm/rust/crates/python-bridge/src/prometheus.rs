@@ -200,10 +200,15 @@ impl NativePrometheusStore {
         applied
     }
 
-    fn callback(&self, log: Py<PyAny>) -> PyResult<RustCallback> {
+    fn callback(
+        &self,
+        log: Py<PyAny>,
+        emit_input_sequence_length_label: bool,
+    ) -> PyResult<RustCallback> {
         Ok(RustCallback::new(Arc::new(Prometheus::new(
             Arc::clone(&self.store),
             Arc::new(PythonLog(log)),
+            emit_input_sequence_length_label,
         )))?)
     }
 }

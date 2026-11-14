@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = { workspace = true, features = ["clock"] }
 futures-util.workspace = true
 indexmap = "2.14.0"
 litellm-callbacks.workspace = true

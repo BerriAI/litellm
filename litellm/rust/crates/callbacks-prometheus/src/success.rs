@@ -127,7 +127,7 @@ impl Success<'_> {
     pub fn run(&self, step: SuccessStep) -> Result<(), CallbackError> {
         let facts = self.facts;
         let identity = metadata(facts)?;
-        let labels = &facts.residual.payload_labels;
+        let labels = &facts.deployment_labels;
         let user_id = stamped(identity, "user_api_key_user_id", identity.user_id.as_ref())?;
         let hashed_api_key = stamped(identity, "user_api_key_hash", identity.key_hash.as_ref())?;
         let api_key_alias = stamped(identity, "user_api_key_alias", identity.key_alias.as_ref())?;
@@ -597,7 +597,7 @@ impl Success<'_> {
     fn deployment(&self, values: &LabelValues) -> Result<(), CallbackError> {
         let facts = self.facts;
         let deployment = &facts.deployment;
-        let api_base = required(&facts.residual.payload_labels, "api_base")?;
+        let api_base = required(&facts.deployment_labels, "api_base")?;
         let model = &facts.model;
         let provider = py(deployment.provider.as_ref());
         let model_id = self.model_info("id")?;
