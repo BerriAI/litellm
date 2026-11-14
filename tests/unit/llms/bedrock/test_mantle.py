@@ -796,3 +796,26 @@ async def test_mantle_anthropic_messages_streaming_sends_stream_and_passes_throu
     assert "event: message_start" in text
     assert '"text": "pong"' in text
     assert "event: message_stop" in text
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_mantle_messages_drops_compaction_without_its_beta():
+    """
+    The bedrock_mantle beta map has no compact-2026-09-04, so the beta is filtered
+    out on this route. ``compaction`` must go with it, or the body carries a field
+    that Bedrock refuses without the beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AmazonMantleMessagesConfig()
+    headers: dict[str, str] = {}
+    request = config.transform_anthropic_messages_request(
+        model="mantle/anthropic.claude-mythos-preview",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 100, "compaction": {"type": "summarize"}},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    assert "compaction" not in request
+    assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")

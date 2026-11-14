@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.109.0"
+version = "1.111.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -15,7 +15,7 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
-    "filelock>=3.16.1,<4.0",
+    "filelock>=3.16.1,<5",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
     "python-dotenv>=1.0.0,<2.0",
@@ -26,7 +26,7 @@ dependencies = [
     "tiktoken>=0.12.0,<1.0; python_version == '3.14'",
     "tiktoken>=0.14.0,<1.0; python_version >= '3.15'",
     "tokenizers>=0.21.0,<1.0",
-    "huggingface-hub>=0.34.0,<2.0",
+    "huggingface-hub>=0.34.0,<3.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
@@ -54,7 +54,9 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "casbin==1.43.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0; python_version < '3.15'",
@@ -72,6 +74,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
@@ -84,8 +87,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.111",
-    "litellm-enterprise==0.1.80",
+    "litellm-proxy-extras==0.4.116",
+    "litellm-enterprise==0.1.85",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -95,6 +98,7 @@ proxy = [
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
     "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
+    "semver>=3.0.4,<4",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and
@@ -130,7 +134,6 @@ utils = [
     # Not in Docker or PyPI proxy extra.
     "numpydoc>=1.8.0,<2.0",
 ]
-caching = ["diskcache>=5.6.3,<6.0"]
 mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
@@ -156,7 +159,8 @@ stt-vertex-chirp = [
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
-    "nvidia-riva-client>=2.15.0",
+    "grpcio>=1.67.1,<2.0",
+    "protobuf>=5.26.1,<7.0",
     "soundfile>=0.12.1",
     "audioread>=3.0.1",
     "numpy>=1.26.0",
@@ -182,10 +186,10 @@ proxy-runtime = [
     "grpcio==1.84.1",
     "prometheus-client>=0.20.0,<1.0",
     "langfuse>=4.7,<5.0",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
@@ -197,7 +201,7 @@ proxy-runtime = [
 ]
 
 [project.scripts]
-litellm = "litellm:run_server"
+litellm = "litellm_cli.main:proxy_server"
 lite = "litellm_cli.main:cli"
 litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
@@ -228,10 +232,10 @@ dev = [
     "types-PyYAML==6.0.12.20250915",
     "botocore-stubs==1.43.14",
     "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "langfuse>=4.7,<5.0",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
@@ -242,6 +246,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "nvidia-riva-client==2.16.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -252,7 +257,7 @@ e2e-dev = [
     "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
-    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz#sha256=5803a20a00a18177f4591706956f31be311879543049b8b38143ad90bb1cb0a6 ; python_version >= '3.12'",
 ]
 proxy-dev = [
     { include-group = "admin-mcp" },
@@ -260,21 +265,28 @@ proxy-dev = [
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
     "sentry-sdk==2.21.0",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp==1.45.1",
-    "opentelemetry-instrumentation-fastapi==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp==1.45.2",
+    "opentelemetry-instrumentation-fastapi==0.66b2",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "nemo-switchyard==0.4.0a1",
     "backports-zstd==1.8.0; python_version < '3.14'",
+    "httptools>=0.7.1,<0.8",
+    "semver>=3.0.4,<4",
 ]
 ci = [
     "psutil==7.2.2",
+    "tzdata==2026.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
+    # The Riva tests serve NVIDIA's own message definitions, which checks
+    # LiteLLM's hand-written copy of them on every run.
+    "nvidia-riva-client==2.16.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -312,31 +324,62 @@ benchmarks = [
     "pytest-codspeed==4.3.0",
     "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
+    "pypdf>=6.21.2,<7.0",
 ]
 
 [build-system]
 requires = ["maturin==1.15.0"]
-build-backend = "maturin"
+build-backend = "build_backend"
+backend-path = [".github/packaging"]
 
 [tool.maturin]
-manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
+manifest-path = "litellm/rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
-python-packages = ["litellm_cli"]
+python-packages = ["litellm"]
 bindings = "pyo3"
 features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    { path = ".github/packaging/*.py", format = "sdist" },
+    { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
+    { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
+    "litellm/integrations/prometheus_helpers/grafana_dashboards/**",
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
-    "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    "litellm/proxy/common_utils/codex_bundled_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_mantle_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_runtime_models_0.166.0.json",
+    { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    "litellm/scripts",
+    "litellm/scripts/**",
+    "litellm/runtime",
+    "litellm/runtime/**",
+    "litellm/schema.prisma",
+    "litellm/enterprise",
+    "litellm/enterprise/**",
+    "litellm/proxy-extras",
+    "litellm/proxy-extras/**",
+    "litellm/packaging",
+    "litellm/packaging/**",
+    { path = "litellm/rust", format = "wheel" },
+    { path = "litellm/rust/**", format = "wheel" },
+    "litellm/rust/target/**",
+    "litellm/deploy",
+    "litellm/deploy/**",
+    "litellm/ui",
+    "litellm/ui/**",
+    "litellm/vscode-extension",
+    "litellm/vscode-extension/**",
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
+    "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
     "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
@@ -350,21 +393,29 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
-    { file = "rust-toolchain.toml" },
-    { file = ".cargo/config.toml" },
-    { file = "litellm-rust/Cargo.lock" },
-    { file = "litellm-rust/Cargo.toml" },
-    { file = "litellm-rust/crates/**/*" },
+    { env = "MATURIN_PEP517_ARGS" },
+    { file = "litellm/rust/rust-toolchain.toml" },
+    { file = "litellm/rust/.cargo/config.toml" },
+    { file = "litellm/rust/Cargo.lock" },
+    { file = "litellm/rust/Cargo.toml" },
+    { file = "litellm/rust/crates/**/*" },
+    { file = "model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",
+    "tornado>=6.6.1; python_version >= '3.11'",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
-    "soupsieve>=2.8.4",
+    "soupsieve>=2.10",
+    "soupsieve>=4.0; python_full_version >= '3.11.5'",
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
+    "dnspython>=2.9.2; python_version >= '3.11'",
+    "filelock<3.20.4; python_version < '3.11'",
+    "filelock>=4.2.1; python_version >= '3.11'",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
@@ -379,22 +430,26 @@ exclude-newer = "3 days"
 [tool.uv.exclude-newer-package]
 # TODO: remove after 2026-10-25, once brotli 1.2.1 (CVE-2026-111497) clears the 3-day window
 brotli = "2026-10-22T14:01:00Z"
+# TODO: remove after 2026-10-31, once pypdf 6.21.4 clears the 3-day window
+pypdf = "2026-10-28T17:01:00Z"
 
 [tool.uv.sources]
+litellm-proxy = { workspace = true }
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["litellm/enterprise", "litellm/proxy-extras", "litellm/packaging/litellm-proxy"]
 
 [tool.commitizen]
-version = "1.109.0"
+version = "1.111.0"
 version_files = [
     "pyproject.toml:^version",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["scripts"]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "**/litellm/ui", "**/litellm/vscode-extension", "**/litellm/enterprise", "**/litellm/proxy-extras", "**/litellm/packaging", "**/litellm/rust", "**/litellm/scripts", "**/litellm/runtime"]
+pythonpath = ["litellm/scripts", "litellm/runtime"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
@@ -459,3 +514,81 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+
+[tool.ruff]
+src = [".", "litellm/runtime"]
+lint.ignore = ["F405", "E402", "F403"]
+# The second group is the strict gate's graduates: rules the codebase already has zero
+# violations of, so they hard-fail here instead of being counted by the strict gate.
+# That gives editors and `ruff check --fix` the diagnostic, which the gate script cannot.
+lint.extend-select = [
+    "T20", "PGH004", "RUF008", "RUF009", "RUF100",
+    "B004", "B018", "B021", "B033", "FURB136", "FURB168", "FURB188", "I001", "PERF402", "PIE790",
+    "PIE800", "PLC0208", "PLR0124", "PLR0402", "PLR0206", "PLR1704", "PLR1711", "PLR1730", "PLR2044",
+    "PLW0133", "PYI030", "PYI041", "PYI064", "RET501", "RUF010", "RUF022", "RUF023", "RUF051", "S113",
+    "SIM114", "SIM118", "SIM201", "SIM211", "SIM222", "TC005", "UP006", "UP007", "UP008",
+    "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045",
+    "C404", "C419", "TID253",
+]
+# RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
+# `# noqa` directives that protect rules enforced elsewhere. List those codes as external
+# so RUF100 leaves their directives alone: the strict gate (.github/linters/ruff-strict.toml) and upstream
+# litellm's own ruff config both rely on suppressions this config can't see.
+lint.external = [
+    # Enforced by the strict-rule gate (litellm/scripts/ruff_strict_gate.py + .github/linters/ruff-strict.toml).
+    # Family entries whose every strict rule graduated into extend-select above (FURB), and
+    # standalone graduated codes (I001, RUF010, RUF022, RUF023, RUF051), are dropped so this
+    # config's RUF100 polices their directives itself.
+    "ANN", "ASYNC230", "B", "C", "D202", "D403", "D417", "D419", "DTZ", "EXE", "LOG015", "N999", "PERF",
+    "PIE", "PL", "PYI", "RET", "RUF012", "RUF015", "RUF019",
+    "RUF046", "RUF059", "S110", "S112", "SIM", "TC", "TID251", "TRY", "UP",
+    # Enforced by upstream litellm's ruff config, but not run in this repo's CI
+    "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
+]
+line-length = 120
+
+extend-exclude = ["litellm/scripts", "litellm/runtime", "litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/enterprise", "litellm/proxy-extras", "litellm/packaging", "litellm/rust", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+
+format.exclude = ["**/enterprise/**"]
+
+# Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
+# (Black did) while `ruff check` keeps skipping them.
+lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+
+[tool.ruff.lint.flake8-tidy-imports]
+banned-module-level-imports = ["prisma"]
+
+[tool.ruff.lint.per-file-ignores]
+"litellm/main.py" = ["F401"]
+"litellm/types/caching.py" = ["F401"]
+"litellm/types/integrations/slack_alerting.py" = ["F401"]
+"litellm/types/llms/custom_http.py" = ["F401"]
+"litellm/types/llms/openai.py" = ["F401"]
+"litellm/types/proxy/management_endpoints/scim_v2.py" = ["F401"]
+"litellm/types/responses/main.py" = ["F401"]
+"litellm/utils.py" = ["F401"]
+"litellm/proxy/proxy_server.py" = ["F401"]
+"litellm/caching/__init__.py" = ["F401"]
+"litellm/llms/anthropic/chat/__init__.py" = ["F401"]
+"litellm/llms/azure_ai/embed/__init__.py" = ["F401"]
+"litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
+"litellm/llms/bedrock/chat/__init__.py" = ["F401"]
+"litellm/proxy/utils.py" = ["F401"]
+
+[tool.pyright]
+extraPaths = ["litellm/runtime"]
+include = ["litellm"]
+ignore = []
+exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/scripts", "litellm/runtime", "litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/enterprise", "litellm/proxy-extras", "litellm/packaging", "litellm/rust", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+enableTypeIgnoreComments = false
+reportMissingImports = false
+reportPrivateImportUsage = false
+reportExplicitAny = "error"
+reportAny = "error"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests/e2e_harness"
+extraPaths = ["tests/e2e", "tests/e2e/batches", "tests/e2e/guardrails", "tests/e2e/perf", "tests/e2e/logging"]

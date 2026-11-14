@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -9,7 +10,11 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.ollama.completion.handler import ollama_aembeddings, ollama_embeddings
+from litellm.llms.ollama.completion.handler import (
+    _process_ollama_embedding_response,
+    ollama_aembeddings,
+    ollama_embeddings,
+)
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -119,6 +124,39 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         assert response.usage.total_tokens == 5
         assert response.usage.completion_tokens == 0
         assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.parametrize(
+    ("use_encoding", "prompt_tokens", "level", "message"),
+    [
+        (True, 5, logging.DEBUG, "Ollama response missing prompt_eval_count; estimated with encoding."),
+        (False, 0, logging.WARNING, "Missing prompt_eval_count and no encoding provided; defaulted to 0."),
+    ],
+)
+def test_missing_prompt_eval_count_is_reported_on_the_given_logger(
+    mock_encoding: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    use_encoding: bool,
+    prompt_tokens: int,
+    level: int,
+    message: str,
+) -> None:
+    logger: Final = logging.getLogger("ollama-embedding-prompt-eval-test")
+
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        response: Final = _process_ollama_embedding_response(
+            response_json={"embeddings": [[0.1, 0.2]]},
+            prompts=["hello"],
+            model="nomic-embed-text",
+            model_response=EmbeddingResponse(),
+            logging_obj=logger,
+            encoding=mock_encoding if use_encoding else None,
+        )
+
+    assert response.usage.prompt_tokens == prompt_tokens
+    assert [(record.levelno, record.getMessage()) for record in caplog.records if record.name == logger.name] == [
+        (level, message)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -310,3 +348,21 @@ async def test_sdk_embedding_rejects_non_string_batch(embedding_route: respx.Rou
             litellm.embedding(model="ollama/nomic-embed-text", input=[123], api_base="http://ollama.test")
 
     assert not embedding_route.called
+
+
+def test_ollama_embeddings_sends_extra_body_fields_at_the_documented_places(embedding_route: respx.Route) -> None:
+    response: Final = litellm.embedding(
+        model="ollama/nomic-embed-text",
+        input=["hello", "world"],
+        api_base="http://ollama.test",
+        extra_body={"truncate": False, "keep_alive": "5m", "options": {"num_ctx": 2048}},
+    )
+
+    assert json.loads(embedding_route.calls.last.request.content) == {
+        "model": "nomic-embed-text",
+        "input": ["hello", "world"],
+        "truncate": False,
+        "keep_alive": "5m",
+        "options": {"num_ctx": 2048},
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]

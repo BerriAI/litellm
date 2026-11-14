@@ -1,0 +1,329 @@
+mod support;
+
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
+
+use litellm_redis_testing::{
+    ClientConnection, RedisDeployment, RedisSentinel, RedisServer, SERVICE_NAME, Topology,
+    eventually,
+};
+use rstest::rstest;
+
+use litellm_redis_client::commands;
+use litellm_redis_client::{
+    Credentials, CredentialsProvider, Error, Namespace, Node, RedisClient, RedisConfig, Sentinel,
+    Standalone, Target, Timeouts,
+};
+use litellm_secret_value::SecretValue;
+use support::{Rotating, connect_as, connections, proxied};
+
+#[rstest]
+#[tokio::test]
+async fn a_pushed_credential_reauthenticates_the_live_connection_and_a_reconnect_uses_the_latest(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let server = RedisDeployment::start(topology).await.unwrap();
+    server
+        .cli_on_every_node(&[
+            "ACL", "SETUSER", "alice", "on", ">first", "~*", "&*", "+@all",
+        ])
+        .await
+        .unwrap();
+    server
+        .cli_on_every_node(&[
+            "ACL", "SETUSER", "bob", "on", ">second", "~*", "&*", "+@all",
+        ])
+        .await
+        .unwrap();
+    let provider = Arc::new(Rotating::new("alice", "first"));
+    let client = connect_as(
+        &server,
+        Credentials::Provider(CredentialsProvider(provider.clone())),
+    );
+    client
+        .send(commands::set("k", "1", Duration::from_secs(60)))
+        .await
+        .unwrap();
+    let before = connections(&server).await;
+
+    provider.rotate("bob", "second");
+    let rotated = eventually(async || {
+        let now = connections(&server).await;
+        (users(&now) == BTreeSet::from(["bob"])).then_some(now)
+    })
+    .await;
+    server
+        .cli_on_every_node(&["ACL", "DELUSER", "alice"])
+        .await
+        .unwrap();
+    server
+        .cli_on_every_node(&["CLIENT", "KILL", "USER", "bob"])
+        .await
+        .unwrap();
+    let after_reconnect = eventually(async || {
+        client
+            .send(commands::get::<String>("k"))
+            .await
+            .ok()
+            .flatten()
+    })
+    .await;
+
+    let reconnected = connections(&server).await;
+
+    assert_eq!(users(&before), BTreeSet::from(["alice"]));
+    assert_eq!(ids(&rotated), ids(&before));
+    assert_eq!(after_reconnect, "1");
+    assert!(!reconnected.is_empty());
+    assert_eq!(users(&reconnected), BTreeSet::from(["bob"]));
+}
+
+fn users(connections: &[ClientConnection]) -> BTreeSet<&str> {
+    connections
+        .iter()
+        .map(|connection| connection.user.as_str())
+        .collect()
+}
+
+fn ids(connections: &[ClientConnection]) -> Vec<(u16, u64)> {
+    connections
+        .iter()
+        .map(|connection| (connection.node, connection.id))
+        .collect()
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_out_of_range_database_is_a_server_rejection() {
+    let server = RedisServer::start().await.unwrap();
+    let port = server.url().rsplit(':').next().unwrap().parse().unwrap();
+    let client = RedisClient::new(RedisConfig {
+        target: Target::Standalone(Standalone {
+            host: "127.0.0.1".into(),
+            port,
+            tls: None,
+            db: 999,
+        }),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_secs(2), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap();
+    let result = client.ping().await;
+    assert!(matches!(result, Err(Error::Server(_))), "{result:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_credential_is_a_transport_failure() {
+    let server = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    server
+        .cli_on_every_node(&["ACL", "SETUSER", "default", "on", ">right"])
+        .await
+        .unwrap();
+    let with_password = |password: &str| {
+        connect_as(
+            &server,
+            Credentials::Static {
+                username: None,
+                password: Some(SecretValue::new(password)),
+            },
+        )
+    };
+    with_password("right").ping().await.unwrap();
+
+    let rejected = with_password("wrong").ping().await;
+
+    assert!(matches!(rejected, Err(Error::Transport(_))), "{rejected:?}");
+}
+
+fn sentinel_client(sentinel: &RedisSentinel, credentials: Credentials) -> RedisClient {
+    let (host, port) = sentinel.sentinel();
+    RedisClient::new(RedisConfig {
+        target: Target::Sentinel(Sentinel {
+            monitors: vec![Node {
+                host: host.to_owned(),
+                port,
+            }],
+            service_name: SERVICE_NAME.to_owned(),
+            monitor_auth: None,
+            tls: None,
+            db: 0,
+        }),
+        credentials,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_secs(1), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn sentinel_writes_follow_the_master_through_a_failover() {
+    let sentinel = RedisSentinel::start().await.unwrap();
+    let client = sentinel_client(&sentinel, Credentials::NONE);
+    client
+        .send(commands::set("before", "1", Duration::from_secs(600)))
+        .await
+        .unwrap();
+    eventually(async || {
+        let replica =
+            redis::Client::open(format!("redis://127.0.0.1:{}", sentinel.replica_port())).ok()?;
+        let mut replica = replica.get_multiplexed_async_connection().await.ok()?;
+        let value: Option<String> = redis::cmd("GET")
+            .arg("before")
+            .query_async(&mut replica)
+            .await
+            .ok()?;
+        value
+    })
+    .await;
+
+    let promoted = sentinel.failover().await.unwrap();
+    eventually(async || {
+        client
+            .send(commands::set("after", "2", Duration::from_secs(600)))
+            .await
+            .ok()
+    })
+    .await;
+
+    assert_eq!(promoted, sentinel.replica_port());
+    assert_eq!(
+        client
+            .send(commands::get::<String>("before"))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+    let promoted = redis::Client::open(format!("redis://127.0.0.1:{promoted}")).unwrap();
+    let mut promoted = promoted.get_multiplexed_async_connection().await.unwrap();
+    let after: Option<String> = redis::cmd("GET")
+        .arg("after")
+        .query_async(&mut promoted)
+        .await
+        .unwrap();
+    assert_eq!(after.as_deref(), Some("2"));
+}
+
+const DATA_PASSWORD: &str = "data-secret";
+
+#[rstest]
+#[tokio::test]
+async fn sentinel_reaches_a_master_that_requires_a_password() {
+    let sentinel = RedisSentinel::start_with_password(DATA_PASSWORD)
+        .await
+        .unwrap();
+    let client = sentinel_client(
+        &sentinel,
+        Credentials::Static {
+            username: None,
+            password: Some(SecretValue::new(DATA_PASSWORD)),
+        },
+    );
+
+    client
+        .send(commands::set("k", "1", Duration::from_secs(60)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        client
+            .send(commands::get::<String>("k"))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn sentinel_rediscovers_with_the_credentials_the_provider_holds_now() {
+    let sentinel = RedisSentinel::start_with_password(DATA_PASSWORD)
+        .await
+        .unwrap();
+    sentinel
+        .cli_on_data_nodes(&[
+            "ACL", "SETUSER", "alice", "on", ">first", "~*", "&*", "+@all",
+        ])
+        .await
+        .unwrap();
+    sentinel
+        .cli_on_data_nodes(&[
+            "ACL", "SETUSER", "bob", "on", ">second", "~*", "&*", "+@all",
+        ])
+        .await
+        .unwrap();
+    let provider = Arc::new(Rotating::new("alice", "first"));
+    let client = sentinel_client(
+        &sentinel,
+        Credentials::Provider(CredentialsProvider(provider.clone())),
+    );
+    client
+        .send(commands::set("k", "1", Duration::from_secs(600)))
+        .await
+        .unwrap();
+
+    provider.rotate("bob", "second");
+    sentinel
+        .cli_on_data_nodes(&["ACL", "DELUSER", "alice"])
+        .await
+        .unwrap();
+    sentinel
+        .cli_on_data_nodes(&["CLIENT", "KILL", "USER", "bob"])
+        .await
+        .unwrap();
+    let after_rediscovery = eventually(async || {
+        client
+            .send(commands::get::<String>("k"))
+            .await
+            .ok()
+            .flatten()
+    })
+    .await;
+
+    assert_eq!(after_rediscovery, "1");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_timed_out_command_replaces_a_connection_that_stopped_answering(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let server = RedisDeployment::start(topology).await.unwrap();
+    let proxies = proxied(&server).await;
+    let client = RedisClient::new(RedisConfig {
+        target: proxies.target.clone(),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_millis(500), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap();
+    client
+        .send(commands::set("k", "1", Duration::from_secs(600)))
+        .await
+        .unwrap();
+
+    proxies.blackhole_open_connections();
+    let stalled = client.send(commands::get::<String>("k")).await;
+    let next = client.send(commands::get::<String>("k")).await;
+
+    assert!(
+        matches!(&stalled, Err(Error::Transport(error)) if error.is_timeout()),
+        "{stalled:?}"
+    );
+    assert_eq!(next.unwrap().as_deref(), Some("1"));
+}

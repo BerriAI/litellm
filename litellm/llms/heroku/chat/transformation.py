@@ -22,6 +22,9 @@ class HerokuError(Exception):
 
 
 class HerokuChatConfig(OpenAIGPTConfig):
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]

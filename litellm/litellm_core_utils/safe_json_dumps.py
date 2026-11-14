@@ -1,8 +1,10 @@
 import json
+import math
 from collections.abc import Callable
 from typing import Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -14,16 +16,31 @@ def strip_null_bytes(value: str) -> str:
     return value.replace("\x00", "")
 
 
+def _finite_or_none(value: float | None) -> float | None:
+    return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
+def _bounded(value: float | None, integer_limit: int | None) -> float | None:
+    if integer_limit is None or isinstance(value, bool) or not isinstance(value, int):
+        return value
+    return max(-integer_limit, min(integer_limit, value))
+
+
 def safe_json_structure(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
     key: str | None = None,
+    *,
+    non_finite_as_null: bool = False,
+    integer_limit: int | None = None,
 ) -> object:
     """
     Rebuild data out of JSON-native pieces while detecting circular references.
     If a circular reference is detected then a marker string is returned.
-    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors.
+    NUL bytes are stripped from strings to prevent PostgreSQL 22P05 errors. With
+    non_finite_as_null, NaN and infinite floats become null, since jsonb rejects them.
+    With integer_limit, integers are clamped to that magnitude.
 
     value_transform, when given, is applied to every string leaf (and to the
     str() fallback for non-serializable objects) with the mapping key the leaf
@@ -43,7 +60,8 @@ def safe_json_structure(
             cleaned = obj.replace("\x00", "") if "\x00" in obj else obj
             return _transform(key, cleaned)
         if isinstance(obj, (int, float, bool, type(None))):
-            return obj
+            bounded: Final = _bounded(obj, integer_limit)
+            return _finite_or_none(bounded) if non_finite_as_null else bounded
         # Check for circular reference.
         if id(obj) in seen:
             return "CircularReference Detected"
@@ -65,8 +83,9 @@ def safe_json_structure(
             seen.remove(id(obj))
             return tuple_result
         elif isinstance(obj, set):
-            sortable_values: Final[list[Any]] = [_serialize(item, seen, depth + 1, key) for item in obj]
-            set_result: Final = sorted(sortable_values)
+            members: Final[list[Any]] = [_serialize(item, seen, depth + 1, key) for item in obj]
+            present: Final = sorted(member for member in members if member is not None)
+            set_result: Final = present + [None] * members.count(None)
             seen.remove(id(obj))
             return set_result
         elif isinstance(obj, BaseModel):
@@ -88,6 +107,20 @@ def safe_dumps(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
+    *,
+    non_finite_as_null: bool = False,
 ) -> str:
     """Serialize data to JSON text through safe_json_structure."""
-    return json.dumps(safe_json_structure(data, max_depth, value_transform), default=str)
+    return json.dumps(
+        safe_json_structure(data, max_depth, value_transform, non_finite_as_null=non_finite_as_null), default=str
+    )
+
+
+_JSONABLE: Final = TypeAdapter(object)
+
+
+def jsonable_or_str(value: object) -> object:
+    try:
+        return _JSONABLE.validate_python(to_jsonable_python(value, fallback=str))
+    except ValueError:
+        return str(value)

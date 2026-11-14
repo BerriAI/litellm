@@ -412,6 +412,7 @@ class WebSearchTransformation:
     def build_web_search_tool_result_block(
         tool_use_id: str,
         search_response: SearchResponse | None,
+        with_snippets: bool = True,
     ) -> dict[str, object]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
@@ -445,6 +446,8 @@ class WebSearchTransformation:
                 ``litellm.asearch()``. If None or empty, the block is still
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
+            with_snippets: False when a text block in the same reply already
+                carries the snippets.
         """
         items: Final[list[dict[str, object]]] = []
         if search_response is not None:
@@ -460,7 +463,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
-                        "snippet": getattr(r, "snippet", "") or "",
+                        **({"snippet": getattr(r, "snippet", "") or ""} if with_snippets else {}),
                     }
                 )
         return {
@@ -481,12 +484,15 @@ class WebSearchTransformation:
         }
 
     @staticmethod
-    def build_web_search_outcome_block(tool_use_id: str, outcome: SearchOutcome) -> dict[str, object]:
+    def build_web_search_outcome_block(
+        tool_use_id: str, outcome: SearchOutcome, with_snippets: bool = True
+    ) -> dict[str, object]:
         match outcome:
             case SearchSucceeded(response=response):
                 return WebSearchTransformation.build_web_search_tool_result_block(
                     tool_use_id=tool_use_id,
                     search_response=response,
+                    with_snippets=with_snippets,
                 )
             case SearchFailed(error_code=error_code):
                 return WebSearchTransformation.build_web_search_tool_result_error_block(

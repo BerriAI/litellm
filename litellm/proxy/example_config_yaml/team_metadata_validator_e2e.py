@@ -16,6 +16,10 @@ unknown impl value raises, which the proxy converts to the fail-closed 503.
 """
 
 import os
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.management_helpers.team_metadata_validation import (
@@ -23,10 +27,18 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationResult,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from typing import Final
 
 ALLOWED_COST_CENTERS: Final = frozenset({"CC-1001", "CC-1002"})
 CLOSED_PORT_URL: Final = "http://127.0.0.1:9/validate"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CostCenterReply(TypedDict):
+    ok: NotRequired[ReadOnly[object]]
+    reason: NotRequired[ReadOnly[str | None]]
+
+
+_COST_CENTER_REPLY: Final = TypeAdapter(_CostCenterReply)
 
 
 async def _validate_allowlist(payload: TeamMetadataValidationPayload) -> TeamMetadataValidationResult:
@@ -54,7 +66,7 @@ async def _validate_via_http(payload: TeamMetadataValidationPayload, service_url
         },
         timeout=2.0,
     )
-    body: Final = response.json()
+    body: Final = _COST_CENTER_REPLY.validate_python(response.json())
     if body.get("ok") is True:
         return TeamMetadataValidationResult(valid=True)
     return TeamMetadataValidationResult(

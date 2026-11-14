@@ -105,6 +105,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         # SpendLogs-producing routes surfaced by the route-inventory audit
         ("/v1/search", (BillableCategory.LLM, "/search")),
         ("/v1/vector_stores/vs_1/search", (BillableCategory.LLM, "/search")),
+        ("/opensearch/docs/_search", (BillableCategory.LLM, "/opensearch")),
         ("/v1/rag/query", (BillableCategory.LLM, "/rag/query")),
         ("/rag/ingest", (BillableCategory.LLM, "/rag/ingest")),
         # Provider passthrough carries real inference and writes SpendLogs
@@ -123,6 +124,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/azure_speech/speechtotext/v3.2/transcriptions", (BillableCategory.LLM, "/azure_speech")),
         ("/transcribe", (BillableCategory.LLM, "/transcribe")),
         ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
+        ("/eu_jev/v1/systemone", (BillableCategory.LLM, "/eu_jev/v1/systemone")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -163,8 +165,22 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1beta/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
+        "/opensearch/docs/_doc",
+        "/opensearch/docs/_doc/_search",
+        "/opensearch/docs/_doc/1",
+        "/opensearch/docs/_bulk",
+        "/opensearch/docs/_update/1",
+        "/opensearch/docs/_count",
+        "/opensearch/docs/_mget",
+        "/opensearch/docs/_doc/search",
+        "/opensearch/docs/_update/search",
+        "/opensearch/docs/_create/embeddings",
+        "/opensearch/docs/_doc/completions",
+        "/opensearch/docs/_explain/rerank",
         # a bare provider prefix is not an inference call
         "/bedrock",
+        "/eu_jev/v1/systemone/extra",
+        "/eu_jev/v1/systemone2",
         "/v1/mcp",
         "/v1/mcp/tools",
         "/v1/mcp/server",
@@ -182,6 +198,11 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
 )
 def test_classify_non_billable_returns_none(path: str):
     assert classify_billable_request(path) is None
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_billed() -> None:
+    assert classify_billable_request("/eu_jev/v1/systemone") is None
 
 
 @pytest.mark.parametrize(

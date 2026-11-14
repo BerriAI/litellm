@@ -31,6 +31,11 @@ class SpendMetrics(LiteLLMBaseModel):
     prompt_caching_savings_spend: float = Field(default=0.0)
     gateway_injected_caching_savings_spend: float = Field(default=0.0)
     autorouter_savings_spend: float = Field(default=0.0)
+    guardrail_spend: float = Field(
+        default=0.0,
+        description="Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. "
+        "Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
+    )
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
@@ -68,29 +73,34 @@ class MetricWithMetadata(MetricBase):
 class GuardrailSpendMetrics(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    spend: float = 0.0
-    untracked_units: int = 0
+    spend: float = Field(default=0.0, description="Guardrail spend in USD, already included in key and model spend")
+    untracked_units: int = Field(default=0, description="Guardrail units with no known price, excluded from spend")
 
 
 class GuardrailKeyMetric(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    metrics: GuardrailSpendMetrics
-    metadata: KeyMetadata
+    metrics: GuardrailSpendMetrics = Field(description="Guardrail spend and unpriced units for this API key")
+    metadata: KeyMetadata = Field(description="API key alias and existence information")
 
 
 class GuardrailMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    guardrail_name: str
+    guardrail_name: str = Field(description="Guardrail display name, falling back to the guardrail ID")
 
 
 class GuardrailMetric(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    metrics: GuardrailSpendMetrics
-    metadata: GuardrailMetadata
-    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(default_factory=dict)
+    metrics: GuardrailSpendMetrics = Field(
+        description="Guardrail spend and unpriced units across all matching API keys"
+    )
+    metadata: GuardrailMetadata = Field(description="Guardrail name information")
+    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(
+        default_factory=dict,
+        description="Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
+    )
 
 
 class BreakdownMetrics(LiteLLMBaseModel):
@@ -103,7 +113,17 @@ class BreakdownMetrics(LiteLLMBaseModel):
     endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
     api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
-    guardrails: Mapping[str, GuardrailMetric] = Field(default_factory=dict)  # guardrail_id -> spend
+    teams: Mapping[str, MetricWithMetadata] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Customer spend by the key's current team, or last team for deleted keys. "
+        "Keys without a known team are grouped under Unassigned",
+    )
+    guardrails: Mapping[str, GuardrailMetric] = Field(
+        default_factory=dict,
+        description="Spend by guardrail ID, already included in key and model spend. "
+        "Populated on user, team and organization aggregated activity only, without a model filter",
+    )
 
 
 class DailySpendData(LiteLLMBaseModel):
@@ -244,6 +264,7 @@ class LiteLLM_DailyUserSpend(LiteLLMBaseModel):
     prompt_caching_savings_spend: float = 0.0
     gateway_injected_caching_savings_spend: float = 0.0
     autorouter_savings_spend: float = 0.0
+    guardrail_spend: float = 0.0
     spend: float = 0.0
     api_requests: int = 0
     successful_requests: int = 0

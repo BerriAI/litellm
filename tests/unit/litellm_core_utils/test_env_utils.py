@@ -6,6 +6,7 @@ import pytest
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
+    get_env_float_in_range,
     get_env_float_or_none,
     get_env_int,
     get_env_int_or_none,
@@ -94,3 +95,12 @@ def test_unparsable_stdout_log_limit_does_not_break_logging(
     assert "first line" in messages
     assert "second line" in messages
     assert len([message for message in messages if raw in message]) == 1
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0.5", 0.5), ("1", 1.0), ("4", 0.25), ("0", 0.25), ("half", 0.25)])
+def test_float_in_range_keeps_values_inside_the_range_and_falls_back_otherwise(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: float
+) -> None:
+    monkeypatch.setenv("ENV_UTILS_TEST_FRACTION", raw)
+
+    assert get_env_float_in_range("ENV_UTILS_TEST_FRACTION", 0.25, 0.01, 1.0) == expected

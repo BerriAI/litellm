@@ -18,6 +18,7 @@ import websockets.exceptions  # registers websockets.exceptions on the websocket
 
 import litellm
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,25 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_vertex_realtime_config_carries_drop_params(drop_params, patch_native_audio_cost_map_entry):
+    from litellm.llms.vertex_ai.realtime.transformation import vertex_realtime_config
+
+    cfg: Final = vertex_realtime_config(
+        _NATIVE_AUDIO_MODEL,
+        access_token="tok",
+        resolve_access_token=AsyncMock(return_value="tok"),
+        project="my-proj",
+        location="us-central1",
+        drop_params=drop_params,
+    )
+
+    rejection: Final = cfg.setup_session_update_rejection(
+        _NATIVE_AUDIO_MODEL, {"modalities": ["text"]}, setup_sent=False
+    )
+    assert (rejection is None) is drop_params
+
+
 def test_vertex_session_update_normalizes_ga_remapped_fields(
     patch_native_audio_cost_map_entry,
 ):
@@ -252,6 +272,26 @@ def test_vertex_keeps_turn_detection_tuning_when_auto_response_is_off():
         "silenceDurationMs": 700,
     }
 
+
+
+@pytest.mark.parametrize(
+    ("session", "disabled"),
+    [
+        ({"turn_detection": None}, True),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, True),
+        ({"type": "realtime", "audio": {"input": {}}}, False),
+    ],
+)
+def test_vertex_turns_activity_detection_off_for_null_turn_detection(session, disabled):
+    """OpenAI's turn_detection null is push-to-talk, so Vertex must wait for the client's activity markers."""
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is disabled
 
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
@@ -607,3 +647,73 @@ def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_co
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
     assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_vertex_session_update_two_output_modalities_collapse_to_audio():
+    """Vertex Live rejects a setup naming two response modalities, so a GA
+    ["text", "audio"] request must be sent as AUDIO only."""
+    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="global")
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+@pytest.mark.parametrize(
+    ("session", "param"),
+    [
+        ({"voice": "Nova"}, "session.voice"),
+        ({"type": "realtime", "audio": {"output": {"voice": "Nova"}}}, "session.audio.output.voice"),
+    ],
+)
+def test_vertex_rejects_an_undocumented_voice_on_the_session_update(session, param):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    rejection: Final = cfg.setup_session_update_rejection("gemini-live-2.5-flash", session, setup_sent=False)
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", param)
+
+
+@pytest.mark.parametrize("voice", ["Kore", "alloy"])
+def test_vertex_accepts_documented_and_openai_stock_voices_on_the_session_update(voice):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", {"voice": voice}, setup_sent=False) is None
+
+
+def test_vertex_drops_an_undocumented_voice_with_drop_params():
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1", drop_params=True)
+    session_update: Final = {"type": "session.update", "session": {"voice": "Nova", "instructions": "Be brief."}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert "speechConfig" not in json.loads(messages[0])["setup"].get("generationConfig", {})
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("voice", ["fable", "onyx"])
+def test_vertex_sends_the_documented_voice_an_openai_tts_voice_maps_to(voice, drop_params):
+    cfg: Final = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1", drop_params=drop_params
+    )
+    session_update: Final = {"type": "session.update", "session": {"voice": voice}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert json.loads(messages[0])["setup"]["generationConfig"]["speechConfig"] == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES[voice]}}
+    }

@@ -7,6 +7,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
+    get_env_float_in_range,
     get_env_float_or_none,
     get_env_int,
     get_env_int_in_range,
@@ -27,7 +28,7 @@ GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
 GITHUB_COPILOT_HOST_KEY: Final = "github_copilot_host"
 GITHUB_COPILOT_DEFAULT_HOST: Final = "github.com"
-GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_SESSION_TTL_SECONDS: Final = 1800
 GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
@@ -67,6 +68,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "retry_after",
         "fallbacks",
         "context_window_fallbacks",
+        "content_policy_fallbacks",
         "retry_policy",
         "model_group_retry_policy",
         "model_group_alias",
@@ -87,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
@@ -133,6 +136,7 @@ ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
+DEFAULT_MAX_REQUEST_HEADER_SIZE: Final = 16 * 1024
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
 DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
@@ -149,16 +153,22 @@ DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = get_env_float(
     "DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5
 )  # default cooldown a deployment if 50% of requests fail in a given minute
 DEFAULT_MAX_TOKENS: Final = get_env_int("DEFAULT_MAX_TOKENS", 4096)
+NO_MAX_TOKENS_TPM_RESERVATION_FRACTION: Final = get_env_float_in_range(
+    "NO_MAX_TOKENS_TPM_RESERVATION_FRACTION", 0.25, 0.01, 1.0
+)
 DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
 DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
 DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = get_env_float("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", 1.0)
+DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS: Final = 10
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLING_RETRIES", 5)
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
+DEFAULT_REPLICATE_SYNC_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_SYNC_POLLING_RETRIES", 120)
+REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES: Final = get_env_int("REPLICATE_MAX_OUTPUT_DOWNLOAD_BYTES", 512 * 1024 * 1024)
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS: Final = get_env_int_in_range(
-    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 300, 1, 86400
+    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 60, 1, 86400
 )
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
@@ -172,6 +182,8 @@ MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS: Final = 256
+BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS: Final = 8 * 1024 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
@@ -416,6 +428,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
+REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
+REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -423,6 +437,7 @@ WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
 
 BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
@@ -435,12 +450,14 @@ MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
+FAILED_PROMPT_TOKEN_ESTIMATE_KEY: Final = "failed_prompt_token_estimate"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
 OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
+REALTIME_SESSION_ENDED_ABNORMALLY_KEY: Final = "realtime_session_ended_abnormally"
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -479,6 +496,7 @@ REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_upda
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
+REDIS_DAILY_CUSTOMER_MEMBER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_customer_member_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
 REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
@@ -627,6 +645,9 @@ STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
+ANTHROPIC_MAX_USER_ID_LENGTH: Final = 512
+ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH: Final = 255
+ANTHROPIC_BILLING_METADATA_PREFIX: Final = "x-anthropic-billing-header:"
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
@@ -663,7 +684,7 @@ request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
 request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
@@ -686,6 +707,9 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
+STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
+VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -716,6 +740,12 @@ ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = get_env_int(
 # upstream stream immediately, instead of continuing to drain for the real
 # terminal usage.
 ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 100)
+ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 600.0
+)
+ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
+)
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
@@ -752,7 +782,13 @@ ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
 ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
 ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
+OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
+PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
+OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
+OPENAI_CHAT_MODES: Final = frozenset({"chat", "responses"})
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -812,6 +848,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "ollama",
     "ollama_chat",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "mistral",
     "groq",
@@ -885,7 +922,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -946,7 +985,10 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
 
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
+    "languages",
+    "keywords",
     "response_format",
+    "stream",
     "timestamp_granularities",
 ]
 
@@ -1011,6 +1053,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
+    "api.clfaigateway.dev/v1",
     "api.mistral.ai/v1",
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
@@ -1062,8 +1105,10 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
+    "https://inference.runanywhere.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
 
@@ -1081,6 +1126,7 @@ openai_compatible_providers: Final[list[str]] = [
     "deepseek",
     "tencent",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "xinference",
     "xai",
@@ -1143,8 +1189,11 @@ openai_compatible_providers: Final[list[str]] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "hostinger_router",
     "sail",
     "reka",
+    "streamlake",
+    "wally",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1258,7 +1307,7 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set] = set(
+together_ai_models: Final[set[str]] = set(
     [
         # llama llms - chat
         "togethercomputer/llama-2-70b-chat",
@@ -1495,6 +1544,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-2",
     "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
@@ -1636,6 +1686,9 @@ OPENAI_FINISH_REASONS: Final = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = get_env_int("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION: Final = (
+    "When you are ready to answer, call this tool with your final answer as its input. Do not reply in plain text."
+)
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"
@@ -1664,10 +1717,13 @@ ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
+USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
@@ -1745,6 +1801,7 @@ AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
 AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
 AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
 AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
+OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX: Final = "/opensearch"
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
@@ -1878,6 +1935,10 @@ SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANU
 SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
 SPEND_LOG_SIZE_CHECK_JOB_NAME: Final = "spend_log_size_check"
 SPEND_LOG_SIZE_CHECK_INTERVAL: Final = os.getenv("SPEND_LOG_SIZE_CHECK_INTERVAL", "1d")
+SCHEDULED_JOB_POLL_INTERVAL_SECONDS: Final = get_env_int("SCHEDULED_JOB_POLL_INTERVAL_SECONDS", 30)
+SCHEDULED_JOB_TICK_TIMEOUT_SECONDS: Final = get_env_float("SCHEDULED_JOB_TICK_TIMEOUT_SECONDS", 10.0)
+SCHEDULED_JOB_LEASE_GRACE_SECONDS: Final = get_env_float("SCHEDULED_JOB_LEASE_GRACE_SECONDS", 300.0)
+SCHEDULED_JOB_RUN_HISTORY_LIMIT: Final = get_env_int("SCHEDULED_JOB_RUN_HISTORY_LIMIT", 1000)
 SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES: Final = get_env_int("SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES", 10)
 SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
     "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
@@ -1898,6 +1959,7 @@ SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, get_env_int("SPEND_ROLLUP_LOCK_TIME
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = get_env_int("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100)
 SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_QUEUE_MAX_BYTES", 64000000))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = get_env_float("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0)
+SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS: Final = 30.0
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, get_env_int("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", 3))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = get_env_float("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.2)
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
@@ -1923,6 +1985,7 @@ BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
+BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS: Final = 2.0
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
@@ -1938,7 +2001,7 @@ BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS: Final = get_env_float(
     "BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS", 60.0
 )
 BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS: Final = get_env_float(
-    "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", 3600.0
+    "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", 7800.0
 )
 _background_interaction_cost_polling_env: Final = os.getenv(
     "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", "true"
@@ -2026,11 +2089,13 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = get_env_int("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 AUTH_OBJECTS_TARGET: Final = "auth_objects"
+HEALTH_CHECKS_TARGET: Final = "health_checks"
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = get_env_int("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
 SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
 SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
+SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS: Final = 30
 SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE: Final = 100
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
@@ -2323,6 +2388,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.

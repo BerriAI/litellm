@@ -3,6 +3,8 @@ underlying `AdaptiveRouter.get_state_snapshot()` helper."""
 
 from unittest.mock import MagicMock
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import pytest
 from fastapi import HTTPException
 
@@ -105,7 +107,7 @@ async def test_endpoint_returns_404_when_no_adaptive_router(monkeypatch):
     """When llm_router is set but has no adaptive routers configured, return 404."""
     from litellm.proxy import proxy_server
 
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.adaptive_routers = {}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -131,7 +133,7 @@ async def test_endpoint_returns_404_when_llm_router_is_none(monkeypatch):
 async def test_endpoint_rejects_non_admin_role(monkeypatch):
     from litellm.proxy import proxy_server
 
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.adaptive_routers = {"r1": _entry()}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -148,7 +150,7 @@ async def test_endpoint_returns_snapshot_list_for_admin(monkeypatch):
     """Single configured router still returns the {"routers": [...]} list shape."""
     from litellm.proxy import proxy_server
 
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.adaptive_routers = {"r1": _entry("r1")}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -167,7 +169,7 @@ async def test_endpoint_returns_one_snapshot_per_router(monkeypatch):
     """With multiple adaptive routers configured, return one snapshot per router."""
     from litellm.proxy import proxy_server
 
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.adaptive_routers = {
         "r1": _entry("r1"),
         "r2": _entry("r2"),

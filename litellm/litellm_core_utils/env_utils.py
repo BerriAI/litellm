@@ -71,7 +71,15 @@ def get_env_int_in_range(env_var: str, default: int, minimum: int, maximum: int)
     Values outside the range fall back to the default and warn, so a misconfigured knob can
     neither crash the caller nor silently change the meaning of what it computes.
     """
-    value: Final = get_env_int(env_var, default)
+    return _within_range(env_var, get_env_int(env_var, default), default, minimum, maximum)
+
+
+def get_env_float_in_range(env_var: str, default: float, minimum: float, maximum: float) -> float:
+    """Float counterpart of `get_env_int_in_range`."""
+    return _within_range(env_var, get_env_float(env_var, default), default, minimum, maximum)
+
+
+def _within_range(env_var: str, value: _NumberT, default: _NumberT, minimum: _NumberT, maximum: _NumberT) -> _NumberT:
     if minimum <= value <= maximum:
         return value
     logging.getLogger("LiteLLM").warning(

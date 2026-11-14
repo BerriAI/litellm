@@ -27,6 +27,15 @@ def _timing_window_start(
     return start_time, False
 
 
+def response_ms_since_logging_start(logging_obj: LiteLLMLoggingObject) -> float | None:
+    reported_ms: Final = logging_obj.response_timing_metrics.get("_response_ms")
+    if reported_ms is None:
+        return None
+    logging_start: Final = logging_obj.start_time
+    window_start: Final = _timing_window_start(logging_start, logging_obj)[0]
+    return reported_ms - max(0.0, logging_start.timestamp() - window_start.timestamp()) * 1000
+
+
 def _union_duration_ms(windows: object, lower: float, upper: float) -> float | None:
     if not isinstance(windows, (list, tuple)):
         return None
@@ -290,7 +299,7 @@ def update_response_metadata(
         # cannot hold ``_hidden_params``: keep only the timing on the logging object (no cost
         # recompute) so the proxy headers and the standard logging payload can still read it.
         logging_obj.set_response_timing_metrics(
-            response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
         return
 
@@ -298,3 +307,24 @@ def update_response_metadata(
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
     metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
     metadata.apply()
+    if logging_obj.stream is True:
+        # the response assembled from the chunks never inherits the stream wrapper's
+        # ``_hidden_params``, so the logging payload reads the timing from the logging object
+        logging_obj.set_response_timing_metrics(
+            _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+        )
+
+
+def _logging_obj_timing_metrics(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    logging_obj: LiteLLMLoggingObject,
+    include_overhead: bool,
+) -> Mapping[str, float]:
+    """A stream read to completion keeps the overhead stamped when the stream was handed back."""
+    timing_metrics: Final = response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+    stamped: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
+    stamped_overhead_ms: Final = stamped.get("litellm_overhead_time_ms")
+    if include_overhead or stamped_overhead_ms is None:
+        return timing_metrics
+    return {**timing_metrics, "litellm_overhead_time_ms": stamped_overhead_ms}

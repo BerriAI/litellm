@@ -10,6 +10,10 @@ from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import (
+    STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
+    ReasoningFieldValues,
+)
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.secret_managers.main import get_secret_str
@@ -290,3 +294,9 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """XAI does not support native WebSocket for Responses API"""
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True

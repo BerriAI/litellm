@@ -29,7 +29,7 @@ def test_the_dropdown_logo_asset_exists():
     """A logo the dashboard cannot resolve degrades silently to a letter tile."""
     logo = _pointfive_config()["logo"]
     repo_root = Path(litellm.__file__).parent.parent
-    asset = repo_root / "ui" / "litellm-dashboard" / "public" / "assets" / "logos" / logo
+    asset = repo_root / "litellm" / "ui" / "litellm-dashboard" / "public" / "assets" / "logos" / logo
 
     assert logo == "pointfive.png"
     assert asset.is_file()

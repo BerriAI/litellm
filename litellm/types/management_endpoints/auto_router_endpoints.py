@@ -176,12 +176,24 @@ class AutoRouterSessionResponse(LiteLLMBaseModel):
     turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    total_spend: float | None = Field(
+        default=None,
+        description="Spend billed to this key under the session id, routed or not, from a shared Redis counter "
+        "whose one-hour expiry every billed request resets. None without a shared Redis or once the counter "
+        "expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, "
+        "and a failed Redis write, eviction or flush drops spend without notice",
+    )
     savings_estimated_turns: int = Field(description="Requests whose savings estimate recorded its baseline cost")
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost"
     )
     saved_spend: float | None = Field(
-        description="Recorded historical savings plus newer estimates, net of classifier cost"
+        description="Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is "
+        "estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour "
+        "with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was "
+        "incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are "
+        "still estimated inside that window: turns that took the identical baseline path, and turns whose whole "
+        "cached prefix the session had already written"
     )
     baseline_spend: float | None = Field(description="Estimated single-model cost: spend plus recorded savings")
     savings_estimated_baseline_spend: float | None = Field(

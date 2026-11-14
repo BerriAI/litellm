@@ -1,15 +1,16 @@
 import asyncio
 import hashlib
+import itertools
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, NoReturn, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
@@ -18,9 +19,8 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
-from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -33,6 +33,7 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
+_FOUNDRY_PROJECT_V1_BASE_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/?$")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -52,6 +53,13 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
+_AZURE_AD_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter[Callable[[], str | Awaitable[str]] | None](
+    Callable[[], str | Awaitable[str]] | None
+)
+
+
+def _callable_azure_ad_token_provider(provider: object) -> Callable[[], str | Awaitable[str]] | None:
+    return _AZURE_AD_TOKEN_PROVIDER_ADAPTER.validate_python(provider) if callable(provider) else None
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -81,6 +89,160 @@ class AzureOpenAIError(BaseLLMException):
         )
 
 
+class EntraRejectionError(AzureOpenAIError):
+    pass
+
+
+_GUID: Final = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+_AADSTS_REASON: Final = re.compile(r"\bAADSTS(\d+)\b.*?(?:\.(?=[\s'\"\\]|$)|$)", re.MULTILINE)
+_ENTRA_CREDENTIAL_REJECTION_CODES: Final = frozenset(
+    {
+        50012,
+        50013,
+        50027,
+        50034,
+        50053,
+        50055,
+        50057,
+        50059,
+        50076,
+        50079,
+        50126,
+        50128,
+        53003,
+        65001,
+        70001,
+        70002,
+        70011,
+        70021,
+        70025,
+        70052,
+        90002,
+        90094,
+        500011,
+        500014,
+        700016,
+        700023,
+        700024,
+        700025,
+        700027,
+        700211,
+        700213,
+        700223,
+        700238,
+        7000112,
+        7000215,
+        7000218,
+        7000222,
+    }
+)
+
+
+def _entra_rejection_reason(message: str) -> str | None:
+    reason: Final = _AADSTS_REASON.search(message)
+    if reason is None or int(reason.group(1)) not in _ENTRA_CREDENTIAL_REJECTION_CODES:
+        return None
+    return _GUID.sub("<redacted>", reason.group(0))
+
+
+def _entra_rejection(reason: str) -> EntraRejectionError:
+    return EntraRejectionError(status_code=401, message=f"Failed to get Azure AD token: {reason}")
+
+
+def entra_rejection_as_auth_error(error: Exception) -> EntraRejectionError | None:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError
+    except ImportError:
+        return None
+    if not isinstance(error, ClientAuthenticationError):
+        return None
+    status_code: Final = error.status_code
+    if status_code is not None and (status_code == 429 or status_code >= 500):
+        return None
+    reason: Final = _entra_rejection_reason(str(error))
+    return None if reason is None else _entra_rejection(reason)
+
+
+def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
+    auth_error: Final = entra_rejection_as_auth_error(error)
+    if auth_error is None:
+        raise error
+    raise auth_error from error
+
+
+def entra_token(provider: Callable[[], str]) -> str:
+    try:
+        return provider()
+    except entra_rejection_types() as error:
+        _raise_entra_rejection_as_auth_error(error)
+
+
+def entra_rejection_types() -> tuple[type[Exception], ...]:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError
+    except ImportError:
+        return ()
+    return (ClientAuthenticationError,)
+
+
+_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
+
+
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    link: BaseException | None = error  # rebind-ok: advances one link of the cause chain per iteration
+    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
+        if link is None:
+            return
+        yield link
+        link = link.__cause__ or link.__context__
+
+
+_REQUEST_FAILURE_TYPES: Final = (APIError, httpx.HTTPError)
+
+
+def _ends_the_failed_attempt(link: BaseException, failed_attempt: BaseException) -> bool:
+    return not isinstance(link, EntraRejectionError) and (
+        isinstance(link, _REQUEST_FAILURE_TYPES) or type(link) is type(failed_attempt)
+    )
+
+
+def _links_within_the_failed_attempt(error: BaseException) -> Iterator[BaseException]:
+    yield error
+    yield from itertools.takewhile(
+        lambda link: not _ends_the_failed_attempt(link, error), itertools.islice(_exception_chain(error), 1, None)
+    )
+
+
+def entra_rejection_in(error: BaseException) -> EntraRejectionError | None:
+    return next(
+        (link for link in _links_within_the_failed_attempt(error) if isinstance(link, EntraRejectionError)), None
+    )
+
+
+def caused_by_entra_rejection(error: BaseException) -> bool:
+    return entra_rejection_in(error) is not None
+
+
+async def _awaited_token(token: Awaitable[str]) -> str:
+    try:
+        return await token
+    except entra_rejection_types() as error:
+        _raise_entra_rejection_as_auth_error(error)
+
+
+def _entra_rejections_as_auth_errors(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], str | Awaitable[str]]:
+    def call_provider() -> str | Awaitable[str]:
+        try:
+            token: Final = provider()
+        except entra_rejection_types() as error:
+            _raise_entra_rejection_as_auth_error(error)
+        return token if isinstance(token, str) else _awaited_token(token)
+
+    return call_provider
+
+
 def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers: Final = {}
     if "x-ratelimit-limit-requests" in headers:
@@ -91,7 +253,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
         openai_headers["x-ratelimit-limit-tokens"] = headers["x-ratelimit-limit-tokens"]
     if "x-ratelimit-remaining-tokens" in headers:
         openai_headers["x-ratelimit-remaining-tokens"] = headers["x-ratelimit-remaining-tokens"]
-    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
+    llm_response_headers: Final = {f"llm_provider-{k}": v for k, v in headers.items()}
 
     return {**llm_response_headers, **openai_headers}
 
@@ -257,22 +419,34 @@ def _cached_oidc_token(cache_key: str) -> str | None:
     return cached if isinstance(cached, str) else None
 
 
+def _oidc_exchange_rejection_reason(error: MaskedHTTPStatusError) -> str | None:
+    if error.response.status_code not in (400, 401):
+        return None
+    return _entra_rejection_reason(error.text or error.response.text)
+
+
 def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
     cached_access_token: Final = _cached_oidc_token(cache_key)
     if cached_access_token is not None:
         return cached_access_token
 
     with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
-        req_token: Final = client.post(
-            token_url,
-            data={
-                "client_id": client_id,
-                "grant_type": "client_credentials",
-                "scope": scope,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": oidc_token,
-            },
-        )
+        try:
+            req_token: Final = client.post(
+                token_url,
+                data={
+                    "client_id": client_id,
+                    "grant_type": "client_credentials",
+                    "scope": scope,
+                    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    "client_assertion": oidc_token,
+                },
+            )
+        except MaskedHTTPStatusError as error:
+            reason: Final = _oidc_exchange_rejection_reason(error)
+            if reason is None:
+                raise
+            raise _entra_rejection(reason) from error
 
     if req_token.status_code != 200:
         raise AzureOpenAIError(
@@ -483,6 +657,9 @@ def get_azure_ad_token(
             raise
         except Exception as e:
             verbose_logger.error("Error calling Azure AD token provider: %s", e)
+            auth_error: Final = entra_rejection_as_auth_error(e)
+            if auth_error is not None:
+                raise auth_error from e
             raise RuntimeError(f"Failed to get Azure AD token: {e}") from e
 
     return azure_ad_token
@@ -621,7 +798,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
         # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-        if self._is_azure_v1_api_version(api_version):
+        if self.is_azure_v1_api_version(api_version):
             # Extract only params that OpenAI client accepts
             # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
             # The OpenAI client accepts a callable for `api_key` and re-invokes it
@@ -642,9 +819,16 @@ class BaseAzureLLM(BaseOpenAILLM):
                 else v1_token_provider
             )
 
+            v1_base: Final = httpx.URL(api_base or "")
+            v1_query: Final = v1_base.params.remove("api-version")
+            v1_trimmed: Final = str(v1_base.copy_with(query=None)).rstrip("/")
+            v1_root: Final = (
+                v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
+            )
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{ensure_api_route(api_base or '', 'openai/v1')}/",
+                "base_url": f"{v1_root}/",
+                "default_query": dict(v1_query),
             }
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
@@ -696,7 +880,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: str | None,
         is_async: bool,
     ) -> dict:
-        azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
+        azure_ad_token_provider = _callable_azure_ad_token_provider(litellm_params.get("azure_ad_token_provider"))
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
 
@@ -775,7 +959,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_client_params["timeout"] = timeout
 
         if azure_ad_token_provider is not None:
-            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
+            azure_client_params["azure_ad_token_provider"] = _entra_rejections_as_auth_errors(azure_ad_token_provider)
         # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
         # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
 
@@ -922,7 +1106,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             new_url = api_base
 
-        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if BaseAzureLLM.is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
@@ -952,7 +1136,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         Returns None when ``api_version`` is a dated one, which still uses the deployment route.
         """
-        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if not BaseAzureLLM.is_azure_v1_api_version(api_version):
             return None
 
         base_url: Final = httpx.URL(api_base)
@@ -970,10 +1154,28 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
     @staticmethod
-    def _is_azure_v1_api_version(api_version: str | None) -> bool:
+    def is_azure_v1_api_version(api_version: str | None) -> bool:
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}
+
+    @staticmethod
+    def is_foundry_project_v1_base(api_base: str | None) -> bool:
+        return api_base is not None and _FOUNDRY_PROJECT_V1_BASE_PATH.search(httpx.URL(api_base).path) is not None
+
+    @staticmethod
+    def is_api_version_opt_out(api_version: str | None) -> bool:
+        return api_version is not None and api_version.lower() == "none"
+
+    @classmethod
+    def opt_out_client_api_version(cls, api_version: str | None) -> str | None:
+        return "v1" if cls.is_api_version_opt_out(api_version) else api_version
+
+    @classmethod
+    def chat_client_api_version(cls, api_base: str | None, api_version: str | None) -> str | None:
+        if cls.is_foundry_project_v1_base(api_base):
+            return "v1"
+        return cls.opt_out_client_api_version(api_version)
 
     def _resolve_env_var(
         self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str

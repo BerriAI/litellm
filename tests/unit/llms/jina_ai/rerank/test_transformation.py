@@ -46,7 +46,10 @@ def test_transform_rerank_response_maps_results_and_usage():
         ({"results": [], "usage": {}}, {"billed_units": {}, "tokens": {}}),
         (
             {"results": [], "usage": {"total_tokens": 12, "input_tokens": 7, "output_tokens": 3, "unknown": 1}},
-            {"billed_units": {"total_tokens": 12}, "tokens": {"input_tokens": 7, "output_tokens": 3}},
+            {
+                "billed_units": {"total_tokens": 12, "input_tokens": 7, "output_tokens": 3},
+                "tokens": {"input_tokens": 7, "output_tokens": 3},
+            },
         ),
     ],
 )
