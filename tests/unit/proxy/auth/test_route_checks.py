@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi import HTTPException, Request
+from starlette.routing import compile_path
 
 from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,
@@ -4336,6 +4337,9 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
             "/v1beta/models/publishers/google/gemini-2.5-flash:generateContent",
             True,
         ),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:generateContent", True),
+        ("/models/{model_name:path}:streamGenerateContent", "/models/:streamGenerateContent", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:countTokens", False),
         # the value must not swallow that suffix and match a different verb
         (
             "/v1beta/models/{model_name:path}:generateContent",
@@ -4363,6 +4367,22 @@ def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matche
     ":generateContent" would also match a ":countTokens" request.
     """
     assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
+
+
+GOOGLE_MODEL_PATH_TEMPLATES: Final = tuple(
+    route for route in LiteLLMRoutes.google_routes.value if "{model_name:path}" in route
+)
+
+
+@pytest.mark.parametrize("template", GOOGLE_MODEL_PATH_TEMPLATES)
+@pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash"])
+def test_google_model_route_gate_agrees_with_the_router(template, model_name):
+    route: Final = template.replace("{model_name:path}", model_name)
+    router_regex, _, _ = compile_path(template)
+
+    assert router_regex.match(route) is not None
+    assert RouteChecks._route_matches_pattern(route=route, pattern=template) is True
+    assert RouteChecks.is_llm_api_route(route=route) is True
 
 
 # Every other route the proxy mounts under /team/{team_id}, spelled the way it

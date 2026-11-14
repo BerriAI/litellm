@@ -633,7 +633,7 @@ class RouteChecks:
             # path converter does not: a %0A anywhere in the value would leave
             # the route unmatched here while still reaching the handler, which
             # turns this gate into a bypass for the lists built on it.
-            return r"[^:]+" if ":" in match.string[match.end() :] else r"[\s\S]+"
+            return r"[^:]*" if ":" in match.string[match.end() :] else r"[\s\S]+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string

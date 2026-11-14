@@ -1634,6 +1634,80 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
         assert result.end_user_id == end_user_id
 
 
+BILLED_GOOGLE_MODEL_ROUTES: Final = tuple(
+    route
+    for route in LiteLLMRoutes.google_routes.value
+    if "{model_name:path}" in route and not route.endswith(":countTokens")
+)
+
+
+@pytest.mark.parametrize("model_in_url", ["", "gemini-text"], ids=["model-only-in-body", "model-in-url"])
+@pytest.mark.parametrize("template", BILLED_GOOGLE_MODEL_ROUTES)
+@pytest.mark.asyncio
+async def test_zero_budget_key_is_refused_on_google_model_routes(
+    monkeypatch: pytest.MonkeyPatch, template: str, model_in_url: str
+) -> None:
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key: Final = "sk-zero-budget-google-route-test"
+    cached_token: Final = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gemini-text"],
+        allowed_routes=["/v1beta/*", "/models/*"],
+        max_budget=0.0,
+        spend=0.0,
+    )
+
+    mock_proxy_logging_obj: Final = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.budget_alerts = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    monkeypatch.setattr(_proxy_server_mod, "prisma_client", MagicMock())
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(_proxy_server_mod, "proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr(_proxy_server_mod, "master_key", "sk-master-key")
+    monkeypatch.setattr(_proxy_server_mod, "general_settings", {})
+    monkeypatch.setattr(_proxy_server_mod, "llm_model_list", [])
+    monkeypatch.setattr(_proxy_server_mod, "llm_router", None)
+    monkeypatch.setattr(_proxy_server_mod, "open_telemetry_logger", None)
+    monkeypatch.setattr(_proxy_server_mod, "model_max_budget_limiter", MagicMock())
+    monkeypatch.setattr(_proxy_server_mod, "user_custom_auth", None)
+    monkeypatch.setattr(_proxy_server_mod, "jwt_handler", None)
+    monkeypatch.setattr(_proxy_server_mod, "litellm_proxy_admin_name", "admin")
+
+    request: Final = Request(scope={"type": "http", "method": "POST", "headers": []})
+    request._url = URL(url=template.replace("{model_name:path}", model_in_url))
+
+    with (
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+            new_callable=AsyncMock,
+            return_value=cached_token,
+        ),
+        pytest.raises(ProxyException) as refused,
+    ):
+        await user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gemini-text", "contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        )
+
+    assert refused.value.type == "budget_exceeded"
+
+
 @pytest.mark.asyncio
 async def test_master_key_auth_sets_via_virtual_key_marker():
     """Master-key requests must also be stamped by overwrite_user_with_key_hash;
