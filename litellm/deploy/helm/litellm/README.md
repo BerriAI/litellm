@@ -67,6 +67,36 @@ backend:
   gatewayUrl: https://gateway.example.com
 ```
 
+## Control plane migrations
+
+Set `migrationJob.mode` to `control-plane` to migrate the control plane's PostgreSQL database. The default `data-plane` mode runs Prisma migrations for the gateway and backend. The control plane mode runs `litellm --control-plane --skip_server_startup` through the shared image's entrypoint.
+
+```yaml
+migrationJob:
+  mode: control-plane
+  controlPlane:
+    databaseSecret:
+      name: control-plane-migrations
+      key: database-url
+```
+
+Create this Secret before installation. Its key must contain a direct PostgreSQL URL for the control plane database. The Job needs at least two database connections. Control plane migrations use this Secret and `migrationJob.extraEnv`, without the data plane's database or Redis settings.
+
+Helm runs the Job before install and upgrade by default. For Argo CD, select its PreSync hook:
+
+```yaml
+migrationJob:
+  hooks:
+    helm:
+      enabled: false
+    argocd:
+      enabled: true
+```
+
+Argo CD deletes successful Jobs and recreates the named hook on the next sync. Failed Jobs remain until the next sync. The chart omits `ttlSecondsAfterFinished` when the Argo CD hook is enabled so the TTL controller cannot delete the Job before Argo CD records its result. Helm hooks retain the configured TTL. Run a full application sync because selective syncs skip hooks.
+
+`migrationJob.command` and `migrationJob.args` override either mode's command. Setting only `command` clears the default arguments.
+
 ## Testing
 
 ```bash
