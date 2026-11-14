@@ -319,7 +319,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
-from litellm.proxy.v2_fields import (
+from litellm.proxy.v2_proxy_fields import (
     DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
     DERIVED_POST_CALL_SUCCESS_FIELDS,
     DERIVED_RESPONSE_HEADERS_FIELDS,

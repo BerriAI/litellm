@@ -11,7 +11,7 @@ from litellm.integrations.custom_logger_v2.host import reset_host_for_tests
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
-from litellm.proxy.v2_fields import limiter_request, output_cap
+from litellm.proxy.v2_proxy_fields import limiter_request, output_cap
 from litellm.types.integrations.custom_logger_v2 import (
     BudgetPlan,
     BudgetReservation,
