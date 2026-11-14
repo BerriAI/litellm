@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +11,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.custom_logger_v2.call import CallContext
@@ -232,7 +232,7 @@ class _MessageFields(BaseModel):
 
 _SETTLEMENT: Final = TypeAdapter(NativeSettlement)
 _CHECK: Final[TypeAdapter[BudgetCheck]] = TypeAdapter(BudgetCheck)
-_HELD_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+_HELD_ENTRIES: Final = TypeAdapter(Iterable[object])
 
 
 def native_budget_route(route: str) -> bool:
@@ -432,10 +432,18 @@ def install_native_budgets(store: SpendCounterStore, callbacks: list[object]) ->
 
 
 def _window_reset(entry: object) -> str | None:
-    reset: Final = entry.get("window_reset_at") if isinstance(entry, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a held entry
+    held: Final = mapping(entry)
+    reset: Final = None if held is None else held.get("window_reset_at")
     if isinstance(reset, datetime):
         return reset.isoformat()
     return reset if isinstance(reset, str) else None
+
+
+def _held_entries(raw: object) -> tuple[object, ...]:
+    try:
+        return tuple(_HELD_ENTRIES.validate_python(raw))
+    except ValidationError:
+        raise TypeError(f"'{type(raw).__name__}' object is not iterable") from None
 
 
 async def settle_native_reservation(
@@ -445,7 +453,7 @@ async def settle_native_reservation(
     budgets: Final = native_budgets()
     if budgets is None or NATIVE_CALL_ID_KEY not in reservation:
         return
-    entries: Final[tuple[object, ...]] = tuple(reservation.get("entries") or ())  # pyright: ignore[reportArgumentType]  # the held entries, iterated as budgets iterates them
+    entries: Final = _held_entries(reservation.get("entries") or ())
     record: Final = _reservation_record(reservation)
     if record is None:
         return
