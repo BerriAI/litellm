@@ -1,8 +1,11 @@
-from typing import List, cast
+import logging
+from collections.abc import Mapping
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -35,6 +38,39 @@ async def test_mistral_chat_transformation():
     )
 
 
+@pytest.fixture
+def fixed_reasoning_capabilities(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    declarations: Final = (
+        ("mistral-medium-latest", ("none", "high")),
+        ("mistral-small-latest", ("none", "high")),
+        ("mistral-vibe-cli-latest", ("none", "high")),
+        ("magistral-small-latest", ("none", "high")),
+        ("magistral-medium-latest", ("none", "high")),
+        ("zai-glm-5", ("none", "low", "high", "max")),
+        ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
+    )
+    for model, levels in declarations:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {
+                "litellm_provider": "mistral",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_effort_levels": levels,
+            },
+        )
+    for model in ("codestral-latest", "mistral-large-latest"):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": False},
+        )
+
+
+@pytest.mark.usefixtures("fixed_reasoning_capabilities")
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
 
@@ -43,49 +79,17 @@ class TestMistralReasoningSupport:
         mistral_config = MistralConfig()
 
         # Test magistral model supports reasoning parameters
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/magistral-medium-2506"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/magistral-medium-2506")
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        supported_params_reasoning = mistral_config.get_supported_openai_params(
-            "mistral/mistral-medium-latest"
-        )
+        supported_params_reasoning = mistral_config.get_supported_openai_params("mistral/mistral-medium-latest")
         assert "reasoning_effort" in supported_params_reasoning
         assert "thinking" not in supported_params_reasoning
 
-        supported_params_normal = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params_normal = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
-
-    def test_map_openai_params_reasoning_effort(self, local_model_cost_map):
-        """Test that reasoning_effort parameter is properly mapped for magistral models."""
-        mistral_config = MistralConfig()
-
-        # Test reasoning_effort mapping for magistral model
-        optional_params = {}
-        result = mistral_config.map_openai_params(
-            non_default_params={"reasoning_effort": "low"},
-            optional_params=optional_params,
-            model="mistral/magistral-medium-2506",
-            drop_params=False,
-        )
-
-        assert result.get("_add_reasoning_prompt") is True
-
-        optional_params_normal = {}
-        result_normal = mistral_config.map_openai_params(
-            non_default_params={"reasoning_effort": "low"},
-            optional_params=optional_params_normal,
-            model="mistral/mistral-medium-latest",
-            drop_params=False,
-        )
-
-        assert "_add_reasoning_prompt" not in result_normal
-        assert result_normal["reasoning_effort"] == "high"
 
     @pytest.mark.parametrize(
         ("model", "requested", "sent"),
@@ -97,18 +101,27 @@ class TestMistralReasoningSupport:
             ("mistral-medium-latest", "xhigh", "high"),
             ("mistral-small-latest", "medium", "high"),
             ("mistral-vibe-cli-latest", "medium", "high"),
+            ("magistral-small-latest", "high", "high"),
+            ("magistral-small-latest", "none", "none"),
+            ("magistral-small-latest", "low", "high"),
+            ("magistral-small-latest", "medium", "high"),
+            ("magistral-medium-latest", "minimal", "high"),
+            ("magistral-medium-latest", "none", "none"),
             ("zai-glm-5", "none", "none"),
             ("zai-glm-5", "minimal", "low"),
             ("zai-glm-5", "medium", "high"),
             ("zai-glm-5", "xhigh", "max"),
             ("zai-glm-5-2", "medium", "medium"),
             ("zai-glm-5-2", "xhigh", "xhigh"),
+            ("zai-glm-5-2", "max", "max"),
         ],
     )
-    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(self, local_model_cost_map, model, requested, sent):
+    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(
+        self, local_model_cost_map: None, model: str, requested: str, sent: str
+    ) -> None:
         import litellm
 
-        optional_params = litellm.get_optional_params(
+        optional_params: Final = litellm.get_optional_params(
             model=model,
             custom_llm_provider="mistral",
             reasoning_effort=requested,
@@ -116,8 +129,8 @@ class TestMistralReasoningSupport:
         assert optional_params["reasoning_effort"] == sent
 
     def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
-        self, local_model_cost_map, monkeypatch
-    ):
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import litellm
 
         monkeypatch.setitem(
@@ -125,14 +138,14 @@ class TestMistralReasoningSupport:
             "mistral/undeclared-reasoner",
             {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": True},
         )
-        optional_params = litellm.get_optional_params(
+        optional_params: Final = litellm.get_optional_params(
             model="undeclared-reasoner",
             custom_llm_provider="mistral",
             reasoning_effort="medium",
         )
         assert optional_params["reasoning_effort"] == "medium"
 
-    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
+    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self) -> None:
         import litellm
 
         with pytest.raises(litellm.UnsupportedParamsError):
@@ -142,7 +155,7 @@ class TestMistralReasoningSupport:
                 reasoning_effort="high",
             )
 
-        dropped = litellm.get_optional_params(
+        dropped: Final = litellm.get_optional_params(
             model="codestral-latest",
             custom_llm_provider="mistral",
             reasoning_effort="high",
@@ -164,228 +177,216 @@ class TestMistralReasoningSupport:
         assert "client_metadata" not in request
         assert request["temperature"] == 0.2
 
-    def test_map_openai_params_thinking(self):
-        """Test that thinking parameter is properly mapped for magistral models."""
-        mistral_config = MistralConfig()
+    @pytest.mark.parametrize(
+        ("thinking", "sent"),
+        [
+            ({"type": "enabled", "budget_tokens": 1024}, "high"),
+            ({"type": "enabled", "budget_tokens": 100}, "high"),
+            ({"type": "disabled"}, "none"),
+            ({"type": "adaptive"}, "high"),
+            ({"type": "adaptive", "display": "summarized"}, "high"),
+        ],
+    )
+    def test_magistral_sends_thinking_as_a_reasoning_effort_the_model_accepts(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture, thinking: object, sent: str
+    ) -> None:
+        import litellm
 
-        # Test thinking mapping for magistral model
-        optional_params = {}
-        result = mistral_config.map_openai_params(
-            non_default_params={"thinking": {"budget": 1000}},
-            optional_params=optional_params,
-            model="mistral/magistral-small-2506",
-            drop_params=False,
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            optional_params: Final = litellm.get_optional_params(
+                model="magistral-small-latest",
+                custom_llm_provider="mistral",
+                thinking=thinking,
+            )
+        assert optional_params["reasoning_effort"] == sent
+        assert "thinking" not in optional_params
+        assert "Ignoring thinking.budget_tokens=" not in caplog.text
+
+    @pytest.mark.parametrize("thinking_first", (False, True))
+    @pytest.mark.parametrize(
+        ("requested", "thinking", "sent"),
+        (
+            ("HIGH", {"type": "disabled"}, "none"),
+            (5, {"type": "disabled"}, "none"),
+            ({"effort": None}, {"type": "disabled"}, "none"),
+            ("HIGH", {"type": "enabled", "budget_tokens": 1024}, "high"),
+            ("HIGH", {"type": "adaptive"}, "high"),
+            ("high", {"type": "disabled"}, "high"),
+            ({"effort": "high", "summary": "auto"}, {"type": "disabled"}, "high"),
+            ("default", {"type": "disabled"}, None),
+            ({"effort": "default", "summary": "auto"}, {"type": "disabled"}, None),
+        ),
+    )
+    def test_magistral_uses_thinking_only_when_effort_was_dropped(
+        self,
+        local_model_cost_map: None,
+        requested: object,
+        thinking: Mapping[str, object],
+        sent: str | None,
+        thinking_first: bool,
+    ) -> None:
+        params: Final = (
+            {"thinking": thinking, "reasoning_effort": requested}
+            if thinking_first
+            else {"reasoning_effort": requested, "thinking": thinking}
+        )
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="magistral-small-latest",
+            drop_params=True,
+        )
+        expected: Final = {} if sent is None else {"reasoning_effort": sent}
+        assert result == expected
+
+    def test_magistral_prefers_reasoning_effort_over_thinking(self, local_model_cost_map: None) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort="none",
+            thinking={"type": "enabled", "budget_tokens": 4096},
+        )
+        assert optional_params["reasoning_effort"] == "none"
+
+    @pytest.mark.parametrize(
+        ("reasoning_effort", "sent"),
+        [
+            ({"effort": "medium", "summary": "detailed"}, "high"),
+            ({"effort": "none", "summary": "auto"}, "none"),
+        ],
+    )
+    def test_magistral_sends_only_the_level_of_a_reasoning_effort_with_a_summary(
+        self, local_model_cost_map: None, reasoning_effort: object, sent: str
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort=reasoning_effort,
+            drop_params=True,
+        )
+        assert optional_params["reasoning_effort"] == sent
+
+    @pytest.mark.parametrize("model", ["magistral-small-latest", "zai-glm-5-2"])
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        ("reasoning_effort", "warned"),
+        [
+            (5, True),
+            ({"effort": 5}, True),
+            ("", True),
+            ("HIGH", True),
+            ({"effort": "auto"}, True),
+            ({"summary": "detailed"}, False),
+            ({"effort": None, "summary": "auto"}, False),
+        ],
+    )
+    def test_unusable_reasoning_effort_is_rejected_or_dropped(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        reasoning_effort: object,
+        warned: bool,
+        drop_params: bool,
+        model: str,
+    ) -> None:
+        import litellm
+
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+                litellm.get_optional_params(
+                    model=model, custom_llm_provider="mistral", reasoning_effort=reasoning_effort
+                )
+            return
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            optional_params: Final = litellm.get_optional_params(
+                model=model,
+                custom_llm_provider="mistral",
+                reasoning_effort=reasoning_effort,
+                drop_params=drop_params,
+            )
+        assert "reasoning_effort" not in optional_params
+        assert ("Dropping reasoning_effort=" in caplog.text) is warned
+
+    @pytest.mark.parametrize("reasoning_effort", ["default", {"effort": "default"}])
+    def test_default_reasoning_effort_leaves_the_level_to_mistral(
+        self, local_model_cost_map: None, reasoning_effort: object
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest", custom_llm_provider="mistral", reasoning_effort=reasoning_effort
+        )
+        assert "reasoning_effort" not in optional_params
+
+    @pytest.mark.parametrize("model", ["magistral-small-latest", "my-magistral-finetune"])
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize("budget_tokens", ["1024", True, None])
+    def test_magistral_non_numeric_thinking_budget_is_rejected_or_dropped(
+        self,
+        local_model_cost_map: None,
+        caplog: pytest.LogCaptureFixture,
+        budget_tokens: object,
+        drop_params: bool,
+        model: str,
+    ) -> None:
+        import litellm
+
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens"):
+                litellm.get_optional_params(
+                    model=model,
+                    custom_llm_provider="mistral",
+                    thinking={"type": "enabled", "budget_tokens": budget_tokens},
+                )
+            return
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            optional_params: Final = litellm.get_optional_params(
+                model=model,
+                custom_llm_provider="mistral",
+                thinking={"type": "enabled", "budget_tokens": budget_tokens},
+                drop_params=drop_params,
+            )
+        assert "reasoning_effort" not in optional_params
+        assert "thinking" not in optional_params
+        assert "Dropping thinking.budget_tokens=" in caplog.text
+
+    def test_magistral_thinking_without_a_type_sends_no_reasoning_effort(self, local_model_cost_map: None) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest",
+            custom_llm_provider="mistral",
+            thinking={"budget_tokens": 4096},
+        )
+        assert "reasoning_effort" not in optional_params
+        assert "thinking" not in optional_params
+
+    @pytest.mark.parametrize(
+        "reasoning", [{"reasoning_effort": "medium"}, {"thinking": {"type": "enabled", "budget_tokens": 1024}}]
+    )
+    def test_magistral_request_carries_reasoning_effort_and_the_callers_messages_only(
+        self, local_model_cost_map: None, reasoning: dict[str, object]
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="magistral-small-latest", custom_llm_provider="mistral", **reasoning
         )
 
-        assert result.get("_add_reasoning_prompt") is True
-
-    def test_get_mistral_reasoning_system_prompt(self):
-        """Test that the reasoning system prompt is properly formatted."""
-        prompt = MistralConfig._get_mistral_reasoning_system_prompt()
-        assert isinstance(prompt, str)
-        assert len(prompt) > 50  # Ensure it's not empty
-
-    def test_add_reasoning_system_prompt_no_existing_system_message(self):
-        """Test adding reasoning system prompt when no system message exists."""
-        mistral_config = MistralConfig()
-
-        messages = [{"role": "user", "content": "What is 2+2?"}]
-        optional_params = {"_add_reasoning_prompt": True}
-
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
-
-        # Should add a new system message at the beginning
-        assert len(result) == 2
-        assert result[0]["role"] == "system"
-        assert "<think>" in result[0]["content"]
-        assert result[1]["role"] == "user"
-        assert result[1]["content"] == "What is 2+2?"
-
-        # Should remove the internal flag
-        assert "_add_reasoning_prompt" not in optional_params
-
-    def test_add_reasoning_system_prompt_with_existing_system_message(self):
-        """Test adding reasoning system prompt when system message already exists."""
-        mistral_config = MistralConfig()
-
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "What is 2+2?"},
-        ]
-        optional_params = {"_add_reasoning_prompt": True}
-
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
-
-        # Should modify existing system message
-        assert len(result) == 2
-        assert result[0]["role"] == "system"
-        assert "<think>" in result[0]["content"]
-        assert "You are a helpful assistant." in result[0]["content"]
-        assert result[1]["role"] == "user"
-
-        # Should remove the internal flag
-        assert "_add_reasoning_prompt" not in optional_params
-
-    def test_add_reasoning_system_prompt_with_existing_list_content(self):
-        """Test adding reasoning system prompt when system message has list content."""
-        mistral_config = MistralConfig()
-
-        messages = [
-            {
-                "role": "system",
-                "content": [
-                    {"type": "text", "text": "You are a helpful assistant."},
-                    {
-                        "type": "text",
-                        "text": "You always provide detailed explanations.",
-                    },
-                ],
-            },
-            {"role": "user", "content": "What is 2+2?"},
-        ]
-        optional_params = {"_add_reasoning_prompt": True}
-
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
-
-        # Should modify existing system message preserving list format
-        assert len(result) == 2
-        assert result[0]["role"] == "system"
-        assert isinstance(result[0]["content"], list)
-
-        # First item should be the reasoning prompt
-        assert result[0]["content"][0]["type"] == "text"
-        assert "<think>" in result[0]["content"][0]["text"]
-
-        # Original content should be preserved
-        assert "You are a helpful assistant." in result[0]["content"][1]["text"]
-        assert (
-            "You always provide detailed explanations."
-            in result[0]["content"][2]["text"]
-        )
-
-        assert result[1]["role"] == "user"
-
-        # Should remove the internal flag
-        assert "_add_reasoning_prompt" not in optional_params
-
-    def test_add_reasoning_system_prompt_preserves_content_types(self):
-        """Test that reasoning prompt preserves original content types (string vs list)."""
-        mistral_config = MistralConfig()
-
-        # Test with string content
-        string_messages = [
-            {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Hello"},
-        ]
-        string_params = {"_add_reasoning_prompt": True}
-
-        string_result = mistral_config._add_reasoning_system_prompt_if_needed(
-            string_messages, string_params
-        )
-        assert isinstance(string_result[0]["content"], str)
-        assert "<think>" in string_result[0]["content"]
-        assert "You are helpful." in string_result[0]["content"]
-
-        # Test with list content
-        list_messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "You are helpful."}],
-            },
-            {"role": "user", "content": "Hello"},
-        ]
-        list_params = {"_add_reasoning_prompt": True}
-
-        list_result = mistral_config._add_reasoning_system_prompt_if_needed(
-            list_messages, list_params
-        )
-        assert isinstance(list_result[0]["content"], list)
-        assert list_result[0]["content"][0]["type"] == "text"
-        assert "<think>" in list_result[0]["content"][0]["text"]
-        assert "You are helpful." in list_result[0]["content"][1]["text"]
-
-    def test_add_reasoning_system_prompt_no_flag(self):
-        """Test that no modification happens when _add_reasoning_prompt flag is not set."""
-        mistral_config = MistralConfig()
-
-        messages = [{"role": "user", "content": "What is 2+2?"}]
-        optional_params = {}
-
-        result = mistral_config._add_reasoning_system_prompt_if_needed(
-            messages, optional_params
-        )
-
-        # Should return messages unchanged
-        assert result == messages
-        assert len(result) == 1
-
-    def test_transform_request_magistral_with_reasoning(self):
-        """Test transform_request method for magistral model with reasoning."""
-        mistral_config = MistralConfig()
-
-        messages = [{"role": "user", "content": "What is 15 * 7?"}]
-        optional_params = {"_add_reasoning_prompt": True}
-
-        result = mistral_config.transform_request(
-            model="mistral/magistral-medium-2506",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-
-        # Should have added system message
-        assert len(result["messages"]) == 2
-        assert result["messages"][0]["role"] == "system"
-        assert "<think>" in result["messages"][0]["content"]
-        assert result["messages"][1]["role"] == "user"
-
-        # Should remove internal flag from optional_params
-        assert "_add_reasoning_prompt" not in result
-
-    def test_transform_request_magistral_without_reasoning(self):
-        """Test transform_request method for magistral model without reasoning."""
-        mistral_config = MistralConfig()
-
-        messages = [{"role": "user", "content": "What is 15 * 7?"}]
-        optional_params = {}
-
-        result = mistral_config.transform_request(
-            model="mistral/magistral-medium-2506",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-
-        # Should not modify messages
-        assert len(result["messages"]) == 1
-        assert result["messages"][0]["role"] == "user"
-
-    def test_transform_request_non_magistral_with_reasoning_params(self):
-        """Test that non-magistral models ignore reasoning parameters."""
-        mistral_config = MistralConfig()
-
-        messages = [{"role": "user", "content": "What is 15 * 7?"}]
-        optional_params = {"_add_reasoning_prompt": True}
-
-        result = mistral_config.transform_request(
-            model="mistral/mistral-large-latest",
-            messages=messages,
+        request: Final = MistralConfig().transform_request(
+            model="magistral-small-latest",
+            messages=[{"role": "user", "content": "What is 17*23?"}],
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
 
-        # Should not add system message for non-magistral models
-        assert len(result["messages"]) == 1
-        assert result["messages"][0]["role"] == "user"
+        assert request["reasoning_effort"] == "high"
+        assert request["messages"] == [{"role": "user", "content": "What is 17*23?"}]
 
     def test_case_insensitive_magistral_detection(self):
         """Test that magistral model detection is case-insensitive."""
@@ -403,48 +404,10 @@ class TestMistralReasoningSupport:
             supported_params = mistral_config.get_supported_openai_params(model)
             assert "reasoning_effort" in supported_params, f"Failed for model: {model}"
 
-    def test_end_to_end_reasoning_workflow(self):
-        """Test the complete workflow from parameter to system prompt injection."""
-        mistral_config = MistralConfig()
-
-        # Step 1: Map parameters
-        optional_params = {}
-        mapped_params = mistral_config.map_openai_params(
-            non_default_params={"reasoning_effort": "high", "temperature": 0.7},
-            optional_params=optional_params,
-            model="mistral/magistral-medium-2506",
-            drop_params=False,
-        )
-
-        assert mapped_params.get("_add_reasoning_prompt") is True
-        assert mapped_params.get("temperature") == 0.7
-
-        # Step 2: Transform request
-        messages = [{"role": "user", "content": "Solve for x: 2x + 5 = 13"}]
-
-        result = mistral_config.transform_request(
-            model="mistral/magistral-medium-2506",
-            messages=messages,
-            optional_params=mapped_params,
-            litellm_params={},
-            headers={},
-        )
-
-        # Verify final result
-        assert len(result["messages"]) == 2
-        assert result["messages"][0]["role"] == "system"
-        assert "<think>" in result["messages"][0]["content"]
-        assert result["messages"][1]["role"] == "user"
-        assert result["messages"][1]["content"] == "Solve for x: 2x + 5 = 13"
-        assert result.get("temperature") == 0.7
-        assert "_add_reasoning_prompt" not in result
-
 
 def test_mistral_streaming_chunk_preserves_thinking_blocks():
     """Ensure streaming chunks keep magistral reasoning content."""
-    iterator = MistralChatResponseIterator(
-        streaming_response=iter([]), sync_stream=True, json_mode=False
-    )
+    iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
 
     streamed_chunk = {
         "id": "chunk-1",
@@ -521,9 +484,7 @@ class TestMistralParallelToolCalls:
     def test_get_supported_openai_params_includes_parallel_tool_calls(self):
         """Test that parallel_tool_calls is in supported parameters."""
         mistral_config = MistralConfig()
-        supported_params = mistral_config.get_supported_openai_params(
-            "mistral/mistral-large-latest"
-        )
+        supported_params = mistral_config.get_supported_openai_params("mistral/mistral-large-latest")
         assert "parallel_tool_calls" in supported_params
 
     def test_transform_request_preserves_parallel_tool_calls(self):
@@ -689,9 +650,7 @@ class TestMistralEmptyContentHandling:
 
         result = MistralConfig._handle_empty_content_response(response_data)
 
-        assert (
-            result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
-        )
+        assert result["choices"][0]["message"]["content"] == "Hello, how can I help you?"
 
     def test_handle_empty_content_response_handles_multiple_choices(self):
         """Test that only the first choice is processed for empty content."""
@@ -932,9 +891,7 @@ def test_mistral_transform_request_hoists_tool_message_image():
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
             },
             {
                 "role": "tool",
@@ -957,3 +914,35 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+@pytest.mark.parametrize(
+    "param, value, sent",
+    (
+        ("reasoning_effort", "none", "none"),
+        ("reasoning_effort", "xhigh", "high"),
+        ("thinking", {"type": "disabled"}, "none"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}, "high"),
+        ("thinking", {"type": "adaptive"}, "high"),
+    ),
+)
+def test_magistral_reasoning_request_is_sent_as_a_level_without_a_drop_warning(
+    fixed_reasoning_capabilities: None, param: str, value: object, sent: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == sent
+    assert (
+        tuple(
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and f"Dropping {param}=" in record.getMessage()
+        )
+        == ()
+    )
