@@ -9293,6 +9293,30 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+def test_pre_call_omits_raw_request_body_over_size_limit(logging_obj, monkeypatch):
+    """Redacting a multi-MB raw request blocks the event loop, so an oversized body is left out of it."""
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.MAX_RAW_REQUEST_BODY_LOG_CHARS", 100)
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+    body = {"messages": [{"role": "user", "content": "PRIVATE-PHRASE " * 20}]}
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": "https://api.openai.com/v1/chat/completions",
+            "headers": {},
+            "complete_input_dict": body,
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert "PRIVATE-PHRASE" not in raw_request
+    assert "https://api.openai.com/v1/chat/completions" in raw_request
+    assert logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"] == body
+
+
 _PRIVATE_RAW_REQUEST_ARGS: Final = {
     "api_base": "https://api.openai.com/v1/chat/completions",
     "headers": {},
