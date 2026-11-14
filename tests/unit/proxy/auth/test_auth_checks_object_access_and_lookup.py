@@ -89,6 +89,7 @@ from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_header
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -1069,6 +1070,49 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
     else:
         assert "budget_reset_at" not in creation_args
 
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_starts_each_default_window_with_its_own_reset(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {
+            "budget_limits": [
+                {"budget_duration": "1h", "max_budget": 5.0},
+                {"budget_duration": "30d", "max_budget": 100.0},
+            ]
+        },
+    )
+    prisma_client: Final = MagicMock()
+    prisma_client.db = AsyncMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+
+    try:
+        await get_user_object(
+            user_id="jwt_upsert_windows",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+    except Exception as e:
+        print(e)
+
+    resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+    windows: Final = json.loads(prisma_client.db.litellm_usertable.create.call_args[1]["data"]["budget_limits"])
+    assert [window["budget_duration"] for window in windows] == ["1h", "30d"]
+    assert all(
+        datetime.fromisoformat(window["reset_at"])
+        in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
+        for window in windows
+    )
 
 def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
@@ -4262,7 +4306,8 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
 
 
 @pytest.mark.asyncio
-async def test_reject_clientside_metadata_tags_enabled_with_tags():
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_reject_clientside_metadata_tags_enabled_with_tags(route):
     """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present."""
     from fastapi import Request
 
@@ -4290,7 +4335,7 @@ async def test_reject_clientside_metadata_tags_enabled_with_tags():
             end_user_object=None,
             global_proxy_spend=None,
             general_settings=general_settings,
-            route="/chat/completions",
+            route=route,
             llm_router=None,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
@@ -6966,7 +7011,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
     cache.async_delete_cache = AsyncMock()
-    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
+    cache.declare_delete = MagicMock(return_value=None)
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -7284,6 +7329,45 @@ async def test_model_discovery_route_bypasses_user_budget():
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "method, route, expect_blocked",
+    [
+        ("GET", "/v1/videos/video_abc", False),
+        ("GET", "/videos/video_abc/content", False),
+        ("POST", "/v1/videos", True),
+        ("POST", "/v1/videos/video_abc/remix", True),
+        ("GET", "/v1/videos", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exhausted_team_budget_spares_only_video_retrieval(method: str, route: str, expect_blocked: bool) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request: Final = MagicMock()
+    request.method = method
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="test-team", spend=0.4, max_budget=0.3),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=request,
+        )
+
+    if expect_blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await run()
+    else:
+        assert await run() is True
 
 
 @pytest.mark.parametrize("route", ["/health/services", "/auto_router/test_routing"])
@@ -10461,12 +10545,13 @@ async def test_can_key_call_resolved_model_skips_customer_lookup_without_custome
 
 
 @pytest.mark.asyncio
-async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch):
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch, route):
     monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
     router = _router_with_priced_and_unpriced_models()
 
     with pytest.raises(ProxyException) as exc_info:
-        await _run_common_checks(model="unpriced-group", llm_router=router)
+        await _run_common_checks(model="unpriced-group", llm_router=router, route=route)
 
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
@@ -11157,6 +11242,7 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
+    assert route_skips_budget_checks(route="/queue/chat/completions") is False
 
 
 @pytest.mark.parametrize(
@@ -11199,6 +11285,34 @@ def test_request_skips_budget_checks_for_non_spending_requests(
     )
     assert (
         request_skips_budget_checks(route=route, model=model, llm_router=router, request_body=request_body) is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "route, http_method, expected",
+    [
+        ("/v1/videos/video_abc", "GET", True),
+        ("/videos/video_abc", "GET", True),
+        ("/v1/videos/video_abc/content", "GET", True),
+        ("/videos/video_abc/content", "GET", True),
+        ("/v1/videos/video_abc", "POST", False),
+        ("/v1/videos/video_abc/content", None, False),
+        ("/v1/videos", "GET", False),
+        ("/v1/videos", "POST", False),
+        ("/v1/videos/video_abc/remix", "POST", False),
+        ("/v1/videos/edits", "POST", False),
+        ("/v1/videos/video_abc/remix", "GET", False),
+        ("/v1/chat/completions", "GET", False),
+    ],
+)
+def test_request_skips_budget_checks_only_for_paid_video_retrieval(
+    route: str, http_method: str | None, expected: bool, free_and_paid_router: litellm.Router
+) -> None:
+    assert (
+        request_skips_budget_checks(
+            route=route, model="paid-model", llm_router=free_and_paid_router, http_method=http_method
+        )
+        is expected
     )
 
 

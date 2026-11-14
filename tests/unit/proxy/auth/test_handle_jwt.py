@@ -2814,7 +2814,8 @@ async def test_auth_builder_rbac_team_denies_passthrough_without_allowlist():
 
 
 @pytest.mark.asyncio
-async def test_auth_builder_admin_on_llm_route_honors_team_header():
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_auth_builder_admin_on_llm_route_honors_team_header(route: str):
     """JWT proxy_admin + x-litellm-team-id on an LLM API route -> team context is
     attached to the admin result so team TPM/RPM limits and attribution apply."""
     from litellm.caching import DualCache
@@ -2832,6 +2833,7 @@ async def test_auth_builder_admin_on_llm_route_honors_team_header():
                 "management_routes",
                 "info_routes",
                 "openai_routes",
+                "/queue/chat/completions",
             ],
         ),
     )
@@ -2858,7 +2860,7 @@ async def test_auth_builder_admin_on_llm_route_honors_team_header():
             jwt_handler=jwt_handler,
             request_data={"model": "gpt-4"},
             general_settings={},
-            route="/chat/completions",
+            route=route,
             prisma_client=None,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,

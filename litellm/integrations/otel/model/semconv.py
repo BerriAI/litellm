@@ -334,8 +334,6 @@ class LiteLLM:
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     SERVICE_CALLER: Final = "litellm.service.caller"
     SERVICE_TARGET: Final = "litellm.service.target"
-    # The sorted, comma-joined key families one Redis pipeline carried ops for; bounded, unlike the keys.
-    REDIS_FAMILIES: Final = "litellm.redis.families"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``

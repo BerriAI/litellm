@@ -305,3 +305,20 @@ async def test_vertex_embedding_usage_carries_the_billable_character_count_googl
         8,
         character_count,
     )
+
+
+def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(predict_endpoint: respx.Route) -> None:
+    predict_endpoint.mock(return_value=_predict_response({"predictions": [_gecko_prediction([0.1, 2], 3)]}))
+
+    litellm.embedding(
+        model=f"vertex_ai/{GECKO}",
+        input=["hello"],
+        vertex_project=PUBLIC_CALL_PROJECT,
+        vertex_location="us-central1",
+        extra_body={"autoTruncate": False},
+    )
+
+    body: Final = json.loads(predict_endpoint.calls.last.request.content)
+    assert body["instances"] == [{"content": "hello"}]
+    assert "extra_body" not in body["parameters"]
+    assert body["parameters"]["autoTruncate"] is False

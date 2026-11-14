@@ -748,6 +748,7 @@ if MCP_AVAILABLE:
         proxy_logging_obj: "ProxyLogging | None",
         *,
         record_listing: bool,
+        use_tool_list_cache: bool,
     ) -> list[MCPTool]:
         return list(
             await global_mcp_server_manager.get_tools_from_server(
@@ -760,6 +761,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 record_listing=record_listing,
+                use_tool_list_cache=use_tool_list_cache,
             )
         )
 
@@ -793,6 +795,7 @@ if MCP_AVAILABLE:
             client_ip,
             proxy_logging_obj,
             record_listing=False,
+            use_tool_list_cache=apply_tool_filters,
         )
 
         server_filtered: Final = filter_tools_by_allowed_tools(tools, server) if apply_tool_filters else tools
@@ -839,6 +842,7 @@ if MCP_AVAILABLE:
             IPAddressUtils.get_mcp_client_ip(request),
             None,
             record_listing=False,
+            use_tool_list_cache=False,
         )
         scan: Final = await scan_tool_descriptions(
             apply_description_overrides(upstream, server),

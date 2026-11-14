@@ -3,14 +3,17 @@ Tests for access group management endpoints.
 """
 
 import types
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 from prisma.errors import PrismaError
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -20,6 +23,10 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.proxy_server import app
 from litellm.types.agents import AgentResponse
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+
+_ClientAndMocks: TypeAlias = tuple[TestClient, MagicMock, MagicMock, MagicMock, MagicMock]
 
 
 def _make_access_group_record(
@@ -30,12 +37,13 @@ def _make_access_group_record(
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
     access_skill_names: list | None = None,
+    access_vector_store_ids: Sequence[str] = (),
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
     updated_by: str | None = "admin-user",
     created_at: datetime | None = None,
-):
+) -> MagicMock:
     created_at_val = created_at or datetime.now()
     updated_at_val = datetime.now()
     data = {
@@ -46,6 +54,7 @@ def _make_access_group_record(
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
         "access_skill_names": access_skill_names or [],
+        "access_vector_store_ids": list(access_vector_store_ids),
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -78,12 +87,12 @@ def _make_key_record(token: str, key_alias: str | None = None):
 
 
 @pytest.fixture
-def client_and_mocks(monkeypatch):
+def client_and_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ClientAndMocks]:
     """Setup mock prisma and admin auth for access group endpoints."""
     mock_access_group_table = MagicMock()
     mock_prisma = MagicMock()
 
-    def _create_side_effect(*, data):
+    def _create_side_effect(*, data: Mapping[str, object]) -> MagicMock:
         return _make_access_group_record(
             access_group_id="ag-new",
             access_group_name=data.get("access_group_name", "new"),
@@ -92,6 +101,7 @@ def client_and_mocks(monkeypatch):
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             access_skill_names=data.get("access_skill_names", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -110,6 +120,7 @@ def client_and_mocks(monkeypatch):
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             access_skill_names=data.get("access_skill_names", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -134,6 +145,9 @@ def client_and_mocks(monkeypatch):
     mock_agents_table.find_many = AsyncMock(return_value=[])
     mock_agents_table.update = AsyncMock(return_value=None)
 
+    mock_vector_store_table = MagicMock()
+    mock_vector_store_table.find_many = AsyncMock(return_value=[])
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
@@ -150,6 +164,7 @@ def client_and_mocks(monkeypatch):
         litellm_verificationtoken=mock_key_table,
         litellm_mcpservertable=mock_mcp_server_table,
         litellm_agentstable=mock_agents_table,
+        litellm_managedvectorstorestable=mock_vector_store_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -1438,9 +1453,22 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
 # ---------------------------------------------------------------------------
 
 
-def _mock_resource_tables(mock_prisma, *, mcp_servers=(), agents=(), teams=(), keys=()):
+def _make_vector_store_record(vector_store_id: str, vector_store_name: str | None = None) -> types.SimpleNamespace:
+    return types.SimpleNamespace(vector_store_id=vector_store_id, vector_store_name=vector_store_name)
+
+
+def _mock_resource_tables(
+    mock_prisma: MagicMock,
+    *,
+    mcp_servers: Sequence[object] = (),
+    agents: Sequence[object] = (),
+    vector_stores: Sequence[object] = (),
+    teams: Sequence[object] = (),
+    keys: Sequence[object] = (),
+) -> None:
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_servers))
     mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=list(agents))
+    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=list(vector_stores))
     mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=list(teams))
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(keys))
 
@@ -1454,6 +1482,7 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
             access_group_id="ag-123",
             access_mcp_server_ids=["mcp-a", "mcp-b", "mcp-ghost"],
             access_agent_ids=["agent-a", "agent-ghost"],
+            access_vector_store_ids=["store-a", "store-unnamed", "store-ghost"],
             assigned_team_ids=["team-a", "team-b"],
             assigned_key_ids=["key-a", "key-b"],
         )
@@ -1465,6 +1494,10 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
             _make_mcp_server_record("mcp-b", server_name="jira_tools"),
         ],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[
+            _make_vector_store_record("store-a", "Parks knowledge base"),
+            _make_vector_store_record("store-unnamed"),
+        ],
         teams=[
             _make_team_record("team-a", ["ag-123"], team_alias="Platform"),
             _make_team_record("team-b", ["ag-123"]),
@@ -1481,6 +1514,12 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
         {"id": "mcp-ghost", "name": None},
     ]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}, {"id": "agent-ghost", "name": None}]
+    assert body["access_vector_stores"] == [
+        {"id": "store-a", "name": "Parks knowledge base"},
+        {"id": "store-unnamed", "name": None},
+        {"id": "store-ghost", "name": None},
+    ]
+    assert body["access_vector_store_ids"] == ["store-a", "store-unnamed", "store-ghost"]
     assert body["assigned_teams"] == [{"id": "team-a", "name": "Platform"}, {"id": "team-b", "name": None}]
     assert body["assigned_keys"] == [{"id": "key-a", "name": "ci-key"}, {"id": "key-b", "name": None}]
     assert body["access_mcp_server_ids"] == ["mcp-a", "mcp-b", "mcp-ghost"]
@@ -1490,6 +1529,8 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
     assert sorted(mcp_where["server_id"]["in"]) == ["mcp-a", "mcp-b", "mcp-ghost"]
     agent_where = mock_prisma.db.litellm_agentstable.find_many.call_args.kwargs["where"]
     assert sorted(agent_where["agent_id"]["in"]) == ["agent-a", "agent-ghost"]
+    store_where = mock_prisma.db.litellm_managedvectorstorestable.find_many.call_args.kwargs["where"]
+    assert sorted(store_where["vector_store_id"]["in"]) == ["store-a", "store-ghost", "store-unnamed"]
     key_where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
     assert sorted(key_where["token"]["in"]) == ["key-a", "key-b"]
 
@@ -1503,12 +1544,14 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
                 access_group_id="ag-1",
                 access_mcp_server_ids=["mcp-a"],
                 access_agent_ids=["agent-a"],
+                access_vector_store_ids=["store-a"],
                 assigned_key_ids=["key-a"],
             ),
             _make_access_group_record(
                 access_group_id="ag-2",
                 access_mcp_server_ids=["mcp-b"],
                 access_agent_ids=["agent-b"],
+                access_vector_store_ids=["store-b"],
                 assigned_key_ids=["key-b"],
             ),
         ]
@@ -1517,6 +1560,10 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-a", alias="A"), _make_mcp_server_record("mcp-b", alias="B")],
         agents=[_make_agent_record("agent-a", "Agent A"), _make_agent_record("agent-b", "Agent B")],
+        vector_stores=[
+            _make_vector_store_record("store-a", "Store A"),
+            _make_vector_store_record("store-b", "Store B"),
+        ],
         keys=[_make_key_record("key-a", key_alias="Key A"), _make_key_record("key-b", key_alias="Key B")],
     )
 
@@ -1525,14 +1572,17 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
     first, second = resp.json()
     assert first["access_mcp_servers"] == [{"id": "mcp-a", "name": "A"}]
     assert first["access_agents"] == [{"id": "agent-a", "name": "Agent A"}]
+    assert first["access_vector_stores"] == [{"id": "store-a", "name": "Store A"}]
     assert first["assigned_keys"] == [{"id": "key-a", "name": "Key A"}]
     assert second["access_mcp_servers"] == [{"id": "mcp-b", "name": "B"}]
     assert second["access_agents"] == [{"id": "agent-b", "name": "Agent B"}]
+    assert second["access_vector_stores"] == [{"id": "store-b", "name": "Store B"}]
     assert second["assigned_keys"] == [{"id": "key-b", "name": "Key B"}]
 
     for table, column in (
         (mock_prisma.db.litellm_mcpservertable, "server_id"),
         (mock_prisma.db.litellm_agentstable, "agent_id"),
+        (mock_prisma.db.litellm_managedvectorstorestable, "vector_store_id"),
         (mock_prisma.db.litellm_verificationtoken, "token"),
     ):
         table.find_many.assert_awaited_once()
@@ -1552,9 +1602,11 @@ def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_moc
     resp = client.get("/v1/access_group")
     assert resp.status_code == 200
     assert all(group["access_mcp_servers"] == [] and group["assigned_keys"] == [] for group in resp.json())
+    assert all(group["access_vector_stores"] == [] for group in resp.json())
 
     mock_prisma.db.litellm_mcpservertable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_agentstable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_managedvectorstorestable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
 
 
@@ -1567,6 +1619,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-a", alias="GitHub")],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[_make_vector_store_record("store-a", "Parks knowledge base")],
         teams=[team_record],
     )
 
@@ -1576,6 +1629,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
             "access_group_name": "new-group",
             "access_mcp_server_ids": ["mcp-a"],
             "access_agent_ids": ["agent-a"],
+            "access_vector_store_ids": ["store-a"],
             "assigned_team_ids": ["team-1"],
         },
     )
@@ -1583,6 +1637,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
     body = resp.json()
     assert body["access_mcp_servers"] == [{"id": "mcp-a", "name": "GitHub"}]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_vector_stores"] == [{"id": "store-a", "name": "Parks knowledge base"}]
     assert body["assigned_teams"] == [{"id": "team-1", "name": "Platform"}]
 
 
@@ -1596,16 +1651,55 @@ def test_update_access_group_response_carries_resolved_names(client_and_mocks):
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-new", alias="Linear")],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[_make_vector_store_record("store-new", "HR policies")],
     )
 
     resp = client.put(
-        "/v1/access_group/ag-update", json={"access_mcp_server_ids": ["mcp-new"], "access_agent_ids": ["agent-a"]}
+        "/v1/access_group/ag-update",
+        json={
+            "access_mcp_server_ids": ["mcp-new"],
+            "access_agent_ids": ["agent-a"],
+            "access_vector_store_ids": ["store-new"],
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["access_mcp_servers"] == [{"id": "mcp-new", "name": "Linear"}]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_vector_stores"] == [{"id": "store-new", "name": "HR policies"}]
     assert body["access_mcp_server_ids"] == ["mcp-new"]
+
+
+def test_get_access_group_names_a_vector_store_declared_in_the_config_file(
+    client_and_mocks: _ClientAndMocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config-declared store has no row, so its name comes from the registry the config file filled."""
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_vector_store_ids=["store-config", "store-loaded"])
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                {
+                    "vector_store_id": "store-config",
+                    "custom_llm_provider": "openai",
+                    "vector_store_name": "Config store",
+                    "is_config": True,
+                },
+                {"vector_store_id": "store-loaded", "custom_llm_provider": "openai", "vector_store_name": "stale"},
+            ]
+        ),
+    )
+
+    resp = client.get("/v1/access_group/ag-123")
+    assert resp.status_code == 200
+    assert resp.json()["access_vector_stores"] == [
+        {"id": "store-config", "name": "Config store"},
+        {"id": "store-loaded", "name": None},
+    ]
 
 
 def test_create_access_group_persists_mcp_tool_permissions_as_json(client_and_mocks):
@@ -1712,6 +1806,41 @@ def test_update_access_group_writes_skill_names(client_and_mocks, update_payload
     assert resp.status_code == 200
     assert resp.json()["access_skill_names"] == expected_skills
     assert mock_table.update.await_args.kwargs["data"]["access_skill_names"] == expected_skills
+
+
+def test_create_access_group_persists_and_returns_vector_store_ids(client_and_mocks: _ClientAndMocks) -> None:
+    client, _, mock_table, *_ = client_and_mocks
+
+    resp: Final = client.post(
+        "/v1/access_group", json={"access_group_name": "stores", "access_vector_store_ids": ["store-a"]}
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["access_vector_store_ids"] == ["store-a"]
+    assert mock_table.create.await_args.kwargs["data"]["access_vector_store_ids"] == ["store-a"]
+
+
+@pytest.mark.parametrize(
+    ("update_payload", "expected_stores"),
+    [
+        ({"access_vector_store_ids": ["store-a"]}, ["store-a"]),
+        ({"access_vector_store_ids": []}, []),
+        ({"access_vector_store_ids": None}, []),
+    ],
+)
+def test_update_access_group_writes_vector_store_ids(
+    client_and_mocks: _ClientAndMocks, update_payload: Mapping[str, object], expected_stores: Sequence[str]
+) -> None:
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-stores", access_vector_store_ids=["old-store"])
+    )
+
+    resp: Final = client.put("/v1/access_group/ag-stores", json=update_payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["access_vector_store_ids"] == expected_stores
+    assert mock_table.update.await_args.kwargs["data"]["access_vector_store_ids"] == expected_stores
 
 
 def test_update_access_group_without_skill_field_leaves_skills_untouched(client_and_mocks):

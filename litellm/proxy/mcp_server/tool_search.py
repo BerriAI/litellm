@@ -588,6 +588,7 @@ async def handle_mcp_tool_search(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        use_tool_list_cache=False,
     )
     results: Final = await search_mcp_tools(query, mcp_listing.tools, top_k, settings, ranker)
     if isinstance(results, EmbeddingFailed):
@@ -628,6 +629,7 @@ async def handle_mcp_proxy_tool(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             mcp_proxy_mode=True,
+            use_tool_list_cache=False,
         )
         llm_router: Final = proxy_server.llm_router
         proxy_logging_obj: Final = proxy_server.proxy_logging_obj

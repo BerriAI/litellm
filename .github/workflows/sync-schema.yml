@@ -1,9 +1,9 @@
-name: Sync schema.prisma copies
+name: Sync litellm/schema.prisma copies
 
 on:
   pull_request:
     paths:
-      - 'schema.prisma'
+      - 'litellm/schema.prisma'
 
 # Scoped to ONLY the permissions needed:
 # - contents:write to push the sync commit to the PR branch
@@ -37,7 +37,7 @@ jobs:
 
       - name: Reject symlinked schema files
         run: |
-          for f in schema.prisma litellm/proxy/schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma; do
+          for f in litellm/schema.prisma litellm/proxy/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma; do
             if [ -L "$f" ]; then
               echo "::error file=$f::$f is a symlink, which is not allowed"
               exit 1
@@ -46,13 +46,13 @@ jobs:
 
       - name: Copy root schema to other locations
         run: |
-          cp schema.prisma litellm/proxy/schema.prisma
-          cp schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+          cp litellm/schema.prisma litellm/proxy/schema.prisma
+          cp litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
 
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet -- litellm/proxy/schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma; then
+          if git diff --quiet -- litellm/proxy/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Schemas already in sync. Nothing to do."
           else
@@ -68,6 +68,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$GITHUB_HEAD_REF"
-          git add -- litellm/proxy/schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma
-          git commit -m "chore: sync schema.prisma copies from root"
+          git add -- litellm/proxy/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
+          git commit -m "chore: sync litellm/schema.prisma copies from the canonical schema"
           git push origin "HEAD:$GITHUB_HEAD_REF"
