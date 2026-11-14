@@ -7328,13 +7328,13 @@ async def _messages_fallback_through_dispatch(entry: str, logging_obj: LitellmLo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry", ["async", "sync"])
-async def test_a_native_messages_fallback_prices_its_own_reply_not_the_bridged_attempt_before_it(entry: str):
+async def test_a_native_messages_fallback_prices_its_own_reply_not_the_bridged_attempt_before_it(entry: str) -> None:
     """The proxy hands one logging object to every fallback attempt of a /v1/messages call. A blocked
     attempt answered through the chat bridge must not price the native reply of the fallback after it."""
-    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj: Final = _anthropic_messages_logging_obj()
     logging_obj.record_bridged_model_response(_blocked_bridged_attempt())
 
-    served = await _messages_fallback_through_dispatch(entry, logging_obj)
+    served: Final = await _messages_fallback_through_dispatch(entry, logging_obj)
 
     assert isinstance(served, dict)
     assert logging_obj.billable_result(served) == served
