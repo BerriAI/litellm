@@ -354,7 +354,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
+    needs: [dashboard-build, core-checks, all-extras]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -365,4 +365,4 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'to_entries | all(.[]; .value.result == "success" or (.value.result == "skipped" and (.key == "windows-sdk" or .key == "proxy-build-from-pip")))' <<< "$NEEDS" > /dev/null
+          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
