@@ -1,4 +1,5 @@
 import base64
+import bisect
 import copy
 import hashlib
 import itertools
@@ -14,7 +15,7 @@ from types import MappingProxyType
 from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
@@ -2285,7 +2286,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
+    original_content_element: Mapping[str, object] | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -2924,6 +2925,11 @@ def _without_repeated_thinking(
     )
 
 
+def _without_trailing_empty_text(blocks: Sequence[_Replayed]) -> tuple[_Replayed, ...]:
+    trailing_empty: Final = sum(1 for _ in itertools.takewhile(_is_empty_text_block, reversed(blocks)))
+    return tuple(blocks[: len(blocks) - trailing_empty])
+
+
 def _interleave(
     content: Sequence[_Replayed],
     before: Mapping[int, Sequence[_Replayed]],
@@ -2943,6 +2949,195 @@ def _thinking_in_replay_order(
         block
         for item in _with_missing_thinking_blocks(content_items, thinking_blocks or ())
         if (block := _as_thinking_block(item)) is not None
+    )
+
+
+_CONTENT_BLOCK_ORDER: Final = TypeAdapter(tuple[AnthropicContentBlockOrderEntry, ...])
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
+
+def _recorded_content_block_order(order: object) -> tuple[AnthropicContentBlockOrderEntry, ...] | None:
+    if order is None:
+        return None
+    try:
+        return _CONTENT_BLOCK_ORDER.validate_python(order)
+    except ValidationError:
+        return None
+
+
+class _PlainTextPart(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["text"]
+    text: str
+    cache_control: dict[str, JsonValue] | None = None
+
+
+_PLAIN_TEXT_PARTS: Final = TypeAdapter(tuple[_PlainTextPart, ...])
+
+
+def _plain_text_parts(content: object) -> tuple[_PlainTextPart, ...] | None:
+    if content is None or isinstance(content, str):
+        return (_PlainTextPart(type="text", text=content or ""),)
+    try:
+        return _PLAIN_TEXT_PARTS.validate_python(content)
+    except ValidationError:
+        return None
+
+
+_TextBreakpoint: TypeAlias = tuple[int, Mapping[str, JsonValue] | AllMessageValues]
+
+
+def _text_breakpoints(parts: Sequence[_PlainTextPart], message: AllMessageValues) -> tuple[_TextBreakpoint, ...]:
+    ends: Final = tuple(itertools.accumulate(len(part.text) for part in parts))
+    from_parts: Final = tuple(
+        (end, {"cache_control": part.cache_control}) for end, part in zip(ends, parts) if part.cache_control is not None
+    )
+    return from_parts or ((ends[-1] if ends else 0, message),)
+
+
+def _breakpoint_ending_in(
+    text_breakpoints: Sequence[_TextBreakpoint], start: int, end: int
+) -> Mapping[str, JsonValue] | AllMessageValues | None:
+    last: Final = bisect.bisect_right(text_breakpoints, end, key=lambda text_breakpoint: text_breakpoint[0]) - 1
+    if last < 0 or text_breakpoints[last][0] <= start:
+        return None
+    return text_breakpoints[last][1]
+
+
+def _block_field(block: Mapping[str, object], key: str) -> object:
+    return block.get(key)
+
+
+_ReplayedBlock: TypeAlias = AnthropicMessagesAssistantMessageValues | _AnthropicToolInvokeItem
+
+
+def _recorded_block(
+    entry: AnthropicContentBlockOrderEntry,
+    thinking_seen: int,
+    text_end: int,
+    *,
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    text: str,
+    tool_uses: Mapping[object, _AnthropicToolInvokeItem],
+    tool_results: Mapping[object, _AnthropicToolInvokeItem],
+    drop_params: bool,
+    text_breakpoints: Sequence[_TextBreakpoint],
+) -> tuple[_ReplayedBlock, ...]:
+    match entry:
+        case AnthropicContentBlockOrderEntry(type="thinking" | "redacted_thinking"):
+            return tuple(_replayable_thinking_blocks([thinking_blocks[thinking_seen - 1]], drop_params=drop_params))
+        case AnthropicContentBlockOrderEntry(type="text", length=int() as length) if length:
+            text_block: Final = AnthropicMessagesTextParam(type="text", text=text[text_end - length : text_end])
+            breakpoint_source: Final = _breakpoint_ending_in(text_breakpoints, text_end - length, text_end)
+            if breakpoint_source is not None:
+                add_cache_control_to_content(
+                    anthropic_content_element=text_block, original_content_element=breakpoint_source
+                )
+            return (text_block,)
+        case AnthropicContentBlockOrderEntry(id=str() as block_id) if block_id in tool_uses:
+            return (tool_uses[block_id],)
+        case AnthropicContentBlockOrderEntry(tool_use_id=str() as tool_use_id) if tool_use_id in tool_results:
+            return (tool_results[tool_use_id],)
+        case _:
+            return ()
+
+
+def _blocks_in_recorded_order(
+    order: tuple[AnthropicContentBlockOrderEntry, ...],
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    tool_invokes: Sequence[_AnthropicToolInvokeItem],
+    text: str,
+    *,
+    drop_params: bool,
+    text_breakpoints: Sequence[_TextBreakpoint],
+) -> tuple[_ReplayedBlock, ...] | None:
+    tool_uses: Final = MappingProxyType(
+        {
+            _block_field(item, "id"): item
+            for item in tool_invokes
+            if _block_field(item, "type") in ("server_tool_use", "tool_use")
+        }
+    )
+    tool_results: Final = MappingProxyType(
+        {
+            _block_field(item, "tool_use_id"): item
+            for item in tool_invokes
+            if str(_block_field(item, "type")).endswith("_tool_result")
+        }
+    )
+    recorded_server_tool_uses: Final = frozenset(entry.id for entry in order if entry.type == "server_tool_use")
+    server_tool_uses: Final = frozenset(
+        block_id for block_id, item in tool_uses.items() if _block_field(item, "type") == "server_tool_use"
+    )
+    recorded_ids: Final = tuple(entry.id for entry in order if entry.id is not None)
+    recorded_tool_results: Final = tuple(entry.tool_use_id for entry in order if entry.tool_use_id is not None)
+    if (
+        tuple(entry.type for entry in order if entry.type in _THINKING_BLOCK_TYPES)
+        != tuple(_block_field(block, "type") for block in thinking_blocks)
+        or sum(entry.length or 0 for entry in order if entry.type == "text") != len(text)
+        or recorded_server_tool_uses != server_tool_uses
+        or not recorded_server_tool_uses.issubset(tool_results)
+        or len(frozenset(recorded_ids)) != len(recorded_ids)
+        or len(recorded_tool_results) != len(tool_results)
+        or frozenset(recorded_tool_results) != frozenset(tool_results)
+    ):
+        return None
+    placed: Final = tuple(
+        itertools.chain.from_iterable(
+            _recorded_block(
+                entry,
+                thinking_seen,
+                text_end,
+                thinking_blocks=thinking_blocks,
+                text=text,
+                tool_uses=tool_uses,
+                tool_results=tool_results,
+                drop_params=drop_params,
+                text_breakpoints=text_breakpoints,
+            )
+            for entry, thinking_seen, text_end in zip(
+                order,
+                itertools.accumulate(int(entry.type in _THINKING_BLOCK_TYPES) for entry in order),
+                itertools.accumulate((entry.length or 0) if entry.type == "text" else 0 for entry in order),
+            )
+        )
+    )
+    placed_objects: Final = frozenset(map(id, placed))
+    return (*placed, *(item for item in tool_invokes if id(item) not in placed_objects))
+
+
+def _blocks_not_sent_before(
+    blocks: Sequence[_ReplayedBlock], sent_tool_ids: Container[object]
+) -> tuple[_ReplayedBlock, ...]:
+    repeated_ids: Final = frozenset(
+        block_id for block in blocks if (block_id := _block_field(block, "id")) in sent_tool_ids
+    )
+    return tuple(
+        block
+        for block in blocks
+        if _block_field(block, "id") not in repeated_ids and _block_field(block, "tool_use_id") not in repeated_ids
+    )
+
+
+def _replay_in_recorded_order(
+    message: ChatCompletionAssistantMessage,
+    tool_invokes: Sequence[_AnthropicToolInvokeItem],
+    *,
+    drop_params: bool,
+) -> tuple[_ReplayedBlock, ...] | None:
+    fields: Final = as_str_mapping(message.get("provider_specific_fields")) or {}
+    order: Final = _recorded_content_block_order(fields.get("content_block_order"))
+    parts: Final = _plain_text_parts(message.get("content"))
+    if order is None or parts is None:
+        return None
+    return _blocks_in_recorded_order(
+        order,
+        message.get("thinking_blocks") or (),
+        tool_invokes,
+        "".join(part.text for part in parts),
+        drop_params=drop_params,
+        text_breakpoints=_text_breakpoints(parts, message),
     )
 
 
@@ -3253,10 +3448,30 @@ def anthropic_messages_pt(
                 tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
             )
 
-            if (
+            _recorded_replay = (
+                _replay_in_recorded_order(assistant_content_block, tool_invoke_results, drop_params=drop_params)
+                if thinking_blocks is not None and _has_server_tool_calls
+                else None
+            )
+
+            if _recorded_replay is not None:
+                for block in _blocks_not_sent_before(_recorded_replay, unique_tool_ids):
+                    item_id = _block_field(block, "id")
+                    if isinstance(item_id, str) and item_id in unique_tool_ids:
+                        continue
+                    if isinstance(item_id, str):
+                        unique_tool_ids.add(item_id)
+                    assistant_content.append(
+                        cast(  # cast-ok: server tool blocks are Anthropic-native dicts the content union does not model
+                            AnthropicMessagesAssistantMessageValues, block
+                        )
+                    )
+                assistant_tool_calls = None
+
+            elif (
                 thinking_blocks is not None
                 and _has_server_tool_calls
-                and isinstance(assistant_content_block.get("content", None), (str, type(None)))
+                and (_acb_parts := _plain_text_parts(assistant_content_block.get("content", None))) is not None
             ):
                 # INTERLEAVED MODE: When we have both thinking blocks and server
                 # tool calls (e.g. web search), Anthropic's original response
@@ -3290,15 +3505,15 @@ def anthropic_messages_pt(
 
                 # Build the text block if content is a non-empty string
                 text_element = None
-                _acb_content = assistant_content_block.get("content")
-                if isinstance(_acb_content, str) and _acb_content:
+                _acb_content = "".join(part.text for part in _acb_parts)
+                if _acb_content:
                     _anthropic_text_content_element = AnthropicMessagesTextParam(
                         type="text",
                         text=_acb_content,
                     )
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_text_content_element,
-                        original_content_element=dict(assistant_content_block),
+                        original_content_element=_text_breakpoints(_acb_parts, assistant_content_block)[-1][1],
                     )
                     if "cache_control" in _content_element:
                         _anthropic_text_content_element["cache_control"] = _content_element["cache_control"]
@@ -3306,7 +3521,9 @@ def anthropic_messages_pt(
 
                 # Interleave: each thinking block precedes its server tool group.
                 # Pattern: thinking[0], group[0], thinking[1], group[1], ...
-                # Any remaining thinking blocks (after all groups) go before text.
+                # Only the last remaining thinking block goes before text, since
+                # Anthropic rejects thinking blocks that were apart in the original
+                # response and sit side by side in the replay.
                 # Any remaining groups (after all thinking blocks) go after.
                 tb_idx = 0
                 grp_idx = 0
@@ -3327,8 +3544,8 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesAssistantMessageValues, block))
                         grp_idx += 1
                     elif tb_idx < num_tb:
-                        # More thinking blocks than tool groups - emit before text
-                        assistant_content.append(replayed_thinking_blocks[tb_idx])
+                        if tb_idx == num_tb - 1:
+                            assistant_content.append(replayed_thinking_blocks[tb_idx])
                         tb_idx += 1
                     else:
                         # More tool groups than thinking blocks - emit remaining
@@ -3461,7 +3678,8 @@ def anthropic_messages_pt(
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
-            for content in new_messages[-1]["content"]:
+            new_messages[-1]["content"] = list(_without_trailing_empty_text(new_messages[-1]["content"]))
+            for content in new_messages[-1]["content"][-1:]:
                 if isinstance(content, dict) and content["type"] == "text":
                     content["text"] = content["text"].rstrip()  # no trailing whitespace for final assistant message
 

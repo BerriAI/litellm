@@ -10,7 +10,15 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, Pro
 
 import httpx
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    ModelWrapValidatorHandler,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -92,6 +100,7 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
     AnthropicComputerTool,
+    AnthropicContentBlockOrderEntry,
     AnthropicHostedTools,
     AnthropicInputSchema,
     AnthropicMcpServerTool,
@@ -413,6 +422,47 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     type: ReadOnly[str]
     tool_use_id: ReadOnly[str]
     content: ReadOnly[object]
+
+
+class _AnthropicResponseContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: tuple[Mapping[str, object], ...] = ()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _empty_when_malformed(
+        cls, value: object, handler: ModelWrapValidatorHandler["_AnthropicResponseContent"]
+    ) -> "_AnthropicResponseContent":
+        try:
+            return handler(value)
+        except ValidationError:
+            return cls()
+
+
+def content_block_order_entry(block: Mapping[str, object]) -> AnthropicContentBlockOrderEntry:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return AnthropicContentBlockOrderEntry(type="text", length=len(text))
+        case {"type": str() as kind, "id": str() as block_id}:
+            return AnthropicContentBlockOrderEntry(type=kind, id=block_id)
+        case {"type": str() as kind, "tool_use_id": str() as tool_use_id}:
+            return AnthropicContentBlockOrderEntry(type=kind, tool_use_id=tool_use_id)
+        case _:
+            return AnthropicContentBlockOrderEntry(type=str(block.get("type")))
+
+
+def recorded_content_block_order(
+    entries: Sequence[AnthropicContentBlockOrderEntry],
+) -> tuple[Mapping[str, object], ...] | None:
+    kinds: Final = frozenset(entry.type for entry in entries)
+    if kinds.isdisjoint(("thinking", "redacted_thinking")) or "server_tool_use" not in kinds:
+        return None
+    return tuple(entry.model_dump(exclude_none=True) for entry in entries)
+
+
+def content_block_order(content: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...] | None:
+    return recorded_content_block_order(tuple(content_block_order_entry(block) for block in content))
 
 
 def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:
@@ -3249,6 +3299,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        block_order: Final = content_block_order(_AnthropicResponseContent.model_validate(completion_response).content)
+        if block_order is not None:
+            provider_specific_fields["content_block_order"] = block_order
 
         server_tool_calls: Final = [tc for tc in tool_calls if tc["id"] in server_tool_use_ids]
         if server_tool_calls:
