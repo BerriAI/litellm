@@ -391,7 +391,7 @@ async def reserve_budget_for_request(
     # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
-    if native_owner_reserves() and (not pre_call_admits or native_budget_route(route)):
+    if native_owner_reserves():
         planned: Final = await _native_budget_plan(
             request_body=_NATIVE_REQUEST_BODY.validate_python(request_body),
             route=route,
@@ -408,7 +408,9 @@ async def reserve_budget_for_request(
             ),
             fail_closed_budget_enforcement=fail_closed_budget_enforcement,
         )
-        return planned if pre_call_admits or planned is None else await admit_native_reservation_now(valid_token)
+        if planned is None or (pre_call_admits and native_budget_route(route)):
+            return planned
+        return await admit_native_reservation_now(valid_token)
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
