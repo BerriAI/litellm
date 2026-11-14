@@ -1294,19 +1294,21 @@ fn azure_chat_tiers() -> RouterConfig {
 }
 
 #[rstest]
-#[case::batch_create_moves_past_the_level_it_used(azure_chat_and_batch_tiers(), true, vec!["b2", "b3"])]
-#[case::other_calls_walk_every_level(azure_chat_and_batch_tiers(), false, vec!["c1", "b2"])]
-#[case::batch_create_without_a_batch_deployment_walks_every_level(azure_chat_tiers(), true, vec!["c1", "c2"])]
+#[case::batch_create_moves_past_the_level_it_used(azure_chat_and_batch_tiers(), true, false, vec!["b2", "b3"])]
+#[case::other_batch_calls_walk_every_level(azure_chat_and_batch_tiers(), false, true, vec!["c1", "b2"])]
+#[case::batch_create_without_a_batch_deployment_walks_every_level(azure_chat_tiers(), true, false, vec!["c1", "c2"])]
 #[tokio::test]
 async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
     #[case] config: RouterConfig,
     #[case] batch_create: bool,
+    #[case] batch_api: bool,
     #[case] expected: Vec<&str>,
 ) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
     let router = router(config, json!({"num_retries": 0}), host.clone());
     let request = RouterRequest {
         batch_create,
+        batch_api,
         ..request()
     };
     router
@@ -1314,6 +1316,76 @@ async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
         .await
         .unwrap();
     assert_eq!(host.selected(), expected);
+}
+
+#[tokio::test]
+async fn a_failed_chat_level_never_falls_back_to_a_batch_only_level() {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(
+        azure_chat_and_batch_tiers(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let error = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    assert_eq!(host.selected(), vec!["c1"]);
+    assert!(matches!(error, Error::Attempt(failed) if failed.kind == FailureKind::InternalServer));
+}
+
+fn azure_chat_beside_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_chat_call(false, vec!["c1"])]
+#[case::a_batch_or_file_call(true, vec!["c1", "b2"])]
+#[tokio::test]
+async fn only_batch_and_file_calls_pick_among_azure_batch_only_deployments(
+    #[case] batch_api: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let router = router(
+        azure_chat_beside_batch(),
+        json!({}),
+        Arc::new(ScriptedHost::default()),
+    );
+    let request = RouterRequest {
+        batch_api,
+        ..request()
+    };
+    let candidates = router
+        .healthy(&Op::from("acompletion"), &request)
+        .await
+        .unwrap();
+    let healthy: Vec<&str> = candidates.healthy.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(healthy, expected);
+}
+
+#[tokio::test]
+async fn a_rate_limited_chat_deployment_beside_a_batch_one_returns_its_own_error() {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429)],
+    ));
+    let router = router(
+        azure_chat_beside_batch(),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let error = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    assert_eq!(host.selected(), vec!["c1"]);
+    assert!(matches!(error, Error::Attempt(refused) if refused.kind == FailureKind::RateLimit));
 }
 
 fn azure_chat_then_batch() -> RouterConfig {

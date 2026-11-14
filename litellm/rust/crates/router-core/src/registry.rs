@@ -239,16 +239,24 @@ impl Deployment {
         self.model_info.raw.get("mode").and_then(Value::as_str) == Some("batch")
     }
 
-    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
-    /// its `custom_llm_provider`, else its model's provider prefix.
-    pub(crate) fn cannot_run_batches(&self) -> bool {
+    fn is_azure(&self) -> bool {
         let provider = self.params.custom_llm_provider.as_deref().or_else(|| {
             self.params
                 .model
                 .split_once('/')
                 .map(|(provider, _)| provider)
         });
-        matches!(provider, Some("azure" | "azure_ai")) && !self.is_batch_capable()
+        matches!(provider, Some("azure" | "azure_ai"))
+    }
+
+    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
+    /// its `custom_llm_provider`, else its model's provider prefix.
+    pub(crate) fn cannot_run_batches(&self) -> bool {
+        self.is_azure() && !self.is_batch_capable()
+    }
+
+    pub(crate) fn serves_only_batches(&self) -> bool {
+        self.is_azure() && self.is_batch_capable()
     }
 
     pub(crate) fn supports_web_search(&self) -> bool {

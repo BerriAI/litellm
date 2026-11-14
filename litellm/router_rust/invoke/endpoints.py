@@ -155,6 +155,7 @@ class EndpointCore(Protocol):
         specific_deployment: bool | None = None,
         messages: object = None,
         batch_upload: bool = False,
+        batch_api: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]: ...
 
     async def acompletion(self, *args: object, **kwargs: object) -> object: ...  # kwargs-ok: endpoint payload
@@ -2252,6 +2253,7 @@ class RustEndpoints:
                 kind="healthy",
                 specific_deployment=bool(specific) or None,
                 messages=_user_message("retrieve-api-fake-text"),
+                batch_api=True,
             )
         else:
             healthy = [as_dict(r) for r in self._core.handle.deployments()]  # rebind-ok: as Python rebinds it
@@ -2348,6 +2350,7 @@ class RustEndpoints:
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
             batch_upload=is_batch_upload(kwargs),
+            batch_api=True,
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
 

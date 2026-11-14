@@ -251,6 +251,24 @@ fn without_deployments_that_cannot_batch(
         .collect()
 }
 
+pub(crate) fn skips_batch_only(request: &RouterRequest, pool: &[Arc<Deployment>]) -> bool {
+    !request.batch_create && !request.batch_api && pool.iter().any(|d| !d.serves_only_batches())
+}
+
+fn without_batch_only_deployments(
+    request: &RouterRequest,
+    all: &[Arc<Deployment>],
+    healthy: Vec<Arc<Deployment>>,
+) -> Vec<Arc<Deployment>> {
+    if !skips_batch_only(request, all) {
+        return healthy;
+    }
+    healthy
+        .into_iter()
+        .filter(|d| !d.serves_only_batches())
+        .collect()
+}
+
 impl Core {
     fn context<'a>(
         &'a self,
@@ -504,7 +522,8 @@ impl Core {
             let healthy = if resolution.kind.is_single() {
                 healthy
             } else {
-                without_deployments_that_cannot_batch(request, &all, healthy)
+                let healthy = without_deployments_that_cannot_batch(request, &all, healthy);
+                without_batch_only_deployments(request, &all, healthy)
             };
             return Ok(Candidates {
                 name: name.to_owned(),
@@ -672,6 +691,7 @@ impl Core {
 
         if !resolution.kind.is_single() {
             healthy = without_deployments_that_cannot_batch(request, &all, healthy);
+            healthy = without_batch_only_deployments(request, &all, healthy);
         }
 
         if let Some(pinned) = [
@@ -899,5 +919,77 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(picked.id, "b");
+    }
+
+    fn declared(id: &str, params: serde_json::Value, mode: &str) -> Arc<Deployment> {
+        let spec: DeploymentSpec = serde_json::from_value(json!({
+            "model_name": "g", "litellm_params": params, "model_info": {"id": id, "mode": mode},
+        }))
+        .unwrap();
+        Arc::new(Deployment::from_spec(spec).unwrap())
+    }
+
+    fn chat() -> Arc<Deployment> {
+        declared("chat", json!({"model": "azure/chat"}), "chat")
+    }
+
+    fn azure_batch(id: &str) -> Arc<Deployment> {
+        declared(id, json!({"model": "azure/batch"}), "batch")
+    }
+
+    fn ids(deployments: &[Arc<Deployment>]) -> Vec<&str> {
+        deployments.iter().map(|d| d.id.as_str()).collect()
+    }
+
+    #[rstest]
+    #[case::an_azure_model(json!({"model": "azure/batch"}), vec!["chat"])]
+    #[case::an_azure_ai_model(json!({"model": "azure_ai/batch"}), vec!["chat"])]
+    #[case::azure_named_by_custom_llm_provider(
+        json!({"model": "batch", "custom_llm_provider": "azure"}),
+        vec!["chat"]
+    )]
+    #[case::another_provider_serves_more_than_batches(json!({"model": "openai/batch"}), vec!["chat", "batch"])]
+    fn a_call_outside_the_batch_api_skips_azure_batch_only_deployments(
+        #[case] batch_params: serde_json::Value,
+        #[case] expected: Vec<&str>,
+    ) {
+        let pool = vec![chat(), declared("batch", batch_params, "batch")];
+        let kept = without_batch_only_deployments(&RouterRequest::default(), &pool, pool.clone());
+        assert_eq!(ids(&kept), expected);
+    }
+
+    #[rstest]
+    #[case::a_batch_create(
+        RouterRequest { batch_create: true, ..RouterRequest::default() },
+        vec![chat(), azure_batch("batch")],
+        vec![chat(), azure_batch("batch")],
+        vec!["chat", "batch"]
+    )]
+    #[case::a_batch_or_file_call(
+        RouterRequest { batch_api: true, ..RouterRequest::default() },
+        vec![chat(), azure_batch("batch")],
+        vec![chat(), azure_batch("batch")],
+        vec!["chat", "batch"]
+    )]
+    #[case::a_group_with_only_batch_deployments(
+        RouterRequest::default(),
+        vec![azure_batch("b1"), azure_batch("b2")],
+        vec![azure_batch("b1"), azure_batch("b2")],
+        vec!["b1", "b2"]
+    )]
+    #[case::a_cooling_chat_deployment_leaves_nothing(
+        RouterRequest::default(),
+        vec![chat(), azure_batch("batch")],
+        vec![azure_batch("batch")],
+        vec![]
+    )]
+    fn batch_only_deployments_stay_for_batch_calls_and_batch_only_groups(
+        #[case] request: RouterRequest,
+        #[case] all: Vec<Arc<Deployment>>,
+        #[case] healthy: Vec<Arc<Deployment>>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let kept = without_batch_only_deployments(&request, &all, healthy);
+        assert_eq!(ids(&kept), expected);
     }
 }

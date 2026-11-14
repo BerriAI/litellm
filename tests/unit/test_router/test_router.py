@@ -8176,37 +8176,93 @@ async def test_acreate_batch_on_a_mixed_wildcard_group_only_reaches_batch_deploy
     assert batch_route.call_count == 20
 
 
+_AZURE_BATCH_DEPLOYMENT_REFUSAL: Final = {
+    "error": {"code": "OperationNotSupported", "message": "The current operation is not allowed in this deployment."}
+}
+
+
 @pytest.mark.asyncio
-async def test_chat_calls_after_a_batch_create_still_use_every_deployment_in_the_group(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Only the batch create itself is narrowed to mode batch deployments. Chat calls the same task makes
-    afterwards keep load balancing across the whole group."""
+async def test_chat_calls_on_a_mixed_azure_group_stay_off_its_batch_deployment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = litellm.Router(
         model_list=[
-            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"),
-            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"),
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
         ],
         num_retries=0,
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        respx_mock.post(host="batch-sku.openai.azure.com").mock(
+        batch_creates: Final = respx_mock.post(host="batch-sku.openai.azure.com", path__regex=r"/batches").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
+        batch_chats: Final = respx_mock.post(host="batch-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(400, json=_AZURE_BATCH_DEPLOYMENT_REFUSAL)
+        )
+        chats: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
         await _create_batches(router, "gpt-mixed", attempts=2)
+        for _ in range(20):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
 
-    chat_deployments: Final = {
-        (
-            await router.acompletion(
-                model="gpt-mixed", messages=[{"role": "user", "content": "hi"}], mock_response="ok"
-            )
-        )._hidden_params["model_id"]
-        for _ in range(40)
-    }
+    assert (batch_creates.call_count, chats.call_count, batch_chats.call_count) == (2, 20, 0)
 
-    assert chat_deployments == {"chat-deployment", "batch-deployment"}
+
+_AZURE_FILE_DELETED: Final = {"id": "file-batch-input", "object": "file", "deleted": True}
+_AZURE_FILE_LIST: Final = {"object": "list", "data": [], "has_more": False}
+_MIXED_GROUP_BATCH_AND_FILE_CALLS: Final = {
+    "retrieve-batch": (
+        lambda router: router.aretrieve_batch(model="gpt-mixed", batch_id="batch_created"),
+        _AZURE_BATCH_CREATED,
+    ),
+    "cancel-batch": (
+        lambda router: router.acancel_batch(model="gpt-mixed", batch_id="batch_created"),
+        _AZURE_BATCH_CREATED,
+    ),
+    "upload-file": (
+        lambda router: router.acreate_file(model="gpt-mixed", purpose="user_data", file=io.BytesIO(b"hi")),
+        _AZURE_FILE_CREATED,
+    ),
+    "file-content": (
+        lambda router: router.afile_content(model="gpt-mixed", file_id="file-batch-input"),
+        _AZURE_FILE_CREATED,
+    ),
+    "delete-file": (
+        lambda router: router.afile_delete(model="gpt-mixed", file_id="file-batch-input"),
+        _AZURE_FILE_DELETED,
+    ),
+    "list-files": (lambda router: router.afile_list(model="gpt-mixed"), _AZURE_FILE_LIST),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "answer"), _MIXED_GROUP_BATCH_AND_FILE_CALLS.values(), ids=_MIXED_GROUP_BATCH_AND_FILE_CALLS.keys()
+)
+async def test_batch_and_file_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    answer: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="chat-sku.openai.azure.com").mock(return_value=httpx.Response(200, json=answer))
+        batch_deployment: Final = respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        for _ in range(20):
+            await call(router)
+
+    assert batch_deployment.call_count > 0
 
 
 @pytest.mark.asyncio

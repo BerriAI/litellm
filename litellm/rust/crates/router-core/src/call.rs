@@ -27,7 +27,7 @@ use crate::{
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
     retry::{RetryContext, resolve_retry_policy, should_retry},
-    select::{Candidates, SelectInputs},
+    select::{Candidates, SelectInputs, skips_batch_only},
 };
 
 mod stream;
@@ -796,9 +796,11 @@ impl Core {
                 .collect();
             let batch_levels_only =
                 request.batch_create && members.iter().any(|d| d.is_batch_capable());
+            let skips_batch_only = skips_batch_only(request, &members);
             let mut orders: Vec<i64> = members
                 .iter()
                 .filter(|d| !batch_levels_only || !d.cannot_run_batches())
+                .filter(|d| !skips_batch_only || !d.serves_only_batches())
                 .filter_map(|d| d.order())
                 .collect();
             orders.sort_unstable();
