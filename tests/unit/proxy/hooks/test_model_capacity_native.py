@@ -2055,3 +2055,128 @@ async def test_the_hold_release_reaches_the_dynamic_limiter_once(
         _auth(data),
     )
     assert calls == ["native"], calls
+
+
+class _RefusesAfterTheLimiter(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],  # mutable-ok: the legacy hook takes the proxy's request dict
+        call_type: str,
+    ) -> None:
+        raise HTTPException(status_code=400, detail="a later hook refused")
+
+
+async def _messages_through_the_proxy(
+    proxy_logging: ProxyLogging, router: Router, auth: UserAPIKeyAuth, call_id: str, words: int, upstream_fails: bool
+) -> object:
+    from litellm.proxy.litellm_pre_call_utils import bind_v2_request_scope
+
+    async def lifecycle() -> object:
+        live_auth: Final = auth.model_copy(update={"request_route": "/v1/messages"})
+        logging_obj, data = litellm.utils.function_setup(
+            original_function="anthropic_messages",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),
+            model="claude",
+            messages=[{"role": "user", "content": "word " * words}],
+            max_tokens=10,
+            litellm_call_id=call_id,
+            metadata={
+                "user_api_key_auth": live_auth,
+                "user_api_key_team_id": live_auth.team_id,
+                "user_api_key_team_alias": live_auth.team_alias,
+                "user_api_key_auth_metadata": live_auth.metadata,
+            },
+        )
+        data["litellm_logging_obj"] = logging_obj
+        _ = bind_v2_request_scope(data, live_auth, {})
+        try:
+            admitted: Final = await proxy_logging.pre_call_hook(
+                user_api_key_dict=live_auth, data=data, call_type="anthropic_messages"
+            )
+            assert admitted is not None
+            await router.aanthropic_messages(
+                model="claude",
+                messages=[{"role": "user", "content": "word " * words}],
+                max_tokens=10,
+                litellm_call_id=call_id,
+                litellm_logging_obj=logging_obj,
+                metadata=admitted["metadata"],
+                mock_response=Exception("provider down") if upstream_fails else "served",
+                num_retries=0,
+            )
+        except Exception as error:
+            if not upstream_fails:
+                await proxy_logging.post_call_failure_hook(
+                    request_data=data, original_exception=error, user_api_key_dict=live_auth
+                )
+            await _settled()
+            return type(error).__name__
+        await _settled()
+        return None
+
+    return await asyncio.create_task(lifecycle(), context=contextvars.Context())
+
+
+@pytest.mark.parametrize(
+    ("later_hook_refuses", "words", "upstream_fails", "expected"),
+    [
+        pytest.param(
+            False,
+            400,
+            False,
+            (
+                "ProxyRateLimitError",
+                [None, None, None, None],
+                [
+                    ("throttled", "claude", "team-m", "messages-team", "default", "tokens", "model_per_team_saturated"),
+                    ("share", "claude", "team-m", "messages-team", "default", 200, 0),
+                ],
+            ),
+            id="the_limiter_refuses",
+        ),
+        pytest.param(
+            True,
+            20,
+            False,
+            ("HTTPException", [0, 0, 0, 0.0], [("share", "claude", "team-m", "messages-team", "default", 200, 0)]),
+            id="a_later_hook_refuses",
+        ),
+        pytest.param(False, 20, True, ("InternalServerError", [0, 0, 0, 0.0], []), id="the_upstream_fails"),
+    ],
+)
+async def test_a_messages_request_that_fails_settles_through_attempt_ended_like_python(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated: Clock,
+    later_hook_refuses: bool,
+    words: int,
+    upstream_fails: bool,
+    expected: tuple[object, ...],
+) -> None:
+    _borrowing(monkeypatch, 0.0)
+    router: Final = _router(("claude", 1000, None))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    side: Final = NativeSide(router, isolated)
+    tap: Final = _MetricsTap()
+    for name in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(
+        litellm, "callbacks", [side.logger, *([_RefusesAfterTheLimiter()] if later_hook_refuses else []), tap]
+    )
+    team: Final = _key(
+        "team", team_id="team-m", team_alias="messages-team", team_metadata={"model_tpm_limit": {"claude": 200}}
+    )
+    outcome: Final = await _messages_through_the_proxy(
+        ProxyLogging(user_api_key_cache=DualCache()),  # pyright: ignore[reportArgumentType]  # the proxy builds it from a DualCache too
+        router,
+        team,
+        "m0",
+        words,
+        upstream_fails,
+    )
+    counters: Final = await _counters(
+        side, [("model_saturation_check", "claude"), ("model_per_team_saturated", "team-m:claude")]
+    )
+    assert (outcome, [entry[3] for entry in counters], tap.calls) == expected

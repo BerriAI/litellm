@@ -356,6 +356,26 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
     assert (facts.ids.call_id, facts.kind.call_type, facts.target.model) == ("call-1", "acompletion", "gpt")
 
 
+@pytest.mark.parametrize(("proxied", "synchronous"), [(False, True), (True, False)])
+def test_a_messages_call_is_synchronous_only_outside_a_proxy_request(
+    monkeypatch: pytest.MonkeyPatch, proxied: bool, synchronous: bool
+) -> None:
+    logging_obj: Final = Logging(
+        model="claude",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="call-1",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    if proxied:
+        _ = _bound(monkeypatch, frozenset({Hook.attempt_ended}), {"litellm_logging_obj": logging_obj})
+
+    assert logging_obj.v2_call_facts().kind.synchronous is synchronous
+
+
 async def test_typed_records_reach_the_rust_with_the_python_values_json_mode_would_lose() -> None:
     handle: Final = Handle()
     logger: Final = rust_logger(handle)

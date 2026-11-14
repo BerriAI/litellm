@@ -3533,7 +3533,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 call_type=call_type,
                 route=route if isinstance(route, str) else None,
                 stream=self.stream is True,
-                synchronous=call_type in _SYNC_CALL_TYPES
+                synchronous=self.v2_scope is None
+                and call_type in _SYNC_CALL_TYPES
                 and self.is_sync_litellm_request(require_attributes(params, _ParamsLookup, "get")),
                 internal_origin=v2_derive.call_internal_origin(args),
             ),
