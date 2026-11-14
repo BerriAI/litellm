@@ -22,7 +22,8 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -51,6 +52,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -330,6 +332,34 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _get_transcription_usage_duration(completion_response: object) -> float | None:
+    response_fields: Final = as_str_mapping(completion_response)
+    usage_object: Final = (
+        response_fields.get("usage") if response_fields is not None else attribute_or_none(completion_response, "usage")
+    )
+    usage_fields: Final = as_str_mapping(usage_object)
+    usage_type: Final = (
+        usage_fields.get("type") if usage_fields is not None else attribute_or_none(usage_object, "type")
+    )
+    if usage_type != "duration":
+        return None
+    seconds: Final = (
+        usage_fields.get("seconds") if usage_fields is not None else attribute_or_none(usage_object, "seconds")
+    )
+    return normalized_audio_duration_seconds(seconds)
+
+
+def _transcription_duration_for_cost(completion_response: object) -> float:
+    billed_duration: Final = _get_transcription_usage_duration(completion_response)
+    if billed_duration is not None and billed_duration > 0:
+        return billed_duration
+    hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
+    measured_duration: Final = normalized_audio_duration_seconds(
+        hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
+    )
+    return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1105,6 +1135,14 @@ def _normalize_service_tier(service_tier: object) -> str | None:
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
 
 
+def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
+    return _resolve_billable_service_tier(
+        requested=None,
+        served=_served_service_tier(completion_response, usage_object),
+    )
+
+
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
     served_lower: Final = served.lower() if isinstance(served, str) else None
@@ -1470,6 +1508,14 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _model_is_none_error(completion_response_text: str, litellm_logging_obj: LitellmLoggingObject | None) -> ValueError:
+    message: Final = "Model is None and does not exist in passed completion_response."
+    model_call_details: Final = {} if litellm_logging_obj is None else litellm_logging_obj.model_call_details
+    if should_redact_message_logging(model_call_details) or model_call_details.get("query_image") is not None:
+        return ValueError(message)
+    return ValueError(f"{message} Passed completion_response={completion_response_text}, model=None")
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1722,9 +1768,7 @@ def completion_cost(
 
                 else:
                     if model is None:
-                        raise ValueError(
-                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                        )
+                        raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                     if len(messages) > 0:
                         prompt_tokens = token_counter(model=model, messages=messages)
                     elif len(prompt) > 0:
@@ -1738,9 +1782,7 @@ def completion_cost(
                     return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                 if custom_llm_provider is None:
                     try:
                         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1766,6 +1808,7 @@ def completion_cost(
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
+                        service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -1825,15 +1868,7 @@ def completion_cost(
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils.count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    # Check _hidden_params first (duration stored there to
-                    # avoid polluting the response body), then fall back to
-                    # the response attribute (for verbose_json responses that
-                    # naturally include duration from the provider).
-                    _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
-                    )
+                    audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
                         meta_obj = completion_response.meta
@@ -1968,9 +2003,7 @@ def completion_cost(
                     return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
 
                 if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
                     # Calculate the prompt characters + response characters

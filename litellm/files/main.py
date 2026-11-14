@@ -259,6 +259,7 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
                 create_file_data=_create_file_request,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -388,6 +389,7 @@ def file_retrieve(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -569,6 +571,7 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -775,6 +778,7 @@ def file_list(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -972,6 +976,7 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -1093,11 +1098,12 @@ def file_content_streaming(
             organization=openai_creds.organization,
             chunk_size=chunk_size,
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
-    elif custom_llm_provider == LlmProviders.VERTEX_AI.value:
+    elif custom_llm_provider in (LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value):
         if not _is_async:
             raise litellm.exceptions.BadRequestError(
-                message="Streaming 'file_content' for vertex_ai is only supported through 'afile_content'.",
+                message=f"Streaming 'file_content' for {custom_llm_provider} is only supported through 'afile_content'.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -1106,14 +1112,14 @@ def file_content_streaming(
                     request=httpx.Request(method="file_content", url="https://github.com/BerriAI/litellm"),
                 ),
             )
-        vertex_files_config: Final = ProviderConfigManager.get_provider_files_config(
+        google_files_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders.VERTEX_AI,
+            provider=LlmProviders(custom_llm_provider),
         )
-        assert vertex_files_config is not None
+        assert google_files_config is not None
         response = base_llm_http_handler.async_retrieve_file_content_streaming(
             file_content_request=file_content_request,
-            provider_config=vertex_files_config,
+            provider_config=google_files_config,
             litellm_params=litellm_params,
             headers=extra_headers or {},
             logging_obj=logging_obj,

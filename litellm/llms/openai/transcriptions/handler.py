@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
@@ -97,6 +98,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 logging_obj=logging_obj,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
         openai_client: Final[OpenAI] = self._get_openai_client(
@@ -106,6 +108,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -159,6 +162,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         client=None,
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         try:
             openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(
@@ -169,6 +173,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 client=client,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
             ## LOGGING

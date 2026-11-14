@@ -414,3 +414,74 @@ def test_converse_redacted_thinking_replays_to_the_anthropic_api_as_claude_nativ
             {"type": "redacted_thinking", "data": NATIVE_REDACTED},
             {"type": "text", "text": FIRST_ANSWER},
         )
+
+
+_SIGNED_THINKING: Final[dict[str, JsonValue]] = {
+    "type": "thinking",
+    "thinking": "Checking the forecast.",
+    "signature": "scripted-signature-" + "s" * 32,
+}
+_CONVERSE_SIGNED_PART: Final[dict[str, JsonValue]] = {
+    "reasoningContent": {
+        "reasoningText": {"text": _SIGNED_THINKING["thinking"], "signature": _SIGNED_THINKING["signature"]}
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("deployment", "replayed_thinking"),
+    [
+        pytest.param({"model": f"bedrock/converse/{NOVA_MODEL_ID}"}, (), id="nova"),
+        pytest.param(
+            {
+                "model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}",
+                "model_info": {"base_model": f"bedrock/{NOVA_MODEL_ID}"},
+            },
+            (),
+            id="application-profile-arn-with-nova-base-model",
+        ),
+        pytest.param(
+            {"model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}"},
+            (_CONVERSE_SIGNED_PART,),
+            id="application-profile-arn-without-base-model",
+        ),
+        pytest.param(
+            {
+                "model": f"bedrock/converse/{APPLICATION_PROFILE_ARN}",
+                "model_info": {"base_model": f"bedrock/{CLAUDE_MODEL_ID}"},
+            },
+            (_CONVERSE_SIGNED_PART,),
+            id="application-profile-arn-with-claude-base-model",
+        ),
+        pytest.param(_CLAUDE, (_CONVERSE_SIGNED_PART,), id="claude"),
+    ],
+)
+def test_signed_history_keeps_its_thinking_unless_the_converse_target_is_known_not_to_be_claude(
+    gateway: Gateway, deployment: dict[str, JsonValue], replayed_thinking: tuple[dict[str, JsonValue], ...]
+) -> None:
+    model_info: Final = deployment.get("model_info")
+    parameters: Final = {key: value for key, value in deployment.items() if key != "model_info"}
+    with wire_server(_bedrock_peer()) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model_info=model_info if isinstance(model_info, dict) else None,
+            api_key=TOKEN,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint=wire.url,
+            **parameters,
+        )
+
+        reply: Final = _chat(
+            gateway,
+            {
+                "model": model,
+                "max_tokens": 256,
+                "messages": [
+                    {"role": "user", "content": QUESTION},
+                    {"role": "assistant", "content": FIRST_ANSWER, "thinking_blocks": [_SIGNED_THINKING]},
+                    {"role": "user", "content": FOLLOW_UP},
+                ],
+            },
+        )
+
+        assert reply.content == FINAL_ANSWER
+        assert _replayed_assistant_turn(wire).content == (*replayed_thinking, {"text": FIRST_ANSWER})

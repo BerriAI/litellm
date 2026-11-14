@@ -31,6 +31,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -250,6 +251,26 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["input"] = redacted_str
 
 
+_REDACTED_REQUEST_FIELDS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
+_NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
+
+
+def _request_field_redactions(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{field: REDACTED_BY_LITELLM for field in _REDACTED_REQUEST_FIELDS if params.get(field) is not None},
+        **{
+            field: _with_redacted_request_fields(nested)
+            for field in _NESTED_REQUEST_FIELDS
+            if (nested := _as_mapping(params.get(field))) is not None
+        },
+    }
+
+
+def _with_redacted_request_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    redactions: Final = _request_field_redactions(params)
+    return {**params, **redactions} if redactions else params
+
+
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """
     Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
@@ -267,6 +288,9 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+    model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
+    if model_parameters is not None:
+        standard_logging_object["model_parameters"] = _with_redacted_request_fields(model_parameters)
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
@@ -371,7 +395,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     """
     request: Final = _as_mapping(params.get("proxy_server_request"))
     return {
-        **params,
+        **(_with_redacted_request_fields(params) if redact_request_body else params),
         **{
             key: _redacted_baseline_metadata(value)
             for key, value in params.items()
@@ -385,7 +409,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict, result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
     """
     Performs the actual redaction on the logging object and result.
 
@@ -405,6 +429,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params"))
+    model_call_details.update(
+        {
+            **_request_field_redactions(model_call_details),
+            **({"optional_params": _with_redacted_request_fields(optional_params)} if optional_params else {}),
+        }
+    )
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):

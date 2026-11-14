@@ -126,6 +126,28 @@ class TestTranscriptionDurationNotInResponseBody:
 class TestCostCalculatorReadsDurationFromHiddenParams:
     """The cost calculator should read duration from _hidden_params via completion_cost()."""
 
+    @patch(  # test-quality-ok: isolates duration selection from the model pricing table
+        "litellm.cost_calculator.openai_cost_per_second"
+    )
+    def test_completion_cost_prefers_provider_usage_duration_over_measured_duration(self, mock_cost_fn):
+        mock_cost_fn.return_value = (0.001, 0.0)
+        response = TranscriptionResponse(text="test")
+        response.usage = TranscriptionUsageDurationObject(type="duration", seconds=60.0)
+        response._hidden_params = {
+            "audio_transcription_duration": 17.5,
+            "custom_llm_provider": "openai",
+        }
+
+        completion_cost(
+            completion_response=response,
+            model="gpt-transcribe",
+            call_type="atranscription",
+        )
+
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 60.0
+
     @patch("litellm.cost_calculator.openai_cost_per_second")
     def test_completion_cost_uses_hidden_params_duration(self, mock_cost_fn):
         """
