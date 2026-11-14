@@ -1,6 +1,10 @@
+import base64
 from collections.abc import Collection, Mapping
 from io import BufferedReader, BytesIO
-from typing import Any, Final, cast, get_type_hints
+from pathlib import Path
+from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.token_counter import get_image_type
@@ -145,3 +149,44 @@ class ImageEditRequestUtils:
         except Exception:
             # If anything goes wrong, default to PNG
             return FILE_MIME_TYPES[FileType.PNG]
+
+
+_FILE_TUPLE: Final = TypeAdapter(tuple[object, ...])
+
+
+@runtime_checkable
+class _StrPathLike(Protocol):
+    def __fspath__(self) -> str: ...
+
+
+@runtime_checkable
+class _SeekableBinaryReader(Protocol):
+    def tell(self) -> int: ...
+
+    def seek(self, offset: int) -> int: ...
+
+    def read(self) -> bytes: ...
+
+
+def _read_image_bytes(image: object) -> bytes:
+    if isinstance(image, bytes):
+        return image
+    if isinstance(image, tuple):
+        return _read_image_bytes(_FILE_TUPLE.validate_python(image)[1])
+    if isinstance(image, _StrPathLike):
+        return Path(image).read_bytes()
+    if isinstance(image, _SeekableBinaryReader):
+        position: Final = image.tell()
+        image.seek(0)
+        data: Final = image.read()
+        image.seek(position)
+        return data
+    raise ValueError(f"Unsupported image type for image edit: {type(image).__name__}")
+
+
+def image_to_data_url(image: object) -> str:
+    if isinstance(image, str):
+        return image
+    image_bytes: Final = _read_image_bytes(image)
+    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_bytes)
+    return f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"

@@ -2164,13 +2164,14 @@ class CostCalculatorUtils:
                 image_response=completion_response,
                 model_info=pricing,
             )
-        elif (
-            custom_llm_provider == litellm.LlmProviders.OPENAI.value
-            or custom_llm_provider == litellm.LlmProviders.AZURE.value
+        elif custom_llm_provider in (
+            litellm.LlmProviders.OPENAI.value,
+            litellm.LlmProviders.AZURE.value,
+            litellm.LlmProviders.MINIMAX.value,
         ):
-            # gpt-image models use token-based pricing.
+            # gpt-image and MiniMax image models use token-based pricing.
             model_lower: Final = model.lower()
-            if "gpt-image" in model_lower:
+            if "gpt-image" in model_lower or custom_llm_provider == litellm.LlmProviders.MINIMAX.value:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )

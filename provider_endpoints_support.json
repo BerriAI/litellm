@@ -3065,7 +3065,9 @@
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": true
+        "responses": true,
+        "image_generations": true,
+        "image_edits": true
       }
     },
     "pg_vector": {
