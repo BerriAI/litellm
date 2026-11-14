@@ -114,16 +114,16 @@ class Connection:
 
 
 def test_direct_members_resolve_to_user_identities_and_connection_is_closed():
-    connection = Connection(
+    connection: Final = Connection(
         [group(member=[ALICE, BOB])], {ALICE: [user("alice@example.org")], BOB: [user("bob@example.org")]}
     )
-    result = read_directory(SETTINGS, connection)
+    result: Final = read_directory(SETTINGS, connection)
     assert result == (DirectoryGroup("project-a", "project-a", ("alice@example.org", "bob@example.org")),)
     assert connection.closed
 
 
 def test_deleted_member_entry_skips_only_its_group():
-    connection = Connection(
+    connection: Final = Connection(
         [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
         {ALICE: [user("alice@example.org")]},
         raising={BOB: (32, LDAPNoSuchObjectResult(result=32, description="noSuchObject"))},
@@ -136,7 +136,7 @@ def test_deleted_member_entry_skips_only_its_group():
 
 
 def test_member_shared_by_groups_is_looked_up_once_per_snapshot():
-    connection = Connection(
+    connection: Final = Connection(
         [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
         {ALICE: [user("alice@example.org")], BOB: [user("bob@example.org")]},
     )
@@ -148,7 +148,7 @@ def test_member_shared_by_groups_is_looked_up_once_per_snapshot():
 
 
 def test_deleted_member_shared_by_groups_skips_each_group_after_one_lookup():
-    connection = Connection(
+    connection: Final = Connection(
         [group("project-a", member=[BOB]), group("project-b", member=[ALICE, BOB]), group("project-c", member=[ALICE])],
         {ALICE: [user("alice@example.org")]},
         raising={BOB: (32, LDAPNoSuchObjectResult(result=32, description="noSuchObject"))},
@@ -162,7 +162,7 @@ def test_deleted_member_shared_by_groups_skips_each_group_after_one_lookup():
 
 
 def test_unreadable_member_entry_still_aborts_snapshot():
-    connection = Connection(
+    connection: Final = Connection(
         [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
         {ALICE: [user("alice@example.org")]},
         raising={BOB: (50, LDAPInsufficientAccessRightsResult(result=50, description="insufficientAccessRights"))},
@@ -184,7 +184,7 @@ def test_omitted_membership_attribute_is_an_empty_roster_with_complete_read_perm
 
 
 def test_ldap_attribute_names_are_case_insensitive():
-    connection = Connection(
+    connection: Final = Connection(
         [entry("group", CN=["project-a"], MEMBER=[ALICE])],
         {ALICE: [entry(ALICE, MAIL=["a@example.org"], OBJECTCLASS=["InetOrgPerson"])]},
     )
@@ -204,21 +204,23 @@ def test_ldap_attribute_names_are_case_insensitive():
     ],
 )
 def test_incomplete_or_nested_member_does_not_become_empty_group(members: Sequence[Mapping[str, object]]):
-    result = read_directory(SETTINGS, Connection([group(member=[ALICE])], {ALICE: members}))
+    result: Final = read_directory(SETTINGS, Connection([group(member=[ALICE])], {ALICE: members}))
     assert isinstance(result, tuple) and isinstance(result[0], DirectoryError)
 
 
 @pytest.mark.parametrize("object_class", ["person", "inetOrgPerson", "organizationalPerson", "user", "posixAccount"])
 def test_standard_user_object_classes_resolve_as_members(object_class: str):
-    connection = Connection(
+    connection: Final = Connection(
         [group(member=[ALICE])], {ALICE: [entry(ALICE, mail=["a@example.org"], objectClass=["top", object_class])]}
     )
     assert read_directory(SETTINGS, connection) == (DirectoryGroup("project-a", "project-a", ("a@example.org",)),)
 
 
 def test_configured_group_id_and_name_attributes_identify_the_team():
-    settings = SETTINGS.model_copy(update={"group_id_attribute": "entryUUID", "group_name_attribute": "description"})
-    connection = Connection(
+    settings: Final = SETTINGS.model_copy(
+        update={"group_id_attribute": "entryUUID", "group_name_attribute": "description"}
+    )
+    connection: Final = Connection(
         [group(member=[ALICE], entryUUID=["0b6f-team"], description=["Project A"])],
         {ALICE: [user("alice@example.org")]},
     )
@@ -227,39 +229,41 @@ def test_configured_group_id_and_name_attributes_identify_the_team():
 
 
 def test_configured_user_match_attribute_supplies_member_identity():
-    settings = SETTINGS.model_copy(update={"user_match_attribute": "uid"})
-    connection = Connection([group(member=[ALICE])], {ALICE: [user("alice@example.org", uid=["alice"])]})
+    settings: Final = SETTINGS.model_copy(update={"user_match_attribute": "uid"})
+    connection: Final = Connection([group(member=[ALICE])], {ALICE: [user("alice@example.org", uid=["alice"])]})
     assert read_directory(settings, connection) == (DirectoryGroup("project-a", "project-a", ("alice",)),)
     assert connection.requested_attributes[1] == ("uid", "objectClass")
 
 
 @pytest.mark.parametrize("member_attribute", ["uniqueMember", "roleOccupant"])
 def test_dn_valued_member_attributes_resolve_member_entries(member_attribute: str):
-    settings = SETTINGS.model_copy(update={"member_attribute": member_attribute})
-    connection = Connection([group(**{member_attribute: [ALICE]})], {ALICE: [user("alice@example.org")]})
+    settings: Final = SETTINGS.model_copy(update={"member_attribute": member_attribute})
+    connection: Final = Connection([group(**{member_attribute: [ALICE]})], {ALICE: [user("alice@example.org")]})
     assert read_directory(settings, connection) == (DirectoryGroup("project-a", "project-a", ("alice@example.org",)),)
     assert connection.searches == [(ALICE, "(objectClass=*)", "BASE")]
 
 
 def test_duplicate_ids_are_rejected_even_when_one_group_cannot_resolve_members():
-    result = read_directory(SETTINGS, Connection([group(member=[]), group(member=[ALICE])]))
+    result: Final = read_directory(SETTINGS, Connection([group(member=[]), group(member=[ALICE])]))
     assert result == DirectoryError("LDAP group IDs are not unique within the selected groups")
 
 
 def test_ranged_membership_is_rejected_instead_of_removing_unread_members():
-    result = read_directory(SETTINGS, Connection([group(**{"member;range=0-1499": [ALICE]})]))
+    result: Final = read_directory(SETTINGS, Connection([group(**{"member;range=0-1499": [ALICE]})]))
     assert isinstance(result, tuple) and isinstance(result[0], DirectoryError)
     assert "ranged" in result[0].reason
 
 
 @pytest.mark.parametrize("code", [4, 10, 50])
 def test_partial_directory_results_are_rejected(code: int):
-    result = read_directory(SETTINGS, Connection([group(member=[])], result_code=code))
+    result: Final = read_directory(SETTINGS, Connection([group(member=[])], result_code=code))
     assert result == DirectoryError("LDAP group search did not complete successfully")
 
 
 def test_referrals_are_not_treated_as_groups():
-    result = read_directory(SETTINGS, Connection([{"type": "searchResRef", "uri": ["ldap://other.example.org"]}]))
+    result: Final = read_directory(
+        SETTINGS, Connection([{"type": "searchResRef", "uri": ["ldap://other.example.org"]}])
+    )
     assert isinstance(result, DirectoryError)
 
 
@@ -268,20 +272,20 @@ def test_missing_group_preserves_absence_in_snapshot():
 
 
 def test_binary_group_identifiers_are_not_implicitly_decoded():
-    result = read_directory(SETTINGS, Connection([entry("group", cn=[b"project-a"], member=[])]))
+    result: Final = read_directory(SETTINGS, Connection([entry("group", cn=[b"project-a"], member=[])]))
     assert isinstance(result, DirectoryError)
 
 
 def test_member_uid_lookup_escapes_filter_values():
-    settings = SETTINGS.model_copy(update={"member_attribute": "memberUid"})
-    expected_filter = r"(uid=alice\2a\29\28uid=\2a)"
-    connection = Connection([group(memberUid=["alice*)(uid=*"])], {expected_filter: [user("alice@example.org")]})
+    settings: Final = SETTINGS.model_copy(update={"member_attribute": "memberUid"})
+    expected_filter: Final = r"(uid=alice\2a\29\28uid=\2a)"
+    connection: Final = Connection([group(memberUid=["alice*)(uid=*"])], {expected_filter: [user("alice@example.org")]})
     assert read_directory(settings, connection) == (DirectoryGroup("project-a", "project-a", ("alice@example.org",)),)
     assert connection.searches == [(SETTINGS.user_search_base, expected_filter, "SUBTREE")]
 
 
 def test_start_tls_failure_prevents_search_and_closes_connection():
-    connection = Connection([group(member=[])], tls_ok=False)
+    connection: Final = Connection([group(member=[])], tls_ok=False)
     assert read_directory(SETTINGS.model_copy(update={"start_tls": True}), connection) == DirectoryError(
         "LDAP TLS negotiation failed"
     )
@@ -326,38 +330,38 @@ def test_invalid_configuration_errors_do_not_expose_bind_password(updates: Mappi
 
 
 def test_cancelled_reader_stops_before_opening_ldap():
-    cancellation = Event()
+    cancellation: Final = Event()
     cancellation.set()
-    connection = Connection([group(member=[])])
-    result = read_directory(SETTINGS, connection, cancellation)
+    connection: Final = Connection([group(member=[])])
+    result: Final = read_directory(SETTINGS, connection, cancellation)
     assert isinstance(result, DirectoryError)
     assert not connection.closed
     assert connection.searches == []
 
 
 def test_cancellation_after_member_read_stops_remaining_lookups_and_closes_connection():
-    cancellation = Event()
-    connection = Connection(
+    cancellation: Final = Event()
+    connection: Final = Connection(
         [group(member=[ALICE, BOB])],
         {ALICE: [user("alice@example.org")], BOB: [user("bob@example.org")]},
         stop_after_search=cancellation,
     )
-    result = read_directory(SETTINGS, connection, cancellation)
+    result: Final = read_directory(SETTINGS, connection, cancellation)
     assert isinstance(result, DirectoryError)
     assert len(connection.searches) == 1
     assert connection.closed
 
 
 def test_cancellation_during_paged_snapshot_discards_results_before_membership_reads():
-    cancellation = Event()
+    cancellation: Final = Event()
 
     def pages() -> Iterable[Mapping[str, object]]:
         cancellation.set()
         yield group(member=[ALICE])
         pytest.fail("LDAP snapshot should stop consuming pages after cancellation")
 
-    connection = Connection(pages())
-    result = read_directory(SETTINGS, connection, cancellation)
+    connection: Final = Connection(pages())
+    result: Final = read_directory(SETTINGS, connection, cancellation)
     assert isinstance(result, DirectoryError)
     assert connection.searches == []
     assert connection.closed
@@ -369,7 +373,7 @@ def test_cancellation_during_paged_snapshot_discards_results_before_membership_r
 )
 def test_real_ldap_client_constructor_verifies_tls_and_disables_referrals(url: str, ssl_enabled: bool, port: int):
     pytest.importorskip("ldap3")
-    client = open_ldap_connection(SETTINGS.model_copy(update={"server_url": url}))
+    client: Final = open_ldap_connection(SETTINGS.model_copy(update={"server_url": url}))
     assert client.server.tls.validate == ssl.CERT_REQUIRED
     assert client.server.ssl is ssl_enabled
     assert client.server.port == port

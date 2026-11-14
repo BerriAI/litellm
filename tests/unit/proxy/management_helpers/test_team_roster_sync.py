@@ -647,7 +647,7 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _RecordingPublishRedisClient()
+    client: Final = _RecordingPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(500)]
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
@@ -850,7 +850,7 @@ async def test_removing_hundreds_of_members_through_a_slow_redis_broadcasts_ever
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0)
-    client = _WedgedPublishRedisClient()
+    client: Final = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(600)]
     prisma, evicted = _removal_of(removed)
 

@@ -36,6 +36,17 @@ SETTINGS: Final = LDAPSyncSettings(
 )
 
 
+class _SkippableLoopClock:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        loop: Final = asyncio.get_running_loop()
+        self._real_time = loop.time
+        self.skipped = 0.0
+        monkeypatch.setattr(loop, "time", lambda: self._real_time() + self.skipped)
+
+    def skip(self, seconds: float) -> None:
+        self.skipped += seconds
+
+
 class Users:
     def __init__(self, rows: Sequence[LiteLLM_UserTable]) -> None:
         self.rows = rows
@@ -56,8 +67,8 @@ class Users:
 
 @pytest.mark.asyncio
 async def test_existing_users_match_case_insensitively_without_creating_unknown_users():
-    users = Users([LiteLLM_UserTable(user_id="alice", user_email="Alice@example.org")])
-    result = await resolve_user_ids(
+    users: Final = Users([LiteLLM_UserTable(user_id="alice", user_email="Alice@example.org")])
+    result: Final = await resolve_user_ids(
         UserRepository(users),
         DirectoryGroup("project-a", "project-a", ("alice@example.org", "unknown@example.org")),
         SETTINGS,
@@ -68,13 +79,13 @@ async def test_existing_users_match_case_insensitively_without_creating_unknown_
 
 @pytest.mark.asyncio
 async def test_duplicate_email_accounts_abort_group_matching():
-    users = Users(
+    users: Final = Users(
         [
             LiteLLM_UserTable(user_id="alice", user_email="Alice@example.org"),
             LiteLLM_UserTable(user_id="other", user_email="alice@example.org"),
         ]
     )
-    result = await resolve_user_ids(
+    result: Final = await resolve_user_ids(
         UserRepository(users), DirectoryGroup("project-a", "project-a", ("alice@example.org",)), SETTINGS
     )
     assert isinstance(result, DirectoryError)
@@ -83,9 +94,9 @@ async def test_duplicate_email_accounts_abort_group_matching():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["user_id", "sso_user_id"])
 async def test_configured_identity_field_matches_existing_user(field: str):
-    users = Users([LiteLLM_UserTable(user_id="alice", sso_user_id="z1234")])
-    identity = "alice" if field == "user_id" else "z1234"
-    result = await resolve_user_ids(
+    users: Final = Users([LiteLLM_UserTable(user_id="alice", sso_user_id="z1234")])
+    identity: Final = "alice" if field == "user_id" else "z1234"
+    result: Final = await resolve_user_ids(
         UserRepository(users),
         DirectoryGroup("project-a", "project-a", (identity,)),
         SETTINGS.model_copy(update={"litellm_match_field": field}),
@@ -287,13 +298,14 @@ async def test_team_write_already_started_finishes_past_the_time_budget(monkeypa
         [group(TEAM, member=[ALICE]), group("later", member=[ALICE])], {ALICE: [user("alice")]}
     )
     job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
-    job.time_budget_seconds = 0.5
+    job.time_budget_seconds = 60
+    clock: Final = _SkippableLoopClock(monkeypatch)
     original: Final = ldap_sync_module.sync_team_roster
     started: list[str] = []  # mutable-ok: records which teams began writing
 
     async def slow_roster_write(*args: object, **kwargs: object) -> object:
         started.append(str(args[1]))
-        await asyncio.sleep(1)
+        clock.skip(61)
         return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
 
     monkeypatch.setattr(ldap_sync_module, "sync_team_roster", slow_roster_write)
@@ -310,11 +322,12 @@ async def test_no_team_write_starts_once_the_time_budget_is_spent(monkeypatch: p
     prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
     connection: Final = Connection([group(TEAM, member=[ALICE])], {ALICE: [user("alice")]})
     job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
-    job.time_budget_seconds = 0.5
+    job.time_budget_seconds = 60
+    clock: Final = _SkippableLoopClock(monkeypatch)
     original: Final = ldap_sync_module.resolve_user_ids
 
     async def slow_user_match(*args: object, **kwargs: object) -> object:
-        await asyncio.sleep(1)
+        clock.skip(61)
         return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
 
     monkeypatch.setattr(ldap_sync_module, "resolve_user_ids", slow_user_match)
