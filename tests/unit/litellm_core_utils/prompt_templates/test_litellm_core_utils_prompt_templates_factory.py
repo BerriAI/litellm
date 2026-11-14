@@ -2093,11 +2093,12 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     [
         (None, {}),
         ('{"location": "Boston"', {"location": "Boston"}),
+        ({"location": "Boston"}, {"location": "Boston"}),
     ],
-    ids=["null_arguments", "truncated_arguments"],
+    ids=["null_arguments", "truncated_arguments", "already_parsed_arguments"],
 )
-def test_convert_to_gemini_tool_call_invoke_tolerates_null_and_truncated_arguments(
-    arguments: str | None, expected_args: dict[str, str]
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_parsed_arguments(
+    arguments: str | dict[str, str] | None, expected_args: dict[str, str]
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
@@ -2118,6 +2119,29 @@ def test_convert_to_gemini_tool_call_invoke_tolerates_null_and_truncated_argumen
     assert len(parts) == 1
     assert parts[0]["function_call"]["name"] == "get_weather"
     assert parts[0]["function_call"]["args"] == expected_args
+
+
+@pytest.mark.parametrize("arguments", [["Boston"], 5, False], ids=["list", "number", "false"])
+def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_json_string(
+    arguments: list[str] | int | bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(Exception, match="must be a JSON string"):
+        convert_to_gemini_tool_call_invoke(message)
 
 
 @pytest.mark.asyncio
