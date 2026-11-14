@@ -51,6 +51,7 @@ _NOW: Final = 1_800_000_000.0
 @pytest.fixture(autouse=True)
 def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(deployments, "time", SimpleNamespace(time=lambda: _NOW))
+    monkeypatch.setattr(vector_store_deployment_cooldowns.in_memory_cache, "_clock", lambda: _NOW)
 
 
 @pytest.fixture(autouse=True)
