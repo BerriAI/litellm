@@ -46,14 +46,12 @@ from ..safeguards import (
     requested_dangerous_tool_use,
     with_safeguard_results,
 )
+from ..utils import RESPONSES_API_PROVIDERS
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
-# Providers that are routed directly to the OpenAI Responses API instead of
-# going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -102,7 +100,7 @@ def _should_route_to_responses_api(
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
-    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
+    if custom_llm_provider in RESPONSES_API_PROVIDERS:
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
