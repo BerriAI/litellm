@@ -6161,7 +6161,7 @@ def _messages_reply(message_id: str, input_tokens: int, output_tokens: int) -> d
         "id": message_id,
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
         "content": [{"type": "text", "text": "answer"}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -6170,8 +6170,15 @@ def _messages_reply(message_id: str, input_tokens: int, output_tokens: int) -> d
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refused_attempt_replied, expected_tokens",
+    [(True, (1012, 507)), (False, (12, 7))],
+    ids=["refused-reply-parked", "refused-attempt-raised"],
+)
 async def test_a_native_messages_reply_served_after_a_refused_bridged_attempt_bills_its_own_tokens(
     monkeypatch: pytest.MonkeyPatch,
+    refused_attempt_replied: bool,
+    expected_tokens: tuple[int, int],
 ) -> None:
     from litellm.utils import _schedule_async_success_logging
 
@@ -6189,7 +6196,7 @@ async def test_a_native_messages_reply_served_after_a_refused_bridged_attempt_bi
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [])
     logging_obj: Final = LitellmLogging(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-5-5",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="anthropic_messages",
@@ -6199,26 +6206,24 @@ async def test_a_native_messages_reply_served_after_a_refused_bridged_attempt_bi
         dynamic_async_success_callbacks=[recorder],
     )
     logging_obj.update_environment_variables(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-5-5",
         user="",
         optional_params={},
         litellm_params={"metadata": {}},
         custom_llm_provider="anthropic",
     )
     logging_obj.defer_async_logging = True
-    logging_obj.record_bridged_model_response(
-        ModelResponse(
-            id="chatcmpl-refused",
-            model="claude-sonnet-4-5",
-            choices=[{"index": 0, "message": {"role": "assistant", "content": "no"}, "finish_reason": "content_filter"}],
-            usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
-        )
+    refused: Final = ModelResponse(
+        id="chatcmpl-refused",
+        model="claude-sonnet-5-5",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "no"}, "finish_reason": "content_filter"}],
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
     )
+    logging_obj.record_bridged_model_response(refused)
     now: Final = datetime.datetime.now()
 
-    _schedule_async_success_logging(
-        logging_obj, _messages_reply("msg_refused", 1000, 500), now, now, is_completion_with_fallbacks=False
-    )
+    if refused_attempt_replied:
+        _schedule_async_success_logging(logging_obj, refused, now, now, is_completion_with_fallbacks=False)
     logging_obj.carry_failed_attempt_usage()
     _schedule_async_success_logging(
         logging_obj, _messages_reply("msg_served", 12, 7), now, now, is_completion_with_fallbacks=False
@@ -6231,7 +6236,7 @@ async def test_a_native_messages_reply_served_after_a_refused_bridged_attempt_bi
 
     (payload,) = recorder.payloads
     assert payload["id"] == "msg_served"
-    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (1012, 507)
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == expected_tokens
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():

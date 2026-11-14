@@ -1163,7 +1163,9 @@ def _current_failure_usage_to_lift(
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
-    cost in model_call_details, so prefer it. Otherwise a request that was
+    cost in model_call_details, so prefer it. A non-stream reply whose success
+    log was parked and never sent was billed in full, so it comes next.
+    Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
     estimated input-side Usage. When the failure is one the provider bills
     anyway (``provider_billed``: a read timeout or a client disconnect, where

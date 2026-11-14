@@ -2316,7 +2316,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
+        self._carry_parked_success()
         self.bridged_model_response = None
+
+    def _carry_parked_success(self) -> None:
         parked: Final = self.deferred_success_result
         if parked is None or self.enqueue_deferred_logging is None:
             return

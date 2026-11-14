@@ -6953,7 +6953,7 @@ async def test_the_spend_row_of_a_fallback_reply_counts_the_tokens_of_the_refuse
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [])
     logging_obj: Final = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5.4-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -6963,14 +6963,14 @@ async def test_the_spend_row_of_a_fallback_reply_counts_the_tokens_of_the_refuse
         dynamic_async_success_callbacks=[recorder],
     )
     logging_obj.update_environment_variables(
-        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+        model="gpt-5.4-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
     )
     logging_obj.defer_async_logging = True
     refused: Final = litellm.ModelResponse(
-        id="refused", model="gpt-4o-mini", usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        id="refused", model="gpt-5.4-mini", usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     )
     served: Final = litellm.ModelResponse(
-        id="served", model="gpt-4o-mini", usage=litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        id="served", model="gpt-5.4-mini", usage=litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
     )
     now: Final = datetime.datetime.now()
 
@@ -6986,4 +6986,4 @@ async def test_the_spend_row_of_a_fallback_reply_counts_the_tokens_of_the_refuse
     row: Final = get_logging_payload(kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now)
 
     assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (1010, 505, 1515)
-    assert row["spend"] == pytest.approx(kwargs["response_cost"])
+    assert row["spend"] == pytest.approx(litellm.completion_cost(refused) + litellm.completion_cost(served))

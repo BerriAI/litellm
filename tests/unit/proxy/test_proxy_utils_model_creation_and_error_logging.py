@@ -2396,6 +2396,55 @@ def test_a_failed_request_bills_the_reply_whose_parked_success_log_never_ran(
     assert lifted["response_cost"] == pytest.approx(litellm.completion_cost(reply, model=FAILURE_USAGE_MODEL))
 
 
+
+@pytest.mark.asyncio
+async def test_a_request_failing_after_its_success_log_was_sent_does_not_bill_that_reply_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy.utils import _count_request_input_tokens, _failure_fields_to_lift
+    from litellm.utils import _schedule_async_success_logging
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="sent-then-failed",
+        function_id="sent-then-failed",
+    )
+    logging_obj.update_environment_variables(
+        model=FAILURE_USAGE_MODEL, user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.defer_async_logging = True
+    logging_obj.model_call_details["first_api_call_start_time"] = real_datetime.datetime.now()
+    reply: Final = ModelResponse(
+        id="sent", model=FAILURE_USAGE_MODEL, usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    )
+    now: Final = real_datetime.datetime.now()
+
+    _schedule_async_success_logging(logging_obj, reply, now, now, is_completion_with_fallbacks=False)
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (
+        _count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None),
+        0,
+    )
+    assert not lifted.get("response_cost")
+
 def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
     from litellm.proxy.utils import _failure_usage_to_lift
 
