@@ -102,8 +102,8 @@ def _parse_path_segments(path: str) -> list:
     import re
 
     # Match field names OR bracket expressions
-    # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern: Final = r"[^\.\[]+|\[[^\]]*\]"
+    # Pattern: field_name (anything except . or [) | [anything_in_brackets except [ or ]]
+    pattern: Final = r"[^\.\[]+|\[[^\]\[]*\]"
     segments: Final = re.findall(pattern, path)
     return segments
 
