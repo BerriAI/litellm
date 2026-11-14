@@ -5954,96 +5954,67 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
             )
 
 
+def _router_with(*deployments: tuple[str, str], opted_in: frozenset[str] = frozenset()) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": model,
+                    **({"configurable_clientside_auth_params": ["model_id"]} if model_name in opted_in else {}),
+                },
+            }
+            for model_name, model in deployments
+        ]
+    )
+
+
+_EVERY_MODEL_ID_PROVIDER: Final = (
+    ("claude", "bedrock/us.anthropic.claude-sonnet-4-6"),
+    ("sm", "sagemaker_chat/my-endpoint"),
+    ("vx", "vertex_ai/private"),
+)
+
+
 @pytest.mark.parametrize(
     "request_body",
     [
-        {
-            "model": "claude-sonnet-4-6",
-            "model_id": "us.amazon.nova-micro-v1:0",
-            "messages": [{"role": "user", "content": "hi"}],
-        },
-        {"model": "claude-sonnet-4-6", "extra_body": {"model_id": "us.amazon.nova-micro-v1:0"}},
+        {"model": "claude", "model_id": "us.amazon.nova-micro-v1:0", "messages": [{"role": "user", "content": "hi"}]},
+        {"model": "claude", "extra_body": {"model_id": "us.amazon.nova-micro-v1:0"}},
+        {"model": "claude", "fallbacks": [{"model": "claude", "model_id": "us.amazon.nova-micro-v1:0"}]},
     ],
-    ids=["root", "extra_body"],
+    ids=["root", "extra_body", "fallback_target"],
 )
-@pytest.mark.parametrize("route", [None, "/v1/chat/completions", "/v1/messages"])
-def test_client_model_id_cannot_swap_the_bedrock_model_behind_an_allowed_model(
-    request_body: dict[str, object], route: str | None
-) -> None:
-    with pytest.raises(ValueError, match="model_id"):
+@pytest.mark.parametrize("route", [None, "/v1/chat/completions", "/v1/messages", "/queue/chat/completions"])
+def test_client_model_id_is_rejected_on_llm_routes(request_body: dict[str, object], route: str | None) -> None:
+    with pytest.raises(ValueError, match="model_id is not allowed"):
         is_request_body_safe(
             request_body=request_body,
             general_settings={},
-            llm_router=None,
-            model="claude-sonnet-4-6",
+            llm_router=_router_with(*_EVERY_MODEL_ID_PROVIDER),
+            model="claude",
             route=route,
         )
 
 
-def test_client_model_id_is_allowed_under_proxy_wide_opt_in() -> None:
-    assert (
+@pytest.mark.parametrize("model", [name for name, _ in _EVERY_MODEL_ID_PROVIDER])
+def test_client_model_id_is_rejected_for_every_provider_without_the_deployment_opt_in(model: str) -> None:
+    with pytest.raises(ValueError, match="model_id is not allowed"):
         is_request_body_safe(
-            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
-            general_settings={"allow_client_side_credentials": True},
-            llm_router=None,
-            model="claude-sonnet-4-6",
-        )
-        is True
-    )
-
-
-def test_client_model_id_is_allowed_when_the_deployment_opts_in() -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "claude-sonnet-4-6",
-                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-6"},
-                "model_info": {"configurable_clientside_auth_params": ["model_id"]},
-            }
-        ]
-    )
-    assert (
-        is_request_body_safe(
-            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            request_body={"model": model, "model_id": "picked-by-the-client"},
             general_settings={},
-            llm_router=router,
-            model="claude-sonnet-4-6",
-        )
-        is True
-    )
-
-
-def test_the_queue_route_rejects_a_client_model_id_like_every_other_llm_route() -> None:
-    with pytest.raises(ValueError, match="model_id"):
-        is_request_body_safe(
-            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
-            general_settings={},
-            llm_router=None,
-            model="claude-sonnet-4-6",
-            route="/queue/chat/completions",
+            llm_router=_router_with(*_EVERY_MODEL_ID_PROVIDER),
+            model=model,
+            route="/v1/chat/completions",
         )
 
 
-def _router_with(*deployments: tuple[str, str]) -> Router:
-    return Router(
-        model_list=[{"model_name": model_name, "litellm_params": {"model": model}} for model_name, model in deployments]
-    )
-
-
-@pytest.mark.parametrize(
-    "router, model, model_id",
-    [
-        (_router_with(("sm", "sagemaker_chat/my-endpoint")), "sm", "my-inference-component"),
-        (_router_with(("vx", "vertex_ai/private")), "vx", "1234567890"),
-    ],
-    ids=["sagemaker-inference-component", "vertex-private-endpoint"],
-)
-def test_model_id_stays_allowed_where_it_does_not_pick_the_bedrock_model(
-    router: Router, model: str, model_id: str
-) -> None:
+@pytest.mark.parametrize("model", [name for name, _ in _EVERY_MODEL_ID_PROVIDER])
+def test_client_model_id_is_allowed_when_the_deployment_opts_in(model: str) -> None:
+    router: Final = _router_with(*_EVERY_MODEL_ID_PROVIDER, opted_in=frozenset((model,)))
     assert (
         is_request_body_safe(
-            request_body={"model": model, "model_id": model_id, "messages": [{"role": "user", "content": "hi"}]},
+            request_body={"model": model, "model_id": "picked-by-the-client"},
             general_settings={},
             llm_router=router,
             model=model,
@@ -6053,56 +6024,61 @@ def test_model_id_stays_allowed_where_it_does_not_pick_the_bedrock_model(
     )
 
 
-@pytest.mark.parametrize(
-    "fallback_model, model_id, accepted",
-    [("claude", "us.amazon.nova-micro-v1:0", False), ("sm-2", "my-inference-component", True)],
-    ids=["bedrock fallback rejected", "sagemaker fallback allowed"],
-)
-def test_fallback_target_model_id_is_judged_by_the_fallback_model(
-    fallback_model: str, model_id: str, accepted: bool
-) -> None:
-    router: Final = _router_with(
-        ("sm", "sagemaker_chat/my-endpoint"),
-        ("sm-2", "sagemaker_chat/other-endpoint"),
-        ("claude", "bedrock/us.anthropic.claude-sonnet-4-6"),
+def test_proxy_wide_client_side_credentials_do_not_unlock_model_id() -> None:
+    settings: Final = {"allow_client_side_credentials": True}
+    router: Final = _router_with(*_EVERY_MODEL_ID_PROVIDER)
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude", "api_base": "https://example.com"},
+            general_settings=settings,
+            llm_router=router,
+            model="claude",
+            route="/v1/chat/completions",
+        )
+        is True
+    ), "the proxy-wide flag must keep unlocking the other banned params"
+    with pytest.raises(ValueError, match="listing `model_id` in `configurable_clientside_auth_params`"):
+        is_request_body_safe(
+            request_body={
+                "model": "claude",
+                "api_base": "https://example.com",
+                "model_id": "us.amazon.nova-micro-v1:0",
+            },
+            general_settings=settings,
+            llm_router=router,
+            model="claude",
+            route="/v1/chat/completions",
+        )
+
+
+def test_an_opted_in_primary_does_not_unlock_model_id_for_a_fallback_that_did_not_opt_in() -> None:
+    router: Final = _router_with(*_EVERY_MODEL_ID_PROVIDER, opted_in=frozenset(("sm",)))
+    with pytest.raises(ValueError, match="model_id is not allowed"):
+        is_request_body_safe(
+            request_body={
+                "model": "sm",
+                "messages": [{"role": "user", "content": "hi"}],
+                "fallbacks": [{"model": "claude", "model_id": "us.amazon.nova-micro-v1:0"}],
+            },
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_model_id_in_request_metadata_is_allowed(metadata_key: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude", metadata_key: {"model_id": "client-label"}},
+            general_settings={},
+            llm_router=_router_with(*_EVERY_MODEL_ID_PROVIDER),
+            model="claude",
+            route="/v1/chat/completions",
+        )
+        is True
     )
-    request_body: Final = {
-        "model": "sm",
-        "messages": [{"role": "user", "content": "hi"}],
-        "fallbacks": [{"model": fallback_model, "model_id": model_id}],
-    }
-    if accepted:
-        assert (
-            is_request_body_safe(
-                request_body=request_body,
-                general_settings={},
-                llm_router=router,
-                model="sm",
-                route="/v1/chat/completions",
-            )
-            is True
-        )
-        return
-    with pytest.raises(ValueError, match="model_id"):
-        is_request_body_safe(
-            request_body=request_body,
-            general_settings={},
-            llm_router=router,
-            model="sm",
-            route="/v1/chat/completions",
-        )
-
-
-def test_model_id_is_rejected_when_the_model_group_mixes_in_a_bedrock_deployment() -> None:
-    router: Final = _router_with(("sm", "sagemaker_chat/my-endpoint"), ("sm", "bedrock/us.anthropic.claude-sonnet-4-6"))
-    with pytest.raises(ValueError, match="model_id"):
-        is_request_body_safe(
-            request_body={"model": "sm", "model_id": "us.amazon.nova-micro-v1:0"},
-            general_settings={},
-            llm_router=router,
-            model="sm",
-            route="/v1/chat/completions",
-        )
 
 
 @pytest.mark.parametrize("route", ["/health", "/spend/logs/ui", "/model/block", "/model/unblock"])

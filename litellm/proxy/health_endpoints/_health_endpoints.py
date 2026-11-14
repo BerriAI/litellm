@@ -62,6 +62,7 @@ from litellm.proxy.auth.auth_exception_handler import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+    DEPLOYMENT_MODEL_SELECTOR_PARAMS,
     VERTEX_TARGET_PARAMS,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -158,7 +159,9 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 _BANNED_CONNECTION_PARAMS: Final[tuple[str, ...]] = tuple(
-    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in VERTEX_TARGET_PARAMS
+    param
+    for param in _BANNED_REQUEST_BODY_PARAMS
+    if param not in VERTEX_TARGET_PARAMS | DEPLOYMENT_MODEL_SELECTOR_PARAMS
 )
 
 
