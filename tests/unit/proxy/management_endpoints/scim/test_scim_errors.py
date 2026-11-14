@@ -35,11 +35,27 @@ def _proxy_exception(message: str, code: int | str | None) -> ProxyException:
     [{"message": "a shape SCIM does not read"}, ["a", "list"], {"error": 404}],
     ids=["dict-without-error", "list", "non-string-error"],
 )
-def test_a_detail_with_no_readable_reason_answers_the_status_phrase(detail: object):
+def test_a_detail_with_no_readable_reason_answers_its_text(detail: object):
     assert _answer(HTTPException(status_code=404, detail=detail)) == (
+        404,
+        {"schemas": [_SCIM_ERROR_URN], "status": "404", "detail": str(detail)},
+    )
+
+
+def test_an_empty_detail_answers_the_status_phrase():
+    assert _answer(HTTPException(status_code=404, detail="")) == (
         404,
         {"schemas": [_SCIM_ERROR_URN], "status": "404", "detail": HTTPStatus(404).phrase},
     )
+
+
+def test_a_proxy_exception_stringified_from_an_unreadable_http_exception_detail_keeps_that_text():
+    detail: Final = frozenset({"Master key must be a valid string. Current type=<class 'NoneType'>"})
+    raised: Final = _raised_while_handling(
+        HTTPException(status_code=500, detail=detail), _proxy_exception(str(detail), 500)
+    )
+
+    assert _answer(raised) == (500, {"schemas": [_SCIM_ERROR_URN], "status": "500", "detail": str(detail)})
 
 
 def test_an_empty_proxy_exception_with_a_status_python_has_no_phrase_for_answers_the_code_itself():

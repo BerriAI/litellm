@@ -1,5 +1,3 @@
-"""RFC 7644 section 3.12 SCIM Error responses for every error the /scim/v2 routes answer."""
-
 from collections.abc import Callable, Coroutine, Mapping
 from http import HTTPStatus
 from types import MappingProxyType
@@ -26,8 +24,6 @@ _ScimRouteFailure: TypeAlias = HTTPException | ProxyException | RequestValidatio
 
 
 class ScimError(Exception):
-    """Raised to answer an RFC 7644 SCIM Error instead of the proxy's OpenAI error shape."""
-
     def __init__(
         self,
         status_code: int,
@@ -50,7 +46,7 @@ def _reason(detail: object) -> _Reason:
     try:
         parsed: Final = _DETAIL_ADAPTER.validate_python(detail)
     except ValidationError:
-        return _Reason("", None)
+        return _Reason(str(detail), None)
     if isinstance(parsed, str):
         return _Reason(parsed, None)
     return _Reason(parsed["error"], parsed.get("scimType"))

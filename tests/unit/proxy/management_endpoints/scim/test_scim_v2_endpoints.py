@@ -6939,8 +6939,6 @@ def _okta_user(user_name: str) -> dict[str, object]:
 
 @pytest.fixture
 def proxy_scim_client(monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
-    """The proxy's own application with the enterprise license gate lifted, so a response passes
-    through the routes the proxy mounts for /scim and the exception handlers it registers."""
     from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.app.dependency_overrides, premium_user_check, lambda: None)
@@ -6975,9 +6973,6 @@ async def test_create_user_past_the_license_seat_cap_answers_a_scim_error_naming
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ):
-    """Okta prints a rejected create's SCIM Error ``detail`` after "Errors reported by remote
-    server:", so the seat-cap reason has to arrive there, and the proxy log has to name the user
-    Okta asks about."""
     from litellm.proxy import proxy_server
     from litellm.proxy.auth.litellm_license import LicenseCheck
 
@@ -7040,8 +7035,6 @@ async def test_creating_a_resource_that_already_exists_answers_409_with_scim_typ
     existing_teams: LiteLLM_TeamTable | None,
     reason: str,
 ):
-    """RFC 7644 section 3.3: a create whose identifier is already taken MUST answer 409 with
-    scimType "uniqueness", which an IdP reads to link the existing account instead of failing."""
     users: Final = MagicMock()
     users.find_unique = AsyncMock(return_value=existing_users)
     teams: Final = MagicMock()
@@ -7107,3 +7100,23 @@ async def test_a_body_that_fails_validation_answers_422_as_a_scim_error_without_
         },
     )
     assert rejected_value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_a_refused_placeholder_merge_keeps_the_proxy_error_shape(
+    proxy_scim_client: AsyncClient, proxy_admin_caller: None, monkeypatch: pytest.MonkeyPatch
+):
+    users: Final = MagicMock()
+    users.find_unique = AsyncMock(return_value=None)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.post("/scim/v2/placeholders/ghost-user/merge")
+
+    error: Final = response.json()["error"]
+    assert (response.status_code, response.headers["content-type"], error["code"]) == (
+        404,
+        "application/json",
+        "404",
+    )
+    assert "User not found with ID: ghost-user" in error["message"]

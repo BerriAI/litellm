@@ -293,6 +293,7 @@ scim_router: Final = APIRouter(
     dependencies=[Depends(premium_user_check)],
     route_class=ScimRoute,
 )
+placeholder_router: Final = APIRouter()
 
 SCIM_MAX_PAGE_SIZE: Final = 100
 
@@ -2057,7 +2058,7 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
-@scim_router.get(
+@placeholder_router.get(
     "/placeholders",
     response_model=tuple[SCIMPlaceholder, ...],
     dependencies=(Depends(user_api_key_auth),),
@@ -2095,7 +2096,7 @@ def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, 
     return None
 
 
-@scim_router.post(
+@placeholder_router.post(
     "/placeholders/{user_id}/merge",
     response_model=SCIMPlaceholderMergeResult,
     dependencies=(Depends(user_api_key_auth),),
@@ -2138,6 +2139,9 @@ async def merge_placeholder(
         )
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+scim_router.include_router(placeholder_router)
 
 
 def _parse_member_entry(entry: object) -> SCIMMember | None:
