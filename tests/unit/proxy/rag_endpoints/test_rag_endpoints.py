@@ -1175,6 +1175,56 @@ def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
 
 
+def _rag_query_with_s3_image(
+    client: TestClient, respx_mock: respx.MockRouter, general_settings: Mapping[str, object]
+) -> tuple[httpx.Response, respx.Route]:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", dict(general_settings)):
+        response: Final = _post_rag_query(
+            client,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            body={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},
+                        ],
+                    }
+                ]
+            },
+        )
+    return response, search
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_refuses_an_s3_image_in_a_bucket_the_proxy_does_not_list(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    response, search = _rag_query_with_s3_image(client_team_a, respx_mock, {})
+
+    assert response.status_code == 403, response.json()
+    assert "allowed_client_side_s3_buckets" in response.json()["detail"]
+    assert search.call_count == 0
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_answers_an_s3_image_in_a_listed_bucket(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    response, search = _rag_query_with_s3_image(
+        client_team_a, respx_mock, {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+
+
 @pytest.mark.usefixtures("httpx_transport")
 def test_rag_query_search_results_carry_the_managed_file_id_ingest_returned(
     client_team_a: TestClient, respx_mock: respx.MockRouter
