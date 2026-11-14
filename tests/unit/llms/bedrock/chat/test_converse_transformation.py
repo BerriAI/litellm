@@ -4466,7 +4466,7 @@ async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_n
         "system_after_function_result",
     ],
 )
-async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_without_tools_is_guarded(
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_with_tool_history_without_tools(
     use_async: bool, placement: str
 ):
     config: Final = AmazonConverseConfig()
@@ -4479,11 +4479,9 @@ async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_
     request: Final = (
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
     )
-    sent_blocks: Final = tuple(
-        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
-    )
-    assert _GUARD_BLOCK in sent_blocks
-    assert {"text": _GUARDED_PART_TEXT} not in sent_blocks
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert not any("guardContent" in block for block in message_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in message_blocks
 
 
 _BLOCKED_QUESTION: Final = "Tell me about hexblade in one sentence."
@@ -4497,11 +4495,17 @@ def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
         case "system_after_assistant":
             return [question, {"role": "assistant", "content": "Sure."}, reply_rule]
         case "system_after_tool_result":
+            return [*_conversation_ending_in("tool_result"), reply_rule]
+        case "tool_result":
             return [
                 question,
                 {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
                 {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
-                reply_rule,
+            ]
+        case "tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("tool_result")[1:],
             ]
         case "system_after_guarded_assistant":
             guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
@@ -4553,16 +4557,9 @@ def _sent_guarded_texts(request: RequestObject) -> tuple[str, ...]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize(
-    ("neutralizes_tool_blocks", "guarded_texts"),
-    [
-        (True, ("[tool result for call_1: Sunny.]", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
-        (False, ()),
-    ],
-    ids=["tool_results_rewritten", "dummy_tool_added"],
-)
-async def test_trailing_system_turn_is_guarded_with_the_rewritten_tool_results_before_it(
-    use_async: bool, neutralizes_tool_blocks: bool, guarded_texts: tuple[str, ...]
+@pytest.mark.parametrize("neutralizes_tool_blocks", [True, False], ids=["tool_results_rewritten", "dummy_tool_added"])
+async def test_trailing_system_turn_after_tool_history_without_tools_keeps_the_full_input_check(
+    use_async: bool, neutralizes_tool_blocks: bool
 ):
     config: Final = AmazonConverseConfig()
     kwargs: Final = dict(
@@ -4578,7 +4575,38 @@ async def test_trailing_system_turn_is_guarded_with_the_rewritten_tool_results_b
         request: Final = (
             await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
         )
-    assert _sent_guarded_texts(request) == guarded_texts
+    assert _sent_guarded_texts(request) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("tool_result", ()),
+        ("system_after_tool_result", ()),
+        ("tool_result_after_guarded_question", (_BLOCKED_QUESTION, "[tool result for call_1: Sunny.]")),
+    ],
+)
+async def test_tool_history_without_tools_guards_its_tool_results_only_alongside_user_input(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    sent_guarded_texts: Final = tuple(
+        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    )
+    assert sent_guarded_texts == guarded_texts
+    assert any(_BLOCKED_QUESTION in block.get("text", "") for block in message_blocks) is not bool(guarded_texts)
 
 
 @pytest.mark.asyncio
@@ -8451,7 +8479,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     (#24158, #27138)."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -8472,7 +8500,9 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_tools_empty(tools_value):
     structured tool blocks with no toolConfig."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={"tools": tools_value})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={"tools": tools_value}, guards_tool_results=False
+    )
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -8488,7 +8518,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
         {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert not any(m.get("role") in ("tool", "function") for m in result)
     serialized = json.dumps(result)
@@ -8525,7 +8555,7 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         },
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
     text = rewritten["content"]
@@ -8541,6 +8571,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_tools_present():
     result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
         messages,
         optional_params={"tools": [{"type": "function", "function": {"name": "x"}}]},
+        guards_tool_results=False,
     )
 
     assert result is messages
@@ -8550,7 +8581,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
     """Plain conversation with no tool blocks is returned unchanged."""
     messages = [{"role": "user", "content": "hi"}]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert result is messages
 
@@ -8561,7 +8592,7 @@ def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
     messages = _orphaned_tool_history_messages()
 
     with caplog.at_level("WARNING"):
-        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert any("neutralizing orphaned tool blocks" in record.getMessage() for record in caplog.records)
 
@@ -8654,42 +8685,6 @@ def test_transform_request_tool_result_only_history(monkeypatch):
 
     _assert_no_structured_tool_blocks(result)
     assert "lookup result" in json.dumps(result)
-
-
-def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
-    """With guardrailConfig present, a neutralized tool result that becomes the
-    trailing user turn must be emitted as guardContent, not plain text, so
-    untrusted tool output does not bypass the guardrail (neutralize must run
-    before guarded-text conversion)."""
-    monkeypatch.setattr(litellm, "modify_params", False)
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
-        messages=[
-            {"role": "user", "content": "look it up"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
-        ],
-        optional_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}},
-        litellm_params={},
-        headers={},
-    )
-
-    _assert_no_structured_tool_blocks(result)
-    serialized = json.dumps(result)
-    assert "guardContent" in serialized
-    assert "secret tool output" in serialized
 
 
 def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypatch):

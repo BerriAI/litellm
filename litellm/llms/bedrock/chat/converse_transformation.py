@@ -268,21 +268,6 @@ def _is_guarded_user_turn(message: object) -> bool:
     return _is_user_turn(message) and _has_guarded_text(message)
 
 
-def _is_tool_or_function_turn(message: object) -> bool:
-    return message_field(message, "role") in ("tool", "function")
-
-
-def _rewrites_tool_results_as_guarded_text(
-    messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
-) -> bool:
-    return (
-        "guardrailConfig" in optional_params
-        and litellm.bedrock_neutralize_orphaned_tool_blocks
-        and not optional_params.get("tools")
-        and any(map(_is_tool_or_function_turn, messages))
-    )
-
-
 def _becomes_a_user_turn(message: object) -> bool:
     return _is_user_turn(message) or is_system_message(message)
 
@@ -412,7 +397,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _neutralize_orphaned_tool_blocks(
-        messages: list[AllMessageValues], optional_params: dict
+        messages: list[AllMessageValues], optional_params: dict, *, guards_tool_results: bool
     ) -> list[AllMessageValues]:
         if optional_params.get("tools") or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
             return messages
@@ -433,8 +418,6 @@ class AmazonConverseConfig(BaseConfig):
             rendered = convert_content_list_to_str(message).strip()
             return rendered or "<non-text tool result omitted>"
 
-        guardrail_active: Final = "guardrailConfig" in optional_params
-
         def _rewrite(message: AllMessageValues) -> AllMessageValues:
             role = message.get("role")
             tool_calls = message.get("tool_calls")
@@ -448,10 +431,7 @@ class AmazonConverseConfig(BaseConfig):
                 name = message.get("name")
                 label = f"tool result for {tool_call_id or name or 'unknown'}"
                 result_text: Final = f"[{label}: {_result_text(message)}]"
-                # Tool results are externally controlled, so guard them wherever they
-                # land in history; _convert_consecutive_user_messages_to_guarded_text
-                # only covers the trailing user turn.
-                content: Final = [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
+                content: Final = [{"type": "guarded_text", "text": result_text}] if guards_tool_results else result_text
                 return ChatCompletionUserMessage(role="user", content=content)
             return message
 
@@ -464,9 +444,13 @@ class AmazonConverseConfig(BaseConfig):
         return [_rewrite(message) for message in messages]
 
     @staticmethod
-    def _handle_orphaned_tool_blocks(messages: list[AllMessageValues], optional_params: dict) -> list[AllMessageValues]:
+    def _handle_orphaned_tool_blocks(
+        messages: list[AllMessageValues], optional_params: dict, *, guards_tool_results: bool
+    ) -> list[AllMessageValues]:
         if litellm.bedrock_neutralize_orphaned_tool_blocks:
-            return AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params)
+            return AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+                messages, optional_params, guards_tool_results=guards_tool_results
+            )
 
         if "tools" in optional_params or not has_tool_call_blocks(messages):
             return messages
@@ -1684,29 +1668,32 @@ class AmazonConverseConfig(BaseConfig):
             len(messages),
         )
 
+    @staticmethod
     def _keeps_the_full_input_check(
-        self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object], *, guards_user_input: bool
     ) -> bool:
         """Bedrock's guardrail checks every message until one carries guardContent, then only those blocks.
 
         A guarded system or assistant part past the system prompt would shrink the check to that part, so it goes as
-        text, with the trailing turns left unguarded, when the messages would carry no guardContent without it: no user
-        turn is guarded, no tool result is rewritten into a guarded user turn, and the trailing wrap has no text to guard.
+        text, with the trailing turns left unguarded, when no user input is guarded.
         """
         remaining: Final = messages[_leading_system_count(messages) :]
-        if "guardrailConfig" not in optional_params or not any(map(_is_guarded_turn_outside_user_turns, remaining)):
-            return False
-        if any(map(_is_guarded_user_turn, remaining)):
-            return False
-        if _rewrites_tool_results_as_guarded_text(messages, optional_params):
-            return False
-        return not any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages)))
+        return (
+            "guardrailConfig" in optional_params
+            and any(map(_is_guarded_turn_outside_user_turns, remaining))
+            and not guards_user_input
+        )
 
-    def _wraps_the_trailing_turns(
-        self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
-    ) -> bool:
-        return _rewrites_tool_results_as_guarded_text(messages, optional_params) or (
-            "guardrailConfig" in optional_params and bool(self._turns_the_trailing_wrap_guards(messages))
+    def _guards_user_input(self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]) -> bool:
+        """Whether the request guards a user turn, the caller's or the trailing wrap's.
+
+        Only then do tool results rewritten into user turns get guarded too, since guarding them alone would shrink the
+        input check to the tool results and let a blocked word in a user turn through.
+        """
+        remaining: Final = messages[_leading_system_count(messages) :]
+        return "guardrailConfig" in optional_params and (
+            any(map(_is_guarded_user_turn, remaining))
+            or any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages)))
         )
 
     def _turns_the_trailing_wrap_guards(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
@@ -2369,16 +2356,20 @@ class AmazonConverseConfig(BaseConfig):
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
         sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
-        wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
-            sendable_messages, typed_optional_params
+        guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
+        wraps_trailing_turns: Final = guards_user_input and bool(
+            self._turns_the_trailing_wrap_guards(sendable_messages)
+        )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(
+            sendable_messages, typed_optional_params, guards_user_input=guards_user_input
         )
         messages, system_content_blocks = self._transform_system_message(
             sendable_messages, model=capability_model, deployment_model=model
         )
 
-        # Convert last user message to guarded_text if guardrailConfig is present
-        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        guard_input: Final = self._handle_orphaned_tool_blocks(
+            messages, optional_params, guards_tool_results=guards_user_input
+        )
         messages = (
             guard_input
             if not wraps_trailing_turns
@@ -2464,16 +2455,20 @@ class AmazonConverseConfig(BaseConfig):
         typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
         sends_guarded_text: Final = _sends_guarded_text(typed_optional_params, litellm_params)
         sendable_messages: Final = _sendable_messages(messages, sends_guarded_text)
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
-        wraps_trailing_turns: Final = not keeps_full_input_check and self._wraps_the_trailing_turns(
-            sendable_messages, typed_optional_params
+        guards_user_input: Final = self._guards_user_input(sendable_messages, typed_optional_params)
+        wraps_trailing_turns: Final = guards_user_input and bool(
+            self._turns_the_trailing_wrap_guards(sendable_messages)
+        )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(
+            sendable_messages, typed_optional_params, guards_user_input=guards_user_input
         )
         messages, system_content_blocks = self._transform_system_message(
             sendable_messages, model=capability_model, deployment_model=model
         )
 
-        # Convert last user message to guarded_text if guardrailConfig is present
-        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
+        guard_input: Final = self._handle_orphaned_tool_blocks(
+            messages, optional_params, guards_tool_results=guards_user_input
+        )
         messages = (
             guard_input
             if not wraps_trailing_turns
