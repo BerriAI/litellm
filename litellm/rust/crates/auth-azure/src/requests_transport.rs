@@ -24,6 +24,194 @@ type Environment = [(String, String)];
 #[error("Could not find a suitable TLS CA certificate bundle, invalid path: {0}")]
 pub struct MissingCaBundle(pub String);
 
+/// A token request that failed after `requests` would have opened its connection, directly or
+/// through the proxy it picked.
+#[derive(Debug)]
+pub struct RequestsSendFailure {
+    proxy: Option<(String, u16)>,
+    source: reqwest::Error,
+}
+
+impl RequestsSendFailure {
+    pub fn proxy(&self) -> Option<(&str, u16)> {
+        self.proxy
+            .as_ref()
+            .map(|(host, port)| (host.as_str(), *port))
+    }
+
+    pub fn error(&self) -> &reqwest::Error {
+        &self.source
+    }
+}
+
+/// How a token request failed, where `requests` reports it the same way every time.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RequestsReason {
+    ProxyUnreachable {
+        host: String,
+        port: u16,
+        errno: i32,
+    },
+    ProxyUnresolved {
+        host: String,
+        port: u16,
+        lookup: String,
+    },
+    ProxyAuthenticationRequired,
+    ProxyDisconnected,
+    ConnectionAborted {
+        errno: Option<i32>,
+    },
+    TlsEof,
+    CertificateRejected(CertificateRejection),
+    ReadTimeout,
+}
+
+/// The certificate failures OpenSSL and rustls tell apart alike. An unknown issuer is not one:
+/// OpenSSL names a self-signed leaf, a self-signed root in the chain or a missing local issuer.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CertificateRejection {
+    NameMismatch,
+    Expired,
+    NotYetValid,
+}
+
+const TUNNEL_CONNECT_FAILED: &str = "tunnel error: failed to create underlying connection";
+const TUNNEL_PROXY_AUTH: &str = "tunnel error: proxy authorization required";
+const TUNNEL_EOF: &str = "tunnel error: unexpected end of file";
+const TUNNEL_IO: &str = "tunnel error: io error establishing tunnel";
+const INCOMPLETE_MESSAGE: &str = "connection closed before message completed";
+const HANDSHAKE_EOF: &str = "tls handshake eof";
+const LOOKUP_PREFIX: &str = "failed to lookup address information: ";
+const ECONNRESET: i32 = 104;
+
+impl RequestsSendFailure {
+    /// The reason for this failure as `requests` would report it, or `None` when what the native
+    /// request observed does not decide it. A direct connect or name lookup failure is `None`.
+    pub fn reason(&self) -> Option<RequestsReason> {
+        let causes = causes(&self.source);
+        let says = |text: &str| causes.iter().any(|cause| cause.to_string() == text);
+        let io = || {
+            causes
+                .iter()
+                .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        };
+        let errno = io().find_map(std::io::Error::raw_os_error);
+        let reset = errno == Some(ECONNRESET)
+            || io().any(|cause| cause.kind() == std::io::ErrorKind::ConnectionReset);
+        let eof = says(HANDSHAKE_EOF)
+            || io().any(|cause| cause.kind() == std::io::ErrorKind::UnexpectedEof);
+        if self.source.is_timeout() && !self.source.is_connect() {
+            return Some(RequestsReason::ReadTimeout);
+        }
+        if !self.source.is_connect() {
+            return (eof || says(INCOMPLETE_MESSAGE)).then_some(match self.proxy {
+                Some(_) => RequestsReason::ProxyDisconnected,
+                None => RequestsReason::ConnectionAborted { errno: None },
+            });
+        }
+        if let Some((host, port)) = &self.proxy {
+            if says(TUNNEL_CONNECT_FAILED) {
+                return proxy_unreachable(host, *port, errno, &causes);
+            }
+            if says(TUNNEL_PROXY_AUTH) {
+                return Some(RequestsReason::ProxyAuthenticationRequired);
+            }
+            if says(TUNNEL_EOF) {
+                return Some(RequestsReason::ConnectionAborted { errno: None });
+            }
+            if says(TUNNEL_IO) {
+                return (reset && errno.is_some())
+                    .then_some(RequestsReason::ConnectionAborted { errno });
+            }
+        }
+        if let Some(rejection) = causes
+            .iter()
+            .find_map(|cause| certificate_rejection(cause.downcast_ref::<rustls::Error>()?))
+        {
+            return Some(RequestsReason::CertificateRejected(rejection));
+        }
+        if eof {
+            return Some(RequestsReason::TlsEof);
+        }
+        (reset && errno.is_some()).then_some(RequestsReason::ConnectionAborted { errno })
+    }
+}
+
+fn proxy_unreachable(
+    host: &str,
+    port: u16,
+    errno: Option<i32>,
+    causes: &[&(dyn std::error::Error + 'static)],
+) -> Option<RequestsReason> {
+    if let Some(errno) = errno {
+        return Some(RequestsReason::ProxyUnreachable {
+            host: host.to_owned(),
+            port,
+            errno,
+        });
+    }
+    let lookup = causes
+        .iter()
+        .find_map(|cause| Some(cause.to_string().strip_prefix(LOOKUP_PREFIX)?.to_owned()))?;
+    Some(RequestsReason::ProxyUnresolved {
+        host: host.to_owned(),
+        port,
+        lookup,
+    })
+}
+
+fn certificate_rejection(error: &rustls::Error) -> Option<CertificateRejection> {
+    let rustls::Error::InvalidCertificate(certificate) = error else {
+        return None;
+    };
+    match certificate {
+        rustls::CertificateError::NotValidForName
+        | rustls::CertificateError::NotValidForNameContext { .. } => {
+            Some(CertificateRejection::NameMismatch)
+        }
+        rustls::CertificateError::Expired | rustls::CertificateError::ExpiredContext { .. } => {
+            Some(CertificateRejection::Expired)
+        }
+        rustls::CertificateError::NotValidYet
+        | rustls::CertificateError::NotValidYetContext { .. } => {
+            Some(CertificateRejection::NotYetValid)
+        }
+        _ => None,
+    }
+}
+
+/// Every cause of `error`, including the error an `io::Error` wraps, which its own `source` skips.
+fn causes<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Vec<&'a (dyn std::error::Error + 'static)> {
+    std::iter::successors(Some(error), |&cause| next_cause(cause)).collect()
+}
+
+fn next_cause<'a>(
+    cause: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a (dyn std::error::Error + 'static)> {
+    match cause
+        .downcast_ref::<std::io::Error>()
+        .and_then(std::io::Error::get_ref)
+    {
+        Some(inner) => Some(inner as &(dyn std::error::Error + 'static)),
+        None => cause.source(),
+    }
+}
+
+impl std::fmt::Display for RequestsSendFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl std::error::Error for RequestsSendFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.source()
+    }
+}
+
 /// The HTTP stack Python's azure-identity sends a token request through: `requests` over urllib3,
 /// reading its proxy and CA bundle from the process environment on every request.
 pub(crate) struct RequestsTransport {
@@ -60,21 +248,36 @@ impl RequestsTransport {
 impl HttpClient for RequestsTransport {
     async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
         let environment = (self.environment)();
-        let config = client_config(&environment, request.url())
+        let proxy = requests_proxy(&environment, request.url());
+        let config = client_config(&environment, request.url(), proxy.clone())
             .map_err(|missing| azure_core::Error::new(ErrorKind::Other, missing))?;
         let client = self
             .pool
             .client(&config, ClientVariant::NoRedirect)
             .map_err(|error| azure_core::Error::new(ErrorKind::Other, error))?;
-        send(&client, request).await
+        let proxy = proxy
+            .and_then(|proxy| {
+                Url::parse(&proxy)
+                    .or_else(|_| Url::parse(&format!("http://{proxy}")))
+                    .ok()
+            })
+            .and_then(|proxy| {
+                let host = proxy
+                    .host_str()?
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_owned();
+                Some((host, proxy.port_or_known_default()?))
+            });
+        send(&client, request, proxy).await
     }
 }
 
 fn client_config(
     environment: &Environment,
     url: &Url,
+    proxy: Option<String>,
 ) -> Result<HttpClientConfig, MissingCaBundle> {
-    let proxy = requests_proxy(environment, url);
     let variable = format!("{}_proxy", url.scheme());
     Ok(HttpClientConfig {
         verify: verify(environment)?,
@@ -230,6 +433,7 @@ fn split_port(host: &str) -> &str {
 async fn send(
     client: &litellm_http::Client,
     request: &Request,
+    proxy: Option<(String, u16)>,
 ) -> azure_core::Result<AsyncRawResponse> {
     let builder = request.headers().iter().fold(
         client
@@ -252,7 +456,13 @@ async fn send(
         } else {
             ErrorKind::Io
         };
-        azure_core::Error::new(kind, error)
+        azure_core::Error::new(
+            kind,
+            RequestsSendFailure {
+                proxy,
+                source: error,
+            },
+        )
     })?;
     let status = response.status().as_u16();
     let headers = Headers::from(
@@ -285,8 +495,11 @@ mod tests {
     use litellm_http::Verify;
     use rstest::rstest;
 
-    use super::{RequestsTransport, requests_proxy, verify};
-    use crate::test_support::{Pki, SERVED_TOKEN, TunnelProxy};
+    use super::{
+        CertificateRejection, RequestsReason, RequestsSendFailure, RequestsTransport,
+        requests_proxy, verify,
+    };
+    use crate::test_support::{Endpoint, Pki, Proxy, SERVED_TOKEN, TunnelProxy};
 
     const TOKEN_URL: &str = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token";
 
@@ -335,6 +548,7 @@ mod tests {
 
     const PRESENT: &str = env!("CARGO_MANIFEST_DIR");
 
+    // The missing bundle text is requests 2.34.0 `HTTPAdapter.cert_verify`'s, checked 2026-11-14
     #[rstest]
     #[case::certifi_roots(&[], Ok(Verify::BuiltInRoots))]
     #[case::requests_bundle(&[("REQUESTS_CA_BUNDLE", PRESENT)], Ok(Verify::CaBundle(PRESENT.into())))]
@@ -432,6 +646,146 @@ mod tests {
             } else {
                 Vec::new()
             }
+        );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Route {
+        Direct,
+        Untrusted,
+        Named(&'static str),
+        Expired,
+        Tunnel,
+        Refused,
+        ProxyRefused,
+        Proxy(Proxy),
+    }
+
+    async fn failed(endpoint: Endpoint, route: Route) -> Option<RequestsReason> {
+        let pki = match route {
+            Route::Expired => Pki::expired(),
+            _ => Pki::new(),
+        };
+        let port = pki.endpoint(endpoint).await;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let proxy = match route {
+            Route::Tunnel => Some(TunnelProxy::start(port).await.port),
+            Route::Proxy(behaviour) => Some(TunnelProxy::answering(behaviour).await.port),
+            Route::ProxyRefused => Some(closed),
+            _ => None,
+        };
+        let (host, port) = match route {
+            Route::Named(host) => (host, port),
+            Route::Refused => ("127.0.0.1", closed),
+            _ => ("127.0.0.1", port),
+        };
+        let bundle = match route {
+            Route::Untrusted => Vec::new(),
+            _ => vec![(
+                "REQUESTS_CA_BUNDLE".to_owned(),
+                pki.ca.display().to_string(),
+            )],
+        };
+        let variables = bundle
+            .into_iter()
+            .chain(proxy.map(|proxy| {
+                (
+                    "HTTPS_PROXY".to_owned(),
+                    format!("http://127.0.0.1:{proxy}"),
+                )
+            }))
+            .collect();
+
+        let error = post(
+            &transport(variables),
+            &format!("https://{host}:{port}/token"),
+        )
+        .await
+        .unwrap_err();
+
+        litellm_error::find::<RequestsSendFailure>(&error)
+            .unwrap_or_else(|| panic!("{error:?}"))
+            .reason()
+    }
+
+    #[rstest]
+    #[case::direct_connect_is_worded_elsewhere(Endpoint::Token, Route::Refused, None)]
+    #[case::reset_in_the_handshake(Endpoint::ResetBeforeTls, Route::Direct, Some(RequestsReason::ConnectionAborted { errno: Some(104) }))]
+    #[case::closed_in_the_handshake(
+        Endpoint::CloseBeforeTls,
+        Route::Direct,
+        Some(RequestsReason::TlsEof)
+    )]
+    #[case::closed_before_the_answer(Endpoint::CloseAfterRequest, Route::Direct, Some(RequestsReason::ConnectionAborted { errno: None }))]
+    #[case::reset_before_the_answer(Endpoint::ResetAfterRequest, Route::Direct, None)]
+    #[case::unknown_issuer(Endpoint::Token, Route::Untrusted, None)]
+    #[case::name_mismatch(
+        Endpoint::Token,
+        Route::Named("localhost"),
+        Some(RequestsReason::CertificateRejected(CertificateRejection::NameMismatch))
+    )]
+    #[case::expired(
+        Endpoint::Token,
+        Route::Expired,
+        Some(RequestsReason::CertificateRejected(CertificateRejection::Expired))
+    )]
+    #[case::proxy_refused(Endpoint::Token, Route::ProxyRefused, Some(RequestsReason::ProxyUnreachable { host: "127.0.0.1".to_owned(), port: 0, errno: 111 }))]
+    #[case::proxy_asks_for_credentials(
+        Endpoint::Token,
+        Route::Proxy(Proxy::Status("407 Proxy Authentication Required")),
+        Some(RequestsReason::ProxyAuthenticationRequired)
+    )]
+    #[case::proxy_forbids(Endpoint::Token, Route::Proxy(Proxy::Status("403 Forbidden")), None)]
+    #[case::proxy_closes(Endpoint::Token, Route::Proxy(Proxy::Close), Some(RequestsReason::ConnectionAborted { errno: None }))]
+    #[case::proxy_resets(Endpoint::Token, Route::Proxy(Proxy::Reset), Some(RequestsReason::ConnectionAborted { errno: Some(104) }))]
+    #[case::tunnel_closed_in_the_handshake(
+        Endpoint::CloseBeforeTls,
+        Route::Tunnel,
+        Some(RequestsReason::TlsEof)
+    )]
+    #[case::tunnel_closed_before_the_answer(
+        Endpoint::CloseAfterRequest,
+        Route::Tunnel,
+        Some(RequestsReason::ProxyDisconnected)
+    )]
+    #[case::tunnel_reset_before_the_answer(
+        Endpoint::ResetAfterRequest,
+        Route::Tunnel,
+        Some(RequestsReason::ProxyDisconnected)
+    )]
+    #[tokio::test]
+    async fn a_failed_token_request_is_read_as_requests_reports_it(
+        #[case] endpoint: Endpoint,
+        #[case] route: Route,
+        #[case] expected: Option<RequestsReason>,
+    ) {
+        let reason = failed(endpoint, route).await;
+
+        let ignoring_proxy_port = match reason {
+            Some(RequestsReason::ProxyUnreachable { host, errno, .. }) => {
+                Some(RequestsReason::ProxyUnreachable {
+                    host,
+                    port: 0,
+                    errno,
+                })
+            }
+            other => other,
+        };
+        assert_eq!(ignoring_proxy_port, expected);
+    }
+
+    #[rstest]
+    #[case::direct(Route::Direct)]
+    #[case::tunnel(Route::Tunnel)]
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_token_request_is_a_read_timeout(#[case] route: Route) {
+        assert_eq!(
+            failed(Endpoint::Silent, route).await,
+            Some(RequestsReason::ReadTimeout)
         );
     }
 }

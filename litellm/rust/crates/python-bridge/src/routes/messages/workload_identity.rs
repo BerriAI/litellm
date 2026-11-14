@@ -15,7 +15,7 @@ use pyo3::{
 };
 
 use crate::credentials::CallerTokenProvider;
-use litellm_auth_azure::EntraTokenFailure;
+use litellm_auth_azure::{EntraTokenFailure, MissingCaBundle, RequestsSendFailure};
 
 const MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 
@@ -181,6 +181,17 @@ fn entra_token_error_with(
     error: &(dyn std::error::Error + 'static),
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Option<PyErr> {
+    if let Some(missing) = litellm_error::find::<MissingCaBundle>(error) {
+        return Some(
+            py.import(MODULE)
+                .and_then(|module| {
+                    module
+                        .getattr("entra_token_failure")?
+                        .call1((missing.to_string(),))
+                })
+                .map_or_else(|mapping| mapping, PyErr::from_value),
+        );
+    }
     let failure = litellm_error::find::<EntraTokenFailure>(error)?;
     let raised = py.import(MODULE).and_then(|module| match failure {
         EntraTokenFailure::Response(response)
@@ -192,10 +203,24 @@ fn entra_token_error_with(
                 PyBytes::new(py, &response.body),
             ))
         }
-        EntraTokenFailure::Transport { host, port, source } => module
-            .getattr("entra_token_failure")?
-            .call1((requests_reason(host, *port, source, environment)
-                .unwrap_or_else(|| litellm_error::Report::new(source).to_string()),)),
+        EntraTokenFailure::Transport { host, port, source } => {
+            let reason = match litellm_error::find::<RequestsSendFailure>(source) {
+                Some(sent) => match sent.reason() {
+                    Some(reason) => {
+                        super::requests_reason::requests_reason_text(py, host, *port, &reason)?
+                    }
+                    None => sent
+                        .proxy()
+                        .is_none()
+                        .then(|| direct_connect_reason(host, *port, source))
+                        .flatten(),
+                },
+                None => requests_reason(host, *port, source, environment),
+            };
+            module
+                .getattr("entra_token_failure")?
+                .call1((reason.unwrap_or_else(|| litellm_error::Report::new(source).to_string()),))
+        }
     });
     match raised {
         Ok(raised) if raised.is_none() => None,
@@ -205,7 +230,7 @@ fn entra_token_error_with(
 }
 
 /// `getaddrinfo` failures as glibc words them, with the `EAI_*` code Python's `socket.gaierror` shows.
-const LOOKUP_FAILURES: [(i32, &str); 4] = [
+pub(super) const LOOKUP_FAILURES: [(i32, &str); 4] = [
     (-2, "Name or service not known"),
     (-3, "Temporary failure in name resolution"),
     (-4, "Non-recoverable failure in name resolution"),
@@ -225,7 +250,14 @@ fn requests_reason(
     let proxied = PROXY_VARIABLES
         .iter()
         .any(|name| environment(name).is_some_and(|value| !value.is_empty()));
-    if proxied || *failure.kind() != azure_core::error::ErrorKind::Connection {
+    if proxied {
+        return None;
+    }
+    direct_connect_reason(host, port, failure)
+}
+
+fn direct_connect_reason(host: &str, port: u16, failure: &azure_core::Error) -> Option<String> {
+    if *failure.kind() != azure_core::error::ErrorKind::Connection {
         return None;
     }
     let causes = || {
@@ -270,7 +302,9 @@ pub(crate) fn python_error(
 mod tests {
     use std::sync::Mutex;
 
-    use litellm_auth_azure::{EntraTokenFailure, TokenResponse};
+    use litellm_auth_azure::{
+        CertificateRejection, EntraTokenFailure, RequestsReason, TokenResponse,
+    };
     use pyo3::types::PyList;
 
     use super::*;
@@ -293,9 +327,19 @@ def azure_ad_token_failure(error):
 def non_string_azure_ad_token(token):
     calls.append(('non_string', token))
     return TypeError('mapped token')
+def requests_reason(name):
+    def build(*args):
+        calls.append((name, *args))
+        return name
+    build.__name__ = name
+    return build
 host = types.ModuleType('litellm.rust_bridge.host.routes.messages')
 for function in (entra_token_response_failure, entra_token_failure, azure_ad_token_failure, non_string_azure_ad_token):
     setattr(host, function.__name__, function)
+for name in ('requests_proxy_unreachable', 'requests_proxy_unresolved', 'requests_proxy_authentication_required',
+             'requests_proxy_disconnected', 'requests_connection_aborted', 'requests_tls_eof',
+             'requests_certificate_rejected', 'requests_read_timeout'):
+    setattr(host, name, requests_reason(name))
 for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.routes'):
     sys.modules.setdefault(name, types.ModuleType(name))
 sys.modules['litellm.rust_bridge.host.routes.messages'] = host
@@ -551,5 +595,120 @@ else:
             requests_reason("login.microsoftonline.com", 443, &failure, &environment).as_deref(),
             expected
         );
+    }
+
+    #[rstest::rstest]
+    #[case::proxy_unreachable(
+        "login.microsoftonline.com",
+        RequestsReason::ProxyUnreachable { host: "proxy".into(), port: 3128, errno: 111 },
+        Some("requests_proxy_unreachable"),
+        "[('requests_proxy_unreachable', 'proxy', 3128, 111)]"
+    )]
+    #[case::proxy_unresolved(
+        "login.microsoftonline.com",
+        RequestsReason::ProxyUnresolved { host: "proxy".into(), port: 3128, lookup: "Name or service not known".into() },
+        Some("requests_proxy_unresolved"),
+        "[('requests_proxy_unresolved', 'proxy', 3128, -2, 'Name or service not known')]"
+    )]
+    #[case::proxy_lookup_glibc_words_otherwise(
+        "login.microsoftonline.com",
+        RequestsReason::ProxyUnresolved { host: "proxy".into(), port: 3128, lookup: "no such host".into() },
+        None,
+        "[]"
+    )]
+    #[case::proxy_authentication(
+        "login.microsoftonline.com",
+        RequestsReason::ProxyAuthenticationRequired,
+        Some("requests_proxy_authentication_required"),
+        "[('requests_proxy_authentication_required',)]"
+    )]
+    #[case::proxy_disconnected(
+        "login.microsoftonline.com",
+        RequestsReason::ProxyDisconnected,
+        Some("requests_proxy_disconnected"),
+        "[('requests_proxy_disconnected',)]"
+    )]
+    #[case::reset(
+        "login.microsoftonline.com",
+        RequestsReason::ConnectionAborted { errno: Some(104) },
+        Some("requests_connection_aborted"),
+        "[('requests_connection_aborted', 104)]"
+    )]
+    #[case::closed(
+        "login.microsoftonline.com",
+        RequestsReason::ConnectionAborted { errno: None },
+        Some("requests_connection_aborted"),
+        "[('requests_connection_aborted', None)]"
+    )]
+    #[case::tls_eof(
+        "login.microsoftonline.com",
+        RequestsReason::TlsEof,
+        Some("requests_tls_eof"),
+        "[('requests_tls_eof',)]"
+    )]
+    #[case::host_name_mismatch(
+        "login.microsoftonline.com",
+        RequestsReason::CertificateRejected(CertificateRejection::NameMismatch),
+        Some("requests_certificate_rejected"),
+        "[('requests_certificate_rejected', \"Hostname mismatch, certificate is not valid for 'login.microsoftonline.com'.\")]"
+    )]
+    #[case::address_mismatch(
+        "10.0.0.1",
+        RequestsReason::CertificateRejected(CertificateRejection::NameMismatch),
+        Some("requests_certificate_rejected"),
+        "[('requests_certificate_rejected', \"IP address mismatch, certificate is not valid for '10.0.0.1'.\")]"
+    )]
+    #[case::expired(
+        "login.microsoftonline.com",
+        RequestsReason::CertificateRejected(CertificateRejection::Expired),
+        Some("requests_certificate_rejected"),
+        "[('requests_certificate_rejected', 'certificate has expired')]"
+    )]
+    #[case::not_yet_valid(
+        "login.microsoftonline.com",
+        RequestsReason::CertificateRejected(CertificateRejection::NotYetValid),
+        Some("requests_certificate_rejected"),
+        "[('requests_certificate_rejected', 'certificate is not yet valid')]"
+    )]
+    #[case::read_timeout(
+        "login.microsoftonline.com",
+        RequestsReason::ReadTimeout,
+        Some("requests_read_timeout"),
+        "[('requests_read_timeout', 'login.microsoftonline.com', 443)]"
+    )]
+    fn a_requests_reason_is_worded_by_the_host(
+        #[case] host: &str,
+        #[case] reason: RequestsReason,
+        #[case] text: Option<&str>,
+        #[case] asked: &str,
+    ) {
+        with_fake_host(|py, locals| {
+            let worded =
+                super::super::requests_reason::requests_reason_text(py, host, 443, &reason)
+                    .unwrap();
+
+            assert_eq!(worded.as_deref(), text);
+            assert_eq!(calls(locals), asked);
+        });
+    }
+
+    #[rstest::rstest]
+    fn a_missing_ca_bundle_raises_what_requests_raises_for_it() {
+        let error = litellm_auth::Error::CredentialAcquisition(litellm_auth::ErrorDetail::failed(
+            "Azure token request",
+            litellm_auth_azure::MissingCaBundle("/absent/ca.pem".into()),
+        ));
+        with_fake_host(|py, locals| {
+            let mapped = entra_token_error_with(py, &error, &|_| None);
+
+            assert_eq!(
+                mapped.map(|mapped| mapped.value(py).str().unwrap().to_string()),
+                Some("mapped reason".to_owned())
+            );
+            assert_eq!(
+                calls(locals),
+                "[('reason', 'Could not find a suitable TLS CA certificate bundle, invalid path: /absent/ca.pem')]"
+            );
+        });
     }
 }

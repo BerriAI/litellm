@@ -8,7 +8,9 @@ mod test_support;
 mod token_retry;
 mod types;
 
-pub use requests_transport::MissingCaBundle;
+pub use requests_transport::{
+    CertificateRejection, MissingCaBundle, RequestsReason, RequestsSendFailure,
+};
 pub use resolve::{AzureAuthService, AzureIdentity, SECRET_NAMES};
 pub use token_retry::{EntraTokenFailure, TokenResponse};
 pub use types::{

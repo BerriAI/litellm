@@ -1,8 +1,16 @@
+import contextlib
 import datetime
+import errno
 import functools
 import json
 import logging
+import os
+import socket
+import ssl
+import struct
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -2318,6 +2326,253 @@ def test_a_token_failure_logs_the_call_flag_python_s_handler_set_first(
     details: Final[Mapping[str, object]] = logger.model_call_details
     params: Final = _PARAMS.validate_python(details.get("litellm_params", {}))
     assert params.get("aanthropic_messages") is flagged
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenEndpointCertificates:
+    ca: str
+    valid: tuple[str, str]
+    expired: tuple[str, str]
+
+
+@pytest.fixture(scope="module")
+def token_endpoint_certificates(tmp_path_factory: pytest.TempPathFactory) -> _TokenEndpointCertificates:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    directory: Final = tmp_path_factory.mktemp("entra")
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    ca_key: Final = ec.generate_private_key(ec.SECP256R1())
+    ca_name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "entra test CA")])
+    ca: Final = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    def leaf(name: str, not_after: datetime.datetime) -> tuple[str, str]:
+        key: Final = ec.generate_private_key(ec.SECP256R1())
+        certificate: Final = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "login.microsoftonline.com")]))
+            .issuer_name(ca_name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_after - datetime.timedelta(days=30))
+            .not_valid_after(not_after)
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("login.microsoftonline.com")]), critical=False)
+            .sign(ca_key, hashes.SHA256())
+        )
+        (directory / f"{name}.pem").write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        (directory / f"{name}.key").write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            )
+        )
+        return str(directory / f"{name}.pem"), str(directory / f"{name}.key")
+
+    (directory / "ca.pem").write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    return _TokenEndpointCertificates(
+        ca=str(directory / "ca.pem"),
+        valid=leaf("valid", now + datetime.timedelta(days=1)),
+        expired=leaf("expired", now - datetime.timedelta(days=1)),
+    )
+
+
+_ADDRESS: Final = TypeAdapter(tuple[str, int])
+
+
+def _serve(handle: Callable[[socket.socket], None]) -> int:
+    listener: Final = socket.create_server(("127.0.0.1", 0))
+
+    def accept() -> None:
+        while True:
+            connection = listener.accept()[0]
+            threading.Thread(target=handle, args=(connection,), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    return _port(listener)
+
+
+def _reset(connection: socket.socket) -> None:
+    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    connection.close()
+
+
+def _read_head(connection: socket.socket) -> None:
+    received: Final = bytearray()
+    while b"\r\n\r\n" not in received and (chunk := connection.recv(4096)):
+        received.extend(chunk)
+
+
+def _proxy(answer: Callable[[socket.socket], None]) -> int:
+    def handle(connection: socket.socket) -> None:
+        _read_head(connection)
+        answer(connection)
+
+    return _serve(handle)
+
+
+def _tunnel_to(port: int) -> Callable[[socket.socket], None]:
+    def tunnel(connection: socket.socket) -> None:
+        upstream: Final = socket.create_connection(("127.0.0.1", port))
+        connection.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+
+        def pipe(source: socket.socket, target: socket.socket) -> None:
+            with contextlib.suppress(OSError):
+                while data := source.recv(65536):
+                    target.sendall(data)
+            with contextlib.suppress(OSError):
+                target.shutdown(socket.SHUT_WR)
+
+        threading.Thread(target=pipe, args=(upstream, connection), daemon=True).start()
+        pipe(connection, upstream)
+
+    return tunnel
+
+
+def _tls_endpoint(certificate: tuple[str, str]) -> int:
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(*certificate)
+
+    def handle(connection: socket.socket) -> None:
+        with contextlib.suppress(OSError), context.wrap_socket(connection, server_side=True) as tls:
+            _read_head(tls)
+
+    return _serve(handle)
+
+
+def _closed_port() -> int:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        return _port(listener)
+
+
+def _port(listener: socket.socket) -> int:
+    return _ADDRESS.validate_python(listener.getsockname())[1]
+
+
+def _ask_for_proxy_credentials(connection: socket.socket) -> None:
+    connection.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\n\r\n")
+
+
+def _close(connection: socket.socket) -> None:
+    connection.close()
+
+
+def _azure_identity_reason(monkeypatch: pytest.MonkeyPatch, environment: Mapping[str, str]) -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+    from azure.identity import ClientSecretCredential
+
+    for name in [name for name in os.environ if name.lower().endswith("_proxy") or name.endswith("CA_BUNDLE")]:
+        monkeypatch.delenv(name)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    credential: Final = ClientSecretCredential(
+        "tenant", "client", "secret", disable_instance_discovery="AZURE_AUTHORITY_HOST" in environment
+    )
+    with pytest.raises(ClientAuthenticationError) as raised:
+        credential.get_token("https://cognitiveservices.azure.com/.default")
+    return str(raised.value).removeprefix("Authentication failed: ")
+
+
+def test_an_unreachable_proxy_is_worded_as_requests_words_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    port: Final = _closed_port()
+
+    reason: Final = _azure_identity_reason(monkeypatch, {"HTTPS_PROXY": f"http://127.0.0.1:{port}"})
+
+    assert reason == messages_host.requests_proxy_unreachable("127.0.0.1", port, errno.ECONNREFUSED)
+
+
+@pytest.mark.parametrize(
+    ("answer", "worded"),
+    [
+        pytest.param(
+            _ask_for_proxy_credentials,
+            messages_host.requests_proxy_authentication_required,
+            id="proxy_asks_for_credentials",
+        ),
+        pytest.param(
+            _close,
+            lambda: messages_host.requests_connection_aborted(None),
+            id="proxy_closes",
+        ),
+        pytest.param(_reset, lambda: messages_host.requests_connection_aborted(errno.ECONNRESET), id="proxy_resets"),
+    ],
+)
+def test_a_proxy_refusing_the_tunnel_is_worded_as_requests_words_it(
+    monkeypatch: pytest.MonkeyPatch, answer: Callable[[socket.socket], None], worded: Callable[[], str]
+) -> None:
+    reason: Final = _azure_identity_reason(monkeypatch, {"HTTPS_PROXY": f"http://127.0.0.1:{_proxy(answer)}"})
+
+    assert reason == worded()
+
+
+def test_a_connection_closed_in_the_handshake_is_worded_as_ssl_words_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    def close_before_handshake(connection: socket.socket) -> None:
+        connection.shutdown(socket.SHUT_WR)
+        connection.recv(65536)
+        connection.close()
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch, {"AZURE_AUTHORITY_HOST": f"https://127.0.0.1:{_serve(close_before_handshake)}"}
+    )
+
+    assert reason == messages_host.requests_tls_eof()
+
+
+def test_a_tunnel_closed_before_the_answer_is_worded_as_requests_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.valid)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {
+            "HTTPS_PROXY": f"http://127.0.0.1:{_proxy(_tunnel_to(endpoint))}",
+            "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca,
+        },
+    )
+
+    assert reason == messages_host.requests_proxy_disconnected()
+
+
+def test_an_expired_certificate_is_worded_as_openssl_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.expired)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {
+            "HTTPS_PROXY": f"http://127.0.0.1:{_proxy(_tunnel_to(endpoint))}",
+            "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca,
+        },
+    )
+
+    assert reason == messages_host.requests_certificate_rejected("certificate has expired")
+
+
+def test_a_certificate_for_another_name_is_worded_as_ssl_words_it(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_certificates: _TokenEndpointCertificates
+) -> None:
+    endpoint: Final = _tls_endpoint(token_endpoint_certificates.valid)
+
+    reason: Final = _azure_identity_reason(
+        monkeypatch,
+        {"AZURE_AUTHORITY_HOST": f"https://localhost:{endpoint}", "REQUESTS_CA_BUNDLE": token_endpoint_certificates.ca},
+    )
+
+    assert reason == messages_host.requests_certificate_rejected(
+        "Hostname mismatch, certificate is not valid for 'localhost'."
+    )
 
 
 def test_a_failure_without_an_endpoint_answer_raises_what_get_azure_ad_token_raises() -> None:

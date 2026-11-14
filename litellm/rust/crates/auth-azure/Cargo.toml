@@ -15,6 +15,7 @@ async-trait.workspace = true
 futures-util.workspace = true
 moka.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 strum.workspace = true
@@ -30,7 +31,6 @@ azure_identity = { version = "1.0.0", features = ["tokio"] }
 litellm-secrets.workspace = true
 rcgen = "0.14.10"
 rstest.workspace = true
-rustls.workspace = true
 tempfile.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 tokio = { workspace = true, features = ["test-util"] }

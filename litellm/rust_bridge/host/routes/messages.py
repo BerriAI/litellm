@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import errno
 import functools
+import http
+import http.client
 import inspect
 import ipaddress
 import os
 import socket
+import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -1319,6 +1323,83 @@ def entra_token_failure(reason: str) -> Exception:
     from azure.core.exceptions import ClientAuthenticationError
 
     return azure_ad_token_failure(ClientAuthenticationError(message=f"Authentication failed: {reason}"))
+
+
+def requests_proxy_unreachable(host: str, port: int, code: int) -> str:
+    """What `requests` reports when it cannot open a connection to its proxy."""
+    from urllib3.connection import HTTPSConnection
+    from urllib3.exceptions import NewConnectionError, ProxyError
+
+    refused: Final = NewConnectionError(
+        HTTPSConnection(host, port), f"Failed to establish a new connection: [Errno {code}] {os.strerror(code)}"
+    )
+    return str(ProxyError(_PROXY_UNREACHABLE, refused))
+
+
+def requests_proxy_unresolved(host: str, port: int, code: int, lookup: str) -> str:
+    """What `requests` reports when the name of its proxy does not resolve."""
+    from urllib3.connection import HTTPSConnection
+    from urllib3.exceptions import NameResolutionError, ProxyError
+
+    unresolved: Final = NameResolutionError(host, HTTPSConnection(host, port), socket.gaierror(code, lookup))
+    return str(ProxyError(_PROXY_UNREACHABLE, unresolved))
+
+
+def requests_proxy_authentication_required() -> str:
+    """What `requests` reports when its proxy answers the tunnel with 407."""
+    from urllib3.exceptions import ProxyError
+
+    status: Final = http.HTTPStatus.PROXY_AUTHENTICATION_REQUIRED
+    return str(ProxyError(_PROXY_UNREACHABLE, OSError(f"Tunnel connection failed: {status.value} {status.phrase}")))
+
+
+def requests_proxy_disconnected() -> str:
+    """What `requests` reports when the tunnel through its proxy closes before the token response."""
+    from urllib3.exceptions import ProxyError
+
+    return str(ProxyError(_PROXY_UNREACHABLE, http.client.RemoteDisconnected(_REMOTE_CLOSED)))
+
+
+def requests_connection_aborted(code: int | None) -> str:
+    """What `requests` reports when the connection is reset (errno `code`) or closed (None) before an answer."""
+    from urllib3.exceptions import ProtocolError
+
+    cause: Final = http.client.RemoteDisconnected(_REMOTE_CLOSED) if code is None else OSError(code, os.strerror(code))
+    return str(ProtocolError("Connection aborted.", cause))
+
+
+def requests_tls_eof() -> str:
+    """What `requests` reports when the connection ends inside the TLS handshake, as this build's `ssl` words it."""
+    incoming: Final = ssl.MemoryBIO()
+    handshake: Final = ssl.create_default_context().wrap_bio(incoming, ssl.MemoryBIO(), server_hostname="eof.invalid")
+    with contextlib.suppress(ssl.SSLWantReadError):
+        handshake.do_handshake()
+    incoming.write_eof()
+    try:
+        handshake.do_handshake()
+    except ssl.SSLError as eof:
+        return str(eof)
+    raise AssertionError("a handshake over a closed connection completed")
+
+
+def requests_certificate_rejected(reason: str) -> str:
+    """What `requests` reports when OpenSSL rejects the server certificate for `reason`."""
+    site: Final = requests_tls_eof().rsplit(" ", 1)[-1]
+    return f"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: {reason} {site}"
+
+
+def requests_read_timeout(host: str, port: int) -> str:
+    """What `requests` reports when azure-identity's default read timeout passes with no answer."""
+    from azure.core.configuration import ConnectionConfiguration
+    from urllib3 import HTTPSConnectionPool
+    from urllib3.exceptions import ReadTimeoutError
+
+    seconds: Final = ConnectionConfiguration().read_timeout
+    return str(ReadTimeoutError(HTTPSConnectionPool(host, port), None, f"Read timed out. (read timeout={seconds})"))
+
+
+_PROXY_UNREACHABLE: Final = "Unable to connect to proxy"
+_REMOTE_CLOSED: Final = "Remote end closed connection without response"
 
 
 def entra_token_response_failure(status: int, headers: Sequence[tuple[str, str]], body: bytes) -> Exception | None:
