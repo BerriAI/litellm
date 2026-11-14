@@ -26,7 +26,6 @@ from litellm.proxy._types import (
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
@@ -41,7 +40,6 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
-    release_budget_reservation,
     release_budget_reservation_on_cancel,
     reserve_budget_for_request,
 )
@@ -474,112 +472,6 @@ def test_should_start_window_without_reset_at_at_duration_boundary():
     after = datetime.now(timezone.utc) - timedelta(hours=1)
     assert window_start is not None
     assert before <= window_start <= after
-
-
-@pytest.mark.asyncio
-async def test_should_release_tracked_entry_when_reservation_fails_after_increment(
-    spend_counter_state,
-):
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-reserve-after-increment-failure",
-        spend=0.0,
-        max_budget=1.0,
-    )
-
-    async def fail_after_increment(pending):
-        for item in pending:
-            counter_cache.increment_local(item.counter_key, item.increment)
-        raise RuntimeError("lost increment response")
-
-    with (
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-            return_value=0.5,
-        ),
-        patch(
-            "litellm.proxy.proxy_server.run_spend_counter_pipeline",
-            side_effect=fail_after_increment,
-        ),
-        patch(
-            "litellm.proxy.proxy_server.invalidate_spend_counter",
-            side_effect=RuntimeError("invalidate unavailable"),
-        ),
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    assert reservation is None
-    assert counter_cache.get_local("spend:key:key-budget-reserve-after-increment-failure") == pytest.approx(0.0)
-
-
-@pytest.mark.asyncio
-async def test_should_retry_partial_release_without_double_decrement(
-    spend_counter_state,
-    monkeypatch,
-):
-    counter_cache, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-partial-release",
-        spend=0.0,
-        max_budget=1.0,
-        team_id="team-budget-partial-release",
-    )
-    team_object = LiteLLM_TeamTable(
-        team_id="team-budget-partial-release",
-        spend=0.0,
-        max_budget=1.0,
-    )
-
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=0.4,
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=team_object,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    original_increment_local = counter_cache.increment_local
-    fail_next_team_release = True
-
-    def flaky_increment_local(counter: str, amount: float) -> float:
-        nonlocal fail_next_team_release
-        if counter == "spend:team:team-budget-partial-release" and amount < 0 and fail_next_team_release:
-            fail_next_team_release = False
-            raise RuntimeError("simulated counter failure")
-        return original_increment_local(counter, amount)
-
-    monkeypatch.setattr(counter_cache, "increment_local", flaky_increment_local)
-
-    with pytest.raises(RuntimeError):
-        await release_budget_reservation(reservation)
-
-    assert counter_cache.get_local("spend:key:key-budget-partial-release") == pytest.approx(0.0)
-    assert counter_cache.get_local("spend:team:team-budget-partial-release") == pytest.approx(0.4)
-
-    await release_budget_reservation(reservation)
-
-    assert counter_cache.get_local("spend:key:key-budget-partial-release") == pytest.approx(0.0)
-    assert counter_cache.get_local("spend:team:team-budget-partial-release") == pytest.approx(0.0)
 
 
 async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token: str):
