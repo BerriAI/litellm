@@ -502,6 +502,16 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> 
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
 
+pub fn is_unsignable_thinking_block(block: &ContentBlock) -> bool {
+    is_encrypted_reasoning_block(block)
+        || (block.is_type(ContentBlockType::Thinking)
+            && block.signature.as_deref().is_none_or(str::is_empty))
+}
+
+pub fn strip_unsignable_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_unsignable_thinking_block(block))
+}
+
 fn is_advisor_use(block: &ContentBlock) -> bool {
     block.is_type(ContentBlockType::ServerToolUse)
         && block.name.as_deref() == Some("advisor")
@@ -1261,6 +1271,84 @@ mod tests {
     fn strip_encrypted_reasoning_blocks_leaves_untouched(#[case] input: Value) {
         assert_eq!(
             apply(strip_encrypted_reasoning_blocks, input.clone()),
+            input
+        );
+    }
+
+    #[rstest]
+    #[case::empty_signature_from_another_provider(
+        json!([
+            {"role": "user", "content": "Tile a 3x8 board."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Use the recurrence.", "signature": ""},
+                {"type": "text", "text": "153"}
+            ]},
+            {"role": "user", "content": "Now 17 * 23?"}
+        ]),
+        json!([
+            {"role": "user", "content": "Tile a 3x8 board."},
+            {"role": "assistant", "content": [{"type": "text", "text": "153"}]},
+            {"role": "user", "content": "Now 17 * 23?"}
+        ])
+    )]
+    #[case::missing_signature_before_a_tool_call(
+        json!([
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Read a.txt first."},
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"path": "a.txt"}}
+            ]}
+        ]),
+        json!([
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"path": "a.txt"}}
+            ]}
+        ])
+    )]
+    #[case::bridge_minted_reasoning(
+        json!([
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "plan", "signature": tagged("gAAAA_1")},
+                {"type": "redacted_thinking", "data": tagged("gAAAA_2")},
+                {"type": "text", "text": "The answer."}
+            ]}
+        ]),
+        json!([
+            {"role": "assistant", "content": [{"type": "text", "text": "The answer."}]}
+        ])
+    )]
+    #[case::message_left_empty_is_dropped(
+        json!([
+            {"role": "user", "content": "Solve it."},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": ""}]},
+            {"role": "user", "content": "Go on."}
+        ]),
+        json!([
+            {"role": "user", "content": "Solve it."},
+            {"role": "user", "content": "Go on."}
+        ])
+    )]
+    fn strip_unsignable_thinking_blocks_rewrites(#[case] input: Value, #[case] expected: Value) {
+        assert_eq!(apply(strip_unsignable_thinking_blocks, input), expected);
+    }
+
+    #[rstest]
+    #[case::anthropic_signed_blocks(json!([
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
+            {"type": "text", "text": "The answer."}
+        ]}
+    ]))]
+    #[case::signed_with_omitted_display(json!([
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "text", "text": "The answer."}
+        ]}
+    ]))]
+    #[case::string_content(json!([{"role": "user", "content": "Solve it."}]))]
+    fn strip_unsignable_thinking_blocks_leaves_untouched(#[case] input: Value) {
+        assert_eq!(
+            apply(strip_unsignable_thinking_blocks, input.clone()),
             input
         );
     }

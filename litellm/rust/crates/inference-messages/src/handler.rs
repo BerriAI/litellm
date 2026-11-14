@@ -320,7 +320,7 @@ async fn provider_call(
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let requested_output_format = trimmed.params.output_format.clone();
-    let body = config.request_body(
+    let shaped = config.request_body(
         tool_custom_field.apply(
             config.transform_anthropic_messages_request(trimmed, &transform_context)?,
             shaping.settings.drops_unsupported_params,
@@ -330,11 +330,12 @@ async fn provider_call(
     )?;
     let url = config.get_complete_url(
         api_base.as_deref(),
-        &body.model,
+        &shaped.model,
         &connection_params,
-        body.params.streams(),
+        shaped.params.streams(),
         &env_lookup,
     )?;
+    let body = config.request_for_url(shaped, &url);
     let environment = ValidatedEnvironment {
         headers: config.headers_for_url(
             config.request_headers(

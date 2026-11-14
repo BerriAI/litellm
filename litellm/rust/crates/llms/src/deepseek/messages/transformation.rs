@@ -455,11 +455,13 @@ mod tests {
     }
 
     #[rstest]
-    fn thinking_history_and_params_pass_through() {
+    #[case::signed("sig")]
+    #[case::unsigned("")]
+    fn thinking_history_and_params_pass_through(#[case] signature: &str) {
         let messages = json!([
             {"role": "user", "content": "Use the tool."},
             {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "I should call the tool.", "signature": "sig"},
+                {"type": "thinking", "thinking": "I should call the tool.", "signature": signature},
                 {"type": "tool_use", "id": "toolu_123", "name": "get_weather", "input": {"city": "Sao Paulo"}}
             ]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_123", "content": "Sunny"}]}

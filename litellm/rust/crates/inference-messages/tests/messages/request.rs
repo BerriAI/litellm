@@ -679,6 +679,16 @@ async fn reasoning_is_translated_by_the_model_capabilities(
     }]}]),
     json!([{"role": "assistant", "content": [{"type": "text", "text": "Web search results:\n\nTitle: T\nURL: https://e.x"}]}])
 )]
+#[case::unsigned_thinking_on_a_host_that_does_not_check_claude_signatures(
+    json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]),
+    json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}])
+)]
 #[tokio::test]
 async fn replayed_history_is_cleaned_before_sending(
     call: MessagesCall,

@@ -21,6 +21,10 @@ from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
@@ -51,8 +55,9 @@ from ...common_utils import (
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
-    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unreplayable_blocks_from_anthropic_messages,
     tools_without_custom_field,
+    verifies_claude_thinking_signatures,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -212,6 +217,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return is_claude_model_target(self._resolved_provider, model)
+
+    def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
+        return verifies_claude_thinking_signatures(self._resolved_provider, model, api_base)
 
     def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
         return tools_without_custom_field(
@@ -780,11 +788,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
         log_beta_gated_strips(gated.stripped, model=model, provider=self._resolved_provider)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
+            messages=strip_unreplayable_blocks_from_anthropic_messages(
                 drop_non_string_tool_result_texts(
                     _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
                     getattr(litellm_params, "drop_params", None),
-                )
+                ),
+                is_unsignable_thinking_block
+                if self.verifies_thinking_signatures(model, getattr(litellm_params, "api_base", None))
+                else is_encrypted_reasoning_block,
             ),
             max_tokens=max_tokens,
             model=model,

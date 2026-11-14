@@ -619,6 +619,40 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_reply"),
+    [
+        ("converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", [{"text": "Seven."}]),
+        ("converse/us.amazon.nova-pro-v1:0", [{"text": "Gemini reasoning"}, {"text": "Seven."}]),
+    ],
+)
+@pytest.mark.parametrize("signature", ["", None])
+def test_converse_claude_never_reads_an_unsigned_thought_from_another_provider_as_its_own_reply(
+    model: str, expected_reply: list[dict[str, str]], signature: str | None
+):
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            AnthropicMessagesUserMessageParam(role="user", content="Pick a number."),
+            AnthopicMessagesAssistantMessageParam(
+                role="assistant",
+                content=[
+                    {"type": "thinking", "thinking": "Gemini reasoning", "signature": signature},
+                    {"type": "text", "text": "Seven."},
+                ],
+            ),
+            AnthropicMessagesUserMessageParam(role="user", content="Double it."),
+        ],
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+
+    converse_messages: Final = _bedrock_converse_messages_pt(
+        messages=translated, model=model.removeprefix("converse/"), llm_provider="bedrock_converse"
+    )
+
+    assert converse_messages[1]["content"] == expected_reply
+
+
 def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
     """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
