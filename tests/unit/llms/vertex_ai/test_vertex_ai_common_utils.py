@@ -1,7 +1,7 @@
 import copy
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
@@ -26,6 +26,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     get_vertex_url,
+    needs_parameters_json_schema,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -296,6 +297,37 @@ async def test_vertex_gemini_count_applies_the_context_edits_inference_applies()
     assert result.total_tokens == 37
     assert len(peer.requests) == 1
     assert peer.requests[0].content.decode().count(_TOOL_OUTPUT) == 1
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_sends_a_union_root_tool_as_parameters_since_vertex_counts_only_that_field() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Look up Atlas."}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            tools=[
+                {
+                    "name": "lookup",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                        "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+                    },
+                }
+            ],
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    sent_tools: Final = _JSON_BODY.validate_json(peer.requests[0].content)["tools"]
+    assert isinstance(sent_tools, list) and isinstance(sent_tools[0], dict)
+    declarations: Final = sent_tools[0]["functionDeclarations"]
+    assert isinstance(declarations, list) and isinstance(declarations[0], dict)
+    assert ("parameters" in declarations[0], "parametersJsonSchema" in declarations[0]) == (True, False)
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
@@ -1626,6 +1658,107 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
     assert sent[0]["enum"] == ["1", "2", "5"]
     assert sent[1]["enum"] == ["1", "2", "5"]
     assert sent[0] == sent[1]
+
+
+_OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+_DEEP_ROOT_REF_CHAIN_LENGTH: Final = 3000
+
+
+def _deep_root_ref_chain(end: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    links: Final = {f"d{i}": {"$ref": f"#/$defs/d{i + 1}"} for i in range(_DEEP_ROOT_REF_CHAIN_LENGTH)}
+    return {"$ref": "#/$defs/d0", "$defs": {**links, f"d{_DEEP_ROOT_REF_CHAIN_LENGTH}": end}}
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "OBJECT", "properties": {"a": {"type": "string"}}}, False),
+        ({"properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {"a": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}, False),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": _OBJECT_BRANCH}}, False),
+        ({"$ref": "#/$defs/Missing", "$defs": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, False),
+        ({"$ref": "#/definitions/Lookup", "definitions": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, False),
+        ({"type": "object", "anyOf": [{"required": ["a"]}]}, True),
+        ({"anyOf": [_OBJECT_BRANCH]}, True),
+        ({"oneOf": [_OBJECT_BRANCH]}, True),
+        ({"allOf": [_OBJECT_BRANCH]}, True),
+        ({"type": ["object", "null"], "properties": {"a": {"type": "string"}}}, True),
+        ({"type": "string"}, True),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"anyOf": [_OBJECT_BRANCH]}}}, True),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"type": ["object", "null"]}}}, True),
+        ({"type": ["object"], "properties": {"a": {"type": "string"}}}, False),
+        ({"$ref": "#/$defs/Lookup", "$defs": {"Lookup": {"type": ["OBJECT"]}}}, False),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"anyOf": [_OBJECT_BRANCH]}}}, True),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": _OBJECT_BRANCH}}, False),
+        ({"$ref": "#/$defs/Lookup", "anyOf": [{"required": ["a"]}], "$defs": {"Lookup": _OBJECT_BRANCH}}, True),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B", "oneOf": [_OBJECT_BRANCH]}, "B": _OBJECT_BRANCH}}, True),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}}}, False),
+        (_deep_root_ref_chain({"anyOf": [_OBJECT_BRANCH]}), True),
+        (_deep_root_ref_chain(_OBJECT_BRANCH), False),
+    ],
+    ids=[
+        "object",
+        "uppercase-object",
+        "untyped-properties",
+        "union-inside-a-property",
+        "root-ref-to-object",
+        "root-ref-to-missing-def",
+        "root-ref-into-definitions",
+        "object-with-any-of",
+        "root-any-of",
+        "root-one-of",
+        "root-all-of",
+        "type-list",
+        "non-object-type",
+        "root-ref-to-union",
+        "root-ref-to-type-list",
+        "single-object-type-list",
+        "root-ref-to-single-object-type-list",
+        "chained-root-ref-to-union",
+        "chained-root-ref-to-object",
+        "root-ref-to-object-beside-a-union",
+        "chained-root-ref-through-a-union-to-object",
+        "cyclic-root-ref",
+        "cyclic-root-ref-through-a-union",
+        "deep-root-ref-chain-to-union",
+        "deep-root-ref-chain-to-object",
+    ],
+)
+def test_needs_parameters_json_schema(parameters: Mapping[str, JsonValue], expected: bool) -> None:
+    assert needs_parameters_json_schema(parameters) is expected
+
+
+def _missing_root_ref(size: int) -> Mapping[str, JsonValue]:
+    return {"$ref": "#/$defs/" + "m" * size, "$defs": {f"d{i}": {} for i in range(size // 16)}}
+
+
+def _long_named_root_ref_cycle(size: int) -> Mapping[str, JsonValue]:
+    first, second = "a" * size, "b" * size
+    fillers: Final = {f"d{i}": {"type": "string"} for i in range(size // 16)}
+    cycle: Final = {first: {"$ref": f"#/$defs/{second}"}, second: {"$ref": f"#/$defs/{first}"}}
+    return {"$ref": f"#/$defs/{first}", "$defs": {**cycle, **fillers}}
+
+
+def _root_ref_cost(parameters: Mapping[str, JsonValue]) -> float:
+    def once() -> float:
+        started: Final = time.perf_counter()
+        needs_parameters_json_schema(parameters)
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+@pytest.mark.parametrize("build", [_missing_root_ref, _long_named_root_ref_cycle], ids=["missing-ref", "ref-cycle"])
+def test_needs_parameters_json_schema_stays_linear_on_long_refs_and_many_defs(
+    build: Callable[[int], Mapping[str, JsonValue]],
+) -> None:
+    """Tool parameters are caller-controlled, so 4x longer refs with 4x more $defs must not cost 16x.
+    Comparing two sizes keeps this honest on a slow box, and the quadratic walk this replaced grew 13x to 16x."""
+    growth: Final = _root_ref_cost(build(256 * 1024)) / _root_ref_cost(build(64 * 1024))
+
+    assert growth < 10.0, f"cost grew {growth:.1f}x for 4x the input"
 
 
 class _Priority(int, Enum):

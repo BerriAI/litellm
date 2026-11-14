@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -916,6 +917,63 @@ def build_vertex_schema(
 
 _build_vertex_schema = build_vertex_schema
 
+_VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_ROOT_DEFS_REF_PREFIX: Final = "#/$defs/"
+_JSON_SCHEMA: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _is_absent_or_object_type(schema_type: object) -> bool:
+    match schema_type:
+        case None:
+            return True
+        case str():
+            return schema_type.lower() == "object"
+        case [str() as only_type]:
+            return only_type.lower() == "object"
+        case _:
+            return False
+
+
+def _root_cannot_be_vertex_parameters(root: Mapping[str, object]) -> bool:
+    return any(
+        keyword in root for keyword in _VERTEX_PARAMETERS_UNSUPPORTED_ROOT_KEYWORDS
+    ) or not _is_absent_or_object_type(root.get("type"))
+
+
+def _root_ref_def_name(schema: Mapping[str, JsonValue], def_names: Mapping[str, str]) -> str | None:
+    match schema.get("$ref"):
+        case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX):
+            return def_names.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
+        case _:
+            return None
+
+
+def _root_ref_chain(
+    schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]
+) -> tuple[Mapping[str, JsonValue], ...]:
+    object_defs: Final = MappingProxyType({name: value for name, value in defs.items() if isinstance(value, dict)})
+    def_names: Final = MappingProxyType({name: name for name in object_defs})
+    next_names: Final = ((name, _root_ref_def_name(value, def_names)) for name, value in object_defs.items())
+    next_def: Final = MappingProxyType({name: target for name, target in next_names if target is not None})
+    first: Final = _root_ref_def_name(schema, def_names)
+    if first is None:
+        return (schema,)
+    names: Final = tuple(accumulate(range(len(next_def)), lambda name, _: next_def.get(name, name), initial=first))
+    return (schema,) if names[-1] in next_def else (schema, *(object_defs[name] for name in frozenset(names)))
+
+
+def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
+    defs: Final = parameters.get("$defs")
+    chain: Final = _root_ref_chain(parameters, defs if isinstance(defs, dict) else {})
+    return any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
+
+
+def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
+    if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
+        return None
+    json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
+    return json_schema if needs_parameters_json_schema(json_schema) else None
+
 
 def build_json_schema(parameters: dict) -> dict:
     """
@@ -1656,7 +1714,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             if isinstance(request_view, InferenceRequestViewError):
                 return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(
-                system=request_view.system, tools=tools, model=model_to_use
+                system=request_view.system, tools=tools, model=model_to_use, allow_parameters_json_schema=False
             )
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)

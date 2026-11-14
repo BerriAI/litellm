@@ -1698,6 +1698,52 @@ class TestVertexBatchIntegerEnums:
         assert properties["mode"]["enum"] == ["fast", "slow"]
 
 
+_FLAT_TOOL_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _chat_entry_with_tool(custom_id: str, name: str, parameters: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Look it up"}],
+            "tools": [{"type": "function", "function": {"name": name, "parameters": parameters}}],
+        },
+    }
+
+
+class TestVertexBatchToolParameters:
+    @pytest.mark.parametrize(
+        "root_schema",
+        [
+            {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            },
+            {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+        ],
+        ids=["anyof-root", "type-list-root"],
+    )
+    def test_rows_never_send_parameters_json_schema_since_vertex_batch_merges_keys_across_rows(
+        self, root_schema: Mapping[str, object]
+    ):
+        rows: Final = _wrap_entries(
+            [
+                _chat_entry_with_tool("root-1", "lookup", root_schema),
+                _chat_entry_with_tool("flat-1", "get_weather", _FLAT_TOOL_SCHEMA),
+            ]
+        )
+
+        declarations: Final = [row["request"]["tools"][0]["function_declarations"][0] for row in rows]
+        assert [
+            (declaration["name"], "parameters" in declaration, "parametersJsonSchema" in declaration)
+            for declaration in declarations
+        ] == [("lookup", True, False), ("get_weather", True, False)]
+
+
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
 
