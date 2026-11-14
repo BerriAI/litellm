@@ -1,10 +1,11 @@
 import re
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
+from functools import cache, lru_cache
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
@@ -796,6 +797,18 @@ def _schema_gemini_receives(schema: JsonValue, valid_fields: frozenset[str], dep
             return schema
 
 
+@dataclass(frozen=True, slots=True)
+class _DefinitionsFilteredOnUse:
+    definitions: Mapping[str, JsonValue]
+    gemini_receives: Callable[[str], JsonValue]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.definitions
+
+    def __getitem__(self, name: str) -> JsonValue:
+        return self.gemini_receives(name)
+
+
 def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -838,6 +851,11 @@ def build_vertex_schema_within_budget(
     parameters_gemini_receives: Final = _schema_object_gemini_receives(parameters_json, valid_schema_fields)
     parameters.clear()
     parameters.update(parameters_gemini_receives)
+
+    @cache
+    def definition_gemini_receives(name: str) -> JsonValue:
+        return _schema_gemini_receives(all_defs[name], valid_schema_fields, 1)
+
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
@@ -845,10 +863,7 @@ def build_vertex_schema_within_budget(
     try:
         inlined_bytes: Final = unpack_defs(
             parameters,
-            {
-                name: _schema_gemini_receives(definition, valid_schema_fields, 1)
-                for name, definition in all_defs.items()
-            },
+            _DefinitionsFilteredOnUse(all_defs, definition_gemini_receives),
             max_inlined_bytes=max_inlined_bytes,
         )
     except DefsInliningBudgetExceededError as e:
