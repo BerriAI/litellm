@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import itertools
 import json
 import math
 import re
@@ -481,7 +482,7 @@ def _sse_data_payload(line: bytes) -> bytes | None:
     return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
 
 
-def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+def sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
     data: Final = b"\n".join(payload for payload in payloads if payload is not None)
     try:
@@ -490,8 +491,13 @@ def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
         return None
 
 
+def split_sse_frames(data: bytes) -> tuple[tuple[bytes, ...], bytes]:
+    boundaries: Final = (0, *(match.end() for match in _SSE_FRAME_END.finditer(data)))
+    return tuple(data[start:end] for start, end in itertools.pairwise(boundaries)), data[boundaries[-1] :]
+
+
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
-    event: Final = _sse_frame_event(frame)
+    event: Final = sse_frame_event(frame)
     if event is None:
         return frame
     stamped: Final = await safeguard_results.observe(event)
