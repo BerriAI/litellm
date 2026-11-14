@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
     inline_every_remote_url,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, mapped_max_output_tokens
 from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
@@ -72,15 +72,6 @@ def _anthropic_config_max_tokens() -> int | None:
     return litellm.AnthropicConfig.max_tokens
 
 
-def _mapped_max_tokens(model: str) -> int | None:
-    row: Final = object_mapping(litellm.model_cost.get(model)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
-    match row.get("max_output_tokens"):
-        case int() as max_tokens:
-            return max_tokens
-        case _:
-            return None
-
-
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
@@ -112,12 +103,20 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     @classmethod
     def get_config(
-        cls, *, model: str | None = None, configured_max_output_tokens: int | None = None
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
         return {
             key: value
             for key, value in super()
-            .get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            .get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=custom_llm_provider,
+            )
             .items()
             if key != "max_tokens"
         }
@@ -326,7 +325,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     (
                         max_tokens
                         for max_tokens in map(
-                            _mapped_max_tokens, self._default_max_tokens_models(model, litellm_params)
+                            mapped_max_output_tokens, self._default_max_tokens_models(model, litellm_params)
                         )
                         if max_tokens is not None
                     ),
