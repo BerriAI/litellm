@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { createParser, useQueryStates } from "nuqs";
 
 import { dailyActivityAggregatedCall } from "@/components/networking";
@@ -11,6 +11,7 @@ import {
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
 import { useAggregatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity";
+import { costOptimizationDateRange } from "./costOptimizationDateRange";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const activityDate = createParser({
@@ -48,16 +49,21 @@ export interface DailyActivityRange {
 
 export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
 
-export const useActivityDateRange = (): ActivityDateRange => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
+export const useActivityDateRange = (initialRange?: () => DateRange): ActivityDateRange => {
+  const [initialDates] = useState<DateRange>(
+    initialRange ??
+      (() => {
+        const now = new Date();
+        return { from: new Date(now.getTime() - THIRTY_DAYS_MS), to: now };
+      }),
+  );
   const [params, setParams] = useQueryStates(activityDates);
   const dateValue = useMemo<DateRange>(
     () =>
       params.activity_from && params.activity_to && params.activity_from <= params.activity_to
         ? { from: params.activity_from, to: params.activity_to }
-        : { from: initialFrom, to: initialTo },
-    [params.activity_from, params.activity_to, initialFrom, initialTo],
+        : initialDates,
+    [params.activity_from, params.activity_to, initialDates],
   );
   const onDateChange = (value: DateRange) => {
     void setParams({ activity_from: value.from ?? null, activity_to: value.to ?? null });
@@ -116,6 +122,6 @@ export const useDailyActivityRange = (
   userId: string | null,
   userRole: string,
 ): DailyActivityRange => {
-  const dateRange = useActivityDateRange();
+  const dateRange = useActivityDateRange(costOptimizationDateRange);
   return useScopedDailyActivityRange(accessToken, { userId: spendScopeUserId(userRole, userId) }, dateRange);
 };
