@@ -871,6 +871,7 @@ class _SyncSuccessRun:
     start_time: datetime.datetime
     end_time: datetime.datetime
     complete_streaming_response: object
+    carries_stream_chunk: bool
     is_sync_request: bool
     for_async_request: bool
     call_details_view: Mapping[str, object]
@@ -4147,6 +4148,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 else callbacks
             )
 
+            carries_stream_chunk: Final = isinstance(result, ModelResponseStream)
             ## REDACT MESSAGES ##
             result = _REDACTED_RESULT.validate_python(
                 redact_message_input_output_from_logging(
@@ -4181,6 +4183,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
                 complete_streaming_response=complete_streaming_response,
+                carries_stream_chunk=carries_stream_chunk,
                 is_sync_request=is_sync_request,
                 for_async_request=for_async_request,
                 call_details_view=MappingProxyType(prepared.details),
@@ -4248,7 +4251,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for_async_request: Final = run.for_async_request
         call_details_view: Final = run.call_details_view
         delivers_final_stream_log: Final = complete_streaming_response is not None or self._is_pass_through_call()
-        sends_success_log: Final = delivers_final_stream_log or not isinstance(run.result, ModelResponseStream)
+        sends_success_log: Final = delivers_final_stream_log or not run.carries_stream_chunk
         result = run.result  # rebind-ok: integrations swap in the assembled stream for later callbacks
         kwargs: Mapping[str, object] = run.kwargs  # rebind-ok: integrations leave their kwargs to later callbacks
         litellm_params = run.litellm_params  # rebind-ok: supabase leaves its params to later callbacks

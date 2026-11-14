@@ -5264,7 +5264,7 @@ class _SyncChunkLogHeldOpen(CustomLogger):
         self.release_chunk_log: Final = threading.Event()
 
     def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
-        if isinstance(result, litellm.ModelResponseStream):
+        if not self.chunk_log_held.is_set():
             self.chunk_log_held.set()
             _ = self.release_chunk_log.wait(timeout=10)
         return kwargs, result
@@ -5340,20 +5340,23 @@ def _log_a_sync_chunk_held_open_across_the_stream_end() -> None:
         ("traceloop", "traceloopLogger"),
     ],
 )
+@pytest.mark.parametrize("message_logging_off", [False, True])
 def test_a_sync_chunk_log_racing_the_stream_end_sends_a_string_callback_integration_one_success(
-    monkeypatch: pytest.MonkeyPatch, callback: str, integration_global: str
+    monkeypatch: pytest.MonkeyPatch, callback: str, integration_global: str, message_logging_off: bool
 ):
     integration: Final = _SyncStringCallbackIntegrationRecorder()
     monkeypatch.setattr(litellm_logging, integration_global, integration, raising=False)
     monkeypatch.setattr(litellm, "success_callback", [callback])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
 
     _log_a_sync_chunk_held_open_across_the_stream_end()
 
     assert integration.logged_responses == ["ModelResponse"]
 
 
+@pytest.mark.parametrize("message_logging_off", [False, True])
 def test_a_sync_chunk_log_racing_the_stream_end_calls_a_success_callback_function_once(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, message_logging_off: bool
 ):
     calls: Final[list[tuple[str, object]]] = []  # mutable-ok: records each call as it fires
 
@@ -5363,6 +5366,7 @@ def test_a_sync_chunk_log_racing_the_stream_end_calls_a_success_callback_functio
         calls.append((type(completion_response).__name__, kwargs.get("complete_streaming_response") is not None))
 
     monkeypatch.setattr(litellm, "success_callback", [track_cost_callback])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
 
     _log_a_sync_chunk_held_open_across_the_stream_end()
 
