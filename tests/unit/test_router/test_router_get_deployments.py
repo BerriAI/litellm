@@ -365,3 +365,46 @@ def test_get_routable_deployments_returns_every_deployment_routing_can_pick(
     }
 
     assert routable_ids == expected_ids
+
+
+@pytest.mark.parametrize(
+    ("pattern", "target_model", "requested", "expected_upstream"),
+    (
+        ("openai/*", "openai/*", "openai/a*b", "openai/a*b"),
+        ("team-a/*", "azure/*", "team-a/x*y", "azure/x*y"),
+        ("openai/*", "openai/*", "openai/*/*", "openai/*/*"),
+        ("p/*/s/*", "openai/*/s/*", "p/a*b/s/c", "openai/a*b/s/c"),
+        ("openai/*", "openai/*", "openai/gpt-4o\nfoo", "openai/gpt-4o"),
+        ("team-a/*", "azure/*", "team-a/gpt-4o\r\nX-Inject: 1", "azure/gpt-4o\r"),
+        ("openai/*", "openai/*", "openai/\ud800", "openai/\ud800"),
+    ),
+    ids=(
+        "asterisk-same-prefix",
+        "asterisk-different-prefix",
+        "double-asterisk",
+        "multi-wildcard-asterisk",
+        "newline-stops-capture",
+        "crlf-preserves-cr-stops-before-lf",
+        "lone-surrogate",
+    ),
+)
+def test_wildcard_deployments_preserve_asterisks_newlines_and_surrogates(
+    pattern: str, target_model: str, requested: str, expected_upstream: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": pattern,
+                "litellm_params": {"model": target_model, "api_key": "test-key"},
+                "model_info": {"id": "wild"},
+            }
+        ]
+    )
+
+    available: Final = router.get_available_deployment(requested)
+    wildcard_matches: Final = router.registry().deployments(requested, source="wildcard")
+    routable: Final = router.registry().deployments(requested, source="routable")
+
+    assert available["litellm_params"]["model"] == expected_upstream
+    assert [row["litellm_params"]["model"] for row in wildcard_matches] == [expected_upstream]
+    assert [row["litellm_params"]["model"] for row in routable] == [expected_upstream]

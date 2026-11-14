@@ -91,7 +91,7 @@ from litellm.router_api import (
     RoutingContext,
     RoutingObservers,
 )
-from litellm.router_attempt import for_requested_model, request_from_call
+from litellm.router_attempt import request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
 from litellm.router_rust.invoke.endpoints import (
@@ -4131,9 +4131,7 @@ class _Selection:
 
     def _served(self, record: object) -> Mapping[str, object]:
         """A deployment as served: its record, with the litellm_params values JSON carries as text."""
-        return _with_live_params(
-            self._core, for_requested_model(typed_deployment(as_str_mapping(record) or {}), self._model)
-        )
+        return _with_live_params(self._core, typed_deployment(as_str_mapping(record) or {}))
 
     def _failed(self, step: Mapping[str, object], *, sync: bool) -> BaseException:
         core: Final = self._core
@@ -4921,7 +4919,7 @@ class _Driver:
             # A default deployment whose id is not a string is called as Python copies it, id and all.
             as_str_mapping(default_deployment_copy(self._core._resolved.default_deployment, requested)) or {}  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             if step.get("deployment_id") == DEFAULT_DEPLOYMENT_COPIED_ID
-            else for_requested_model(typed_deployment(as_str_mapping(step.get("deployment")) or {}), requested)
+            else typed_deployment(as_str_mapping(step.get("deployment")) or {})
         )
         # The values its JSON record carries as text (an Exception `mock_response`) called as configured.
         deployment = _with_live_params(self._core, deployment)

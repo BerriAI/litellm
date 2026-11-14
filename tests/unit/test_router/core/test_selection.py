@@ -215,6 +215,62 @@ async def test_a_pattern_that_does_not_match_is_an_unknown_model(make_core: Make
         await core.select("openai/gpt-4o")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "target_model", "requested", "expected_upstream"),
+    [
+        ("openai/*", "openai/*", "openai/a*b", "openai/a*b"),
+        ("team-a/*", "azure/*", "team-a/x*y", "azure/x*y"),
+        ("openai/*", "openai/*", "openai/*/*", "openai/*/*"),
+        ("p/*/s/*", "openai/*/s/*", "p/a*b/s/c", "openai/a*b/s/c"),
+        ("openai/*", "openai/*", "openai/gpt-4o\nfoo", "openai/gpt-4o"),
+        ("team-a/*", "azure/*", "team-a/gpt-4o\r\nX-Inject: 1", "azure/gpt-4o\r"),
+        ("openai/*", "openai/*", "openai/hi-\ud800", "openai/hi-\ud800"),
+        ("openai/*", "openai/*", "openai/low-\udc00", "openai/low-\udc00"),
+        ("openai/*", "openai/*", "openai/\uf8fe\ud800", "openai/\uf8fe\ud800"),
+    ],
+)
+async def test_wildcard_preserves_asterisks_newlines_and_surrogates(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    pattern: str,
+    target_model: str,
+    requested: str,
+    expected_upstream: str,
+) -> None:
+    core: Final = make_core(model_list=[deployment(pattern, "wild", model=target_model)])
+    chosen: Final = await core.select(requested)
+    assert isinstance(chosen, Mapping)
+    chosen_params: Final = chosen["litellm_params"]
+    assert chosen_params["model"] == expected_upstream  # pyright: ignore[reportIndexIssue]  # Deployment params
+    healthy: Final = await core.select(requested, kind="healthy")
+    assert isinstance(healthy, list) and len(healthy) == 1
+    healthy_params: Final = healthy[0]["litellm_params"]
+    assert healthy_params["model"] == expected_upstream  # pyright: ignore[reportIndexIssue]  # Deployment params
+    for op in ("acompletion", "completion"):
+        await core.call(op, {"model": requested, "messages": MESSAGES})
+        assert host.calls[-1].model == expected_upstream
+
+
+@pytest.mark.asyncio
+async def test_wildcard_pattern_does_not_match_across_newline(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=[deployment("*-mini", "wild", model="openai/*")])
+    with pytest.raises(litellm.BadRequestError):
+        await core.select("a\nb-mini")
+    with pytest.raises(litellm.BadRequestError):
+        await core.call("acompletion", {"model": "a\nb-mini", "messages": MESSAGES})
+
+
+@pytest.mark.asyncio
+async def test_unknown_model_with_lone_surrogate_raises_bad_request(make_core: MakeCore) -> None:
+    core: Final = make_core(model_list=[deployment("openai/*", "wild", model="openai/*")])
+    requested: Final = "unknown/\ud800"
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await core.select(requested)
+    assert raised.value.model == requested
+    assert requested in str(raised.value)
+
+
 # --- selecting by deployment id or litellm model --------------------------------------------
 
 

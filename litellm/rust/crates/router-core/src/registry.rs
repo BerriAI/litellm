@@ -1154,20 +1154,25 @@ fn pattern_specificity(pattern: &str) -> (usize, usize) {
     (regex.chars().count(), complexity)
 }
 
-/// `*` matches any run of characters, as the pattern router's `(.*)` does under `re.match`:
-/// anchored at the start only, so the name may run on past the pattern's last literal.
+/// `*` matches any run of characters before `\n`, as the pattern router's `(.*)` does under
+/// `re.match`: anchored at the start only, so the name may run on past the pattern's last literal.
+/// Each `*` can be matched greedily at its earliest valid occurrence because any later start that
+/// also reaches a suffix would allow the earlier occurrence to bridge into the same suffix without
+/// crossing `\n`, so existence requires no backtracking.
 fn wildcard_matches(pattern: &str, name: &str) -> bool {
     let mut parts = pattern.split('*');
     let first = parts.next().unwrap_or_default();
     let Some(mut rest) = name.strip_prefix(first) else {
         return false;
     };
-    let parts: Vec<&str> = parts.collect();
     for part in parts {
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
-            None => return false,
+        let Some(at) = rest.find(part) else {
+            return false;
+        };
+        if rest[..at].contains('\n') {
+            return false;
         }
+        rest = &rest[at + part.len()..];
     }
     true
 }
@@ -1635,6 +1640,58 @@ mod tests {
         assert_eq!(
             (next.version(), ids),
             (1, vec!["2".to_owned(), "1".to_owned()])
+        );
+    }
+
+    #[rstest]
+    #[case::matches_before_lf("openai/*", "openai/gpt-4o\nfoo", true)]
+    #[case::cannot_cross_lf("*-mini", "a\nb-mini", false)]
+    #[case::allows_cr_without_lf("*-mini", "a\rb-mini", true)]
+    fn wildcard_resolve_respects_newline_boundaries(
+        #[case] pattern: &str,
+        #[case] request: &str,
+        #[case] expected_match: bool,
+    ) {
+        let registry = Registry::build(
+            vec![spec(
+                pattern,
+                json!({"model": "openai/*"}),
+                json!({"id": "w"}),
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry.resolve(request, ResolveScope::default()).is_some(),
+            expected_match
+        );
+    }
+
+    #[rstest]
+    fn wildcard_resolve_rejects_backtracking_inputs_without_stalling() {
+        let pattern = "p/*/*/*/*/*/*/*/*/*/*/mini";
+        let registry = Registry::build(
+            vec![spec(
+                pattern,
+                json!({"model": "openai/*"}),
+                json!({"id": "w"}),
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let nonmatching = format!("p/{}x", "/".repeat(80));
+        assert!(
+            registry
+                .resolve(&nonmatching, ResolveScope::default())
+                .is_none()
+        );
+        let matching = format!("p/{}mini", "/".repeat(80));
+        assert!(
+            registry
+                .resolve(&matching, ResolveScope::default())
+                .is_some()
         );
     }
 }

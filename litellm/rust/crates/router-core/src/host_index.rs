@@ -11,6 +11,8 @@
 //!
 //! Values are JSON so whatever a caller wrote reads back as written, junk included.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -493,26 +495,40 @@ pub fn regex_match(regex: &str, request: &str) -> Option<Vec<String>> {
     let runs = literal_runs(regex)?;
     let rest = request.strip_prefix(runs[0].as_str())?;
     let mut groups = Vec::new();
-    greedy(&runs[1..], rest, &mut groups).then_some(groups)
+    let mut rejected = HashSet::new();
+    greedy(&runs[1..], rest, &mut rejected, &mut groups).then_some(groups)
 }
 
 /// Match `runs` (each a literal that follows a group) against `rest`, longest group first.
-fn greedy(runs: &[String], rest: &str, groups: &mut Vec<String>) -> bool {
+fn greedy(
+    runs: &[String],
+    rest: &str,
+    rejected: &mut HashSet<(usize, usize)>,
+    groups: &mut Vec<String>,
+) -> bool {
     let Some((literal, later)) = runs.split_first() else {
         return true;
     };
-    let mut ends: Vec<usize> = rest.char_indices().map(|(at, _)| at).collect();
-    ends.push(rest.len());
+    if !later.is_empty() && rejected.contains(&(runs.len(), rest.len())) {
+        return false;
+    }
+    // Python `re.match` without `re.DOTALL` never lets `(.*)` cross `\n`.
+    let prefix = &rest[..rest.find('\n').unwrap_or(rest.len())];
+    let mut ends: Vec<usize> = prefix.char_indices().map(|(at, _)| at).collect();
+    ends.push(prefix.len());
     for &end in ends.iter().rev() {
         let (group, after) = rest.split_at(end);
         let Some(after) = after.strip_prefix(literal.as_str()) else {
             continue;
         };
         groups.push(group.to_owned());
-        if greedy(later, after, groups) {
+        if greedy(later, after, rejected, groups) {
             return true;
         }
         groups.pop();
+    }
+    if !later.is_empty() {
+        rejected.insert((runs.len(), rest.len()));
     }
     false
 }
@@ -526,9 +542,14 @@ pub fn deployment_model_name(groups: &[String], request: &str, model: &str) -> S
     if groups.len() > model.matches('*').count() {
         return request.to_owned();
     }
-    let mut named = model.to_owned();
-    for group in groups {
-        named = named.replacen('*', group, 1);
+    let mut parts = model.split('*');
+    let mut named = String::with_capacity(model.len());
+    if let Some(first) = parts.next() {
+        named.push_str(first);
+    }
+    for (index, part) in parts.enumerate() {
+        named.push_str(groups.get(index).map_or("*", String::as_str));
+        named.push_str(part);
     }
     named
 }
@@ -723,5 +744,60 @@ mod tests {
         );
         let routed = router.route("any/gpt-4o", None).unwrap();
         assert_eq!(routed[0]["model_info"], expected);
+    }
+
+    #[rstest]
+    #[case::asterisk_in_single_group(
+        &["a*b".to_owned()],
+        "openai/a*b",
+        "openai/*",
+        "openai/a*b",
+    )]
+    #[case::asterisk_in_first_group_with_multiple_template_wildcards(
+        &["a*b".to_owned(), "c".to_owned()],
+        "p/a*b/s/c",
+        "upstream/*/s/*",
+        "upstream/a*b/s/c",
+    )]
+    #[case::fewer_groups_than_template_wildcards(
+        &["a*b".to_owned()],
+        "p/a*b",
+        "upstream/*/s/*",
+        "upstream/a*b/s/*",
+    )]
+    fn deployment_model_name_substitutes_in_a_single_pass(
+        #[case] groups: &[String],
+        #[case] request: &str,
+        #[case] template: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(deployment_model_name(groups, request, template), expected);
+    }
+
+    #[rstest]
+    #[case::stops_before_lf("openai/*", "openai/gpt-4o\nfoo", Some(vec!["gpt-4o".to_owned()]))]
+    #[case::keeps_cr_before_lf("team-a/*", "team-a/gpt-4o\r\nX-Inject: 1", Some(vec!["gpt-4o\r".to_owned()]))]
+    #[case::suffix_literal_cannot_cross_lf("*-mini", "a\nb-mini", None)]
+    #[case::infix_literal_cannot_cross_lf("a*b-mini", "a1\n2b-mini", None)]
+    #[case::literal_lf_in_pattern_matches("a\nb*", "a\nbc", Some(vec!["c".to_owned()]))]
+    #[case::group_before_literal_lf("a*\nb*", "ax\nbc", Some(vec!["x".to_owned(), "c".to_owned()]))]
+    fn wildcard_capture_stops_at_newline_like_python_re_match(
+        #[case] pattern: &str,
+        #[case] request: &str,
+        #[case] expected: Option<Vec<String>>,
+    ) {
+        assert_eq!(regex_match(&pattern_to_regex(pattern), request), expected);
+    }
+
+    #[rstest]
+    fn regex_match_rejects_backtracking_inputs_via_memoization() {
+        let nonmatching = format!("p/{}x", "/".repeat(80));
+        assert_eq!(
+            regex_match(
+                &pattern_to_regex("p/*/*/*/*/*/*/*/*/*/*/mini"),
+                &nonmatching
+            ),
+            None
+        );
     }
 }

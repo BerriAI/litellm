@@ -41,7 +41,8 @@ pub(super) fn policy<'py>(
     stream_origin: &Bound<'py, PyAny>,
     failure_kind: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let request = config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
+    let request = config::parse_request(document(request)?, None)
+        .map_err(|error| config_error_to_pyerr(py, error))?;
     let StreamPolicy {
         can_retry,
         can_fall_back,
@@ -70,7 +71,8 @@ pub(super) fn recover(
     failure: &Bound<'_, PyDict>,
 ) -> PyResult<RouterCall> {
     let op = Op::new(op);
-    let request = config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
+    let request = config::parse_request(document(request)?, None)
+        .map_err(|error| config_error_to_pyerr(request.py(), error))?;
     let stream_origin = origin(stream_origin)?;
     let Err(failure) = attempt_outcome(failure)? else {
         return Err(PyValueError::new_err("a stream failure needs `ok: False`"));
