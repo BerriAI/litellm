@@ -172,6 +172,23 @@ async def test_series_idle_past_the_ttl_are_removed_and_free_their_slot(clock, m
 
 
 @pytest.mark.asyncio
+async def test_cap_holds_and_ttl_is_ignored_in_multiprocess_mode(monkeypatch, tmp_path, clock):
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "prometheus_metrics_max_series_per_metric", 2)
+    monkeypatch.setattr(litellm, "prometheus_metrics_ttl_seconds", 10.0)
+    monkeypatch.setattr(litellm, "prometheus_metrics_cleanup_interval_seconds", 0.0)
+    logger: Final = PrometheusLogger()
+
+    await _count_request(logger, "first-agent")
+    await _count_request(logger, "second-agent")
+    clock[0] += 11.0
+    await _count_request(logger, "third-agent")
+
+    series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    assert _label_values(series, "user_agent") == {"first-agent", "second-agent", "other"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "metric_name", ["litellm_deployment_successful_fallbacks", "litellm_deployment_failed_fallbacks"]
 )
@@ -237,6 +254,28 @@ async def test_end_user_eviction_frees_a_slot_under_the_cap(monkeypatch):
 
     series: Final = _scraped_series("litellm_spend_metric_total")
     assert _label_values(series, "end_user") == {"end-user-3", "end-user-4"}
+
+
+@pytest.mark.asyncio
+async def test_end_user_eviction_keeps_the_series_and_its_slot_in_multiprocess_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "enable_end_user_cost_tracking_prometheus_only", True)
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [{"group": "end-user-spend", "metrics": ["litellm_spend_metric"], "include_labels": ["end_user"]}],
+    )
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_max_series_per_metric", 2)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_ttl_seconds", None)
+    monkeypatch.setattr(litellm, "prometheus_metrics_max_series_per_metric", 3)
+    monkeypatch.setattr(litellm, "prometheus_metrics_ttl_seconds", None)
+    logger: Final = PrometheusLogger()
+
+    for index in range(5):
+        await _request(logger, end_user=f"end-user-{index}")
+
+    series: Final = _scraped_series("litellm_spend_metric_total")
+    assert _label_values(series, "end_user") == {"end-user-0", "end-user-1", "end-user-2", "other"}
 
 
 @pytest.mark.asyncio

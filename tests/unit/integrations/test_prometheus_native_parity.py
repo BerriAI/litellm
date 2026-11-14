@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import traceback
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -12,7 +14,7 @@ from typing import Final, Literal, TypeAlias
 from zoneinfo import ZoneInfo
 
 import pytest
-from prometheus_client import REGISTRY, CollectorRegistry, generate_latest
+from prometheus_client import REGISTRY, CollectorRegistry, generate_latest, multiprocess
 from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics
 from prometheus_client.registry import Collector
 
@@ -1106,11 +1108,72 @@ def test_the_router_cooldown_lookup_reaches_the_native_logger(monkeypatch: pytes
     assert native_text == python_text
 
 
-def test_multiprocess_mode_keeps_the_python_logger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_multiprocess_mode_runs_the_native_logger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(NATIVE_PROMETHEUS_ENV, "true")
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
 
-    assert not native_prometheus_enabled()
+    assert native_prometheus_enabled()
+
+
+_PID: Final = re.compile(r'pid="\d+"')
+MULTIPROCESS_CONFIGS: Final = (
+    "defaults",
+    "custom_labels_tags_stream_end_user",
+    "excludes_include_labels_and_series_cap",
+)
+
+
+async def _merged(logger: PrometheusLogger, line: tuple[object, ...]) -> str:
+    for kwargs in copy.deepcopy(CORPUS):
+        await _line(line, kwargs, "success")
+    outcomes: Final = await _direct_calls(logger, line)
+    registry: Final = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry)
+    return generate_latest(registry).decode() + "\n".join(outcomes) + "\n"
+
+
+def multiprocess_main(mode: Mode, config: str, output: str) -> None:
+    for name, value in CONFIGS[config].items():
+        setattr(litellm, name, copy.deepcopy(value))
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        text: Final = asyncio.run(_drive(mode, monkeypatch, _merged))
+    _ = Path(output).write_text(text)
+
+
+def _multiprocess_text(mode: Mode, config: str, tmp_path: Path) -> str:
+    directory: Final = tmp_path / mode
+    directory.mkdir()
+    output: Final = tmp_path / f"{mode}.txt"
+    environment: Final = {
+        key: value for key, value in os.environ.items() if key not in (NATIVE_PROMETHEUS_ENV, RECORD_ENV)
+    }
+    environment["PROMETHEUS_MULTIPROC_DIR"] = str(directory)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(Path(litellm.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]))
+    )
+    script: Final = (
+        "from tests.unit.integrations.test_prometheus_native_parity import multiprocess_main; "
+        f"multiprocess_main({mode!r}, {config!r}, {str(output)!r})"
+    )
+    finished: Final = subprocess.run(
+        [sys.executable, "-P", "-c", script], env=environment, capture_output=True, text=True, timeout=600
+    )
+    assert finished.returncode == 0, finished.stderr[-4000:]
+    return "\n".join(sorted(_PID.sub('pid="<pid>"', _masked(output.read_text())).splitlines()))
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("config", MULTIPROCESS_CONFIGS)
+def test_multiprocess_mode_writes_what_the_python_logger_writes_to_the_shared_directory(
+    config: str, mode: Mode, tmp_path: Path
+) -> None:
+    python_text: Final = str(
+        _python_side_sync(f"multiprocess/{config}", lambda: _multiprocess_text("python", config, tmp_path))
+    )
+    native_text: Final = _multiprocess_text(mode, config, tmp_path)
+
+    assert "litellm_spend_metric" in python_text or config.startswith("excludes")
+    assert native_text == python_text
 
 
 def _raised_line(error: BaseException) -> str:
