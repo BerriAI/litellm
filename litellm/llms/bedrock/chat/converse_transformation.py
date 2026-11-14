@@ -7,7 +7,7 @@ import json
 import re
 import time
 import types
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import chain, takewhile
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
@@ -234,12 +234,18 @@ def _is_guarded_text(part: object) -> bool:
     return message_field(part, "type") == "guarded_text"
 
 
-def _without_guarded_text_outside_user_turns(message: AllMessageValues) -> AllMessageValues:
+def _is_guarded_text_without_string_text(part: object) -> bool:
+    return _is_guarded_text(part) and not isinstance(message_field(part, "text"), str)
+
+
+def _without_parts_outside_user_turns(
+    message: AllMessageValues, left_out: Callable[[object], bool]
+) -> AllMessageValues:
     parts: Final = parts_of(message_field(message, "content"))
-    if message_field(message, "role") not in ("system", "assistant") or not any(map(_is_guarded_text, parts)):
+    if message_field(message, "role") not in ("system", "assistant") or not any(map(left_out, parts)):
         return message
     return cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
-        AllMessageValues, {**message, "content": [part for part in parts if not _is_guarded_text(part)]}
+        AllMessageValues, {**message, "content": [part for part in parts if not left_out(part)]}
     )
 
 
@@ -2354,13 +2360,17 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
+        left_out: Final = _is_guarded_text_without_string_text if can_send_guarded_text else _is_guarded_text
+        sendable_messages: Final = [_without_parts_outside_user_turns(message, left_out) for message in messages]
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
-            messages, _JSON_OBJECT.validate_python(optional_params)
+            sendable_messages, _JSON_OBJECT.validate_python(optional_params)
         )
         messages, system_content_blocks = self._transform_system_message(
-            list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
-            if can_send_guarded_text
-            else list(map(_without_guarded_text_outside_user_turns, messages)),
+            list(
+                _guarded_text_as_text_past_the_system_prompt(sendable_messages)
+                if keeps_full_input_check
+                else sendable_messages
+            ),
             model=capability_model,
             deployment_model=model,
         )
@@ -2448,13 +2458,17 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
+        left_out: Final = _is_guarded_text_without_string_text if can_send_guarded_text else _is_guarded_text
+        sendable_messages: Final = [_without_parts_outside_user_turns(message, left_out) for message in messages]
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
-            messages, _JSON_OBJECT.validate_python(optional_params)
+            sendable_messages, _JSON_OBJECT.validate_python(optional_params)
         )
         messages, system_content_blocks = self._transform_system_message(
-            list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
-            if can_send_guarded_text
-            else list(map(_without_guarded_text_outside_user_turns, messages)),
+            list(
+                _guarded_text_as_text_past_the_system_prompt(sendable_messages)
+                if keeps_full_input_check
+                else sendable_messages
+            ),
             model=capability_model,
             deployment_model=model,
         )

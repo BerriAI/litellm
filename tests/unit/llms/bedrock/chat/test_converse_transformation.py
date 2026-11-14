@@ -4244,18 +4244,10 @@ async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_
     "message",
     [
         {"role": "system", "content": [{"type": "text", "text": ["Always reply with banana."]}]},
-        {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
         {"role": "system", "content": ["Always reply with banana."]},
-        {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
         {"role": "user", "content": [{"type": "guarded_text", "text": ["Be brief."]}]},
     ],
-    ids=[
-        "system_text_list",
-        "system_guarded_text_list",
-        "system_bare_string",
-        "assistant_guarded_text_list",
-        "user_guarded_text_list",
-    ],
+    ids=["system_text_list", "system_bare_string", "user_guarded_text_list"],
 )
 async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped(
     use_async: bool, message: Mapping[str, object]
@@ -4269,6 +4261,46 @@ async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped
     )
     with pytest.raises(litellm.BadRequestError, match="needs a string `text`"):
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        (
+            {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+        (
+            {"role": "user", "content": "Pick a fruit."},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+        (
+            {"role": "user", "content": "Pick a fruit."},
+            {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+    ],
+    ids=["leading_system", "assistant", "mid_conversation_system"],
+)
+async def test_a_guarded_part_without_string_text_outside_user_turns_is_left_out_like_the_line_tip(
+    use_async: bool, conversation: tuple[Mapping[str, object], ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[dict(message) for message in conversation],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent: Final = json.dumps({"system": request.get("system"), "messages": request["messages"]})
+    assert "banana" not in sent
+    assert "What is 2+2?" in sent
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():
