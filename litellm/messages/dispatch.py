@@ -3,14 +3,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import detectors
+from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
+from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
-from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -22,7 +22,6 @@ from litellm.rust_bridge.public_call import (
     native_acall_hook,
     native_call,
     native_call_hook,
-    optional_sequence,
     optional_str,
     signature,
 )
@@ -66,7 +65,7 @@ def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -
             request_timeout=kwargs.get("request_timeout"),
             stream_timeout=kwargs.get("stream_timeout"),
         ),
-        stream=fields.get("stream") is True,
+        stream=bool(fields.get("stream")),
         custom_llm_provider=provider or "",
     )
     if timeout is None:
@@ -81,9 +80,7 @@ def _public_request(
     if fields is None:
         return None
     model: Final = fields.get("model")
-    messages: Final = optional_sequence(fields.get("messages"))
-    max_tokens: Final = fields.get("max_tokens")
-    if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
+    if not isinstance(model, str):
         return None
     return native_call(legacy, args, _native_kwargs(fields, kwargs))
 
@@ -133,30 +130,20 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
     return _route_target(model, resolved_model, resolved_provider, model_info, api_base, compacting=False)
 
 
-_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+_NATIVE_COMMON_FEATURES: Final = frozenset(
     {
-        **{feature: detect for feature, detect in detectors.COMMON.items() if feature is not Feature.TIMEOUT_VARIANTS},
-        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
-        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
-        Feature.MODIFY_PARAMS: detectors.modify_params,
-        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
-        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
-        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
-        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
-        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
+        Feature.TIMEOUT_VARIANTS,
+        Feature.LATEST_ALIAS,
+        Feature.MOCK_RESPONSE,
+        Feature.CALLER_CLIENT,
+        Feature.TLS_POLICY,
+        Feature.AGENTIC_LOOP_HOOK,
+        Feature.PROXY_MCP_TOOLS,
     }
 )
 
-_ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
-    {
-        **_FEATURES,
-        Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
-        Feature.FOUNDRY_BETA_ROW: route_detectors.foundry_beta_row,
-        Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
-        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
-    }
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES}
 )
 
 
@@ -181,32 +168,87 @@ _DISPATCH: Final = PublicDispatch(
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=lambda request: _context(request, _ASYNC_FEATURES),
+    context=lambda request: _context(request, _FEATURES),
 )
+
+
+def _unsupported_features(features: detectors.Detectors, request: NativeCall) -> tuple[str, ...]:
+    try:
+        return tuple(sorted(feature.value for feature in detectors.detected(features, request)))
+    except Exception:  # noqa: BLE001  # a failing detector names nothing, and the call is refused all the same
+        return ()
+
+
+def _checked_target(request: NativeCall, model: str, provider: str | None) -> Target | None:
+    try:
+        return _target(request, model, provider)
+    except Exception:  # noqa: BLE001  # the provider alone still decides whether the call has a Python path
+        return None
+
+
+def _rust_only_refusal(
+    legacy: inspect.Signature, features: detectors.Detectors, args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> UnsupportedParamsError | None:
+    if bind(legacy, args, kwargs) is None:
+        return None
+    request: Final = native_call(legacy, args, kwargs)
+    requested_model: Final = request.resolved.get("model")
+    if not isinstance(requested_model, str):
+        return None
+    model, provider = _resolved(request)
+    context: Final = RouteContext(
+        Route.MESSAGES, provider=provider, model=requested_model, target=_checked_target(request, model, provider)
+    )
+    if catalog.rollout(context) is not Rollout.RUST_REQUIRED:
+        return None
+    unsupported: Final = _unsupported_features(features, request)
+    return UnsupportedParamsError(
+        message=(
+            f"provider {provider} on /v1/messages runs only on the Rust path, which does not support "
+            f"{', '.join(unsupported) if unsupported else 'this call'}"
+        ),
+        llm_provider=provider,
+        model=requested_model,
+    )
+
+
+def _python_messages_handler(
+    *args: object,
+    **kwargs: object,  # kwargs-ok: forwards the public call shape
+) -> MessagesResult | Coroutine[object, object, MessagesResult]:
+    refusal: Final = _rust_only_refusal(_MESSAGES, _FEATURES, args, kwargs)
+    if refusal is not None:
+        raise refusal
+    return _PYTHON_MESSAGES(*args, **kwargs)
+
+
+async def _python_anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
+    refusal: Final = _rust_only_refusal(_AMESSAGES, _FEATURES, args, kwargs)
+    if refusal is not None:
+        raise refusal
+    return await _PYTHON_AMESSAGES(*args, **kwargs)
 
 
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
-    python: Final = _PYTHON_MESSAGES
     if _FLAG.requested(kwargs):
         return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         _FLAG.dropped(kwargs),
-        python=python,
+        python=_python_messages_handler,
         binding=NATIVE_MESSAGES,
         native=native_call_hook,
     )
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
-    python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
         _FLAG.dropped(kwargs),
-        python=python,
+        python=_python_anthropic_messages,
         binding=NATIVE_AMESSAGES,
         native=native_acall_hook,
     )

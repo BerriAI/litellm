@@ -148,6 +148,26 @@ def _respond(request: Request) -> Reply:
     assert request.method == "POST", request.method
     streaming: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
     tag: Final = uuid.uuid4().hex
+    if ":streamGenerateContent" in request.target:
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert "contents" in body and "messages" not in body, body
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(
+                _data_frame(
+                    {
+                        "candidates": [
+                            {"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}
+                        ],
+                        "usageMetadata": {
+                            "promptTokenCount": 1200,
+                            "candidatesTokenCount": 300,
+                            "totalTokenCount": 1500,
+                        },
+                    }
+                ),
+            ),
+        )
     if request.target.endswith("/chat/completions"):
         return (
             Reply(content_type="text/event-stream", chunks=_chat_stream(tag))
@@ -159,6 +179,8 @@ def _respond(request: Request) -> Reply:
             return Reply(content_type="text/event-stream", chunks=_responses_stream(tag))
         return Reply(body=json.dumps(_responses_response(tag)).encode())
     assert request.target.endswith("/v1/messages"), request.target
+    messages_body: Final = _JSON_OBJECT.validate_json(request.body)
+    assert "messages" in messages_body and "contents" not in messages_body, messages_body
     if streaming:
         return Reply(content_type="text/event-stream", chunks=_anthropic_stream(tag))
     return Reply(body=json.dumps(_anthropic_message(tag)).encode())
@@ -198,3 +220,46 @@ def test_request_is_billed_at_the_reported_list_cost(gateway: Gateway, path: str
         if not stream:
             assert float(response.headers["x-litellm-response-cost"]) == _approx(_LIST_COST)
         assert _logged_spend(response.headers["x-litellm-call-id"]) == _approx(_LIST_COST)
+
+
+@pytest.mark.parametrize(
+    ("model", "stream"),
+    (
+        ("opencode_go/minimax-m3", True),
+        ("opencode_go/minimax-m3", False),
+        ("opencode_go/minimax-m3.1-flash", True),
+        ("opencode_go/gemini-4-argon", True),
+    ),
+    ids=("messages-stream", "messages-non-stream", "openai-stream", "gemini-stream"),
+)
+def test_chat_completion_uses_go_model_stream_protocol(gateway: Gateway, model: str, stream: bool) -> None:
+    with wire_server(_respond) as wire, gateway.scenario() as scenario:
+        deployment: Final = scenario.model(model=model, api_base=wire.url, api_key="synthetic-go-key")
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _body("/v1/chat/completions", deployment, stream)
+        )
+        assert response.status_code == 200, response.text
+        if not stream:
+            body: Final = _JSON_OBJECT.validate_json(response.content)
+            nonstream_choices: Final = TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(body["choices"])
+            message: Final = _JSON_OBJECT.validate_python(nonstream_choices[0]["message"])
+            assert message["content"] == "ok", response.text
+            assert nonstream_choices[0]["finish_reason"] == "stop", response.text
+            return
+        events: Final = tuple(
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: {")
+        )
+        choice_groups: Final = tuple(
+            TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(event["choices"]) for event in events
+        )
+        choices: Final = tuple(group[0] for group in choice_groups if group)
+        deltas: Final = tuple(_JSON_OBJECT.validate_python(choice["delta"]) for choice in choices)
+        assert "".join(str(delta.get("content") or "") for delta in deltas) == "ok", response.text
+        assert tuple(choice["finish_reason"] for choice in choices if choice.get("finish_reason")) == ("stop",), (
+            response.text
+        )
+        assert response.text.rstrip().endswith("data: [DONE]"), response.text
+        if model == "opencode_go/minimax-m3":
+            assert _logged_spend(response.headers["x-litellm-call-id"]) == _approx(_LIST_COST)

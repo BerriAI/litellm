@@ -1,6 +1,6 @@
 """
 The Rust router core's Python side: ``RustCore`` (``core``) and the host-side modules router-core
-(litellm-rust/crates/router-core) reaches through its steps.
+(litellm/rust/crates/router-core) reaches through its steps.
 
 - ``steps``: answers to host steps that need live Python objects (strategies, pre-routing,
   pre-call facts, plugins, callbacks, caller access)

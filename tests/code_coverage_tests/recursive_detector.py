@@ -1,10 +1,17 @@
 import ast
 import os
+from itertools import filterfalse
+from typing import Final
+
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
+    "_count_anthropic_content",  # Nested server result mappings are bounded by DEFAULT_MAX_RECURSE_DEPTH.
     "remove_additional_properties",
     "remove_strict_from_schema",
     "filter_schema_fields",
@@ -57,6 +64,8 @@ IGNORE_FUNCTIONS = [
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "_opensearch_filter",  # OpenSearch: runs only on a filter pydantic validated, whose recursion guard stops at depth 255.
+    "_exact_filter",  # OpenSearch: runs only on a filter pydantic validated, whose recursion guard stops at depth 255.
     "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
     "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
     "_inlined",  # max depth set (_MAX_INLINE_DEPTH=32); passes the schema node through untouched at the cap. Walks a Pydantic JSON schema once at import time.
@@ -141,7 +150,9 @@ def find_recursive_functions_in_file(file_path):
 def find_recursive_functions_in_directory(directory):
     recursive_functions = {}
     ignored_recursive_functions = {}
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        if os.path.normpath(root) == os.path.normpath(directory):
+            dirs[:] = filterfalse(NON_SDK_SOURCE_DIRS.__contains__, dirs)
         for file in files:
             print("file: ", file)
             if file.endswith(".py"):
