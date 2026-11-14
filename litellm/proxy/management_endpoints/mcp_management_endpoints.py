@@ -748,13 +748,19 @@ if MCP_AVAILABLE:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
     def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
+        """True only for unrestricted ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` or
+        route-scoped admin keys return False.
 
         Global env var secrets pre-fill the admin edit form, so a full admin
-        must see them, but a read-only admin gets the same redacted view as
-        any other non-managing caller.
+        must see them, but a read-only admin or route-scoped key gets the same
+        redacted view as any other non-managing caller.
         """
-        return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            return False
+        allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
+        if isinstance(allowed_routes, list) and len(allowed_routes) > 0:
+            return False
+        return True
 
     def _resolve_credential_target_user_id(user_api_key_dict: UserAPIKeyAuth, requested_user_id: str | None) -> str:
         """The user whose stored MCP credential a request acts on.
@@ -779,16 +785,44 @@ if MCP_AVAILABLE:
             )
         return caller_user_id
 
+    def _has_explicit_mcp_management_route(allowed_routes: list[str]) -> bool:
+        """Check if allowed_routes explicitly grants access to MCP server management endpoints,
+        distinguishing server-management grants from inference routes (e.g. /v1/mcp/tools).
+        """
+        mcp_server_mgmt_exact: Final = {
+            "mcp_management_routes",
+            "management_routes",
+            "/v1/mcp/server",
+            "/v1/mcp/server/*",
+            "/v1/mcp/server/{path:path}",
+            "/v1/mcp/sessions",
+        }
+        for r in allowed_routes:
+            if r in mcp_server_mgmt_exact or r == "/v1/mcp/server" or r.startswith("/v1/mcp/server/"):
+                return True
+        return False
+
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
 
         We treat a requestor as a "restricted" virtual key if `allowed_routes`
         is a non-empty list. This matches the auth gate that blocks routes with
         the error: "Virtual key is not allowed to call this route...".
-        """
 
+        Admin roles (PROXY_ADMIN, PROXY_ADMIN_VIEW_ONLY) whose allowed_routes
+        explicitly grant MCP management access are treated as management viewers
+        (receiving non-admin sanitized views with governance metadata intact),
+        whereas inference-scoped virtual keys (e.g. allowed_routes=["llm_api_routes"])
+        remain on the minimal virtual-key discovery path.
+        """
         allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
-        return isinstance(allowed_routes, list) and len(allowed_routes) > 0
+        if not (isinstance(allowed_routes, list) and len(allowed_routes) > 0):
+            return False
+
+        if user_api_key_has_admin_view(user_api_key_dict) and _has_explicit_mcp_management_route(allowed_routes):
+            return False
+
+        return True
 
     def _sanitize_mcp_server_for_non_admin(
         mcp_server: LiteLLM_MCPServerTable,
