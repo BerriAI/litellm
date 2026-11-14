@@ -101883,4 +101883,28 @@
         "supports_reasoning": true,
         "supports_vision": true
     }
+    "cloudflare/@cf/thinkingmachines/inkling-2-small": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://developers.cloudflare.com/workers-ai/models/inkling-2-small/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "nebius/thinkingmachines/Inkling-2-Small": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 3e-07,
+        "cache_read_input_token_cost": 6e-08,
+        "output_cost_per_token": 1e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
 }
