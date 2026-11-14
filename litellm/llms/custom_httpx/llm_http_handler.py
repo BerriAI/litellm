@@ -126,6 +126,7 @@ from litellm.responses.streaming_iterator import (
     ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
+    ResponsesWsFrameCheck,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -6933,6 +6934,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_check: ResponsesWsFrameCheck | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6965,6 +6967,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                frame_check=frame_check,
                 **kwargs,
             )
             await handler.run()
