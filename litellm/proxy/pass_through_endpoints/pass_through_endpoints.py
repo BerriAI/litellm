@@ -6,7 +6,16 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -115,6 +124,11 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.callback_utils import strip_callback_config
+from litellm.proxy.common_utils.customer_usage import (
+    CUSTOMER_USAGE_METADATA_KEY,
+    ResolvedCustomerUsage,
+    customer_usage_fields,
+)
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -139,8 +153,10 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
+    check_customer_request_model_access,
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
     redact_credential_headers,
+    resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -158,8 +174,10 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     EndpointType,
     PassthroughStandardLoggingPayload,
     WebSocketSessionMeter,
@@ -278,6 +296,11 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     return headers
 
 
+class _AdapterCompletionRouter(Protocol):
+    @property
+    def aadapter_completion(self) -> Callable[..., Coroutine[object, object, object]]: ...
+
+
 async def chat_completion_pass_through_endpoint(
     fastapi_response: Response,
     request: Request,
@@ -368,7 +391,8 @@ async def chat_completion_pass_through_endpoint(
             and data["model"] is not None
             and llm_router.registry().resolve(data["model"], kind="recognized")
         ):
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -377,11 +401,13 @@ async def chat_completion_pass_through_endpoint(
                 or len(llm_router.registry().patterns().patterns) > 0
             )
         ):  # check for wildcard routes or default deployment before checking deployment_names
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif llm_router is not None and data["model"] in llm_router.registry().names(
             kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data, specific_deployment=True))
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -429,6 +455,20 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+_PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+)
+
+
+def _clear_pass_through_request_state(state: object) -> None:
+    for key in _PASS_THROUGH_REQUEST_STATE_KEYS:
+        if hasattr(state, key):
+            delattr(state, key)
 
 
 def _is_provider_payload(request: Request) -> bool:
@@ -678,6 +718,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         logging_obj: LiteLLMLoggingObj,
         _parsed_body: dict | None = None,
         litellm_call_id: str | None = None,
+        customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
         """
         Filter out litellm params from the request body
@@ -745,6 +786,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
         _metadata["user_api_key_metadata"] = _metadata["user_api_key_auth_metadata"]
         _metadata["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
+        if customer_usage is not None:
+            _metadata[CUSTOMER_USAGE_METADATA_KEY] = customer_usage.attribution.model_dump_json()
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and
@@ -781,6 +824,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
+        priced_model_info: Final = (
+            deployment_pricing.resolve(server_marker_free_body)
+            if isinstance(deployment_pricing, DeploymentPricingResolver)
+            else None
+        )
+        if priced_model_info is not None:
+            _metadata["model_info"] = dict(priced_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -1239,6 +1290,49 @@ def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
 
+def _check_customer_passthrough_model_access(
+    request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth, llm_router: litellm.Router | None
+) -> None:
+    if not auth.customer_model_scopes:
+        return
+    model: Final = get_model_from_request(
+        request_data=dict(body),
+        route=get_request_route(request),
+        request_headers=request.headers,
+        request_query_params=request.query_params,
+        llm_router=llm_router,
+        request=request,
+        team_id=auth.team_id,
+    )
+    check_customer_request_model_access({**body, "model": model}, auth, llm_router)
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomerPassthroughAuth:
+    auth: UserAPIKeyAuth
+    usage: ResolvedCustomerUsage | None
+
+
+async def _customer_passthrough_request_auth(
+    request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth
+) -> _CustomerPassthroughAuth:
+    from litellm.proxy.proxy_server import general_settings_view, llm_router
+
+    if request_dispatched_to_pass_through_endpoint(request):
+        return _CustomerPassthroughAuth(auth, None)
+    usage: Final = await resolve_customer_request_usage(
+        {
+            **customer_usage_fields(body.get("litellm_metadata")),
+            **customer_usage_fields(body.get("metadata")),
+        },
+        auth,
+        ledger_enabled=general_settings_view().get("use_spend_logs_ledger", True) is not False,
+    )
+    request_auth: Final = auth.with_customer_model_scopes(usage.model_scopes) if usage is not None else auth
+    _check_customer_passthrough_model_access(request, body, request_auth, llm_router)
+    return _CustomerPassthroughAuth(request_auth, usage)
+
+
 def _anthropic_user_id_to_forward(
     body: Mapping[str, object],
     url: str,
@@ -1273,6 +1367,27 @@ def _eu_jev_scoped_model_override(eu_jev_client_body: Mapping[str, object] | Non
     if eu_jev_client_body is None:
         return MappingProxyType({})
     return MappingProxyType({"model": eu_jev_scoped_model(eu_jev_client_body)})
+
+
+@dataclass(frozen=True, slots=True)
+class _PassthroughClientBody:
+    body: Mapping[str, object]
+    eu_jev_body: Mapping[str, object] | None
+
+
+def _prepare_passthrough_client_body(
+    body: Mapping[str, object], auth: UserAPIKeyAuth, custom_llm_provider: str | None
+) -> _PassthroughClientBody:
+    client_body: Final = dict(body)
+    strip_client_guardrail_information(client_body)
+    if not _key_or_team_allows_client_pricing_override(auth):
+        _strip_client_pricing_overrides(client_body)
+    eu_jev_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
+    scoped_body: Final = {**client_body, **_eu_jev_scoped_model_override(eu_jev_body)}
+    if custom_llm_provider in ("laya", "bespoke"):
+        checkpoint: Final = validate_oss_request(custom_llm_provider, scoped_body)
+        scoped_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+    return _PassthroughClientBody(scoped_body, eu_jev_body)
 
 
 async def pass_through_request(
@@ -1323,7 +1438,7 @@ async def pass_through_request(
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
     )
-    from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
+    from litellm.proxy.proxy_server import llm_router, proxy_config, proxy_logging_obj
 
     #########################################################
     # Initialize variables
@@ -1395,20 +1510,13 @@ async def pass_through_request(
             _parsed_body,
         )
 
-        client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-        strip_client_guardrail_information(client_body)
-        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            _strip_client_pricing_overrides(client_body)
-        eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
-        scoped_client_body: Final = {
-            **client_body,
-            **_eu_jev_scoped_model_override(eu_jev_client_body),
-        }
-        _parsed_body = scoped_client_body
-        if custom_llm_provider in ("laya", "bespoke"):
-            decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
-            checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
-            _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+        client_body: Final = _prepare_passthrough_client_body(
+            TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), user_api_key_dict, custom_llm_provider
+        )
+        _parsed_body = dict(client_body.body)
+
+        customer_request: Final = await _customer_passthrough_request_auth(request, client_body.body, user_api_key_dict)
+        user_api_key_dict = customer_request.auth  # rebind-ok: customer scopes stay request-local
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
@@ -1475,6 +1583,9 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             endpoint_type=endpoint_type,
         )
+        _check_customer_passthrough_model_access(
+            request, TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), user_api_key_dict, llm_router
+        )
         if custom_llm_provider in ("laya", "bespoke"):
             hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
             hook_model: Final = hook_body.get("model")
@@ -1488,10 +1599,10 @@ async def pass_through_request(
             )
             _ = validate_oss_request(custom_llm_provider, decision_body)
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
-        if eu_jev_client_body is not None:
+        if client_body.eu_jev_body is not None:
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(  # rebind-ok: body is rebound per stage
                 eu_jev_upstream_body(
-                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), eu_jev_client_body
+                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), client_body.eu_jev_body
                 )
             )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
@@ -1517,6 +1628,7 @@ async def pass_through_request(
             litellm_call_id=litellm_call_id,
             request=request,
             logging_obj=logging_obj,
+            customer_usage=customer_request.usage,
         )
 
         # Store custom_llm_provider in kwargs and logging object if provided
@@ -2519,12 +2631,7 @@ def create_pass_through_route(
                         keep_target_query=keep_target_query,
                     )
                 finally:
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
-                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
-                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
+                    _clear_pass_through_request_state(request.state)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
@@ -4712,7 +4819,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4945,7 +5052,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -4993,7 +5100,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 

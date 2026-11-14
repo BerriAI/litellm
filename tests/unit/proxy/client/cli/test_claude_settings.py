@@ -3,6 +3,7 @@ import os
 import pathlib
 import shlex
 import stat
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -22,9 +23,11 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
     CONFIGURE_STATE_PATH,
+    LAUNCH_KEY_OVERLAY_PREFIX,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
+    ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
     SettingsFileOwner,
@@ -35,7 +38,12 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     configure_claude_settings,
     install_statusline_script,
     configure_state_path,
+    installed_executable,
+    is_lite_api_key_helper,
+    is_lite_api_key_helper_for,
+    lite_api_key_helper,
     merge_claude_settings,
+    remove_launch_settings_files,
     statusline_command,
     unconfigure_claude_settings,
     with_status_line,
@@ -163,6 +171,141 @@ class TestConfigureClaudeSettings:
         finally:
             settings_path.parent.chmod(0o700)
         assert not settings_path.exists()
+
+
+class TestLiteApiKeyHelper:
+    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+    def test_sh_runs_the_lite_on_path_against_this_proxy(self, tmp_path):
+        lite = tmp_path / "my tools" / "lite"
+        lite.parent.mkdir()
+        lite.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n')
+        lite.chmod(0o700)
+
+        helper = lite_api_key_helper("https://proxy.example.com/", platform="linux", which=lambda name: str(lite))
+
+        assert helper is not None
+        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True, check=True)
+        assert ran.stdout.splitlines() == [str(lite), "--base-url", "https://proxy.example.com", "auth", "print-token"]
+
+    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+    def test_a_lite_found_through_a_relative_path_entry_keeps_running_from_any_directory(self, tmp_path, monkeypatch):
+        for repo, name in ((tmp_path / "login-dir", "mine"), (tmp_path / "other-repo", "planted")):
+            lite = repo / "bin" / "lite"
+            lite.parent.mkdir(parents=True)
+            lite.write_text(f"#!/bin/sh\necho {name}\n")
+            lite.chmod(0o700)
+        monkeypatch.chdir(tmp_path / "login-dir")
+
+        helper = lite_api_key_helper("https://proxy.example.com", platform="linux", which=lambda name: "bin/lite")
+
+        assert helper is not None
+        ran = subprocess.run(
+            ["sh", "-c", helper.command], cwd=tmp_path / "other-repo", capture_output=True, text=True, check=True
+        )
+        assert ran.stdout == "mine\n"
+
+    def test_quotes_every_token_for_cmd_on_windows(self):
+        helper = lite_api_key_helper(
+            "https://proxy.example.com", platform="win32", which=lambda name: r"C:\Program Files\lite\lite.exe"
+        )
+
+        assert helper is not None
+        assert helper.command == (
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"'
+        )
+
+    def test_no_lite_on_path_means_no_helper(self):
+        assert lite_api_key_helper("https://proxy.example.com", which=lambda name: None) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token",
+            "'/home/me/my tools/lite' --base-url https://other.example.com auth print-token",
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"',
+        ],
+        ids=["posix", "posix-quoted-path", "windows"],
+    )
+    def test_recognizes_a_helper_any_lite_wrote_for_any_proxy(self, command):
+        assert is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        ["/opt/mine/helper", "/usr/local/bin/lite auth print-token --verbose", "", None, ["lite", "auth", "print-token"]],
+        ids=["users-own-helper", "other-trailing-args", "disabled", "unset", "not-a-string"],
+    )
+    def test_leaves_every_other_helper_alone(self, command):
+        assert not is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        ("command", "matches"),
+        [
+            ("/usr/local/bin/lite --base-url https://proxy.example.com auth print-token", True),
+            ("'/home/me/my tools/lite' --base-url https://proxy.example.com auth print-token", True),
+            (r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"', True),
+            ("/usr/local/bin/lite --base-url https://other.example.com auth print-token", False),
+            ("/usr/local/bin/lite --base-url https://proxy.example.com/v2 auth print-token", False),
+            ("/opt/mine/helper", False),
+            (None, False),
+        ],
+        ids=["posix", "posix-quoted-path", "windows", "other-proxy", "other-path-on-the-proxy", "users-own", "unset"],
+    )
+    def test_matches_a_helper_any_lite_wrote_for_this_proxy_only(self, command, matches):
+        assert is_lite_api_key_helper_for(command, "https://proxy.example.com/") is matches
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+class TestInstalledExecutable:
+    @staticmethod
+    def _script(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o700)
+
+    def test_the_helper_runs_the_lite_installed_beside_this_python_over_a_shim_earlier_on_path(
+        self, tmp_path, monkeypatch
+    ):
+        self._script(tmp_path / "shims" / "lite", "echo 'pyenv: lite: command not found' >&2; exit 127")
+        self._script(tmp_path / "venv" / "bin" / "lite", "echo real")
+        monkeypatch.setenv("PATH", f"{tmp_path / 'shims'}{os.pathsep}{os.environ['PATH']}")
+
+        helper = lite_api_key_helper(
+            "https://proxy.example.com",
+            platform="linux",
+            which=lambda name: installed_executable(name, scripts_dir=str(tmp_path / "venv" / "bin")),
+        )
+
+        assert helper is not None
+        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True)
+        assert (ran.returncode, ran.stdout) == (0, "real\n")
+
+    def test_falls_back_to_path_when_this_python_has_no_lite(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.setenv("PATH", str(tmp_path / "pipx"))
+
+        assert installed_executable("lite", scripts_dir=str(tmp_path / "venv" / "bin")) == str(tmp_path / "pipx" / "lite")
+
+    def test_a_lite_planted_in_the_working_directory_never_becomes_the_helper(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "repo" / "lite", "echo planted")
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path / "repo")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "bin"), environ={"PATH": f"{os.pathsep}{tmp_path / 'pipx'}"}
+        )
+
+        assert found == str(tmp_path / "pipx" / "lite")
+
+    def test_finds_the_lite_exe_launcher_a_windows_python_installs(self, tmp_path):
+        self._script(tmp_path / "venv" / "Scripts" / "lite.exe", "")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "Scripts"), environ={"PATH": ""}, platform="win32"
+        )
+
+        assert found == str(tmp_path / "venv" / "Scripts" / "lite.exe")
 
 
 class TestConflictingOwnersOfTheSettingsFile:
@@ -313,6 +456,14 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
+    def test_a_helper_lands_top_level_and_blanks_the_token_a_shell_export_would_win_with(self):
+        settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-expired-login", "ANTHROPIC_API_KEY": "leaked"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
+        assert merged["apiKeyHelper"] == HELPER.command
+        assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
+        assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
+        assert "ANTHROPIC_API_KEY" not in merged["env"]
+
     def test_keeps_existing_switch_values_and_unrelated_keys_without_mutating_the_input(self):
         settings = {"theme": "dark", "env": {"SOME_OTHER_VAR": "value", "ENABLE_TOOL_SEARCH": "false"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000", StaticToken("token-abc"))
@@ -374,6 +525,7 @@ class TestMergeClaudeSettings:
 PROXY = "http://127.0.0.1:4000"
 ANTHROPIC = "https://api.anthropic.com"
 RELOGIN = StaticToken("sk-fresh-login")
+HELPER = ApiKeyHelper("/usr/local/bin/lite --base-url http://127.0.0.1:4000 auth print-token")
 ORIGINAL = {
     "theme": "dark",
     "permissions": {"allow": ["Bash"]},
@@ -432,6 +584,15 @@ class _Rig:
 # to be one test each; the receipt's rules are what make them all come out right.
 UNDO_SCENARIOS = {
     "plain round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}),
+    "helper round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}, {"credential": HELPER, "model": KeepModel()}),
+    "helper with no file before": (None, [], None, {"file_removed": True}, {"credential": HELPER}),
+    "re-logins switching between the token and the helper keep the first snapshot": (
+        ORIGINAL,
+        [{"credential": HELPER, "model": KeepModel()}, {"credential": RELOGIN, "model": KeepModel()}],
+        ORIGINAL,
+        {"kept": ()},
+        {"credential": HELPER, "model": KeepModel()},
+    ),
     "no file before": (None, [], None, {"file_removed": True}),
     "no env before": ({"theme": "dark"}, [], {"theme": "dark"}, {}),
     "null env before": ({"theme": "dark", "env": None}, [], {"theme": "dark", "env": None}, {}),
@@ -973,3 +1134,21 @@ class TestStatusLine:
         assert "ANTHROPIC_AUTH_TOKEN" not in restored.get("env", {})
         assert restored["statusLine"]["command"] == statusline_command(script)
         assert "statusLine" not in outcome.restored
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a directory its owner cannot write")
+def test_a_key_file_that_cannot_be_removed_is_named_so_the_user_can_delete_it(tmp_path, capsys):
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    stuck = config_dir / f"{LAUNCH_KEY_OVERLAY_PREFIX}0123456789abcdef.json"
+    stuck.write_text("{}")
+    config_dir.chmod(0o500)
+    try:
+        remove_launch_settings_files(config_dir)
+    finally:
+        config_dir.chmod(0o700)
+
+    output = capsys.readouterr()
+    assert stuck.exists()
+    assert str(stuck) in output.err
+    assert "Removed" not in output.out

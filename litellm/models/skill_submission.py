@@ -11,7 +11,7 @@ from litellm.models.plugin_upload import (
 )
 from litellm.types.proxy.skill_scanning import SkillScan
 
-SubmissionStatus: TypeAlias = Literal["pending_review", "approved", "rejected"]
+SubmissionStatus: TypeAlias = Literal["pending_review", "approved", "rejected", "withdrawn"]
 SubmissionOperation: TypeAlias = Literal["create", "update"]
 
 
@@ -38,6 +38,7 @@ class SkillSubmission:
     reviewed_by: str | None
     reviewed_at: datetime | None
     rejection_reason: str | None
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,14 @@ class SkillSubmissionStore(Protocol):
 
     async def get_archive(self, submission_id: str, submitted_by: str | None) -> bytes | None: ...
 
+    async def edit(
+        self, submission_id: str, owner: str, revision: int, upload: PluginPublication
+    ) -> SkillSubmission | SubmissionMissing | SubmissionConflict | SubmissionLimitExceeded: ...
+
+    async def withdraw(
+        self, submission_id: str, owner: str, revision: int
+    ) -> SkillSubmission | SubmissionMissing | SubmissionConflict: ...
+
     async def review(
         self,
         submission_id: str,
@@ -107,4 +116,5 @@ class SkillSubmissionStore(Protocol):
         reason: str | None,
         *,
         publication_base_url: str | None = None,
+        expected_revision: int | None = None,
     ) -> SubmissionReviewResult: ...

@@ -35,6 +35,8 @@ from litellm.llms.anthropic.messages.native.utils import (
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    object_mapping,
+    openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -588,10 +590,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
     @staticmethod
-    def _resolve_output_format_strict(strict: bool | None) -> bool:
-        if strict is None:
-            return True
-        return strict
+    def _resolve_output_format_strict(strict: object) -> bool:
+        return True if strict is None else bool(strict)
 
     def translate_request(
         self,
@@ -690,19 +690,23 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
         # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format: object = anthropic_request.get("output_format")
-        output_config = anthropic_request.get("output_config")
-        if not isinstance(output_format, dict) and isinstance(output_config, dict):
-            output_format = output_config.get("format")
-        if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
+        output_config_object: Final = object_mapping(anthropic_request.get("output_config"))
+        top_level_output_format: Final = object_mapping(anthropic_request.get("output_format"))
+        output_format: Final = (
+            top_level_output_format
+            if top_level_output_format is not None or output_config_object is None
+            else object_mapping(output_config_object.get("format"))
+        )
+        if output_format is not None and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
+                output_strict: Final = self._resolve_output_format_strict(output_format.get("strict"))
                 responses_kwargs["text"] = {
                     "format": {
                         "type": "json_schema",
                         "name": "structured_output",
-                        "schema": schema,
-                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
+                        "schema": openai_strict_json_schema(schema) if output_strict else schema,
+                        "strict": output_strict,
                     }
                 }
 

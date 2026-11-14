@@ -19,6 +19,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
@@ -42,13 +43,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     error_status_code,
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
@@ -307,6 +309,7 @@ class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+    count_options: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
@@ -316,6 +319,12 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
         "context_management": data.get("context_management"),
         "request_litellm_params": MappingProxyType(
             {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
+        "count_options": MappingProxyType(
+            without_dropped_paths(
+                {name: data[name] for name in COUNT_TOKEN_OPTION_NAMES if name in data},
+                data.get("additional_drop_params"),
+            )
         ),
     }
 
@@ -336,6 +345,7 @@ def _provider_context_management(response: TokenCountResponse) -> Mapping[str, o
 )
 async def count_tokens(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -358,9 +368,17 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _count_tokens(request, user_api_key_dict, litellm_call_id), litellm_call_id, request, fastapi_response
+    )
+
+
+async def _count_tokens(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, litellm_call_id: str
+) -> JSONResponse | Mapping[str, object]:
     from litellm.proxy.proxy_server import count_request_tokens, llm_router, proxy_config
 
-    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         request_data: Final = await read_request_body(request=request)
         data: Final[dict] = {**request_data}
@@ -389,7 +407,9 @@ async def count_tokens(
         )
         if isinstance(token_request, ProxyException):
             return rejected_token_count(
-                _anthropic_error_json_response(token_request, request), litellm_call_id, request_model
+                _anthropic_error_json_response(with_litellm_call_id(token_request, litellm_call_id), request),
+                litellm_call_id,
+                request_model,
             )
 
         token_response: Final = await count_request_tokens(
@@ -401,13 +421,17 @@ async def count_tokens(
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
-        return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
+        return _anthropic_error_json_response(
+            with_litellm_call_id(proxy_exception_from_http_exception(e, {}), litellm_call_id), request
+        )
     except ProxyException as e:
-        return _anthropic_error_json_response(e, request)
+        return _anthropic_error_json_response(with_litellm_call_id(e, litellm_call_id), request)
     except Exception as e:
         answered: Final = with_answered_status(e)
         log_llm_api_exception(answered, litellm_call_id)
-        return _anthropic_error_json_response(proxy_exception_from_route_error(answered), request)
+        return _anthropic_error_json_response(
+            with_litellm_call_id(proxy_exception_from_route_error(answered), litellm_call_id), request
+        )
     else:
         return {
             "input_tokens": token_response.total_tokens,

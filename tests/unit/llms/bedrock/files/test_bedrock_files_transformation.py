@@ -9,6 +9,7 @@ from contextlib import AsyncExitStack, closing
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
@@ -97,6 +98,234 @@ class TestBedrockFilesTransformation:
         model_input: Final = json.dumps(result[0]["modelInput"])
         assert "_litellm_undeclared_sentinel" not in model_input, model_input
         assert result[0]["modelInput"]["max_tokens"] == 10
+
+    @staticmethod
+    def _nova_row(
+        url: str = "/v1/chat/completions",
+        model: str = "us.amazon.nova-pro-v1:0",
+        body_params: Mapping[str, object] = MappingProxyType({}),
+    ) -> Mapping[str, object]:
+        prompt: Final = {"input": "hi"} if url == "/v1/responses" else {"messages": [{"role": "user", "content": "hi"}]}
+        return {
+            "custom_id": "nova-tier-1",
+            "method": "POST",
+            "url": url,
+            "body": {"model": model, **prompt, **body_params},
+        }
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_nova_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": tier})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "priority", "standard_only"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_with_a_service_tier_fails_the_row_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_level_drop_params_drops_the_service_tier(self, url: str, tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, body_params={"service_tier": tier, "drop_params": True})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+        assert "drop_params" not in json.dumps(result[0]["modelInput"])
+
+    def test_nova_row_service_tier_drops_under_global_drop_params(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": "reserved"})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    def test_deployment_drop_params_drops_the_service_tier_from_the_uploaded_nova_rows(self, tier: str):
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model="us.amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": (
+                    "batch.jsonl",
+                    json.dumps(self._nova_row(body_params={"service_tier": tier})).encode(),
+                    "application/jsonl",
+                ),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": True},
+        )
+
+        assert isinstance(request, dict)
+        uploaded_row: Final = json.loads(request["data"])
+        assert uploaded_row["modelInput"]["messages"]
+        assert "serviceTier" not in uploaded_row["modelInput"]
+
+    @pytest.mark.parametrize("drop_params, drops", [(False, False), ("false", False), (True, True), ("true", True)])
+    def test_deployment_drop_params_decides_whether_a_claude_row_tier_fails_or_drops(
+        self, drop_params: bool | str, drops: bool
+    ):
+        claude_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        row: Final = {
+            "custom_id": "claude-tier-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": claude_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "service_tier": "ultrafast",
+            },
+        }
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model=claude_model,
+                create_file_data={
+                    "file": ("batch.jsonl", json.dumps(row).encode(), "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="service_tier"):
+                upload()
+            return
+
+        model_input: Final = upload()["modelInput"]
+        assert model_input["messages"]
+        assert "service_tier" not in json.dumps(model_input)
+        assert "serviceTier" not in model_input
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    body_params={"service_tier": tier, "max_tokens": 10},
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["messages"]
+        assert "service_tier" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize("drop_params, drops", [(True, True), ("true", True), (False, False), ("false", False)])
+    @pytest.mark.parametrize(
+        "model", ["us.anthropic.claude-haiku-4-5-20251001-v1:0", "openai.gpt-oss-120b-1:0", "us.amazon.nova-pro-v1:0"]
+    )
+    def test_row_level_drop_params_decides_whether_a_rejected_tier_fails_or_drops_for_every_row_format(
+        self, model: str, drop_params: bool | str, drops: bool
+    ):
+        rows: Final = [
+            self._nova_row(
+                model=model, body_params={"service_tier": "ultrafast", "drop_params": drop_params, "max_tokens": 10}
+            )
+        ]
+
+        if not drops:
+            with pytest.raises(litellm.UnsupportedParamsError, match="service_tier='ultrafast'"):
+                BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+            return
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+        assert result[0]["modelInput"]["messages"]
+        assert "ultrafast" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize(
+        "tier, bedrock_tier",
+        [("priority", "priority"), ("Flex", "flex"), ("standard", "default"), ("default", "default")],
+    )
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_forwards_a_tier_its_invoke_body_takes(self, url: str, tier: str, bedrock_tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert result[0]["modelInput"]["service_tier"] == bedrock_tier
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_openai_format_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert "service_tier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "scale"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_with_a_tier_bedrock_rejects_fails_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, "openai.gpt-oss-120b-1:0", {"drop_params": True})]
+        )
+
+        assert "drop_params" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        "row_drop_params, deployment_drop_params, drops",
+        [(True, False, True), ("true", False, True), (None, True, True), (None, False, False), ("false", False, False)],
+    )
+    def test_drop_params_decides_whether_a_param_nova_rejects_fails_or_drops_from_an_uploaded_nova_row(
+        self, row_drop_params: bool | str | None, deployment_drop_params: bool, drops: bool
+    ):
+        tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+        row_params: Final = {
+            "tools": [tool],
+            "tool_choice": "none",
+            **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+        }
+        row_bytes: Final = json.dumps(self._nova_row(body_params=row_params)).encode()
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model="us.amazon.nova-pro-v1:0",
+                create_file_data={"file": ("batch.jsonl", row_bytes, "application/jsonl"), "purpose": "batch"},
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": deployment_drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="tool_choice"):
+                upload()
+            return
+
+        tool_config: Final = upload()["modelInput"]["toolConfig"]
+        assert tool_config["tools"]
+        assert "toolChoice" not in tool_config
 
     def test_nova_text_only_uses_converse_format(self):
         """
