@@ -31,13 +31,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   createMobileSidebarHandle,
   MobileSidebarTrigger,
   ShellSidebar,
   useCloseMobileSidebarOn,
+  useShellSidebar,
 } from "@/components/shared/MobileSidebar";
 import {
   navMenuButtonClassName,
@@ -121,15 +121,14 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
   const handleLogout = useLogout(accessToken);
-  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
-  const collapsed = state === "collapsed" && !isMobile;
+  const { isDesktop, collapsed, setOpen, setOpenMobile } = useShellSidebar();
   useCloseMobileSidebarOn();
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileNavigationHandle] = useState(createMobileSidebarHandle);
   const shortcut = useShortcutLabel();
   const openSearch = () => {
-    if (isMobile) setOpenMobile(true);
-    else setOpen(true);
+    setOpen(true);
+    if (!isDesktop) setOpenMobile(true);
     setSearchOpen(true);
   };
   useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });

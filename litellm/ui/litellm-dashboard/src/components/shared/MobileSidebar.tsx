@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, type UIEvent, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,11 +22,50 @@ export function MobileSidebarTrigger({ label, handle }: { label: string; handle:
   );
 }
 
+const DESKTOP_QUERY = "(min-width: 768px)";
+
+const subscribeToDesktopQuery = (onChange: () => void) => {
+  const media = window.matchMedia(DESKTOP_QUERY);
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
+};
+
+const useIsDesktop = (): boolean =>
+  useSyncExternalStore(
+    subscribeToDesktopQuery,
+    () => window.matchMedia(DESKTOP_QUERY).matches,
+    () => false,
+  );
+
+export function useShellSidebar() {
+  const sidebar = useSidebar();
+  const isDesktop = useIsDesktop();
+  const drawerOpen = !isDesktop && sidebar.openMobile;
+  const inDrawer = sidebar.isMobile || drawerOpen;
+  return { ...sidebar, isDesktop, drawerOpen, inDrawer, collapsed: sidebar.state === "collapsed" && !inDrawer };
+}
+
 export function useCloseMobileSidebarOn(navigationKey?: string) {
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, isDesktop, setOpenMobile } = useShellSidebar();
   useEffect(() => {
     setOpenMobile(false);
-  }, [navigationKey, isMobile, setOpenMobile]);
+  }, [navigationKey, isMobile, isDesktop, setOpenMobile]);
+}
+
+const SCROLL_VIEWPORT_SLOT = "scroll-area-viewport";
+
+function useScrollMemory() {
+  const scrollTop = useRef(0);
+  const remember = useCallback((event: UIEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.slot === SCROLL_VIEWPORT_SLOT) {
+      scrollTop.current = event.target.scrollTop;
+    }
+  }, []);
+  const restore = useCallback((node: HTMLDivElement | null) => {
+    const viewport = node?.querySelector<HTMLElement>(`[data-slot="${SCROLL_VIEWPORT_SLOT}"]`);
+    if (viewport) viewport.scrollTop = scrollTop.current;
+  }, []);
+  return { ref: restore, onScrollCapture: remember };
 }
 
 interface ShellSidebarProps {
@@ -35,6 +74,7 @@ interface ShellSidebarProps {
   sheetTitle: string;
   sheetDescription?: string;
   sheetInitialFocus?: false;
+  keepScrollAcrossBreakpoint?: boolean;
   children: ReactNode;
 }
 
@@ -44,13 +84,16 @@ export function ShellSidebar({
   sheetTitle,
   sheetDescription,
   sheetInitialFocus,
+  keepScrollAcrossBreakpoint = false,
   children,
 }: ShellSidebarProps) {
-  const { isMobile, openMobile, setOpenMobile } = useSidebar();
+  const { isMobile, drawerOpen, setOpenMobile } = useShellSidebar();
+  const scrollMemory = useScrollMemory();
   return (
     <>
       {!isMobile && (
         <Sidebar
+          {...(keepScrollAcrossBreakpoint ? scrollMemory : undefined)}
           collapsible="icon"
           role="complementary"
           aria-label={label}
@@ -59,7 +102,7 @@ export function ShellSidebar({
           {children}
         </Sidebar>
       )}
-      <Sheet handle={handle} open={isMobile && openMobile} onOpenChange={setOpenMobile}>
+      <Sheet handle={handle} open={drawerOpen} onOpenChange={setOpenMobile}>
         <SheetContent
           side="left"
           initialFocus={sheetInitialFocus}

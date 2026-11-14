@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { stubViewportMatchMedia } from "@/../tests/viewport";
 import type { ReactElement } from "react";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import ChatShell from "./ChatShell";
@@ -41,6 +42,7 @@ vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => mockLogou
 
 describe("ChatShell", () => {
   beforeEach(() => {
+    stubViewportMatchMedia();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Response.json({ values: {} })),
@@ -210,6 +212,23 @@ describe("ChatShell", () => {
     expect(await screen.findByRole("dialog", { name: "Search conversations" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
+    expect(await screen.findByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("should expand the desktop rail when search was opened at phone width", async () => {
+    const resizeTo = stubViewportMatchMedia();
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    await resizeTo(390);
+    fireEvent.keyDown(document, { key: "k", code: "KeyK", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Search conversations" })).toHaveFocus());
+    await user.keyboard("{Escape}");
+    await resizeTo(1280);
     expect(await screen.findByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
   });
 

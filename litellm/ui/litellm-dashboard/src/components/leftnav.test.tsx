@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
+import { stubViewportMatchMedia } from "../../tests/viewport";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -788,6 +789,43 @@ describe("Sidebar (leftnav)", () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
     expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open navigation" })).toBeInTheDocument();
+  });
+
+  it("treats a fractional width just below the desktop breakpoint as phone width", async () => {
+    const resizeTo = stubViewportMatchMedia();
+    vi.stubGlobal("innerWidth", 1280);
+    renderWithProviders(<PhoneShell />);
+    const drawer = () => screen.queryByRole("dialog", { name: "Navigation" });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    await resizeTo(767.2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    const opened = await screen.findByRole("dialog", { name: "Navigation" });
+    fireEvent.click(within(opened).getByRole("button", { name: "Collapse sidebar" }));
+    await waitFor(() => expect(drawer()).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    await screen.findByRole("dialog", { name: "Navigation" });
+    await resizeTo(1280);
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
+    await resizeTo(767.2);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it("keeps the desktop nav scroll position after the window narrows to phone width and widens again", async () => {
+    const resizeTo = stubViewportMatchMedia();
+    vi.stubGlobal("innerWidth", 1280);
+    renderWithProviders(<PhoneShell />);
+    const navViewport = () => document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    const scrolled = navViewport();
+    if (!scrolled) throw new Error("desktop nav viewport not rendered");
+    scrolled.scrollTop = 500;
+    fireEvent.scroll(scrolled);
+    await resizeTo(390);
+    expect(navViewport()).toBeNull();
+    await resizeTo(1280);
+    expect(navViewport()?.scrollTop).toBe(500);
   });
 
   it("marks Home active at the dashboard root", () => {

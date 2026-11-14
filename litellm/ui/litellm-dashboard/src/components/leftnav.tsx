@@ -1,5 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
-import { type MobileSidebarHandle, ShellSidebar } from "@/components/shared/MobileSidebar";
+import { type MobileSidebarHandle, ShellSidebar, useShellSidebar } from "@/components/shared/MobileSidebar";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -19,7 +19,6 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarSeparator,
-  useSidebar,
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -608,8 +607,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
-  const { state, isMobile, openMobile, setOpen, setOpenMobile } = useSidebar();
-  const collapsed = state === "collapsed" && !isMobile;
+  const { inDrawer, collapsed, openMobile, setOpen, setOpenMobile } = useShellSidebar();
   const closeMobileSidebarOnLinkClick = (event: MouseEvent) => {
     if (event.target instanceof Element && event.target.closest("a[href]")) setOpenMobile(false);
   };
@@ -624,8 +622,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
     setDrawerWasOpen(openMobile);
     if (openMobile) setDrawerOpenGroups(groupsOpenFor(currentRoute));
   }
-  const shownGroups = isMobile ? drawerOpenGroups : openGroups;
-  const setShownGroups = isMobile ? setDrawerOpenGroups : setOpenGroups;
+  const shownGroups = inDrawer ? drawerOpenGroups : openGroups;
+  const setShownGroups = inDrawer ? setDrawerOpenGroups : setOpenGroups;
 
   // Keep the active page's parent group expanded as the user navigates, using the
   // "adjust state during render" pattern rather than an effect (avoids a
@@ -753,7 +751,11 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   return (
-    <ShellSidebar handle={mobileNavigationHandle} sheetTitle={t("shell.dashboardShell.navigation")}>
+    <ShellSidebar
+      handle={mobileNavigationHandle}
+      sheetTitle={t("shell.dashboardShell.navigation")}
+      keepScrollAcrossBreakpoint
+    >
       <div className="contents" onClickCapture={closeMobileSidebarOnLinkClick}>
         <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
