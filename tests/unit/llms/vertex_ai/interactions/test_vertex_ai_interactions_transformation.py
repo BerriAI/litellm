@@ -238,7 +238,7 @@ class TestInteractionByIdRequests:
             headers={},
         )
 
-        assert url == f"{GLOBAL_BASE}/abc123:cancel"
+        assert url == f"{GLOBAL_BASE}/abc123/cancel"
         assert request_body == {}
 
 
