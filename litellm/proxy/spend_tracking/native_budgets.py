@@ -169,7 +169,12 @@ _NATIVE_CALL_TYPES: Final = frozenset(
         CallTypes.aanthropic_messages,
         CallTypes.responses,
         CallTypes.aresponses,
+        CallTypes.create_batch,
+        CallTypes.acreate_batch,
     }
+)
+_NATIVE_ROUTES: Final = frozenset(
+    {"/realtime/client_secrets", "/v1/realtime/client_secrets", "/openai/v1/realtime/client_secrets"}
 )
 
 
@@ -200,6 +205,8 @@ _CHECK: Final[TypeAdapter[BudgetCheck]] = TypeAdapter(BudgetCheck)
 
 
 def native_budget_route(route: str) -> bool:
+    if route in _NATIVE_ROUTES:
+        return True
     call_types: Final = get_call_types_for_route(route) or ()
     return any(call_type in _NATIVE_CALL_TYPES for call_type in call_types)
 

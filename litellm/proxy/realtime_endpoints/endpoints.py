@@ -424,6 +424,9 @@ async def create_realtime_client_secret(
         upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
+        from litellm.proxy.spend_tracking.native_budgets import raise_native_admission_refusal
+
+        await raise_native_admission_refusal(e)
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,

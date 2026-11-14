@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_res
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.router import Router
 from litellm.types.utils import CallTypesLiteral
 
 API_KEY: Final = "sk-native-path"
@@ -74,8 +75,8 @@ def _use_native(proxy: Proxy, native: bool) -> None:
         native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
 
 
-def _request(path: str = "/v1/chat/completions") -> Request:
-    raw: Final = json.dumps(BODY).encode()
+def _request(path: str = "/v1/chat/completions", body: Mapping[str, object] = BODY) -> Request:
+    raw: Final = json.dumps(body).encode()
 
     async def receive() -> Mapping[str, object]:
         return {"type": "http.request", "body": raw, "more_body": False}
@@ -96,7 +97,9 @@ def _request(path: str = "/v1/chat/completions") -> Request:
     )
 
 
-async def _authenticate(proxy: Proxy, max_budget: float | None, path: str = "/v1/chat/completions") -> UserAPIKeyAuth:
+async def _authenticate(
+    proxy: Proxy, max_budget: float | None, path: str = "/v1/chat/completions", body: Mapping[str, object] = BODY
+) -> UserAPIKeyAuth:
     await cache_key_object(
         hashed_token=TOKEN,
         user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=max_budget, spend=0.0),
@@ -104,7 +107,7 @@ async def _authenticate(proxy: Proxy, max_budget: float | None, path: str = "/v1
         proxy_logging_obj=None,
     )
     return await user_api_key_auth(
-        request=_request(path),
+        request=_request(path, body),
         api_key=f"Bearer {API_KEY}",
         azure_api_key_header="",
         anthropic_api_key_header=None,
@@ -574,6 +577,15 @@ REFUSED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
     "messages": ("/v1/messages", MESSAGES_BODY),
     "responses": ("/v1/responses", {"model": "gpt-4o", "input": "hello", "max_output_tokens": 100}),
     "text_completions": ("/v1/completions", {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "max_tokens": 10}),
+    "batches": (
+        "/v1/batches",
+        {
+            "input_file_id": "file-abc",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "gpt-4o",
+        },
+    ),
 }
 
 
@@ -729,3 +741,77 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
     assert {code: native for code, (_, native) in refusals.items()} == {
         code: python for code, (python, _) in refusals.items()
     }
+
+
+ROUTED_MODELS: Final = (("gpt-realtime", "openai/gpt-realtime"),)
+
+
+@dataclass(frozen=True, slots=True)
+class Family:
+    path: str
+    body: Mapping[str, object]
+    call_type: CallTypesLiteral
+
+
+FAMILIES: Final[Mapping[str, Family]] = {
+    "batches": Family(*REFUSED_ROUTES["batches"], call_type="acreate_batch"),
+    "realtime_client_secrets": Family(
+        "/v1/realtime/client_secrets", {"model": "gpt-realtime"}, call_type="acreate_realtime_client_secret"
+    ),
+}
+
+
+def _route_the_family_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_list: Final = [
+        {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-upstream"}}
+        for name, model in ROUTED_MODELS
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+
+
+async def _family_run(proxy: Proxy, native: bool, family: Family, exit_path: Exit) -> Run:
+    _use_native(proxy, native)
+    auth: Final = await _authenticate(proxy, max_budget=10.0, path=family.path, body=family.body)
+    data: Final = {
+        **family.body,
+        "litellm_call_id": f"call-{family.call_type}",
+        "metadata": {"user_api_key_budget_reservation": auth.budget_reservation},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type=family.call_type)
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    entries: Final = [
+        {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+        for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+    ]
+    held: Final = dict(proxy.store.snapshot())
+    await exit_path(auth, data)
+    return Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
+@pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
+async def test_a_widened_route_family_reserves_and_settles_like_python(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, exit_path: Exit
+) -> None:
+    _route_the_family_models(monkeypatch)
+    python: Final = await _family_run(proxy, False, family, exit_path)
+    native: Final = await _family_run(proxy, True, family, exit_path)
+
+    assert python.entries_after_pre_call, "the Python engine must hold a reservation on this route"
+    assert native_budgets.native_budget_route(family.path)
+    assert native == python
+
+
+@pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
+def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family
+) -> None:
+    _route_the_family_models(monkeypatch)
+    python: Final = _refused_over_http(proxy, False, monkeypatch, family.path, family.body)
+    native: Final = _refused_over_http(proxy, True, monkeypatch, family.path, family.body)
+
+    assert python.status == 422
+    assert native == python
