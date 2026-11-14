@@ -12400,7 +12400,6 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client,
                 cache=proxy_logging_obj.internal_usage_cache.dual_cache,
                 email_logger=expiry_email_logger,
-                # read each run, like the performance alert and spend capture jobs, so a UI edit applies live
                 default_days=lambda: configured_key_expiry_alert_days(_current_general_settings()),
                 pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )

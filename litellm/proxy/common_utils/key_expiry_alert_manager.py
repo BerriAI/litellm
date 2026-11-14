@@ -23,7 +23,6 @@ from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_E
 _METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROWS: Final = TypeAdapter(tuple[object, ...])
-# Redis family for the per-key send claims, named for the data like base_email's budget_alert_claims.
 _KEY_EXPIRY_ALERT_CLAIMS_TARGET: Final = "key_expiry_alert_claims"
 _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
