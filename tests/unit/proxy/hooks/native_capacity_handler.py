@@ -1,8 +1,11 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
 from litellm import DualCache, Router
+from litellm.types.router import ModelGroupInfo
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.derivations import DERIVED_ATTEMPT_FIELDS
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -21,9 +24,16 @@ from litellm.proxy.hooks.model_capacity_native import (
     NativeDynamicRateLimiter,
     build_native_dynamic_rate_limiter,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    BorrowingTeamModelLimits,
+    PROXY_MaxParallelRequestsHandler_v3,
+    RateLimitDescriptor,
+    RateLimitedModel,
+    borrowing_team_model_limits,
+)
 from litellm.proxy.hooks.priority_class_share import ActiveTeamRegistry
 from litellm.proxy.request_auth_context import REQUEST_AUTH
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.proxy.utils import HookRun, InternalUsageCache, hook_fields, raise_v2_abort
 from litellm.proxy.v2_proxy_fields import (
     DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
@@ -32,6 +42,107 @@ from litellm.proxy.v2_proxy_fields import (
     PRE_CALL_SOURCES,
 )
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
+
+
+@dataclass(frozen=True, slots=True)
+class TeamShare:
+    share: RateLimitDescriptor
+    ceiling: RateLimitDescriptor | None
+
+
+def _team_descriptor(
+    limiter: PROXY_MaxParallelRequestsHandler_v3, key: str, value: str, limits: BorrowingTeamModelLimits
+) -> RateLimitDescriptor:
+    return RateLimitDescriptor(
+        key=key,
+        value=value,
+        rate_limit={
+            "tokens_per_unit": limits.tpm,
+            "requests_per_unit": limits.rpm,
+            "window_size": limiter.window_size,
+        },
+    )
+
+
+def borrowing_team_share(
+    handler: "NativeDynamicRateLimitHandler", model: str, auth: UserAPIKeyAuth
+) -> TeamShare | None:
+    limiter: Final = handler.v3_limiter
+    rate_limited: Final = limiter.rate_limited_model(model) or RateLimitedModel(requested=model, group=model)
+    limits: Final = borrowing_team_model_limits(auth, rate_limited)
+    if limits.tpm is None and limits.rpm is None:
+        return None
+    value: Final = f"{auth.team_id}:{rate_limited.group}"
+    ceiling: Final = limits.borrow_ceiling()
+    return TeamShare(
+        share=_team_descriptor(limiter, "model_per_team_saturated", value, limits),
+        ceiling=None
+        if ceiling is None
+        else _team_descriptor(limiter, "model_per_team_max_borrow_multiple", value, ceiling),
+    )
+
+
+def model_tracking_descriptor(
+    handler: "NativeDynamicRateLimitHandler", model: str, model_group_info: ModelGroupInfo
+) -> RateLimitDescriptor:
+    return RateLimitDescriptor(
+        key="model_saturation_check",
+        value=model,
+        rate_limit={
+            "requests_per_unit": model_group_info.rpm or None,
+            "tokens_per_unit": model_group_info.tpm or None,
+            "window_size": handler.v3_limiter.window_size,
+        },
+    )
+
+
+async def model_saturation(
+    handler: "NativeDynamicRateLimitHandler", model: str, model_group_info: ModelGroupInfo
+) -> float:
+    rate_limits: Final = handler.v3_limiter.rate_limits
+    scope: Final = RateLimitScope("model_saturation_check", model)
+    requests: Final = await rate_limits.get_from_redis(scope.counter("requests"))
+    tokens: Final = await rate_limits.get_from_redis(scope.counter("tokens"))
+    return max(
+        0.0,
+        0.0 if not model_group_info.rpm or requests is None else int(str(requests)) / model_group_info.rpm,
+        0.0 if not model_group_info.tpm or tokens is None else float(str(tokens)) / model_group_info.tpm,
+    )
+
+
+_SENT: Final[ContextVar[list[RateLimitDescriptor] | None]] = ContextVar("native_capacity_sent", default=None)
+
+
+def _record_descriptors(limiter: PROXY_MaxParallelRequestsHandler_v3) -> None:
+    if "should_rate_limit" in vars(limiter):
+        return
+    original: Final = limiter.should_rate_limit
+
+    async def recorded(descriptors: Sequence[RateLimitDescriptor], *args: object, **kwargs: object) -> object:
+        sent: Final = _SENT.get()
+        if sent is not None:
+            sent.extend(descriptors)
+        return await original(descriptors, *args, **kwargs)
+
+    vars(limiter)["should_rate_limit"] = recorded
+
+
+async def priority_based_descriptors(
+    handler: "NativeDynamicRateLimitHandler", model: str, user_api_key_dict: UserAPIKeyAuth, priority: str | None
+) -> list[RateLimitDescriptor]:
+    assert (user_api_key_dict.metadata or {}).get("priority") == priority
+    _record_descriptors(handler.v3_limiter)
+    sent: Final[list[RateLimitDescriptor]] = []
+    token: Final = _SENT.set(sent)
+    try:
+        await handler.async_pre_call_hook(
+            user_api_key_dict, DualCache(), {"model": model, "max_tokens": 0}, "acompletion"
+        )
+    finally:
+        _SENT.reset(token)
+    return list(
+        {descriptor["value"]: descriptor for descriptor in sent if descriptor["key"] == "priority_model"}.values()
+    )
 
 
 async def _no_legacy(_logger: object, _data: object) -> None:
@@ -71,6 +182,14 @@ class NativeDynamicRateLimitHandler:
         router: Final = self.logger.delegate.llm_router
         assert router is not None
         return router
+
+    @v3_limiter.setter
+    def v3_limiter(self, limiter: PROXY_MaxParallelRequestsHandler_v3) -> None:
+        vars(self.logger.delegate)["v3_limiter"] = limiter
+
+    @active_teams.setter
+    def active_teams(self, registry: ActiveTeamRegistry) -> None:
+        vars(self.logger.delegate)["active_teams"] = registry
 
     def update_variables(self, llm_router: Router) -> None:
         self.logger.update_variables(llm_router)
