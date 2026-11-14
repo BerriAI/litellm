@@ -1473,7 +1473,7 @@ async def common_checks(
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget if user_budget is not None else user_object.soft_budget,
+                max_budget=user_budget,
             )
             _user_soft_budget_check(user_object=user_object, user_spend=user_spend, proxy_logging_obj=proxy_logging_obj)
             if user_budget is None:

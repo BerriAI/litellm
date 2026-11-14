@@ -48,6 +48,9 @@ export const formatNumberWithCommas = (
   return `${sign}${scaled.toLocaleString("en-US", opts)}${suffix}`;
 };
 
+export const formatBudgetValue = (value: number | null | undefined, fallback: string, precision = 4): string =>
+  value !== null && value !== undefined ? `$${formatNumberWithCommas(value, precision)}` : fallback;
+
 export const getSpendString = (value: number | null | undefined, decimals: number = 6): string => {
   if (value === null || value === undefined || !Number.isFinite(value) || value === 0) {
     return "-";

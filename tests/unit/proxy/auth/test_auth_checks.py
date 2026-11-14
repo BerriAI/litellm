@@ -2571,3 +2571,31 @@ async def test_common_checks_alerts_user_over_soft_budget_without_blocking(max_b
     assert soft_alerts[0].user_id == user_id
     assert soft_alerts[0].spend == 7.0
     assert soft_alerts[0].soft_budget == 5.0
+
+
+@pytest.mark.asyncio
+async def test_soft_budget_only_user_is_not_blocked_when_fail_closed_spend_is_unverifiable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_budget_enforcement", True)
+    user_id: Final = f"soft-only-{uuid.uuid4().hex}"
+
+    result: Final = await common_checks(
+        request_body={"model": "gpt-4o-mini"},
+        team_object=None,
+        user_object=LiteLLM_UserTable(user_id=user_id, soft_budget=5.0, spend=1.0),
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        valid_token=UserAPIKeyAuth(token=f"token-{user_id}", user_id=user_id),
+        request=MagicMock(),
+    )
+
+    assert result is True
