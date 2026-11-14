@@ -95,6 +95,7 @@ class FileContentStreamingHandler:
             )
             raise
         finally:
+            await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
             if hasattr(stream_iterator, "aclose"):
                 await stream_iterator.aclose()
 

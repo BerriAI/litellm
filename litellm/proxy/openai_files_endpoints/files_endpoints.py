@@ -1097,6 +1097,7 @@ async def get_file_content(
                         # Return file content
                         from fastapi.responses import Response as FastAPIResponse
 
+                        await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
                         return FastAPIResponse(
                             content=file_content,
                             media_type="application/octet-stream",
@@ -1244,6 +1245,7 @@ async def get_file_content(
         if httpx_response is None:
             raise ValueError(f"Invalid response - response.response is None - got {response}")
 
+        await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
@@ -1447,6 +1449,7 @@ async def get_file(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
+        await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
         return response
 
     except Exception as e:
@@ -1665,6 +1668,7 @@ async def delete_file(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
+        await proxy_logging_obj.arelease_max_parallel_requests(user_api_key_dict)
         return response
 
     except Exception as e:

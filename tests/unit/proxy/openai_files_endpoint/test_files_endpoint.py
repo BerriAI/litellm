@@ -1,3 +1,4 @@
+import asyncio
 import itertools
 import json
 from typing import Final, List, Optional
@@ -15,6 +16,8 @@ import litellm
 from litellm import Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -22,6 +25,7 @@ from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import 
     FileContentStreamingHandler,
 )
 from litellm.proxy.proxy_server import app
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.llms.openai import (
     FileListPage,
     HttpxBinaryResponseContent,
@@ -5882,6 +5886,178 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
     error = response.json()["error"]
     assert error["message"].startswith("Storage backend error")
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")
+
+
+_ONE_SLOT_KEY: Final = hash_token("sk-one-parallel-request")
+_STORED_CONTENT_URL: Final = "litellm_db://content-row-1"
+
+
+def _slots_held_by_the_one_slot_key(proxy_logging_obj: ProxyLogging) -> int:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.redis.stores.rate_limits import RateLimitScope
+
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    assert isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3)
+    gauge: Final = RateLimitScope("api_key", _ONE_SLOT_KEY).gauge
+    return limiter._gauge_in_flight_from_cache_value(limiter.rate_limits.local((gauge,))[0])
+
+
+class _SlotsHeldAtAdmission(CustomLogger):
+    """Runs after the limiter's pre-call hook, so it sees the slots held once a call is admitted."""
+
+    def __init__(self, proxy_logging_obj: ProxyLogging) -> None:
+        super().__init__()
+        self.proxy_logging_obj = proxy_logging_obj
+        self.slots_held: list[int] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.slots_held.append(_slots_held_by_the_one_slot_key(self.proxy_logging_obj))
+
+
+def _route_files_for_a_one_slot_key(monkeypatch: pytest.MonkeyPatch, llm_router: Router) -> _SlotsHeldAtAdmission:
+    """The real limiter and managed-files hook, over one managed file whose bytes LiteLLM stores itself,
+    the way a batch input for a server without a Files API is kept."""
+    import litellm.proxy.proxy_server as ps
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    from litellm.models.managed_files import LiteLLM_ManagedFileTable
+
+    file_id: Final = _unified_managed_file_id()
+    stored_file: Final = LiteLLM_ManagedFileTable(
+        unified_file_id=file_id,
+        model_mappings={"gpt-3.5-turbo-id": _STORED_CONTENT_URL},
+        flat_model_file_ids=[_STORED_CONTENT_URL],
+        file_object=_managed_file(file_id),
+        storage_backend="litellm_db",
+        storage_url=_STORED_CONTENT_URL,
+        created_by="test-user",
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(),
+        prisma_client=MagicMock(
+            db=MagicMock(
+                litellm_managedfiletable=MagicMock(find_first=AsyncMock(return_value=stored_file), delete=AsyncMock()),
+                litellm_managedfilecontenttable=MagicMock(
+                    find_unique=AsyncMock(return_value=MagicMock(content=MagicMock(decode=lambda: b"stored bytes"))),
+                    delete=AsyncMock(),
+                ),
+            )
+        ),
+    )
+    admissions: Final = _SlotsHeldAtAdmission(proxy_logging_obj)
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, admissions])
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(
+            api_key=_ONE_SLOT_KEY,
+            max_parallel_requests=1,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="test-user",
+        ),
+    )
+    return admissions
+
+
+async def _call_twice(method: str, path: str) -> tuple[httpx.Response, httpx.Response]:
+    """Each call runs in its own task, as each request does under a server, so the limiter's
+    per-request stash never carries over, and the logging tasks a call leaves drain before the next."""
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as http_client:
+        first: Final = await asyncio.create_task(http_client.request(method, path))
+        await drain_logging_tasks()
+        await GLOBAL_LOGGING_WORKER.flush()
+        second: Final = await asyncio.create_task(http_client.request(method, path))
+    return first, second
+
+
+@pytest.mark.asyncio
+async def test_get_file_content_from_a_storage_backend_frees_the_parallel_request_slot(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    admissions: Final = _route_files_for_a_one_slot_key(monkeypatch, llm_router)
+
+    first, second = await _call_twice("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+
+    assert (first.status_code, first.content) == (200, b"stored bytes"), first.text
+    assert second.status_code == 200, second.text
+    assert admissions.slots_held == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_get_file_content_served_by_the_managed_files_hook_frees_the_parallel_request_slot(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+
+    admissions: Final = _route_files_for_a_one_slot_key(monkeypatch, llm_router)
+    managed_files: Final = MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_content = AsyncMock(
+        return_value=HttpxBinaryResponseContent(response=httpx.Response(200, content=b"hook bytes"))
+    )
+    admissions.proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+
+    first, second = await _call_twice("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+
+    assert (first.status_code, first.content) == (200, b"hook bytes"), first.text
+    assert second.status_code == 200, second.text
+    assert admissions.slots_held == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_get_file_of_a_managed_file_frees_the_parallel_request_slot(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    file_id: Final = _unified_managed_file_id()
+    admissions: Final = _route_files_for_a_one_slot_key(monkeypatch, llm_router)
+
+    first, second = await _call_twice("GET", f"/v1/files/{file_id}")
+
+    assert (first.status_code, first.json()["id"]) == (200, file_id), first.text
+    assert second.status_code == 200, second.text
+    assert admissions.slots_held == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_delete_file_of_a_stored_managed_file_frees_the_parallel_request_slot(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    admissions: Final = _route_files_for_a_one_slot_key(monkeypatch, llm_router)
+
+    first, second = await _call_twice("DELETE", f"/v1/files/{_unified_managed_file_id()}")
+
+    assert (first.status_code, first.json()["deleted"]) == (200, True), first.text
+    assert second.status_code == 200, second.text
+    assert admissions.slots_held == [1, 1]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_file_content_streamed_from_the_provider_holds_the_slot_until_the_body_ends(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    admissions: Final = _route_files_for_a_one_slot_key(monkeypatch, llm_router)
+    slots_held_mid_body: Final[list[int]] = []
+
+    async def provider_body():
+        yield b"provider "
+        slots_held_mid_body.append(_slots_held_by_the_one_slot_key(admissions.proxy_logging_obj))
+        yield b"bytes"
+
+    respx.get("https://api.openai.com/v1/files/file-abc123/content").mock(
+        side_effect=lambda request: httpx.Response(200, content=provider_body())
+    )
+
+    first, second = await _call_twice("GET", "/v1/files/file-abc123/content")
+
+    assert (first.status_code, first.content) == (200, b"provider bytes"), first.text
+    assert second.status_code == 200, second.text
+    assert admissions.slots_held == [1, 1]
+    assert slots_held_mid_body == [1, 1]
 
 
 def test_get_file_model_routed_id_forwards_deployment_provider(mocker: MockerFixture, monkeypatch):
