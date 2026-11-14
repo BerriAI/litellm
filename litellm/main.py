@@ -243,6 +243,8 @@ from .litellm_core_utils.core_helpers import (
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
+    resolve_fallbacks,
+    without_global_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
@@ -748,7 +750,6 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    fallbacks: Final = kwargs.get("fallbacks", None) or litellm.model_fallbacks
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
@@ -765,6 +766,7 @@ async def acompletion(
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
+    fallbacks: Final = resolve_fallbacks(caller_kwargs)
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -922,7 +924,7 @@ async def acompletion(
 
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
-            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+            **completion_kwargs, kwargs={**caller_kwargs, "fallbacks": fallbacks}
         )
         if response is None:
             raise Exception(
@@ -5775,7 +5777,6 @@ def completion(
     metadata: Final = kwargs.get("metadata", None)
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
-    fallbacks = kwargs.get("fallbacks", None)
     provider_specific_header: Final = cast(
         ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
         kwargs.get("provider_specific_header", None),
@@ -5908,10 +5909,11 @@ def completion(
         elif num_retries is not None:
             max_retries = num_retries
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
-        fallbacks = fallbacks or litellm.model_fallbacks
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        fallbacks: Final = resolve_fallbacks(routing_kwargs)
         if fallbacks is not None:
             return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
-                **args
+                **{**args, "kwargs": {**kwargs, "fallbacks": fallbacks}}
             )
         if model_list is not None:
             deployments: Final = [m["litellm_params"] for m in model_list if m["model_name"] == model]
@@ -5931,7 +5933,6 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
@@ -9606,12 +9607,13 @@ async def ahealth_check(
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
-            return await HealthCheckHelpers.ahealth_check_wildcard_models(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                model_params=model_params,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+            with without_global_fallbacks():
+                return await HealthCheckHelpers.ahealth_check_wildcard_models(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    model_params=model_params,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
@@ -9623,7 +9625,8 @@ async def ahealth_check(
 
         handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
         if handler_mode in mode_handlers:
-            _response: Final = await mode_handlers[handler_mode]()
+            with without_global_fallbacks():
+                _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )
