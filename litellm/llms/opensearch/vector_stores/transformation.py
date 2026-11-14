@@ -4,6 +4,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
+from itertools import accumulate
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal, NoReturn, TypeAlias
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -58,6 +59,7 @@ _ACCOUNT_ID_LABEL: Final = re.compile(r"\A\d{12}\.")
 _UNFILTERABLE_KNN: Final = ("does not support filters", "unknown token [START_OBJECT] after [filter]")
 _ANALYZED_STRING_TYPES: Final = frozenset({"text", "match_only_text", "search_as_you_type"})
 _STRING_TYPES: Final = _ANALYZED_STRING_TYPES | {"keyword", "wildcard", "constant_keyword"}
+_CONTAINER_TYPES: Final = frozenset({"object", "nested"})
 _FORBIDDEN: Final = 403
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _ATTRIBUTE_VALUE_TYPES: Final = (str, int, float, bool)
@@ -196,6 +198,8 @@ class _FieldMapping(LiteLLMBaseModel):
     ignore_above: int | None = None
     normalizer: str | None = None
     path: str | None = None
+    include_in_parent: bool = False
+    include_in_root: bool = False
     properties: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
     fields: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
 
@@ -243,15 +247,23 @@ def _resolved_field(mapping: _FieldMapping, key: str) -> tuple[str, _FieldMappin
     return None if target is None else (field.path, target)
 
 
-def _is_nested(mapping: _FieldMapping, path: str) -> bool:
-    field: Final = _mapped_field(mapping, path)
-    return field is not None and field.type == "nested"
+def _nested_segments(mapping: _FieldMapping, path: str) -> tuple[tuple[str, _FieldMapping], ...]:
+    parts: Final = path.split(".")
+    prefixes: Final = (".".join(parts[:end]) for end in range(1, len(parts) + 1))
+    segments: Final = ((prefix, _mapped_field(mapping, prefix)) for prefix in prefixes)
+    return tuple((prefix, field) for prefix, field in segments if field is not None and field.type == "nested")
+
+
+def _copied_to_root(parent_copied_to_root: bool, nested: _FieldMapping) -> bool:
+    return nested.include_in_root or (nested.include_in_parent and parent_copied_to_root)
 
 
 def _nested_path(mapping: _FieldMapping, path: str) -> str | None:
-    parts: Final = path.split(".")
-    prefixes: Final = (".".join(parts[:end]) for end in range(1, len(parts) + 1))
-    return next((prefix for prefix in prefixes if _is_nested(mapping, prefix)), None)
+    segments: Final = _nested_segments(mapping, path)
+    copied: Final = tuple(accumulate((field for _, field in segments), _copied_to_root, initial=True))[1:]
+    if not segments or copied[-1]:
+        return None
+    return next(prefix for (prefix, _), reaches in zip(segments, copied, strict=True) if not reaches)
 
 
 def _exact_field(
@@ -290,18 +302,18 @@ def _queried_field(
     if resolved is None:
         return None
     path, field = resolved
+    if field.type in _CONTAINER_TYPES:
+        return _InexactKey(
+            key=key,
+            reason=f"the index maps {path} as {field.type}, which holds fields rather than values",
+            remedy=f"Filter on a field inside {path}",
+        )
     nested: Final = _nested_path(mapping, path)
     if nested is not None:
         return _InexactKey(
             key=key,
             reason=f"the index maps {nested} as nested, which needs a nested query",
             remedy=f"Map {nested} as object",
-        )
-    if field.type == "object":
-        return _InexactKey(
-            key=key,
-            reason=f"the index maps {path} as object, which holds fields rather than values",
-            remedy=f"Filter on a field inside {path}",
         )
     exact: Final = _exact_field(path, field, comparison)
     if isinstance(exact, _ExactField) and exact.name == path:

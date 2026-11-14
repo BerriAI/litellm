@@ -660,6 +660,9 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
     }
 
 
+NESTED_TEAM: Final = {"team": {"type": "keyword"}}
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "mapping,search_filter,opensearch_filter",
@@ -743,6 +746,47 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
             {"terms": {"owner.team.raw": ["People Ops"]}},
             id="alias-to-text-with-a-keyword-subfield",
         ),
+        pytest.param(
+            {"properties": {"owner": {"type": "nested", "include_in_root": True, "properties": NESTED_TEAM}}},
+            {"type": "eq", "key": "owner.team", "value": "people-ops"},
+            {"term": {"owner.team": "people-ops"}},
+            id="nested-object-copied-to-the-root",
+        ),
+        pytest.param(
+            {"properties": {"owner": {"type": "nested", "include_in_parent": True, "properties": NESTED_TEAM}}},
+            {"type": "in", "key": "owner.team", "value": ["people-ops"]},
+            {"terms": {"owner.team": ["people-ops"]}},
+            id="top-level-nested-object-copied-to-its-parent",
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "org": {
+                        "type": "nested",
+                        "properties": {"owner": {"type": "nested", "include_in_root": True, "properties": NESTED_TEAM}},
+                    }
+                }
+            },
+            {"type": "eq", "key": "org.owner.team", "value": "people-ops"},
+            {"term": {"org.owner.team": "people-ops"}},
+            id="nested-in-nested-copied-to-the-root",
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "org": {
+                        "type": "nested",
+                        "include_in_parent": True,
+                        "properties": {
+                            "owner": {"type": "nested", "include_in_parent": True, "properties": NESTED_TEAM}
+                        },
+                    }
+                }
+            },
+            {"type": "eq", "key": "org.owner.team", "value": "people-ops"},
+            {"term": {"org.owner.team": "people-ops"}},
+            id="nested-in-nested-copied-up-through-each-parent",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -764,7 +808,6 @@ async def test_filters_compare_the_exact_field_the_index_maps(
 
 
 TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"}}}}
-NESTED_TEAM: Final = {"team": {"type": "keyword"}}
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -927,8 +970,51 @@ NESTED_TEAM: Final = {"team": {"type": "keyword"}}
         pytest.param(
             {"litellm-qa-docs": {"properties": {"owner": {"type": "nested", "properties": NESTED_TEAM}}}},
             {"type": "ne", "key": "owner", "value": "people-ops"},
-            "the index maps owner as nested, which needs a nested query",
+            "the index maps owner as nested, which holds fields rather than values. Filter on a field inside owner",
             id="the-nested-object-itself",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {"org": {"properties": {"owner": {"type": "nested", "properties": NESTED_TEAM}}}}
+                }
+            },
+            {"type": "eq", "key": "org.owner.team", "value": "people-ops"},
+            "the index maps org.owner as nested, which needs a nested query. Map org.owner as object",
+            id="nested-object-inside-a-plain-object",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {
+                        "org": {
+                            "type": "nested",
+                            "properties": {
+                                "owner": {"type": "nested", "include_in_parent": True, "properties": NESTED_TEAM}
+                            },
+                        }
+                    }
+                }
+            },
+            {"type": "eq", "key": "org.owner.team", "value": "people-ops"},
+            "the index maps org as nested, which needs a nested query. Map org as object",
+            id="nested-object-copied-only-into-a-nested-parent",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {
+                        "org": {
+                            "type": "nested",
+                            "include_in_root": True,
+                            "properties": {"owner": {"type": "nested", "properties": NESTED_TEAM}},
+                        }
+                    }
+                }
+            },
+            {"type": "eq", "key": "org.owner.team", "value": "people-ops"},
+            "the index maps org.owner as nested, which needs a nested query. Map org.owner as object",
+            id="nested-object-inside-one-copied-to-the-root",
         ),
         pytest.param(
             {"litellm-qa-docs": {"properties": {"owner": {"properties": NESTED_TEAM}}}},
