@@ -132,7 +132,7 @@ def _json_node(value: object) -> tuple[object, Sequence[tuple[Callable[[object],
     if mapping is not None:
         if not all(isinstance(key, str) for key in mapping):
             return _opaque(value), ()
-        converted: Final[dict[str, object]] = dict.fromkeys(str(key) for key in mapping)
+        converted: Final[dict[str, object]] = {str(key): None for key in mapping}
         return converted, [(partial(converted.__setitem__, str(key)), item) for key, item in mapping.items()]
     items: Final = _items(value)
     if items is not None:
