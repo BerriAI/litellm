@@ -23,25 +23,27 @@ class RecoGuardrail(GenericGuardrailAPI):
 
     def __init__(
         self,
-        reco_tenant_id: str | None,
-        api_base: str | None,
+        reco_tenant_id: str | None = None,
+        api_base: str | None = None,
         headers: Mapping[str, str] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool = True,
         guardrail_name: str | None = None,
         event_hook: str | Sequence[str] | Mode | None = None,
         default_on: bool = False,
+        api_key: str | None = None,
     ) -> None:
-        if not reco_tenant_id:
-            raise ValueError("reco_tenant_id is required for the Reco guardrail")
+        if not reco_tenant_id and not api_key:
+            raise ValueError("reco_tenant_id or api_key is required for the Reco guardrail")
         if not api_base:
             raise ValueError("api_base is required for the Reco guardrail")
 
-        validated_tenant_id: Final = validate_reco_tenant_id(reco_tenant_id)
+        tenant_header: Final = {"X-Reco-Tenant-Id": validate_reco_tenant_id(reco_tenant_id)} if reco_tenant_id else {}
 
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # parent takes untyped extra_headers and **kwargs
-            headers={**(headers or {}), "X-Reco-Tenant-Id": validated_tenant_id},
+            headers={**(headers or {}), **tenant_header},
             api_base=api_base,
+            api_key=api_key,
             unreachable_fallback=unreachable_fallback,
             fail_on_error=fail_on_error,
             guardrail_name=guardrail_name,

@@ -19,8 +19,13 @@ class RecoOptionalParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    reco_tenant_id: str = Field(
-        description="Tenant identifier for the Reco account, as a UUID. Sent as the X-Reco-Tenant-Id header on every guardrail request.",
+    api_key: str | None = Field(
+        default=None,
+        description="Registration token generated in the Reco console. Sent as the x-api-key header; Reco derives the tenant from it. Either api_key or reco_tenant_id is required.",
+    )
+    reco_tenant_id: str | None = Field(
+        default=None,
+        description="Legacy tenant identifier for the Reco account, as a UUID. Sent as the X-Reco-Tenant-Id header when set. Either api_key or reco_tenant_id is required.",
     )
     api_base: str = Field(
         description="Base URL for the Reco guardrail API. Reco's endpoint is per-region and per-silo, so this must be set explicitly rather than defaulted.",
@@ -36,8 +41,8 @@ class RecoOptionalParams(BaseModel):
 
     @field_validator("reco_tenant_id")
     @classmethod
-    def _check_reco_tenant_id(cls, v: str) -> str:
-        return validate_reco_tenant_id(v)
+    def _check_reco_tenant_id(cls, v: str | None) -> str | None:
+        return None if v is None else validate_reco_tenant_id(v)
 
 
 class RecoConfigModel(GuardrailConfigModel[RecoOptionalParams]):

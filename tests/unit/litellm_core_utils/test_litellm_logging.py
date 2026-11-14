@@ -4361,6 +4361,26 @@ def test_get_masked_values():
     assert masked_values["vertex_credentials"] == "{s****y}"
 
 
+def test_get_masked_values_masks_secrets_nested_under_non_sensitive_keys():
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
+
+    masked_values = get_masked_values(
+        {
+            "guardrail": "reco",
+            "optional_params": {"api_key": "reco-registration-token", "api_base": "https://reco.example/api"},
+            "category_thresholds": {1: "kept-as-is"},
+        },
+        unmasked_length=4,
+        number_of_asterisks=4,
+    )
+
+    assert masked_values == {
+        "guardrail": "reco",
+        "optional_params": {"api_key": "re****en", "api_base": "https://reco.example/api"},
+        "category_thresholds": {1: "kept-as-is"},
+    }
+
+
 def test_get_masked_values_keeps_original_non_string_key_behavior():
     from typing import cast
 
