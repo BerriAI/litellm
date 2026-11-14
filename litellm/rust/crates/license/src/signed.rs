@@ -93,27 +93,27 @@ mod tests {
     use super::*;
     use crate::test_support::{OTHER_SIGNER, SIGNER, license, public_key, sign, sign_with};
 
-    /// Signed once by Python's `cryptography` with `PSS.MAX_LENGTH`, the way LiteLLM issues licenses, using a
-    /// throwaway key whose private half was discarded
-    const PYTHON_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkBrrav0fhJV8PCexp13M\nhM/M5YbXUrl6VndP9U9C2nQ9TJC5sZy3f7OQ3H/oCkQXo5r86gk7zgShZtzJW+0E\n2/V4yvYSHdvRtBkbKuBZQT8tGT5bRNPYnD0Zbz8MfPtdZRhU5wg0XP2NqL4ip7kM\nALHpz+z6BuBkMLqFyK8ww++UJl37MmY6WiGLkO1mChe8jvrUOBJfokHrwvW7d0Iq\nMWFcZbBNFhu10X6n0OQGZ/0NCKr2PyroAC836xLd6Ti2lVBq1iXNTmla/u1qUrCK\nNDsxHpoNUYGDm4LP1COkdw3ulI8STDrelbzr/QLfML2ohKM6jKcO8iyanzTEGmqy\nmwIDAQAB\n-----END PUBLIC KEY-----\n";
-    const PYTHON_SIGNED_LICENSE: &str = "eyJleHBpcmF0aW9uX2RhdGUiOiAiMjk5OS0wMS0wMSIsICJ1c2VyX2lkIjogInB5dGhvbi1zaWduZWQiLCAiYWxsb3dlZF9mZWF0dXJlcyI6IFsiYXV0b19yb3V0ZXIiXSwgIm1heF91c2VycyI6IDcsICJtYXhfdGVhbXMiOiAzfS4RmJm6SLvfZv0m7UumByEW16ViJg6Zzktviaa8s82LdGtrsi1XQrj6k+dOFG99hoUF9kL1eR2x2w9pzycqkuo1BeoSeEut6cWp7Aq84n6r800n842GozRGONb873ivHXq2KvEEmkdKo9WGUzn/JNL1Pq3xugvccV2cufU0oFaDQO1ZBcbktMS/liSdDwOyQOnEeDBoR3zDV20ZBy+QnptTRwQBdz8MvyxrJFpSOgtdTJtQ5invj8CPl4qdJDwCrUKMIbVprPw0DWKql5CNUvgHPMBv7ckqvlD8VbJPFj9FOPo3pd+rg4i4mKqRT2nuguwzLUYydJCouTwU9cu5znUG";
+    /// Signed once by `generate_license_key` from the license issuer's `utils.py`, using a throwaway key whose
+    /// private half was discarded
+    const ISSUER_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArgHk910iYWWzzuM1CRzx\nKxLZue7+tJRzhTCI9edw2qzZRjzsfpkt3OS3CExT89ZSANFhMH2VZ9ffK5Ps3EUU\nBmx4HNVb8OMaBVi7BJkFKy71FZAZ8si786JpUcOJqcydHgmAUx354iihbe8ge9sv\nt2gX6J95bxSjK32TQlFUvGGu36fz1jNsbIkoXo5NJNnxUA/+WQ7cQs78jNq00bPq\nZ471FU452bmS44mu8EiUsnt082jUYGCFcGLePdm06SUMO33Q1e0n3j8Vp1CN178B\nACKLo7EyURdmurizdFol0DMTdVBTZJGowMH2vDiYHBA0419mftgYMC89s3v4VNyl\nTwIDAQAB\n-----END PUBLIC KEY-----\n";
+    const ISSUER_SIGNED_LICENSE: &str = "eyJleHBpcmF0aW9uX2RhdGUiOiAiMjk5OS0wMS0wMSIsICJ1c2VyX2lkIjogImlzc3Vlci1zaWduZWQiLCAiYWxsb3dlZF9mZWF0dXJlcyI6IFsiYXV0b19yb3V0ZXIiXSwgIm1heF91c2VycyI6IDcsICJtYXhfdGVhbXMiOiAzfS5GsQIa/aSeDCHRAhh6K5Wse+mvIn17KzDiKhJpncH+WCOHKqn+AkEwzs6cZJdqedQsiILA/vwd+azg7doNj1uBcaGAc4g7Ce2icPHi/oaZ7Z3QqKKur3RFW70pU1MtKtAzDr5S9NWwLxQDs+A3eL2toqSZVLy5XEqKyfVxLeFkrrAlnUhGRHuHFUwblnzMpg53c0SyShfYQGY2bRAGm3kpjmTCGLpbZ1hjNXuruDzxFDOVvQbE3XlFppzeNJy8gPbunkjCQ4Hj7HsdcQi2yrDDD84zFxD13uyPnLcQalJLK/YMwp8v7vFCfOAMR9d5q+h7eqBYL775V4ztledZ4ffJ";
 
     fn now() -> DateTime {
         date(2026, 11, 13).at(12, 0, 0, 0)
     }
 
     #[rstest]
-    fn verifies_a_license_python_cryptography_signed() {
-        let license = PublicKey::from_pem(PYTHON_PUBLIC_KEY)
+    fn verifies_a_license_the_issuer_signed() {
+        let license = PublicKey::from_pem(ISSUER_PUBLIC_KEY)
             .unwrap()
-            .verify(PYTHON_SIGNED_LICENSE, now())
+            .verify(ISSUER_SIGNED_LICENSE, now())
             .unwrap();
 
         assert_eq!(
             license,
             License {
                 expiration_date: date(2999, 1, 1),
-                user_id: Some("python-signed".into()),
+                user_id: Some("issuer-signed".into()),
                 allowed_features: vec!["auto_router".into()],
                 max_users: Some(7),
                 max_teams: Some(3),
