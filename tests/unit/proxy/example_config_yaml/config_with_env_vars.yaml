@@ -1,18 +1,18 @@
 model_list:
   ################################################################################
   # Azure
-  - model_name: gpt-4o-mini
+  - model_name: gpt-6-luna
     litellm_params:
-      model: azure/gpt-4o-mini
+      model: azure/gpt-6-luna
       api_base: https://amazin-prod.openai.azure.com
       api_key: "os.environ/AZURE_GPT_4O"
-      deployment_id: gpt-4o-mini
-  - model_name: gpt-4o
+      deployment_id: gpt-6-luna
+  - model_name: gpt-6.1-sol
     litellm_params:
-      model: azure/gpt-4o
+      model: azure/gpt-6.1-sol
       api_base: https://very-cool-prod.openai.azure.com
       api_key: "os.environ/AZURE_GPT_4O"
-      deployment_id: gpt-4o
+      deployment_id: gpt-6.1-sol
 
   ################################################################################
   # Fireworks

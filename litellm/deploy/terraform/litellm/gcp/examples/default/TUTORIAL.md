@@ -107,9 +107,9 @@ gateway_extra_secrets = {
 proxy_config = {
   model_list = [
     {
-      model_name = "gpt-4o"
+      model_name = "gpt-6.1-sol"
       litellm_params = {
-        model   = "openai/gpt-4o"
+        model   = "openai/gpt-6.1-sol"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },

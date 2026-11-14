@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
-OPENAI_BACKEND = "openai/gpt-4o-mini"
+OPENAI_BACKEND = "openai/gpt-5.4-mini"
 CHAT_PATH = "/chat/completions"
 
 
