@@ -166,6 +166,11 @@ stt-nvidia-riva = [
     "numpy>=1.26.0",
 ]
 google = ["google-cloud-aiplatform>=1.133.0,<2.0"]
+ecologits = [
+    # Impacts estimation imports private ecologits internals (_ProviderConfig,
+    # PROVIDER_CONFIG_MAP in tracers.utils), so hold to the tested minor
+    "ecologits>=0.11.3,<0.12.0",
+]
 bedrock-realtime = [
     # Bedrock Nova Sonic realtime (speech-to-speech) uses the
     # InvokeModelWithBidirectionalStream API, which boto3 cannot do. This

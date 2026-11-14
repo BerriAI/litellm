@@ -262,6 +262,29 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
 
 
+def test_get_logging_payload_includes_ecologits_impacts():
+    """The ecologits callback attaches impacts under metadata['ecologits'] before
+    the success handlers run, so the spend-log row must carry them into the
+    metadata rendered on the Logs UI panel."""
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ecologits_impacts: Final = {
+        "ecologits_payload": {"model_name": "claude-haiku-4-5", "output_token_count": 114},
+        "impacts": {"energy": {"value": 1.3e-05, "unit": "kWh"}},
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"ecologits": ecologits_impacts}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert json.loads(payload["metadata"])["ecologits"] == ecologits_impacts
+    assert _get_spend_logs_metadata(None).get("ecologits") is None
+
+
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
 def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch, store_prompts, redact):
     from litellm.proxy import proxy_server

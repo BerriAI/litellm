@@ -7056,6 +7056,14 @@ def build_custom_logger_compatible_class(
         newrelic_logger: Final = NewRelicLogger()
         _in_memory_loggers.append(newrelic_logger)
         return newrelic_logger
+    elif logging_integration == "ecologits":
+        from litellm.integrations.ecologits import EcoLogitsLogger
+        for callback in _in_memory_loggers:
+            if isinstance(callback, EcoLogitsLogger):
+                return callback
+        ecologits_logger = EcoLogitsLogger()
+        _in_memory_loggers.append(ecologits_logger)
+        return ecologits_logger
     return None
 
 
@@ -7467,6 +7475,11 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
                     return callback
                 if isinstance(callback, NewRelicLogger):
+                    return callback
+        elif logging_integration == "ecologits":
+            from litellm.integrations.ecologits import EcoLogitsLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, EcoLogitsLogger):
                     return callback
         return None
 

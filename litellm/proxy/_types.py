@@ -3938,6 +3938,7 @@ class SpendLogsMetadata(TypedDict):
     batch_failed_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
     error_information: StandardLoggingPayloadErrorInformation | None
     usage_object: dict | None
+    ecologits: ReadOnly[NotRequired[dict | None]]  # impacts attached by the ecologits callback (energy, gwp, adpe, pe, wcf)
     model_map_information: StandardLoggingModelInformation | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: float | None  # LiteLLM overhead time in milliseconds
