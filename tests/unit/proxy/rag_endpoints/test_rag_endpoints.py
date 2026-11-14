@@ -2688,3 +2688,47 @@ def test_rag_ingest_cannot_bind_the_new_store_to_a_deployment_group(client_inter
 
     assert response.status_code == 400, response.json()
     assert "vector_store_deployment" in response.json()["detail"]["error"]
+
+
+def test_rag_query_keeps_a_grouped_store_on_its_group_so_the_search_can_fail_over():
+    from litellm.proxy.rag_endpoints.endpoints import _managed_store_overrides
+    from litellm.vector_stores.deployments import (
+        parse_vector_store_deployments,
+        primary_connection,
+        vector_store_deployment_registry,
+    )
+
+    vector_store_deployment_registry.load(
+        parse_vector_store_deployments(
+            {
+                "vector_store_deployments": [
+                    {
+                        "deployment_name": "kb-search",
+                        "deployment_id": "eastus",
+                        "litellm_params": {
+                            "custom_llm_provider": "azure_ai",
+                            "api_base": "https://eastus.search.windows.net",
+                            "api_key": "key-eastus",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    try:
+        overrides = _managed_store_overrides(
+            {
+                "vector_store_id": "claims-docs",
+                "custom_llm_provider": "azure_ai",
+                "litellm_params": {"vector_store_deployment": "kb-search"},
+            }
+        )
+        ingest_target = primary_connection(overrides)
+    finally:
+        vector_store_deployment_registry.load(())
+
+    assert overrides["vector_store_deployment"] == "kb-search"
+    assert "api_base" not in overrides
+    assert ingest_target["api_base"] == "https://eastus.search.windows.net"
+    assert "vector_store_deployment" not in ingest_target
+

@@ -343,7 +343,7 @@ def _store_provider(config: Mapping[str, object]) -> object:
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
-    stored: Final = primary_connection(build_request_data_from_managed_vector_store(managed_store))
+    stored: Final = build_request_data_from_managed_vector_store(managed_store)
     return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
 
 
@@ -909,7 +909,7 @@ async def rag_ingest(
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
         requested_base: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
-            **_managed_store_overrides(managed_store),
+            **primary_connection(_managed_store_overrides(managed_store)),
         }
         vertex_target_checked: Final = _vertex_target_is_checked(
             requested_base, user_api_key_dict, general_settings_view()

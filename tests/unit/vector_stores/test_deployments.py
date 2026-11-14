@@ -379,3 +379,20 @@ def test_sync_search_on_a_group_refuses_and_points_at_asearch(respx_mock, httpx_
         )
 
     assert not search_service.called
+
+
+class _ForgetfulRedis:
+    async def async_batch_get_cache(self, key_list: list[str]) -> dict[str, object]:
+        return {}
+
+
+@pytest.mark.asyncio
+async def test_a_redis_read_that_returns_nothing_still_honours_this_workers_cooldown(monkeypatch: pytest.MonkeyPatch):
+    attempt, _ = _scripted({"eastus": "503", "scus": "ok"})
+    await with_failover("kb-search", attempt)
+    monkeypatch.setattr(vector_store_deployment_cooldowns, "redis_cache", _ForgetfulRedis())
+    attempt_again, calls_again = _scripted({"eastus": "ok", "scus": "ok"})
+
+    await with_failover("kb-search", attempt_again)
+
+    assert calls_again == ["scus"]

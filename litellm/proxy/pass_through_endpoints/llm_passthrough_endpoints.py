@@ -1104,7 +1104,7 @@ async def milvus_proxy_route(
         vector_store=vector_store,
         user_api_key_dict=user_api_key_dict,
     )
-    litellm_params = dict(primary_connection(vector_store.get("litellm_params") or {}))
+    litellm_params = dict(with_named_credential(primary_connection(vector_store.get("litellm_params") or {})))
     auth_credentials: Final = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
     extra_headers = auth_credentials.get("headers") or {}

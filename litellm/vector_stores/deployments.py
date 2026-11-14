@@ -9,6 +9,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from types import MappingProxyType
 from typing import Final, Generic, TypeAlias, TypeVar
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +19,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
@@ -235,6 +237,8 @@ def classify_status(status: int) -> tuple[bool, bool]:
     return retryable, retryable
 
 
+_MAX_CHAINED_ERRORS: Final = 16
+VECTOR_STORE_DEPLOYMENT_COOLDOWNS_TARGET: Final = "vector_store_deployment_cooldowns"
 _TRANSPORT_ERRORS: Final = (
     litellm.Timeout,
     litellm.APIConnectionError,
@@ -244,13 +248,16 @@ _TRANSPORT_ERRORS: Final = (
 )
 
 
-def _raised_by_transport(error: BaseException | None) -> bool:
+def _raised_by_transport(error: BaseException) -> bool:
     """Whether the error, or one it was raised from, means the deployment could not be reached.
 
     Passthrough reports an unreachable host as a ProxyException raised while handling the aiohttp error."""
-    if error is None:
-        return False
-    return isinstance(error, _TRANSPORT_ERRORS) or _raised_by_transport(error.__cause__ or error.__context__)
+    chain: Final = accumulate(range(_MAX_CHAINED_ERRORS - 1), _raised_from, initial=error)
+    return any(isinstance(link, _TRANSPORT_ERRORS) for link in chain)
+
+
+def _raised_from(link: BaseException | None, _: int) -> BaseException | None:
+    return None if link is None else link.__cause__ or link.__context__
 
 
 def classify_error(deployment: VectorStoreDeployment, error: Exception) -> Failed[_Value]:
@@ -261,18 +268,23 @@ def classify_error(deployment: VectorStoreDeployment, error: Exception) -> Faile
     return Failed(deployment=deployment, retryable=retryable, cools_down=cools_down, error=error)
 
 
-async def _cooldown_ends(keys: Sequence[str]) -> Mapping[str, object]:
-    """Each key's cooldown end, read from Redis when the proxy shares one so every worker sees the same state."""
-    redis: Final = vector_store_deployment_cooldowns.redis_cache
-    if redis is not None:
-        try:
-            return _CACHED.validate_python(await redis.async_batch_get_cache(key_list=list(keys)))
-        except Exception as error:  # noqa: BLE001  # Redis down must not stop healthy searches; this worker's state stands in
-            verbose_logger.warning("vector store deployment cooldowns: Redis read failed, using local state: %s", error)
-    values: Final[object] = await vector_store_deployment_cooldowns.in_memory_cache.async_batch_get_cache(
+@with_service_target(VECTOR_STORE_DEPLOYMENT_COOLDOWNS_TARGET)
+async def _cooldown_ends(keys: Sequence[str]) -> tuple[Mapping[str, object], ...]:
+    """Each key's cooldown end from this worker and, when the proxy shares one, from Redis.
+
+    Writes go to both, so a Redis read that fails (or returns nothing) still leaves this worker's own cooldowns."""
+    local: Final[object] = await vector_store_deployment_cooldowns.in_memory_cache.async_batch_get_cache(
         keys=list(keys)
     )  # pyright: ignore[reportUnknownMemberType]  # the in-memory cache's reads are untyped
-    return MappingProxyType(dict(zip(keys, as_object_list(values) or (), strict=False)))
+    local_ends: Final = MappingProxyType(dict(zip(keys, as_object_list(local) or (), strict=False)))
+    redis: Final = vector_store_deployment_cooldowns.redis_cache
+    if redis is None:
+        return (local_ends,)
+    try:
+        return (local_ends, _CACHED.validate_python(await redis.async_batch_get_cache(key_list=list(keys))))
+    except Exception as error:  # noqa: BLE001  # Redis down must not stop healthy searches; this worker's state stands in
+        verbose_logger.warning("vector store deployment cooldowns: Redis read failed, using local state: %s", error)
+        return (local_ends,)
 
 
 def _still_cooling(cooldown_end: object, now: float) -> bool:
@@ -283,15 +295,16 @@ def _still_cooling(cooldown_end: object, now: float) -> bool:
 
 
 async def _cooled_down_ids(deployments: tuple[VectorStoreDeployment, ...]) -> frozenset[str]:
-    ends: Final = await _cooldown_ends([_cooldown_key(deployment) for deployment in deployments])
+    sources: Final = await _cooldown_ends([_cooldown_key(deployment) for deployment in deployments])
     now: Final = time.time()
     return frozenset(
         deployment.deployment_id
         for deployment in deployments
-        if _still_cooling(ends.get(_cooldown_key(deployment)), now)
+        if any(_still_cooling(ends.get(_cooldown_key(deployment)), now) for ends in sources)
     )
 
 
+@with_service_target(VECTOR_STORE_DEPLOYMENT_COOLDOWNS_TARGET)
 async def _record_failure(failure: Failed[_Value]) -> None:
     """Counts the failure in a one-minute window and cools the deployment down once it reaches ``allowed_fails``."""
     deployment: Final = failure.deployment

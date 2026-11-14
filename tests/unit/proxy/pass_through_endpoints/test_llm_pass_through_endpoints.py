@@ -3740,6 +3740,66 @@ class TestMilvusProxyRoute:
             assert result == {"results": [{"id": 1, "distance": 0.5}]}
 
     @pytest.mark.asyncio
+    async def test_milvus_proxy_route_expands_the_stores_named_credential(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="milvus-cred",
+                    credential_values={"api_base": "http://milvus.internal:19530", "api_key": "milvus-key"},
+                    credential_info={},
+                )
+            ],
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_index_object = MagicMock()
+        mock_index_object.litellm_params.vector_store_name = "milvus-store-1"
+        mock_index_object.litellm_params.vector_store_index = "collection_123"
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+                return_value={"collectionName": "dall-e-6", "data": [[0.1, 0.2]]},
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
+            ) as mock_get_config,
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
+            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
+        ):
+            mock_provider_config = MagicMock()
+            mock_provider_config.get_auth_credentials.return_value = {"headers": {}}
+            mock_provider_config.get_complete_url.return_value = "http://milvus.internal:19530"
+            mock_get_config.return_value = mock_provider_config
+            mock_index_registry.is_vector_store_index.return_value = True
+            mock_index_registry.get_vector_store_index_by_name.return_value = mock_index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = {
+                "litellm_params": {"litellm_credential_name": "milvus-cred"}
+            }
+            mock_create_route.return_value = AsyncMock(return_value={"results": []})
+
+            await milvus_proxy_route(
+                endpoint="vectors/search",
+                request=mock_request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        auth_params = mock_provider_config.get_auth_credentials.call_args.kwargs["litellm_params"]
+        assert auth_params["api_key"] == "milvus-key"
+        assert auth_params["api_base"] == "http://milvus.internal:19530"
+
+    @pytest.mark.asyncio
     async def test_milvus_proxy_route_missing_collection_name(self):
         """
         Test that missing collection name raises HTTPException
