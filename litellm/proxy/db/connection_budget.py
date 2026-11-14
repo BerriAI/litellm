@@ -45,8 +45,12 @@ class ConnectionBudget:
             return None
         return cls.split(int(digits), rust_reserved)
 
+    @property
+    def prisma_limit(self) -> int | None:
+        """Prisma's share once the Rust pool takes some of the total, or None to leave Prisma's limit untouched."""
+        return None if self.rust == 0 else self.python
+
     def prisma_params(self, params: Mapping[str, str | int | float]) -> Mapping[str, str | int | float]:
         """``params`` with Prisma's share as its ``connection_limit``, untouched while the Rust pool takes none."""
-        if self.rust == 0:
-            return params
-        return MappingProxyType({**params, "connection_limit": self.python})
+        limit: Final = self.prisma_limit
+        return params if limit is None else MappingProxyType({**params, "connection_limit": limit})

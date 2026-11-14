@@ -49,10 +49,10 @@ Python and SQLx run side by side until every repository operation is native, so 
 | `schema` | URL param | `search_path` startup setting when not `public`; a custom schema behind PgBouncer is rejected by PgBouncer |
 | `statement_cache_size`, `pgbouncer=true`, `DATABASE_DISABLE_PREPARED_STATEMENTS` | URL params, `db_url_settings.py` | `statement_cache_capacity`: `statement_cache_size` (Prisma's default 100), 0 under `pgbouncer=true`. Run every query through `Statements::new(executor, endpoint.names_statements())` so a 0 capacity sends unnamed statements like Prisma, until a sqlx release carries transact-rs/sqlx#4337 |
 | `application_name` | URL param | A value the operator set is used on both pools; Prisma's `litellm-prisma` default becomes `litellm-native` |
-| Rotating RDS IAM / Entra token | `token_auth.py`, `PrismaWrapper` | Python mints, `NativeDatabase.set_writer_password` swaps connect options |
+| Rotating RDS IAM / Entra token | `token_auth.py`, `PrismaWrapper` | Python mints per side, `NativeDatabase.set_writer_password` / `set_reader_password` swap connect options |
 | In-container PgBouncer | `pgbouncer.py` | Inherited: the pooled URL carries PgBouncer's credential |
-| Startup connection budget | `postgres_connection_budget_message` | Counts the Rust writer pool's share |
-| Read replica routing | `routing_prisma_wrapper.py` | Planned: optional reader pool with explicit routing |
+| Startup connection budget | `postgres_connection_budget_message` | Counts the Rust writer and reader pools' shares |
+| Read replica routing | `routing_prisma_wrapper.py`, `DATABASE_URL_READ_REPLICA` | `Pools`: callers pick `writer()`, `read()` or `read_after_write()`. `read()` prefers the reader and `read_after_write()` the writer (`WriterPinnedClient`); either falls back to the other side when its pool cannot connect and skips that side for 30s, so reads keep working on the reader while the writer is down. Writes have no fallback |
 | Error classification, `lock_timeout` on rollups | `exception_handler.py`, `rollup_lock_timeout.py` | Planned |
 | `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py` | Planned |
 | Auth lookup gate, fail open on DB outage, reader choice per query | `db_lookup_gate.py`, `allow_requests_on_db_unavailable` | With each ported auth read |

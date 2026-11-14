@@ -1296,14 +1296,14 @@ def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
             2,
             "8",
             "4",
-            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 8) = up to 72 connections",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 8 + rust reader pool 2) = up to 80 connections",
         ),
         (
             "8",
             2,
             "50",
             "4",
-            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 50) = up to 240 connections",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 50 + rust reader pool 2) = up to 248 connections",
         ),
         ("8", 2, None, "0", "1 worker(s) x (writer connection_limit 8 + rust writer pool 2) = up to 10 connections"),
     ],
@@ -1325,6 +1325,7 @@ def test_connection_budget_message_sums_the_engines_each_worker_owns(
         writer_limit=writer_limit,
         rust_writer_limit=rust_writer_limit,
         reader_limit=reader_limit,
+        rust_reader_limit=rust_writer_limit,
         num_workers=num_workers,
     )
     assert expected in message
@@ -1335,7 +1336,7 @@ def test_connection_budget_message_survives_an_unparseable_limit() -> None:
     from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
 
     message: Final = postgres_connection_budget_message(
-        writer_limit="ten", rust_writer_limit=2, reader_limit=None, num_workers="2"
+        writer_limit="ten", rust_writer_limit=2, reader_limit=None, rust_reader_limit=0, num_workers="2"
     )
     assert "writer='ten'" in message
 
