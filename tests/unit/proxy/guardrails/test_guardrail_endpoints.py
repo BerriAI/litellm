@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Dict, Final, List, Literal, NamedTuple, Optional
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, create_autospec
 
 import httpx
 import pytest
@@ -20,6 +20,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
@@ -50,6 +51,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -4225,6 +4227,7 @@ class _BedrockGuardrailCall(NamedTuple):
     bedrock_payloads: Sequence[Mapping[str, object]]
     logged: Mapping[str, object]
     failure_hook_request: Mapping[str, object]
+    spend_rows: Sequence[Mapping[str, object]]
 
 
 class _CapturingLogger(CustomLogger):
@@ -4285,8 +4288,15 @@ async def _apply_bedrock_guardrail_over_http(
         return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
 
     capture: Final = _CapturingLogger()
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     mocker.patch.object(
-        litellm, "callbacks", [guardrail(AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))), capture]
+        litellm,
+        "callbacks",
+        [
+            guardrail(AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))),
+            capture,
+            ProxyDBLogger(spend_writer=lambda: spend_writer),
+        ],
     )
     mocker.patch.object(litellm, "_async_success_callback", [])
     mocker.patch.object(litellm, "_async_failure_callback", [])
@@ -4300,7 +4310,9 @@ async def _apply_bedrock_guardrail_over_http(
     app: Final = FastAPI()
     app.include_router(router)
     app.add_exception_handler(ProxyException, openai_exception_handler)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test_api_key", request_route="/guardrails/apply_guardrail"
+    )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
         response: Final = await client.post(
             "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}
@@ -4311,6 +4323,7 @@ async def _apply_bedrock_guardrail_over_http(
         bedrock_payloads=tuple(json.loads(request.content) for request in sent),
         logged=capture.logged[0],
         failure_hook_request=capture.failure_hook_requests[0] if capture.failure_hook_requests else {},
+        spend_rows=tuple(call.kwargs for call in spend_writer.update_database.await_args_list),
     )
 
 
@@ -4328,6 +4341,11 @@ async def test_apply_guardrail_logs_a_blocked_request_with_the_guardrail_verdict
     assert [record["guardrail_status"] for record in call.failure_hook_request["metadata"][_GUARDRAIL_RECORDS]] == [
         "guardrail_intervened"
     ]
+    assert [row["kwargs"]["litellm_params"]["metadata"]["status"] for row in call.spend_rows] == ["failure"]
+    assert [
+        record["guardrail_status"]
+        for record in call.spend_rows[0]["kwargs"]["litellm_params"]["metadata"][_GUARDRAIL_RECORDS]
+    ] == ["guardrail_intervened"]
 
 
 @pytest.mark.asyncio
