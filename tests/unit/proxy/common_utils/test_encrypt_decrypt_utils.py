@@ -429,13 +429,10 @@ def _store_search_tool_value(secret: str) -> object:
 def test_fips_mode_never_stores_a_secret_as_written_when_it_cannot_be_encrypted(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, store: Callable[[str], object]
 ) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "a-salt-key-that-is-not-hex")
-    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value", _raise_no_key)
+    monkeypatch.delenv("LITELLM_SALT_KEY")
+    monkeypatch.setattr(proxy_server, "master_key", None)
     assert store("my-secret") == "my-secret"
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-salt-key-that-is-not-hex")
     request.getfixturevalue("fips_mode")
     with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be at least 32 bytes of hex"):
         store("my-secret")
-
-
-def _raise_no_key(value: str, signing_key: str | None) -> bytes:
-    raise ValueError("no salt key or master key configured")
