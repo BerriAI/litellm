@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from functools import cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -791,12 +792,38 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
+def _upstream_non_openai_keys(response_type: type[BaseModel], original_chunk: BaseModel) -> tuple[str, ...]:
+    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+    expected_keys: Final = frozenset(response_type.model_fields) | frozenset({"usage"})
+    return tuple(
+        key
+        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        if key not in expected_keys and _is_public_data_name(response_type, key)
+    )
+
+
+def _is_public_data_name(response_type: type[BaseModel], key: str) -> bool:
+    return not key.startswith("_") and key not in _class_attribute_names(response_type)
+
+
+@cache
+def _class_attribute_names(response_type: type[BaseModel]) -> frozenset[str]:
+    return frozenset(dir(response_type))
+
+
+def _dump_keys(original_chunk: BaseModel, keys: tuple[str, ...]) -> Mapping[str, object]:
+    return original_chunk.model_dump(include=MappingProxyType(dict.fromkeys(keys, True)))
+
+
+def upstream_non_openai_attributes(response_type: type[BaseModel], original_chunk: BaseModel) -> Mapping[str, object]:
+    keys: Final = _upstream_non_openai_keys(response_type, original_chunk)
+    return MappingProxyType(_dump_keys(original_chunk, keys) if keys else {})
+
+
 def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
     chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
     if chunk_model is None:
         raise AttributeError(
@@ -804,11 +831,7 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
             name="model_fields",
             obj=type(original_chunk),
         )
-    candidate_keys: Final = tuple(
-        key
-        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
-        if key not in expected_keys
-    )
+    candidate_keys: Final = _upstream_non_openai_keys(type(model_response), chunk_model)
     if not candidate_keys:
         return
     candidate_values: Final[tuple[tuple[str, object], ...]] = tuple(
@@ -824,7 +847,7 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
         _assign_attributes(model_response, candidate_values)
         return
-    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
+    _assign_attributes(model_response, _dump_keys(chunk_model, candidate_keys).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:

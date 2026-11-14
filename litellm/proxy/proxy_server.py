@@ -10712,6 +10712,20 @@ def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) 
     return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
 
 
+_OPENAI_CHUNK_EXTRAS: Final = frozenset({"service_tier", "usage"})
+
+
+def _has_provider_extras(chunk: ModelResponseStream) -> bool:
+    extras: Final = chunk.model_extra or {}
+    return any(value is not None for key, value in extras.items() if key not in _OPENAI_CHUNK_EXTRAS)
+
+
+def _without_injected_usage(chunk: object) -> ModelResponseStream | None:
+    if not isinstance(chunk, ModelResponseStream) or not _has_provider_extras(chunk):
+        return None
+    return chunk.model_copy(update={"usage": None})
+
+
 async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
@@ -11137,7 +11151,9 @@ async def async_data_generator(
                         return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
-                continue
+                if (kept_chunk := _without_injected_usage(chunk)) is None:
+                    continue
+                chunk = kept_chunk
 
             if error_state is not None:
                 error_state.observe_chunk(chunk)
