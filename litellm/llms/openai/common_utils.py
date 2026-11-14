@@ -103,6 +103,15 @@ def is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
+def _openai_api_resource_segments(path: str) -> tuple[str, ...]:
+    segments: Final = tuple(segment for segment in path.split("/") if segment)
+    return segments[1:] if segments[:1] == ("v1",) else segments
+
+
+def is_openai_batch_create(method: str, path: str) -> bool:
+    return method.upper() == "POST" and _openai_api_resource_segments(path) == ("batches",)
+
+
 class OpenAIError(BaseLLMException):
     def __init__(
         self,

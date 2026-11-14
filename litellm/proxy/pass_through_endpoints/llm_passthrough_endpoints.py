@@ -66,7 +66,12 @@ from litellm.llms.deepgram.common_utils import (
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
-from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
+from litellm.llms.openai.common_utils import is_openai_batch_create
+from litellm.llms.openai.workload_identity import (
+    FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE,
+    get_workload_identity_bearer_token_for_api_base,
+    resolve_openai_workload_identity_config,
+)
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
@@ -3114,16 +3119,28 @@ async def vertex_proxy_route(
 _OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
 
 
-async def _openai_passthrough_credential(base_target_url: str) -> str | None:
-    static_api_key: Final = normalize_nonempty_secret_str(
+def _openai_passthrough_static_api_key() -> str | None:
+    return normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
             custom_llm_provider=litellm.LlmProviders.OPENAI.value,
             region_name=None,
         )
     )
+
+
+async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+    static_api_key: Final = _openai_passthrough_static_api_key()
     if static_api_key is not None:
         return static_api_key
     return await get_workload_identity_bearer_token_for_api_base(base_target_url)
+
+
+def _creates_federated_openai_batch(method: str, endpoint: str, base_target_url: str) -> bool:
+    return (
+        is_openai_batch_create(method, endpoint)
+        and _openai_passthrough_static_api_key() is None
+        and resolve_openai_workload_identity_config(api_key=None, api_base=base_target_url) is not None
+    )
 
 
 @router.api_route(
@@ -3161,6 +3178,8 @@ async def openai_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    if _creates_federated_openai_batch(request.method, endpoint, base_target_url):
+        raise HTTPException(status_code=400, detail=FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE)
     openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")

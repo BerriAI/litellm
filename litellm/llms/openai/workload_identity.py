@@ -39,6 +39,18 @@ _SDK_UPGRADE_MESSAGE: Final = (
     "Upgrade the installed openai package to use OPENAI_IDENTITY_PROVIDER_ID / "
     "OPENAI_SERVICE_ACCOUNT_ID / OPENAI_IDENTITY_TOKEN_FILE."
 )
+_FEDERATED_BATCH_CREATE_REASON: Final = (
+    "OpenAI runs a batch with the token that created it and never refreshes that token. A workload identity "
+    "token expires within an hour, so every request in this batch would fail with token_expired once it ran."
+)
+FEDERATED_BATCH_CREATE_MESSAGE: Final = (
+    f"{_FEDERATED_BATCH_CREATE_REASON} Create OpenAI batches on a deployment whose api_key is an OpenAI project "
+    "API key with Batch Write permission."
+)
+FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE: Final = (
+    f"{_FEDERATED_BATCH_CREATE_REASON} Set OPENAI_API_KEY to an OpenAI project API key with Batch Write "
+    "permission to create batches through the OpenAI pass-through."
+)
 
 
 @dataclass(frozen=True, slots=True)

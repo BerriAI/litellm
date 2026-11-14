@@ -4011,6 +4011,51 @@ def test_openai_passthrough_uses_workload_identity_token_without_static_key(
         assert json.loads(token_exchange.calls.last.request.content)["subject_token"] == "subject-token-from-file"
 
 
+@pytest.mark.parametrize("path", ["/v1/batches", "/v1/batches/", "/batches"])
+def test_openai_passthrough_refuses_batch_create_on_a_workload_identity_token(
+    openai_passthrough_client: TestClient, openai_wif_env: None, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.llms.openai.workload_identity import FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE
+
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with respx.mock(assert_all_called=False) as upstream:
+        token_exchange = upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        batches = upstream.post(url__startswith="https://api.openai.com/v1/batches").mock(
+            return_value=httpx.Response(200, json={"id": "batch_123"})
+        )
+        response = openai_passthrough_client.post(
+            f"/openai_passthrough{path}",
+            json={"input_file_id": "file-abc123", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        )
+
+    assert response.status_code == 400
+    assert FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE in response.text
+    assert (token_exchange.call_count, batches.call_count) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [("GET", "/v1/batches"), ("GET", "/v1/batches/batch_123"), ("POST", "/v1/batches/batch_123/cancel")],
+)
+def test_openai_passthrough_keeps_workload_identity_on_other_batch_calls(
+    openai_passthrough_client: TestClient, openai_wif_env: None, monkeypatch: pytest.MonkeyPatch, method: str, path: str
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        route = upstream.request(method, f"https://api.openai.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "batch_123"})
+        )
+        response = openai_passthrough_client.request(method, f"/openai_passthrough{path}")
+
+    assert (response.status_code, response.json()) == (200, {"id": "batch_123"})
+    assert route.calls.last.request.headers["authorization"] == "Bearer wif-bearer"
+
+
 @pytest.mark.asyncio
 async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign_api_base(
     openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
