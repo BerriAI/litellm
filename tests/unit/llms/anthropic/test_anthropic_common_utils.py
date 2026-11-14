@@ -1709,6 +1709,24 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert len(warnings) == int(warned)
         assert all(model in w and "model_info.thinking_on_by_default" in w for w in warnings)
 
+    @pytest.mark.usefixtures("local_model_cost_map")
+    def test_drop_clear_thinking_edits_for_model_skips_the_flag_hint_when_the_client_turned_thinking_off(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import drop_clear_thinking_edits_for_model
+
+        params: Final[dict[str, object]] = {
+            "thinking": {"type": "disabled"},
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            drop_clear_thinking_edits_for_model(params, "claude-sonnet-4-5", "anthropic")
+        warnings: Final = [r.getMessage() for r in caplog.records if "clear_thinking" in r.getMessage()]
+
+        assert params == {"thinking": {"type": "disabled"}}
+        assert len(warnings) == 1
+        assert "model_info.thinking_on_by_default" not in warnings[0]
+
     def test_strip_empty_content_blocks_from_anthropic_messages(self):
         """Covers #22930.  The core regression scenario: an assistant message
         with an empty text block alongside ``tool_use`` loses the empty block

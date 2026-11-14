@@ -1797,9 +1797,11 @@ def drop_clear_thinking_edits_for_model(
     if not thinks_without_thinking_param and drop_clear_thinking_edits(params):
         litellm.verbose_logger.warning(
             "litellm removed the clear_thinking context-management edit for model %s because the request goes out "
-            "without thinking. If this model thinks by default, set model_info.thinking_on_by_default to true to "
-            "keep the edit.",
+            "with thinking off.%s",
             model,
+            ""
+            if "thinking" in params
+            else " If this model thinks by default, set model_info.thinking_on_by_default to true to keep the edit.",
         )
 
 
