@@ -195,6 +195,7 @@ class DeploymentOptions:
     tpd: int | None = None
     daily_reset_time: str | None = None
     kubernetes_pod_discovery: bool | None = None
+    check_provider_endpoint: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
     max_parallel_requests: int | None = None

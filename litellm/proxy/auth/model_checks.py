@@ -91,7 +91,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
         return None
     return get_valid_models(
-        check_provider_endpoint=llm_provider == LlmProviders.LITELLM_PROXY,
+        check_provider_endpoint=True if llm_provider == LlmProviders.LITELLM_PROXY else None,
         custom_llm_provider=provider,
         litellm_params=litellm_params,
     )

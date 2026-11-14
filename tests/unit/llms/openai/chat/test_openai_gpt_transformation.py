@@ -2823,3 +2823,88 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
         "opted-in": True,
         "flagless": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (None, "https://api.openai.com/v1/models"),
+        ("", "https://api.openai.com/v1/models"),
+        ("https://third-party.example", "https://third-party.example/v1/models"),
+        ("http://gw.test:8317/subpath/v1", "http://gw.test:8317/subpath/v1/models"),
+        (
+            "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+        ),
+        ("http://gw.test:8317/subpath/v1/chat/completions", "http://gw.test:8317/subpath/v1/models"),
+        ("http://gw.test:8317/subpath/v1?api-version=2025-01", "http://gw.test:8317/subpath/v1/models?api-version=2025-01"),
+    ],
+)
+def test_openai_discover_models_preserves_subpath_and_query_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str | None,
+    expected_url: str,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    route: Final = respx_mock.get(expected_url).mock(
+        return_value=Response(200, json={"data": [{"id": "gemini-4-example"}]})
+    )
+
+    models: Final = OpenAIGPTConfig().discover_models(
+        {
+            "api_base": api_base,
+            "api_key": "gw-key",
+            "extra_headers": {"X-Custom-Tenant": "tenant-1"},
+        }
+    )
+
+    assert models == ["gemini-4-example"]
+    assert route.called
+    assert route.calls.last.request.headers["authorization"] == "Bearer gw-key"
+    assert route.calls.last.request.headers["x-custom-tenant"] == "tenant-1"
+
+
+def test_openai_discover_models_uses_ssl_verify_client_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Mapping
+
+    class _StubHttpClient:
+        def __init__(self, params: Mapping[str, object] | None) -> None:
+            self.client = self
+            self.params = params
+            self.url: str | None = None
+            self.headers: Mapping[str, str] | None = None
+            self.timeout: float | None = None
+
+        def get(self, url: str, headers: Mapping[str, str], timeout: float) -> Response:
+            self.url = url
+            self.headers = headers
+            self.timeout = timeout
+            return Response(200, json={"data": [{"id": "gemini-4-example"}]})
+
+    stub_holder: list[_StubHttpClient] = []
+
+    def fake_get_httpx_client(params: Mapping[str, object] | None = None) -> _StubHttpClient:
+        stub: Final = _StubHttpClient(params)
+        stub_holder.append(stub)
+        return stub
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_httpx_client", fake_get_httpx_client)
+
+    models: Final = OpenAIGPTConfig().discover_models(
+        {
+            "api_base": "https://gw.test/subpath/v1",
+            "api_key": "gw-key",
+            "ssl_verify": False,
+        }
+    )
+
+    assert models == ["gemini-4-example"]
+    assert len(stub_holder) == 1
+    assert stub_holder[0].params == {"ssl_verify": False}
+    assert stub_holder[0].url == "https://gw.test/subpath/v1/models"
+    assert dict(stub_holder[0].headers or {}) == {"Authorization": "Bearer gw-key"}
