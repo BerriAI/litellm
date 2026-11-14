@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -6,11 +8,13 @@ from fastapi import HTTPException
 from litellm.proxy._types import NewMCPServerRequest
 from litellm.proxy.mcp_server.utils import (
     build_synthetic_mcp_request,
+    is_tool_allowed_for_server,
     logging_safe_mcp_headers,
     upstream_credential_headers,
     validate_and_normalize_mcp_server_payload,
     validate_tool_display_names,
 )
+from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -283,3 +287,59 @@ def test_structured_content_redaction_updates_shared_dictionary(field):
     assert set_mcp_tool_result_structured_content(result, {"secret": "[REDACTED]"}) is True
     assert mcp_tool_result_structured_content(logging_reference) == {"secret": "[REDACTED]"}
     assert set(result) == {field, "content"}
+
+
+def _mail_server(tool_policy: Mapping[str, object]) -> MCPServer:
+    return MCPServer.model_validate(
+        {"server_id": "mail-id", "name": "mail", "alias": "mail", "transport": MCPTransport.http, **tool_policy}
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_policy", "allowed", "blocked"),
+    [
+        ({"disallowed_tools_regex": [".*(send|delete).*"]}, ("email_read", "whoami"), ("email_send", "email_delete")),
+        ({"allowed_tools_regex": ["email_.*"]}, ("email_read", "email_send"), ("whoami", "inbox_email_read")),
+        (
+            {"allowed_tools_regex": ["email_.*"], "disallowed_tools_regex": [".*send.*"]},
+            ("email_read", "email_list"),
+            ("email_send", "whoami"),
+        ),
+        ({"allowed_tools": ["whoami"], "allowed_tools_regex": ["email_.*"]}, ("whoami", "email_read"), ("calendar",)),
+        ({"allowed_tools": ["email_send"], "disallowed_tools_regex": [".*send.*"]}, (), ("email_send",)),
+        ({"allowed_tools_regex": ["email"], "disallowed_tools_regex": ["send"]}, ("email",), ("email_send",)),
+        ({"disallowed_tools_regex": [".*send.*"]}, ("email_read",), ("email\nsend",)),
+        ({"disallowed_tools": [".*send.*", "*send*"]}, ("email_send",), (".*send.*",)),
+        ({"disallowed_tools_regex": ["email_send", "("]}, (), ("email_read", "whoami")),
+        ({"allowed_tools": ["whoami"], "disallowed_tools_regex": ".*send.*"}, (), ("whoami", "email_read")),
+        ({"allowed_tools_regex": ["("]}, (), ("email_read", "whoami")),
+        ({"allowed_tools_regex": "email_.*"}, (), ("email_read", "email_.*")),
+        ({"allowed_tools_regex": ["email_.*", "(", 7]}, ("email_read",), ("whoami",)),
+        ({"allowed_tools_regex": []}, (), ("email_read",)),
+    ],
+)
+def test_tool_name_patterns_decide_which_tools_a_server_exposes(
+    tool_policy: dict[str, object], allowed: tuple[str, ...], blocked: tuple[str, ...]
+) -> None:
+    server: Final = _mail_server(tool_policy)
+
+    assert {name: is_tool_allowed_for_server(name, server) for name in allowed + blocked} == {
+        **dict.fromkeys(allowed, True),
+        **dict.fromkeys(blocked, False),
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_policy",
+    [{"disallowed_tools_regex": [r"(a|aa)+"]}, {"allowed_tools_regex": [r"(a|aa)+"]}],
+    ids=["deny", "allow"],
+)
+def test_a_tool_name_that_makes_a_pattern_backtrack_fails_closed_quickly(tool_policy: dict[str, object]) -> None:
+    import time
+
+    server: Final = _mail_server(tool_policy)
+    started: Final = time.monotonic()
+
+    allowed: Final = is_tool_allowed_for_server("a" * 80 + "-", server)
+
+    assert (allowed, time.monotonic() - started < 1) == (False, True)

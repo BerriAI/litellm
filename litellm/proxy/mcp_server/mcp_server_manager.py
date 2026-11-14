@@ -241,6 +241,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
     parse_pinned_tools,
+    parse_tool_name_patterns,
 )
 from litellm.types.utils import CallTypes
 
@@ -441,6 +442,8 @@ class MCPServerConfig(TypedDict, total=False):
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
+    allowed_tools_regex: ReadOnly[_StringList]
+    disallowed_tools_regex: ReadOnly[_StringList]
     allowed_params: _ToolParamMap
     access_groups: _StringList
     static_headers: _StringMap
@@ -1751,6 +1754,21 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
         )
 
 
+def _warn_unusable_tool_name_patterns(server: MCPServer) -> None:
+    if server.disallowed_tools_regex is not None and server.disallowed_tools_regex.unusable:
+        verbose_logger.error(
+            "MCP server %s: disallowed_tools_regex must be a list of valid regular expressions. "
+            "Every tool of this server is blocked until it is fixed.",
+            server.name,
+        )
+    if server.allowed_tools_regex is not None and server.allowed_tools_regex.unusable:
+        verbose_logger.error(
+            "MCP server %s: allowed_tools_regex must be a list of valid regular expressions. "
+            "Entries that are not valid allow no tool.",
+            server.name,
+        )
+
+
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
     """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
     if not is_legacy_upstream_delegate(server):
@@ -2876,6 +2894,8 @@ class MCPServerManager:
                 extra_headers=server_config.get("extra_headers", None),
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
+                allowed_tools_regex=parse_tool_name_patterns(server_config.get("allowed_tools_regex", None)),
+                disallowed_tools_regex=parse_tool_name_patterns(server_config.get("disallowed_tools_regex", None)),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
                 access_groups=server_config.get("access_groups", None),
@@ -2925,6 +2945,7 @@ class MCPServerManager:
             )
             self.assign_unique_short_prefix(new_server)
             _warn_overlapping_tool_policies(new_server)
+            _warn_unusable_tool_name_patterns(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
             self.invalidate_server_definition_caches(server_id)

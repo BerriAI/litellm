@@ -17,7 +17,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import has_attributes
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPToolNamePatterns
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
@@ -264,15 +264,35 @@ def is_server_tool_allowlist_enforced(mcp_server: object) -> bool:
 def server_applies_tool_allowlist(mcp_server: object) -> bool:
     """Whether server-level allowed_tools whitelist filtering is active."""
     allowed_tools: Final[object] = getattr(mcp_server, "allowed_tools", None) or []
-    return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
+    allowed_tools_regex: Final[object] = getattr(mcp_server, "allowed_tools_regex", None)
+    return (
+        is_server_tool_allowlist_enforced(mcp_server)
+        or bool(allowed_tools)
+        or isinstance(allowed_tools_regex, MCPToolNamePatterns)
+    )
+
+
+def server_has_tool_denylist(server: MCPServer) -> bool:
+    return bool(server.disallowed_tools) or isinstance(server.disallowed_tools_regex, MCPToolNamePatterns)
+
+
+def _denied_by_pattern(tool_name: str, rule: MCPToolNamePatterns | None) -> bool:
+    return isinstance(rule, MCPToolNamePatterns) and (rule.unusable or rule.fullmatches(tool_name, on_timeout=True))
+
+
+def _allowed_by_pattern(tool_name: str, rule: MCPToolNamePatterns | None) -> bool:
+    return isinstance(rule, MCPToolNamePatterns) and rule.fullmatches(tool_name, on_timeout=False)
 
 
 def is_tool_allowed_for_server(tool_name: str, server: MCPServer) -> bool:
     """Evaluate server tool policy for a bare name, with explicit denials taking precedence."""
     if match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is not None:
         return False
+    if _denied_by_pattern(tool_name, server.disallowed_tools_regex):
+        return False
     return not server_applies_tool_allowlist(server) or (
         match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
+        or _allowed_by_pattern(tool_name, server.allowed_tools_regex)
     )
 
 

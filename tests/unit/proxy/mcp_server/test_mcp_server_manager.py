@@ -1149,6 +1149,62 @@ class TestMCPServerManager:
         assert server.allowed_tools == [allowed_entry]
         assert server.disallowed_tools == [denied_entry]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_policy", "callable_tools", "refused_tools", "reports_unusable_rule"),
+        [
+            (
+                {"allowed_tools_regex": ["email_.*"], "disallowed_tools_regex": [".*(send|delete).*"]},
+                ("email_read", "email_archive"),
+                ("email_send", "email_delete", "whoami"),
+                False,
+            ),
+            ({"disallowed_tools_regex": ".*send.*"}, (), ("email_read", "email_send"), True),
+            ({"disallowed_tools_regex": ["email_send", "("]}, (), ("email_read",), True),
+            ({"allowed_tools_regex": ["("]}, (), ("email_read",), True),
+        ],
+    )
+    async def test_config_tool_name_patterns_gate_tool_calls(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        tool_policy: MCPServerConfig,
+        callable_tools: tuple[str, ...],
+        refused_tools: tuple[str, ...],
+        reports_unusable_rule: bool,
+    ) -> None:
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager: Final = MCPServerManager()
+        config: Final[dict[str, MCPServerConfig]] = {
+            "mail": {"transport": MCPTransport.stdio, "command": "python", **tool_policy}
+        }
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        for tool_name in callable_tools:
+            await manager.pre_call_tool_check(
+                name=tool_name,
+                arguments={},
+                server_name="mail",
+                user_api_key_auth=UserAPIKeyAuth(),
+                proxy_logging_obj=None,
+                server=server,
+            )
+        for tool_name in refused_tools:
+            with pytest.raises(HTTPException) as exc_info:
+                await manager.pre_call_tool_check(
+                    name=tool_name,
+                    arguments={},
+                    server_name="mail",
+                    user_api_key_auth=UserAPIKeyAuth(),
+                    proxy_logging_obj=None,
+                    server=server,
+                )
+            assert exc_info.value.status_code == 403
+        assert any("valid regular expressions" in message for message in caplog.messages) is reports_unusable_rule
+
     def _oauth2_config(self, **overrides):
         base = {
             "url": "https://example.com/mcp",

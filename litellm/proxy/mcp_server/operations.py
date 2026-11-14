@@ -867,9 +867,10 @@ def filter_tools_by_allowed_tools(
     from litellm.proxy.mcp_server.utils import (
         is_tool_allowed_for_server,
         server_applies_tool_allowlist,
+        server_has_tool_denylist,
     )
 
-    if not server_applies_tool_allowlist(mcp_server) and not mcp_server.disallowed_tools:
+    if not server_applies_tool_allowlist(mcp_server) and not server_has_tool_denylist(mcp_server):
         return tools
     return [
         tool

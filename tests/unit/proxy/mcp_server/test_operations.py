@@ -2254,3 +2254,23 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+@pytest.mark.parametrize(
+    ("tool_policy", "listed"),
+    [
+        ({"disallowed_tools_regex": [".*send.*"]}, ["mail-email_read", "mail-whoami"]),
+        ({"allowed_tools_regex": ["email_.*"]}, ["mail-email_read", "mail-email_send"]),
+        ({"allowed_tools_regex": ["email_.*"], "disallowed_tools_regex": [".*send.*"]}, ["mail-email_read"]),
+        ({"disallowed_tools_regex": ["("]}, []),
+    ],
+)
+def test_tool_listing_applies_tool_name_patterns(tool_policy: dict[str, object], listed: list[str]) -> None:
+    server: Final = MCPServer.model_validate(
+        {"server_id": "mail-id", "name": "mail", "alias": "mail", "transport": MCPTransport.http, **tool_policy}
+    )
+    tools: Final = [
+        MCPTool(name=f"mail-{name}", input_schema={"type": "object"}) for name in ("email_read", "email_send", "whoami")
+    ]
+
+    assert [tool.name for tool in operations.filter_tools_by_allowed_tools(tools, server)] == listed
