@@ -24,7 +24,6 @@ from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     carried_thinking_keys,
     carries_signed_compaction_block,
-    is_claude_tool_target,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -110,9 +109,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def should_strip_billing_metadata(self) -> bool:
         return True
-
-    def verifies_thinking_signatures(self, model: str) -> bool:
-        return is_claude_tool_target("bedrock", model)
 
     def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
         return tools

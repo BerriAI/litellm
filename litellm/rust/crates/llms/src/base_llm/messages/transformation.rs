@@ -115,6 +115,10 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
+    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
+        request
+    }
+
     fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
         headers
     }

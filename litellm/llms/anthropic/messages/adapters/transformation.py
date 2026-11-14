@@ -160,6 +160,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
+    is_unsignable_thinking_block,
     reasoning_content_from_thinking_blocks,
     thinking_blocks_with_encrypted_reasoning,
 )
@@ -176,6 +177,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     eager_input_streaming_flag,
+    is_claude_model_target,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
     strip_unreplayable_blocks_from_anthropic_messages,
@@ -618,7 +620,12 @@ class LiteLLMAnthropicMessagesAdapter:
         replayable_messages: Final = (
             messages
             if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider, deployment_model_info, route)
-            else strip_unreplayable_blocks_from_anthropic_messages(messages, is_encrypted_reasoning_block)
+            else strip_unreplayable_blocks_from_anthropic_messages(
+                messages,
+                is_unsignable_thinking_block
+                if model is not None and is_claude_model_target(custom_llm_provider, model)
+                else is_encrypted_reasoning_block,
+            )
         )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),

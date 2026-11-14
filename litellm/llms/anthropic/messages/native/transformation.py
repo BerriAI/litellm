@@ -49,6 +49,7 @@ from ...common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
+    checks_claude_signatures,
     context_management_betas,
     is_claude_model_target,
     merge_anthropic_beta_headers,
@@ -217,8 +218,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return is_claude_model_target(self._resolved_provider, model)
 
-    def verifies_thinking_signatures(self, model: str) -> bool:
-        return "claude" in model.lower()
+    def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
+        return "claude" in model.lower() and (
+            self._resolved_provider != "anthropic"
+            or checks_claude_signatures(AnthropicModelInfo.resolve_anthropic_api_base(api_base))
+        )
 
     def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
         return tools_without_custom_field(
@@ -793,7 +797,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     getattr(litellm_params, "drop_params", None),
                 ),
                 is_unsignable_thinking_block
-                if self.verifies_thinking_signatures(model)
+                if self.verifies_thinking_signatures(model, getattr(litellm_params, "api_base", None))
                 else is_encrypted_reasoning_block,
             ),
             max_tokens=max_tokens,

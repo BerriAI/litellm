@@ -150,7 +150,7 @@ _SERVER_CALL_FIELD_KEYS: Final = ("server_tool_calls", "web_search_calls")
 _WEB_SEARCH_CALL_ADAPTER: Final = TypeAdapter(ResponseFunctionWebSearch)
 _TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -171,6 +171,19 @@ def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
 
 def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
     return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+_CLAUDE_SIGNATURE_CHECKING_DOMAINS: Final = (
+    "anthropic.com",
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+)
+
+
+def checks_claude_signatures(api_base: str) -> bool:
+    host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname or ""
+    return any(host == domain or host.endswith(f".{domain}") for domain in _CLAUDE_SIGNATURE_CHECKING_DOMAINS)
 
 
 def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
@@ -2155,8 +2168,9 @@ def _replayable_message(
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    kept: Final = [_with_native_redacted_data(b) for b in content if not unreplayable(b)]
-    if kept == content:
+    blocks: Final = OBJECT_LIST_ADAPTER.validate_python(content)
+    kept: Final = [_with_native_redacted_data(b) for b in blocks if not unreplayable(b)]
+    if kept == blocks:
         return message
     if not kept:
         return None

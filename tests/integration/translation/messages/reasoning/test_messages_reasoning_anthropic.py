@@ -82,22 +82,7 @@ def test_messages_reasoning_anthropic(case: TranslationTestCase, gateway: Gatewa
     assert_translation(case, gateway, provider)
 
 
-@pytest.mark.parametrize(
-    "case",
-    (CLAUDE_SONNET_5_5_TEST_CASE, AZURE_CLAUDE_SONNET_5_5_TEST_CASE, VERTEX_CLAUDE_SONNET_5_5_TEST_CASE),
-    ids=(CLAUDE_SONNET_5_5_TEST_CASE.id, AZURE_CLAUDE_SONNET_5_5_TEST_CASE.id, VERTEX_CLAUDE_SONNET_5_5_TEST_CASE.id),
-)
-@pytest.mark.parametrize(
-    "thinking,signature,preserve",
-    (
-        pytest.param("I need the file before answering.", "scripted-signed-history", True, id="visible"),
-        pytest.param("", "scripted-signed-history", True, id="signed_empty"),
-        pytest.param("", "", False, id="empty_signature"),
-        pytest.param("", None, False, id="unsigned_empty"),
-        pytest.param("I need the file before answering.", None, True, id="unsigned_visible"),
-    ),
-)
-def test_messages_replays_signed_thinking_and_tool_results_without_losing_blocks(
+def _assert_history_replay(
     case: TranslationTestCase,
     thinking: str,
     signature: str | None,
@@ -143,3 +128,45 @@ def test_messages_replays_signed_thinking_and_tool_results_without_losing_blocks
     )
     body: Final = assert_translation(replay, gateway, provider)
     messages_structure(body)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (CLAUDE_SONNET_5_5_TEST_CASE, AZURE_CLAUDE_SONNET_5_5_TEST_CASE, VERTEX_CLAUDE_SONNET_5_5_TEST_CASE),
+    ids=(CLAUDE_SONNET_5_5_TEST_CASE.id, AZURE_CLAUDE_SONNET_5_5_TEST_CASE.id, VERTEX_CLAUDE_SONNET_5_5_TEST_CASE.id),
+)
+@pytest.mark.parametrize(
+    "thinking,signature,preserve",
+    (
+        pytest.param("I need the file before answering.", "scripted-signed-history", True, id="visible"),
+        pytest.param("", "scripted-signed-history", True, id="signed_empty"),
+        pytest.param("", "", False, id="empty_signature"),
+        pytest.param("", None, False, id="unsigned_empty"),
+    ),
+)
+def test_messages_replays_signed_thinking_and_tool_results_without_losing_blocks(
+    case: TranslationTestCase,
+    thinking: str,
+    signature: str | None,
+    preserve: bool,
+    gateway: Gateway,
+    provider: SharedProvider,
+) -> None:
+    _assert_history_replay(case, thinking, signature, preserve, gateway, provider)
+
+
+@pytest.mark.parametrize(
+    "case,preserve",
+    (
+        pytest.param(CLAUDE_SONNET_5_5_TEST_CASE, True, id=CLAUDE_SONNET_5_5_TEST_CASE.id),
+        pytest.param(AZURE_CLAUDE_SONNET_5_5_TEST_CASE, False, id=AZURE_CLAUDE_SONNET_5_5_TEST_CASE.id),
+        pytest.param(VERTEX_CLAUDE_SONNET_5_5_TEST_CASE, False, id=VERTEX_CLAUDE_SONNET_5_5_TEST_CASE.id),
+    ),
+)
+def test_messages_drops_visible_unsigned_thinking_only_where_the_host_checks_claude_signatures(
+    case: TranslationTestCase,
+    preserve: bool,
+    gateway: Gateway,
+    provider: SharedProvider,
+) -> None:
+    _assert_history_replay(case, "I need the file before answering.", None, preserve, gateway, provider)
