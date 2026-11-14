@@ -816,8 +816,7 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
         if model_id is None:
             continue
 
-        model_name = litellm_params.get("model")
-        model_info = registry.deployment_model_info(str(model_id), model_name if isinstance(model_name, str) else "")
+        model_info = registry.deployment_model_info(model_id, litellm_params.get("model") or "")
         if model_info is not None and _entry_has_priced_metric(model_info):
             return True
 

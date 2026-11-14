@@ -3087,8 +3087,11 @@ class ProxyLogging:
         is visible instead of silently forwarding unredacted content.
         """
         scans_raw_request: Final = callback.scan_raw_request
-        should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
-        input_data: Final = independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
+        input_data: Final = (
+            independent_snapshot(raw_request_snapshot)
+            if scans_raw_request and raw_request_snapshot is not None
+            else data
+        )
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
         # the dict regardless of whether the guardrail's own hook mutated

@@ -168,6 +168,8 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 
 _CACHED_VALUE: Final = TypeAdapter(object)
 _WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_HELD_RESERVATION: Final = TypeAdapter(object)
+_NATIVE_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _CounterReservationUnavailable(Exception):
@@ -390,7 +392,7 @@ async def reserve_budget_for_request(
         return None
     if pre_call_admits and native_owner_reserves() and native_budget_route(route):
         return await _native_budget_plan(
-            request_body=request_body,
+            request_body=_NATIVE_REQUEST_BODY.validate_python(request_body),
             route=route,
             counters=counters,
             valid_token=valid_token,
@@ -509,7 +511,7 @@ async def reconcile_budget_reservation(
     """Settle every reserved counter on ``actual_cost``. With ``apply_consistent`` False the adjustments for
     counters that still hold the reservation are returned instead of written, so the caller can pipeline them with
     its own increments and then call ``stamp_budget_reservation_actual_cost``."""
-    native: Final = await admitted_native_reservation(budget_reservation)
+    native: Final = await admitted_native_reservation(_HELD_RESERVATION.validate_python(budget_reservation))
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
 
@@ -576,7 +578,7 @@ async def release_budget_reservation_on_cancel(
     when success/failure handling already reconciled, so calling it on every
     cancellation path is safe.
     """
-    admission: Final = native_admission(budget_reservation)
+    admission: Final = native_admission(_HELD_RESERVATION.validate_python(budget_reservation))
     if admission is not None:
         with suppress(asyncio.CancelledError, Exception):
             _ = await asyncio.shield(admission)
