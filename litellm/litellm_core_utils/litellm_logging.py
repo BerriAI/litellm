@@ -912,76 +912,6 @@ _SYNC_CALL_TYPES: Final = frozenset(
 
 
 class Logging(LiteLLMLoggingBaseClass):
-    v2_scope: RequestScope | None = None
-    v2_auth: object = None
-    v2_failure_delivered: bool = False
-
-    def claim_v2_failure(self, eligible: bool) -> bool:
-        if not eligible or self.v2_failure_delivered:
-            return False
-        self.v2_failure_delivered = True
-        return True
-
-    def v2_logging_scope(self) -> RequestScope | None:
-        if self.v2_scope is not None or litellm.global_disable_no_log_param:
-            return self.v2_scope
-        litellm_params: Final[object] = self._model_call_details_view.get("litellm_params", {})
-        no_log: Final = require_attributes(litellm_params, _ParamsLookup, "get").get("no-log", False) is True
-        opt_outs: Final = self._v2_caller_opt_outs(litellm_params)
-        if not (no_log or opt_outs):
-            return None
-        return get_dispatcher().open_scope(RequestSelection(caller_opt_outs=opt_outs, no_log=no_log))
-
-    def _v2_caller_opt_outs(self, litellm_params: object) -> frozenset[str]:
-        if EnterpriseCallbackControls is None:
-            return frozenset()
-        try:
-            disabled: Final = EnterpriseCallbackControls.get_disabled_callbacks(
-                _callback_control_params(litellm_params), self.standard_callback_dynamic_params
-            )
-            if not disabled or not EnterpriseCallbackControls._should_allow_dynamic_callback_disabling():  # pyright: ignore[reportPrivateUsage]  # the gate should_run_callback applies
-                return frozenset()
-        except Exception as e:  # noqa: BLE001  # should_run_callback treats a failed check as not disabled
-            verbose_logger.debug("Error checking disabled callbacks header: %s", e)
-            return frozenset()
-        return frozenset(name for name in disabled if isinstance(name, str))
-
-    def v2_call_facts(self, end_time: object = None) -> CallFacts:
-        call_type: Final = str(self.call_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.call_type is untyped
-        details: Final = self._model_call_details_view
-        args: Final = HookArgs(request=details, logging_obj=self)
-        payload: Final = v2_derive.payload_of(args) or {}
-        params: Final = v2_derive.litellm_params(args)
-        ended: Final = end_time if end_time is not None else details.get("end_time")
-        route: Final = getattr(self.v2_auth, "request_route", None)
-        model_info: Final = v2_derive.mapping(v2_derive.litellm_metadata(args).get("model_info")) or {}
-        group: Final = v2_derive.model_group(args)
-        return CallFacts(
-            ids=CallIds(
-                call_id=str(self.litellm_call_id),
-                trace_id=self.litellm_trace_id,
-                session_id=self.litellm_session_id or None,
-                connection_id=v2_derive.call_connection_id(args),
-            ),
-            kind=CallKind(
-                call_type=call_type,
-                route=route if isinstance(route, str) else None,
-                stream=self.stream is True,
-                synchronous=call_type in _SYNC_CALL_TYPES
-                and self.is_sync_litellm_request(require_attributes(params, _ParamsLookup, "get")),
-                internal_origin=v2_derive.call_internal_origin(args),
-            ),
-            target=CallTarget(
-                model=str(self.model),
-                model_group=group if isinstance(group, str) else None,
-                provider=_text(payload.get("custom_llm_provider")) or _text(params.get("custom_llm_provider")),
-                api_base=_text(payload.get("api_base")) or _text(params.get("api_base")),
-                deployment_id=_text(payload.get("model_id")) or _text(model_info.get("id")),
-            ),
-            timing=CallTiming(start=_epoch(self.start_time) or 0.0, end=_epoch(ended)),
-            cache_hit=_cache_hit(payload.get("cache_hit", details.get("cache_hit"))),
-        )
-
     global \
         supabaseClient, \
         promptLayerLogger, \
@@ -1007,6 +937,9 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    v2_scope: RequestScope | None = None
+    v2_auth: object = None
+    v2_failure_delivered: bool = False
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -3347,6 +3280,30 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return True
 
+    def v2_logging_scope(self) -> RequestScope | None:
+        if self.v2_scope is not None or litellm.global_disable_no_log_param:
+            return self.v2_scope
+        litellm_params: Final[object] = self._model_call_details_view.get("litellm_params", {})
+        no_log: Final = require_attributes(litellm_params, _ParamsLookup, "get").get("no-log", False) is True
+        opt_outs: Final = self._v2_caller_opt_outs(litellm_params)
+        if not (no_log or opt_outs):
+            return None
+        return get_dispatcher().open_scope(RequestSelection(caller_opt_outs=opt_outs, no_log=no_log))
+
+    def _v2_caller_opt_outs(self, litellm_params: object) -> frozenset[str]:
+        if EnterpriseCallbackControls is None:
+            return frozenset()
+        try:
+            disabled: Final = EnterpriseCallbackControls.get_disabled_callbacks(
+                _callback_control_params(litellm_params), self.standard_callback_dynamic_params
+            )
+            if not disabled or not EnterpriseCallbackControls._should_allow_dynamic_callback_disabling():  # pyright: ignore[reportPrivateUsage]  # the gate should_run_callback applies
+                return frozenset()
+        except Exception as e:  # noqa: BLE001  # should_run_callback treats a failed check as not disabled
+            verbose_logger.debug("Error checking disabled callbacks header: %s", e)
+            return frozenset()
+        return frozenset(name for name in disabled if isinstance(name, str))
+
     def update_completion_start_time(self, completion_start_time: datetime.datetime) -> None:
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
@@ -3549,6 +3506,42 @@ class Logging(LiteLLMLoggingBaseClass):
         from litellm.proxy.hooks.autorouter_baseline_cache import invalidate_baseline_cache
 
         await invalidate_baseline_cache(self, reason, completed=completed)
+
+    def v2_call_facts(self, end_time: object = None) -> CallFacts:
+        call_type: Final = str(self.call_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.call_type is untyped
+        details: Final = self._model_call_details_view
+        args: Final = HookArgs(request=details, logging_obj=self)
+        payload: Final = v2_derive.payload_of(args) or {}
+        params: Final = v2_derive.litellm_params(args)
+        ended: Final = end_time if end_time is not None else details.get("end_time")
+        route: Final = getattr(self.v2_auth, "request_route", None)
+        model_info: Final = v2_derive.mapping(v2_derive.litellm_metadata(args).get("model_info")) or {}
+        group: Final = v2_derive.model_group(args)
+        return CallFacts(
+            ids=CallIds(
+                call_id=str(self.litellm_call_id),
+                trace_id=self.litellm_trace_id,
+                session_id=self.litellm_session_id or None,
+                connection_id=v2_derive.call_connection_id(args),
+            ),
+            kind=CallKind(
+                call_type=call_type,
+                route=route if isinstance(route, str) else None,
+                stream=self.stream is True,
+                synchronous=call_type in _SYNC_CALL_TYPES
+                and self.is_sync_litellm_request(require_attributes(params, _ParamsLookup, "get")),
+                internal_origin=v2_derive.call_internal_origin(args),
+            ),
+            target=CallTarget(
+                model=str(self.model),
+                model_group=group if isinstance(group, str) else None,
+                provider=_text(payload.get("custom_llm_provider")) or _text(params.get("custom_llm_provider")),
+                api_base=_text(payload.get("api_base")) or _text(params.get("api_base")),
+                deployment_id=_text(payload.get("model_id")) or _text(model_info.get("id")),
+            ),
+            timing=CallTiming(start=_epoch(self.start_time) or 0.0, end=_epoch(ended)),
+            cache_hit=_cache_hit(payload.get("cache_hit", details.get("cache_hit"))),
+        )
 
     def _build_standard_logging_payload(
         self,
@@ -5210,6 +5203,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     original_model_group=model_group,
                     kwargs=self.model_call_details,
                 )
+
+    def claim_v2_failure(self, eligible: bool) -> bool:
+        if not eligible or self.v2_failure_delivered:
+            return False
+        self.v2_failure_delivered = True
+        return True
 
     def failure_handler(
         self,

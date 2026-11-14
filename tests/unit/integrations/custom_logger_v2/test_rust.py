@@ -349,6 +349,7 @@ def test_the_proxy_scope_is_bound_for_the_request_and_reaches_its_logging_object
     assert scope is not None
     assert current is scope
     assert logging_obj.v2_scope is scope
+    assert isinstance(logging_obj.v2_auth, UserAPIKeyAuth)
     assert copy.deepcopy({"litellm_logging_obj": logging_obj})["litellm_logging_obj"].v2_scope is scope
     facts: Final = logging_obj.v2_call_facts()
     assert facts is not None
