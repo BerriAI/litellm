@@ -731,9 +731,10 @@ class TestLangfuseOtelKeyDynamicConfig:
         [
             ("true", [], False),
             ("true", ["langfuse.example.com"], True),
+            ("true", ["[bad", "langfuse.example.com"], True),
             ("false", [], True),
         ],
-        ids=["v2-refused", "v2-allowlisted", "v1-unchecked"],
+        ids=["v2-refused", "v2-allowlisted", "v2-allowlisted-beside-unparseable-entry", "v1-unchecked"],
     )
     def test_key_langfuse_host_refused_by_otel_v2_gets_no_exporter_or_credentials(
         self, monkeypatch: pytest.MonkeyPatch, otel_v2: str, allowed_hosts: list[str], exports_to_key_host: bool

@@ -53,21 +53,26 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     host: Final = tenant_host or LangfuseOtelLogger._get_langfuse_otel_host()  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own env host resolver rather than duplicating it
     if not host:
         return (LANGFUSE_CLOUD_US_ENDPOINT, None)
-    normalized: Final = host if host.startswith("http") else f"https://{host}"
-    endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
+    endpoint: Final = _langfuse_otel_endpoint(host)
     if tenant_host is None:
         return (endpoint, None)
-    if not _tenant_endpoint_is_allowlisted(endpoint):
+    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
         _warn_host_not_allowlisted(host)
         return None
     return (endpoint, None)
 
 
-def _tenant_endpoint_is_allowlisted(endpoint: str) -> bool:
+def _allowed_by_entry(url: str, entry: str) -> bool:
     try:
-        return is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts)
+        return is_url_destination_allowed_by_host(url, [entry])
     except ValueError:
         return False
+
+
+def _tenant_url_is_allowlisted(url: str) -> bool:
+    configured: Final = litellm.provider_url_destination_allowed_hosts
+    entries: Final = (configured,) if isinstance(configured, str) else tuple(configured or ())
+    return any(_allowed_by_entry(url, entry) for entry in entries)
 
 
 def _otel_v2_enabled_or_off() -> bool:
@@ -77,24 +82,26 @@ def _otel_v2_enabled_or_off() -> bool:
         return False
 
 
-def langfuse_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
-    return bool(params.get("langfuse_host")) and _otel_v2_enabled_or_off() and _langfuse_destination(params) is None
-
-
-def langfuse_sdk_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
-    """The same refusal for the Langfuse SDK clients, checked against the URL they actually call.
-
-    ``resolve_langfuse_host`` gives a bare host ``http://``, not the ``https://`` the OTel exporter uses.
-    """
-    from litellm.integrations.langfuse.langfuse import resolve_langfuse_host
-
-    tenant_host: Final = params.get("langfuse_host")
-    if not tenant_host or not _otel_v2_enabled_or_off():
-        return False
-    if _tenant_endpoint_is_allowlisted(resolve_langfuse_host(tenant_host)):
+def _tenant_host_refused_by_otel_v2(tenant_host: object, url_called: Callable[[str], str]) -> bool:
+    if not tenant_host or _tenant_url_is_allowlisted(url_called(str(tenant_host))) or not _otel_v2_enabled_or_off():
         return False
     _warn_host_not_allowlisted(str(tenant_host))
     return True
+
+
+def _langfuse_otel_endpoint(host: str) -> str:
+    normalized: Final = host if host.startswith("http") else f"https://{host}"
+    return f"{normalized.rstrip('/')}/api/public/otel"
+
+
+def langfuse_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    return _tenant_host_refused_by_otel_v2(params.get("langfuse_host"), _langfuse_otel_endpoint)
+
+
+def langfuse_sdk_tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.langfuse.langfuse import resolve_langfuse_host
+
+    return _tenant_host_refused_by_otel_v2(params.get("langfuse_host"), resolve_langfuse_host)
 
 
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":

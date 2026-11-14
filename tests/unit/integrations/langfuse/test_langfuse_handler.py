@@ -171,9 +171,10 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
     [
         ("true", [], ("https://global.langfuse.com", "global_public_key")),
         ("true", ["test.langfuse.com"], ("https://test.langfuse.com", "test_public_key")),
+        ("true", ["[bad", "test.langfuse.com"], ("https://test.langfuse.com", "test_public_key")),
         ("false", [], ("https://test.langfuse.com", "test_public_key")),
     ],
-    ids=["v2-refused", "v2-allowlisted", "v1-unchecked"],
+    ids=["v2-refused", "v2-allowlisted", "v2-allowlisted-beside-unparseable-entry", "v1-unchecked"],
 )
 def test_key_langfuse_host_refused_by_otel_v2_gets_the_global_logger(
     monkeypatch: pytest.MonkeyPatch,
