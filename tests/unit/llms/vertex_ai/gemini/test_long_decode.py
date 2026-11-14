@@ -518,7 +518,14 @@ async def test_unary_answer_cut_at_the_callers_cap_is_returned_with_its_token_in
 
 @pytest.mark.parametrize(
     "choice_count_request",
-    [{"max_tokens": 100_000, "n": 2}, {"extra_body": {"generationConfig": {"candidateCount": 2}}}],
+    [
+        {"max_tokens": 100_000, "n": 2},
+        {"extra_body": {"generationConfig": {"candidateCount": 2}}},
+        {"max_tokens": 100_000, "n": ""},
+        {"max_tokens": 100_000, "n": []},
+        {"max_tokens": 100_000, "n": {}},
+        {"max_tokens": 100_000, "n": "1"},
+    ],
 )
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
