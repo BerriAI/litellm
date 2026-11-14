@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
@@ -13257,9 +13258,17 @@ def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Req
 
 
 async def _forward_through_pass_through(
-    method: str, client_headers: Mapping[str, str], client_body: bytes, stream: bool, callbacks: list[CustomLogger]
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    stream: bool,
+    callbacks: list[CustomLogger],
+    body_parsed_by_auth: bool = False,
 ) -> httpx.Request:
     received: Final[list[httpx.Request]] = []
+    client_request: Final = _client_request(method, client_headers, client_body)
+    if body_parsed_by_auth:
+        safe_set_request_parsed_body(request=client_request, parsed_body={})
 
     def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
         received.append(upstream_request)
@@ -13275,7 +13284,7 @@ async def _forward_through_pass_through(
         ):
             litellm_patch.setattr(litellm, "callbacks", callbacks)
             response = await pass_through_request(
-                request=_client_request(method, client_headers, client_body),
+                request=client_request,
                 target="https://upstream.test/openai/v1/responses/resp_1",
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
@@ -13394,6 +13403,27 @@ async def test_pass_through_request_forwards_a_body_a_pre_call_hook_adds_to_a_de
     )
 
     assert _upstream_json(upstream_request) == {"reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param({}, b"", None, id="no-length-headers"),
+        pytest.param({"content-type": "application/json", "content-length": "0"}, b"", None, id="length-zero"),
+        pytest.param({"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="length-two"),
+        pytest.param({"content-type": "application/json", "transfer-encoding": "chunked"}, b"{}", {}, id="chunked"),
+    ],
+)
+async def test_pass_through_request_goes_by_the_declared_body_on_a_delete_whose_body_auth_parsed_without_reading(
+    stream: bool, client_headers: Mapping[str, str], client_body: bytes, expected_upstream_json: object
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", client_headers, client_body, stream, callbacks=[], body_parsed_by_auth=True
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
 
 
 @pytest.mark.parametrize(
