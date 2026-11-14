@@ -2917,6 +2917,58 @@ def test_route_keeps_the_openai_organization_off_another_provider(
     assert "OpenAI-Organization" not in recording_openai.headers
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["hosted_vllm/omni-moderation-latest", "litellm_proxy/omni-moderation-latest"])
+async def test_moderation_keeps_the_openai_organization_off_another_provider(
+    recording_openai: _OpenAIThatRecordsTheHeaders, model: str
+) -> None:
+    await litellm.amoderation(
+        api_key=f"sk-{uuid4()}",
+        api_base="https://models.example.com/v1",
+        organization=_DEPLOYMENT_ORGANIZATION,
+        **{**_MODERATION_CALL, "model": model},
+    )
+
+    assert recording_openai.headers is not None
+    assert "OpenAI-Organization" not in recording_openai.headers
+
+
+@respx.mock
+def test_chat_bridged_to_responses_sends_the_deployment_organization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    responses_route: Final = respx.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_org",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.4-mini",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_org",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="openai/responses/gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=f"sk-{uuid4()}",
+        organization=_DEPLOYMENT_ORGANIZATION,
+    )
+
+    assert responses_route.calls.last.request.headers.get_list("OpenAI-Organization") == [_DEPLOYMENT_ORGANIZATION]
+
+
 @pytest.mark.parametrize(
     ("route", "route_kwargs"),
     [(litellm.embedding, _EMBEDDING_CALL), (litellm.speech, _SPEECH_CALL)],

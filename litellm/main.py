@@ -6449,7 +6449,7 @@ def completion(
                 acompletion=acompletion,
                 logging_obj=logging,
                 optional_params=bridge_optional_params,
-                litellm_params=litellm_params,
+                litellm_params={**litellm_params, **({"organization": organization} if organization else {})},
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
@@ -8544,9 +8544,14 @@ async def amoderation(
             is_async=True,
             api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
-            organization=caller_or_deployment_openai_organization(
-                as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")),
-                optional_params.organization,
+            organization=(
+                caller_or_deployment_openai_organization(
+                    as_str_mapping(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("extra_headers")),
+                    optional_params.organization,
+                )
+                if (custom_llm_provider or litellm.LlmProviders.OPENAI.value)
+                in _PROVIDERS_THAT_TAKE_AN_OPENAI_ORGANIZATION
+                else None
             ),
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
