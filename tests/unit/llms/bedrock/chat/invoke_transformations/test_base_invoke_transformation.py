@@ -654,3 +654,30 @@ def test_guarded_non_claude_invoke_stream_yields_only_the_text_and_stop_chunks(
         ([(choice.delta.content, choice.finish_reason) for choice in chunk.choices], chunk.provider_specific_fields or {})
         for chunk in stream
     ] == [([("hi", None)], {}), ([(None, "stop")], {})]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-sonnet-4-6",
+        "amazon.titan-text-express-v1",
+        "mistral.mistral-7b-instruct-v0:2",
+    ],
+)
+def test_a_native_service_tier_sends_no_tier_header_to_invoke_models_whose_replies_do_not_report_it(model: str) -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    litellm.completion(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        max_tokens=10,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        serviceTier={"type": "priority"},
+    )
+
+    assert "X-Amzn-Bedrock-Service-Tier" not in send.call_args.args[0].headers
