@@ -1,6 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit, urlunsplit
@@ -628,18 +629,20 @@ async def test_an_index_size_rejection_commits_the_rest_once_and_parks_what_was_
     assert delivery_database.execute(
         "SELECT delivery_id, request_id, state::text, last_error, is_batch, "
         "accounting_payload->'accounting_repair'->>'delivery_id', "
+        "accounting_payload->'accounting_repair'->>'request_id', "
         "accounting_payload->'accounting_repair'->'rejected'->0->>'table', "
         "accounting_payload->'accounting_repair'->'rejected'->0->'key'->0->>1 = %s "
         'FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id',
         (value,),
     ).fetchall() == [
-        ("oversized", "oversized", "applied", None, False, None, None, None),
+        ("oversized", "oversized", "applied", None, False, None, None, None, None),
         (
             "oversized:index-repair",
             "oversized:index-repair",
             "parked",
             "IndexRowSizeExceeded",
             False,
+            "oversized",
             "oversized",
             "LiteLLM_DailyTagSpend",
             True,
@@ -684,7 +687,7 @@ async def test_a_batch_that_hits_the_index_limit_retries_each_delivery_and_charg
         await repository.apply_pending(_charge_then_index, isolate=isolate, retry_only=True),
     )
     assert sum(result.applied for result in retries) == 2
-    assert tuple(repair for result in retries for repair in result.repaired) == ("oversized:index-repair",)
+    assert tuple(chain.from_iterable(result.repaired for result in retries)) == ("oversized:index-repair",)
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.0,)
     assert delivery_database.execute(
         'SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
@@ -757,10 +760,12 @@ async def test_a_cancelled_isolation_commits_nothing_and_a_restart_charges_once(
 
     repository: Final = AccountingDeliveryRepository(delivery_client)
     task: Final = asyncio.create_task(repository.apply_pending(_charge_then_index, isolate=interrupted))
-    await asyncio.wait_for(charged.wait(), timeout=10)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(charged.wait(), timeout=10)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
     assert delivery_database.execute(
         'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'

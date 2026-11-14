@@ -86,6 +86,7 @@ async def _applied_within_savepoint(
         if not PrismaDBExceptionHandler.is_index_row_size_error(error):
             raise
         await transaction.execute_raw(f"ROLLBACK TO SAVEPOINT {_SAVEPOINT}")
+        await transaction.execute_raw(f"RELEASE SAVEPOINT {_SAVEPOINT}")
         return False
     await transaction.execute_raw(f"RELEASE SAVEPOINT {_SAVEPOINT}")
     return True

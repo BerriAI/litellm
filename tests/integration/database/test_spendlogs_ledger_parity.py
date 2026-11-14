@@ -1972,17 +1972,21 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
     caplog: pytest.LogCaptureFixture,
     field: str,
     rejected_tables: list[str],
-):
+) -> None:
     import logging
 
     from litellm.accounting.worker import flush_accounting_deliveries
 
-    class _Alerts:
+    class _CapturedAlerts:
+        """The worker's logging dependency with its real caches, capturing alerts instead of sending them."""
+
         def __init__(self) -> None:
-            self.messages: list[str] = []  # mutable-ok: alert sink the worker appends to
+            self.call_details: Final = proxy_server.proxy_logging_obj.call_details
+            self.internal_usage_cache: Final = proxy_server.proxy_logging_obj.internal_usage_cache
+            self.messages: Final[asyncio.Queue[str]] = asyncio.Queue()
 
         async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
-            self.messages.append(message)
+            await self.messages.put(message)
 
     token: Final = "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"
     value: Final = _unindexable(51870)
@@ -2012,7 +2016,7 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
             (json.dumps(payload),),
         )
     client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
-    alerts: Final = _Alerts()
+    alerts: Final = _CapturedAlerts()
     await client.db.connect()
     try:
         await flush_accounting_deliveries(DBSpendUpdateWriter(), client, alerts)
@@ -2029,6 +2033,7 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
             )
             deliveries: Final = connection.execute(
                 "SELECT delivery_id, state::text, last_error, "
+                "accounting_payload->'accounting_repair'->>'request_id', "
                 "ARRAY(SELECT DISTINCT item->>'table' FROM jsonb_array_elements("
                 "accounting_payload->'accounting_repair'->'rejected') AS item ORDER BY 1), "
                 "position(%s in accounting_payload::text) > 0 "
@@ -2048,12 +2053,13 @@ async def test_worker_keeps_budgeted_spend_when_the_database_cannot_index_a_long
 
     assert spend == (0.25, 0.25, 0.25, 0.25)
     assert deliveries == [
-        ("oversized", "applied", None, [], True),
-        ("oversized:index-repair", "parked", "IndexRowSizeExceeded", rejected_tables, True),
+        ("oversized", "applied", None, None, [], True),
+        ("oversized:index-repair", "parked", "IndexRowSizeExceeded", "oversized", rejected_tables, True),
     ]
     assert retained == [("oversized:index-repair", "parked")]
-    assert len(alerts.messages) == 1
-    assert ", ".join(rejected_tables) in alerts.messages[0]
-    assert ("LiteLLM_EndUserTable was not applied" in alerts.messages[0]) is (field == "end_user")
+    assert alerts.messages.qsize() == 1
+    alert: Final = alerts.messages.get_nowait()
+    assert ", ".join(rejected_tables) in alert
+    assert ("LiteLLM_EndUserTable was not applied" in alert) is (field == "end_user")
+    assert value not in alert
     assert all(value not in record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING)
-    assert all(value not in message for message in alerts.messages)

@@ -120,8 +120,11 @@ _RELOCK: Final = """SELECT delivery_id, attempts FROM "LiteLLM_SpendLogDelivery"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer FOR UPDATE SKIP LOCKED"""
 _REPAIR: Final = """INSERT INTO "LiteLLM_SpendLogDelivery"
     (delivery_id, request_id, state, attempts, last_error, accounting_payload, is_batch)
-VALUES ($1, $1, 'parked', 1, 'IndexRowSizeExceeded', $2::jsonb, false)
-ON CONFLICT (delivery_id) DO NOTHING"""
+SELECT $2, $2, 'parked', 1, 'IndexRowSizeExceeded',
+    jsonb_build_object('accounting_repair',
+        $3::jsonb || jsonb_build_object('delivery_id', delivery_id, 'request_id', request_id, 'is_batch', is_batch)),
+    false
+FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = $1"""
 _REPAIR_MARKER: Final = "accounting_repair"
 _UNDECODABLE: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'parked', attempts = attempts + 1, last_error = 'UndecodablePayload'
@@ -140,18 +143,11 @@ def repair_delivery_id(delivery_id: str) -> str:
     return f"{delivery_id}:index-repair"
 
 
-def _repair_payload(delivery_id: str, rejected: "tuple[Contribution, ...]") -> str:
-    """A parked record of the contributions Postgres could not index. It carries no top-level charge fields, so
-    even a reader that ignores the marker projects nothing from it."""
+def _repair_payload(rejected: "tuple[Contribution, ...]") -> str:
+    """The contributions Postgres could not index. The parked record nests them under its marker with the source
+    receipt's identity and no top-level charge fields, so even a reader that ignores the marker projects nothing."""
     return safe_dumps(
-        {
-            _REPAIR_MARKER: {
-                "delivery_id": delivery_id,
-                "reason": "IndexRowSizeExceeded",
-                "rejected": [asdict(item) for item in rejected],
-            }
-        },
-        non_finite_as_null=True,
+        {"reason": "IndexRowSizeExceeded", "rejected": [asdict(item) for item in rejected]}, non_finite_as_null=True
     )
 
 
@@ -254,8 +250,13 @@ class AccountingDeliveryRepository:
                     return DeliveryBatchResult()
                 rejected: Final = await isolate(transaction, projection)
                 repair_id: Final = repair_delivery_id(delivery.delivery_id)
-                if rejected:
-                    await transaction.execute_raw(_REPAIR, repair_id, _repair_payload(delivery.delivery_id, rejected))
+                recorded: Final = (
+                    await transaction.execute_raw(_REPAIR, delivery.delivery_id, repair_id, _repair_payload(rejected))
+                    if rejected
+                    else 1
+                )
+                if recorded != 1:
+                    raise RuntimeError("Could not record the rejected contributions of an accounting delivery")
                 await transaction.execute_raw(_APPLIED, (delivery.delivery_id,))
             return DeliveryBatchResult(applied=1, repaired=(repair_id,) if rejected else ())
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
