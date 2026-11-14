@@ -188,6 +188,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     pre_call_served_model,
     request_served_model,
+    resolve_wildcard_prefixed_model,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
@@ -486,9 +487,18 @@ def _get_model_names_for_budget_checks(
 ) -> list[str]:
     if model is None:
         return []
-    if isinstance(model, str):
-        return [model]
-    return model
+    base_models: list[str] = [model] if isinstance(model, str) else list(model)
+    if litellm.enable_model_prefix_enforcement:
+        expanded: list[str] = []
+        for m in base_models:
+            if m not in expanded:
+                expanded.append(m)
+            if isinstance(m, str):
+                resolved = resolve_wildcard_prefixed_model(model=m)
+                if resolved is not None and resolved not in expanded:
+                    expanded.append(resolved)
+        return expanded
+    return base_models
 
 
 async def _normalize_model_for_auth(

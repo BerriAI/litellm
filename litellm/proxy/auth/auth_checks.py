@@ -147,6 +147,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
+from litellm.proxy.litellm_pre_call_utils import resolve_wildcard_prefixed_model
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
@@ -5073,30 +5074,101 @@ def _can_object_call_model(
 
     from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
-    compaction_parent: Final = native_compaction_parent(model)
-    global_or_router_alias_target: Final = (
-        litellm.model_alias_map[model]
-        if model in litellm.model_alias_map
+    effective_model: str = model
+    if litellm.enable_model_prefix_enforcement and llm_router is not None:
+        _is_direct_alias = (
+            (team_model_aliases and model in team_model_aliases)
+            or (key_model_aliases and model in key_model_aliases)
+            or (model in litellm.model_alias_map)
+            or (model in (llm_router.registry().aliases() if hasattr(llm_router, "registry") else (llm_router.model_group_alias or {})))
+        )
+        if not _is_direct_alias:
+            _resolved_model = resolve_wildcard_prefixed_model(model=model, llm_router=llm_router)
+            if _resolved_model is None:
+                raise ModelAccessDeniedProxyException(
+                    message=(
+                        customer_model_access_denied_client_message(model=model)
+                        if object_type == "customer"
+                        else model_access_denied_client_message(model=model)
+                    ),
+                    internal_message=f"Invalid or mismatched model prefix for model={model}",
+                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+            effective_model = _resolved_model
+
+    compaction_parent: Final = native_compaction_parent(effective_model)
+    global_or_router_alias_target: str | None = (
+        litellm.model_alias_map[effective_model]
+        if effective_model in litellm.model_alias_map
         else (
-            llm_router.registry().resolve(model, kind="alias")
-            if llm_router is not None and model in llm_router.registry().aliases()
+            llm_router.registry().resolve(effective_model, kind="alias")
+            if llm_router is not None and hasattr(llm_router, "registry") and effective_model in llm_router.registry().aliases()
             else None
         )
     )
-    after_team_alias: Final = team_model_aliases.get(model, model) if team_model_aliases else model
+    if (
+        litellm.enable_model_prefix_enforcement
+        and llm_router is not None
+        and global_or_router_alias_target is not None
+        and not global_or_router_alias_target.startswith("model_name_")
+    ):
+        _resolved_global_target = resolve_wildcard_prefixed_model(
+            model=global_or_router_alias_target, llm_router=llm_router
+        )
+        if _resolved_global_target is None:
+            raise ModelAccessDeniedProxyException(
+                message=(
+                    customer_model_access_denied_client_message(model=model)
+                    if object_type == "customer"
+                    else model_access_denied_client_message(model=model)
+                ),
+                internal_message=f"Invalid or mismatched model prefix for alias target={global_or_router_alias_target}",
+                type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        global_or_router_alias_target = _resolved_global_target
+    after_team_alias: Final = (
+        team_model_aliases.get(effective_model, effective_model) if team_model_aliases else effective_model
+    )
     after_key_alias: Final = (
         key_model_aliases.get(after_team_alias, after_team_alias) if key_model_aliases else after_team_alias
     )
     after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
-    dispatched_model: Final = (
+    dispatched_model: str = (
         key_model_aliases.get(after_global_alias, after_global_alias) if key_model_aliases else after_global_alias
     )
     key_alias_applied: Final = after_key_alias != after_team_alias or dispatched_model != after_global_alias
+    if (
+        litellm.enable_model_prefix_enforcement
+        and llm_router is not None
+        and (key_alias_applied or after_team_alias != effective_model)
+        and not dispatched_model.startswith("model_name_")
+    ):
+        _resolved_dispatched = resolve_wildcard_prefixed_model(model=dispatched_model, llm_router=llm_router)
+        if _resolved_dispatched is None:
+            raise ModelAccessDeniedProxyException(
+                message=(
+                    customer_model_access_denied_client_message(model=model)
+                    if object_type == "customer"
+                    else model_access_denied_client_message(model=model)
+                ),
+                internal_message=f"Invalid or mismatched model prefix for alias target={dispatched_model}",
+                type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        if key_alias_applied:
+            dispatched_model = _resolved_dispatched
+        else:
+            effective_model = _resolved_dispatched
     potential_models: Final = (
         (dispatched_model,)
         if key_alias_applied
         else (
-            *((model, compaction_parent) if compaction_parent is not None else (model,)),
+            *((effective_model, compaction_parent) if compaction_parent is not None else (effective_model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
         )
     )
@@ -5104,7 +5176,7 @@ def _can_object_call_model(
         ()
         if key_alias_applied
         else _owning_team_names_for_team_deployment(
-            model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+            model=effective_model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
         )
     )
 
@@ -8113,6 +8185,9 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         bool: True if model matches the pattern, False otherwise
     """
     if "*" in allowed_model_pattern:
+        prefix: Final = allowed_model_pattern.removesuffix("*")
+        if allowed_model_pattern.endswith("*") and "*" not in prefix and "\n" not in model:
+            return model.startswith(prefix)
         pattern: Final = f"^{allowed_model_pattern.replace('*', '.*')}$"
         return bool(re.match(pattern, model))
 

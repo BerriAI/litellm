@@ -3,6 +3,7 @@ import copy
 import itertools
 import json
 import re
+import sys
 import time
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
@@ -66,6 +67,9 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    resolve_model_and_provider_for_metadata,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
@@ -3326,6 +3330,20 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Normalize non-alias model name to configured router Model Name before alias resolution
+    if litellm.enable_model_prefix_enforcement and llm_router is not None and isinstance((_cur_model := data.get("model")), str):
+        _team_aliases = user_api_key_dict.team_model_aliases
+        _key_aliases = user_api_key_dict.aliases
+        _is_direct_alias = (
+            (isinstance(_team_aliases, dict) and _cur_model in _team_aliases)
+            or (isinstance(_key_aliases, dict) and _cur_model in _key_aliases)
+            or (_cur_model in litellm.model_alias_map)
+            or (_cur_model in (llm_router.registry().aliases() if hasattr(llm_router, "registry") else (llm_router.model_group_alias or {})))
+        )
+        if not _is_direct_alias:
+            if (_resolved_model := resolve_wildcard_prefixed_model(_cur_model, llm_router)) is not None and _resolved_model != _cur_model:
+                data["model"] = _resolved_model
+
     # Save pre-alias model name for credential override lookup
     _pre_alias_model: Final = data.get("model")
 
@@ -3340,6 +3358,17 @@ async def add_litellm_data_to_request(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
+
+    # If an alias rewrote the model to a non-team-internal target, normalize that target as well
+    if (
+        litellm.enable_model_prefix_enforcement
+        and llm_router is not None
+        and isinstance((_post_alias_model := data.get("model")), str)
+        and _post_alias_model != _pre_alias_model
+        and not _post_alias_model.startswith("model_name_")
+    ):
+        if (_resolved_post := resolve_wildcard_prefixed_model(_post_alias_model, llm_router)) is not None and _resolved_post != _post_alias_model:
+            data["model"] = _resolved_post
 
     data[_metadata_variable_name]["litellm_roi_estimator"] = (
         getattr(request.state, "litellm_roi_estimator", False) is True
@@ -3973,6 +4002,203 @@ def request_served_model(
     return pre_call_served_model(
         caller_alias_target(model, user_api_key_dict, llm_router), user_api_key_dict, model_group_alias
     )
+
+
+
+_MODEL_FAMILY_CACHE_LEN: int = -1
+_MODEL_FAMILY_PROVIDER_MAP: dict[str, str] = {}
+_ROUTER_MODEL_LIST_REF: list | None = None
+_ROUTER_MODEL_LIST_LEN: int = -1
+_ROUTER_EXACT_MODELS: frozenset[str] = frozenset()
+_ROUTER_EXACT_LITELLM_MAP: dict[str, str] = {}
+_ROUTER_PREFIX_TO_PUB: dict[str, str] = {}
+_ROUTER_PROVIDER_TO_RULE: dict[str, tuple[str, str, str]] = {}
+_ROUTER_RESOLVED_CACHE: dict[str, str] = {}
+
+
+def _infer_provider_from_model_cost_family(bare_model: str) -> str | None:
+    global _MODEL_FAMILY_CACHE_LEN
+    model_cost = litellm.model_cost
+    if isinstance(model_cost, dict) and len(model_cost) != _MODEL_FAMILY_CACHE_LEN:
+        _MODEL_FAMILY_PROVIDER_MAP.clear()
+        for sample_m, sample_info in model_cost.items():
+            if not isinstance(sample_m, str) or "/" in sample_m or not isinstance(sample_info, dict):
+                continue
+            fam, has_dash, _ = sample_m.lower().partition("-")
+            prov = sample_info.get("litellm_provider")
+            if has_dash and fam and isinstance(prov, str) and prov and fam not in _MODEL_FAMILY_PROVIDER_MAP:
+                _MODEL_FAMILY_PROVIDER_MAP[fam] = prov
+        _MODEL_FAMILY_CACHE_LEN = len(model_cost)
+    family, has_dash, _ = bare_model.lower().partition("-")
+    return _MODEL_FAMILY_PROVIDER_MAP.get(family) if has_dash else None
+
+
+def _rebuild_router_prefix_index(model_list: list) -> None:
+    global _ROUTER_MODEL_LIST_REF, _ROUTER_MODEL_LIST_LEN
+    global _ROUTER_EXACT_MODELS, _ROUTER_EXACT_LITELLM_MAP
+    global _ROUTER_PREFIX_TO_PUB, _ROUTER_PROVIDER_TO_RULE
+
+    exact_models: set[str] = set()
+    exact_litellm_map: dict[str, str] = {}
+    prefix_to_pub: dict[str, str] = {}
+    provider_to_rule: dict[str, tuple[str, str, str]] = {}
+    pending_exact: list[tuple[str, str, str]] = []
+
+    for dep in model_list:
+        if isinstance(dep, dict):
+            pub_name = dep.get("model_name", "")
+            litellm_params = dep.get("litellm_params") or {}
+            model_info = dep.get("model_info") or {}
+        else:
+            pub_name = getattr(dep, "model_name", "")
+            litellm_params = getattr(dep, "litellm_params", None) or {}
+            model_info = getattr(dep, "model_info", None) or {}
+
+        if not isinstance(pub_name, str) or not pub_name:
+            continue
+
+        owner_team_id = (
+            model_info.get("team_id")
+            if isinstance(model_info, dict)
+            else getattr(model_info, "team_id", None)
+        )
+        if owner_team_id is not None or pub_name.startswith("model_name_"):
+            continue
+
+        if isinstance(litellm_params, dict):
+            litellm_model = litellm_params.get("model", "")
+            dep_custom_provider = litellm_params.get("custom_llm_provider", "")
+        else:
+            litellm_model = getattr(litellm_params, "model", "")
+            dep_custom_provider = getattr(litellm_params, "custom_llm_provider", "")
+
+        if pub_name.endswith("/*"):
+            if isinstance(litellm_model, str) and litellm_model.endswith("/*"):
+                llm_wildcard = litellm_model
+            elif litellm_model == "*" and isinstance(dep_custom_provider, str) and dep_custom_provider:
+                llm_wildcard = f"{dep_custom_provider}/*"
+            else:
+                continue
+            pub_prefix = pub_name.removesuffix("*")
+            litellm_prefix = llm_wildcard.removesuffix("*")
+            base_llm = litellm_prefix.removesuffix("/")
+            prefix_to_pub[pub_prefix] = pub_prefix
+            prefix_to_pub[litellm_prefix] = pub_prefix
+            provider_to_rule[base_llm] = (pub_prefix, litellm_prefix, base_llm)
+        else:
+            exact_models.add(pub_name)
+            if isinstance(litellm_model, str) and litellm_model:
+                pending_exact.append(
+                    (
+                        pub_name,
+                        litellm_model,
+                        dep_custom_provider if isinstance(dep_custom_provider, str) else "",
+                    )
+                )
+
+    for pub_name, litellm_model, dep_prov in pending_exact:
+        llm_prov, llm_sep, llm_bare = litellm_model.partition("/")
+        if not llm_sep:
+            llm_bare = litellm_model
+            llm_prov = dep_prov
+        if llm_bare == pub_name or (
+            llm_prov and f"{llm_prov}/" not in prefix_to_pub and llm_prov not in provider_to_rule
+        ):
+            exact_litellm_map.setdefault(litellm_model, pub_name)
+            if not llm_sep and dep_prov:
+                exact_litellm_map.setdefault(f"{dep_prov}/{litellm_model}", pub_name)
+
+    _ROUTER_EXACT_MODELS = frozenset(exact_models)
+    _ROUTER_EXACT_LITELLM_MAP = exact_litellm_map
+    _ROUTER_PREFIX_TO_PUB = prefix_to_pub
+    _ROUTER_PROVIDER_TO_RULE = provider_to_rule
+    _ROUTER_RESOLVED_CACHE.clear()
+    _ROUTER_MODEL_LIST_REF = model_list
+    _ROUTER_MODEL_LIST_LEN = len(model_list)
+
+
+def _compute_wildcard_prefixed_model(model: str) -> str | None:
+    if model in _ROUTER_EXACT_MODELS:
+        return model
+    if model in _ROUTER_EXACT_LITELLM_MAP:
+        return _ROUTER_EXACT_LITELLM_MAP[model]
+
+    prefix_part, sep, bare_model = model.partition("/")
+    if not sep:
+        bare_model = model
+
+    if not bare_model or (sep and bare_model in _ROUTER_EXACT_MODELS):
+        return None
+
+    given_prefix = f"{prefix_part}/" if sep else ""
+    if sep:
+        if given_prefix not in _ROUTER_PREFIX_TO_PUB:
+            return None
+        if "/" in bare_model:
+            inner_prefix, inner_sep, _ = bare_model.partition("/")
+            if inner_sep and f"{inner_prefix}/" in _ROUTER_PREFIX_TO_PUB:
+                return None
+
+    stripped_model = bare_model
+    custom_llm_provider: str | None = None
+    try:
+        stripped_model, custom_llm_provider = resolve_model_and_provider_for_metadata(model=bare_model)
+    except Exception:
+        custom_llm_provider = _infer_provider_from_model_cost_family(bare_model)
+
+    if not custom_llm_provider:
+        if sep:
+            pub_p = _ROUTER_PREFIX_TO_PUB.get(given_prefix)
+            return f"{pub_p}{bare_model}" if pub_p else None
+        return model
+
+    rule = _ROUTER_PROVIDER_TO_RULE.get(custom_llm_provider)
+    if rule is None:
+        base_prov, _, _ = custom_llm_provider.partition("-")
+        if base_prov == custom_llm_provider:
+            base_prov, _, _ = custom_llm_provider.partition("_")
+        rule = _ROUTER_PROVIDER_TO_RULE.get(base_prov)
+
+    if rule is not None:
+        pub_prefix, litellm_prefix, _ = rule
+        if given_prefix in ("", pub_prefix, litellm_prefix):
+            return f"{pub_prefix}{stripped_model}"
+        return None
+
+    return model if not sep else None
+
+
+def resolve_wildcard_prefixed_model(
+    model: str,
+    llm_router: Router | None = None,
+) -> str | None:
+    if not litellm.enable_model_prefix_enforcement:
+        return model
+    if llm_router is None:
+        _proxy_srv = sys.modules.get("litellm.proxy.proxy_server")
+        llm_router = getattr(_proxy_srv, "llm_router", None) if _proxy_srv is not None else None
+        if llm_router is None:
+            return model
+    model_list = llm_router.model_list
+    if model_list is _ROUTER_MODEL_LIST_REF and len(model_list) == _ROUTER_MODEL_LIST_LEN:
+        try:
+            return _ROUTER_RESOLVED_CACHE[model]
+        except (KeyError, TypeError):
+            if not isinstance(model, str) or not model:
+                return model
+    else:
+        if not model_list or not isinstance(model, str) or not model:
+            return model
+        _rebuild_router_prefix_index(model_list)
+
+    resolved = _compute_wildcard_prefixed_model(model)
+    if resolved is not None and len(model) <= 1024 and len(resolved) <= 1024:
+        if len(_ROUTER_RESOLVED_CACHE) >= 4096:
+            _ROUTER_RESOLVED_CACHE.pop(next(iter(_ROUTER_RESOLVED_CACHE)), None)
+        _ROUTER_RESOLVED_CACHE[model] = resolved
+        if resolved != model:
+            _ROUTER_RESOLVED_CACHE[resolved] = resolved
+    return resolved
 
 
 def _apply_credential_overrides_from_model_config(
