@@ -4982,9 +4982,11 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
  "percent-encoding",
+ "regex",
  "rstest",
  "serde_json",
  "tokio",
