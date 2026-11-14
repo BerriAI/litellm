@@ -1,3 +1,4 @@
+import datetime
 import json
 from pathlib import Path
 from typing import Final
@@ -6,7 +7,6 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.cost_calculator import default_image_cost_calculator
-from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.types.utils import ModelInfo
 
 REPO_ROOT: Final = Path(__file__).parents[2]
@@ -40,6 +40,7 @@ SERVERLESS_CHAT_MODELS: Final = (
 
 # Absent from https://api.together.ai/v1/models?serverless=true and refused by a direct call on 2026-10-30,
 # rnj-1-instruct on 2026-11-14
+LAST_PROBED: Final = datetime.date(2026, 11, 14)
 DEDICATED_ONLY_MODELS: Final = (
     "together_ai/BAAI/bge-base-en-v1.5",
     "together_ai/MiniMaxAI/MiniMax-M2.7",
@@ -154,11 +155,18 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
     )
 
 
-def test_together_dedicated_only_rows_stay_off_the_model_list(cost_map: CostMap):
-    listed: Final = tuple(
-        model for model in DEDICATED_ONLY_MODELS if model in cost_map and not is_hidden_as_retired(cost_map[model])
+def _deprecated_by(info: dict[str, object], day: datetime.date) -> bool:
+    deprecation_date: Final = info.get("deprecation_date")
+    return isinstance(deprecation_date, str) and datetime.date.fromisoformat(deprecation_date) <= day
+
+
+def test_together_dedicated_only_rows_are_deprecated_by_their_last_probe(cost_map: CostMap):
+    undated: Final = tuple(
+        model
+        for model in DEDICATED_ONLY_MODELS
+        if model in cost_map and not _deprecated_by(cost_map[model], LAST_PROBED)
     )
-    assert listed == ()
+    assert undated == ()
 
 
 def _routed_mode(cost_map: CostMap, info: dict[str, object]) -> object:
