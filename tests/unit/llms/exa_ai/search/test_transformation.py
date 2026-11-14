@@ -122,35 +122,17 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
     )
 
     assert response.object == "search"
-    assert response.results == [
-        SearchResult.model_validate(
-            {
-                "title": "First",
-                "url": "https://example.com/first",
-                "snippet": "First text",
-                "date": "2024-01-05T00:00:00.000Z",
-                "highlights": ["ignored when text is present"],
-                "highlight_scores": [0.5],
-                "score": 0.42,
-            }
+    expected: Final = [
+        SearchResult(
+            title="First", url="https://example.com/first", snippet="First text", date="2024-01-05T00:00:00.000Z"
         ),
-        SearchResult.model_validate(
-            {
-                "title": "Second",
-                "url": "https://example.com/second",
-                "snippet": "one\n\ntwo",
-                "highlights": ["one", "two"],
-            }
-        ),
+        SearchResult(title="Second", url="https://example.com/second", snippet="one\n\ntwo"),
         SearchResult(title="Third", url="https://example.com/third", snippet="Summary"),
     ]
-    assert response.model_extra == {
-        "provider_metadata": {
-            "requestId": "b5947044c4b78efa9552a7c89b306d95",
-            "resolvedSearchType": "neural",
-            "costDollars": {"total": 0.005},
-        }
-    }
+
+    assert [result.model_dump(include=set(SearchResult.model_fields)) for result in response.results] == [
+        result.model_dump() for result in expected
+    ]
 
 
 @pytest.mark.parametrize(
@@ -162,10 +144,18 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
         ({"highlightScores": [0.1]}, {"highlight_scores": [0.1]}),
         ({"score": None}, {"score": None}),
         ({"highlights": [], "highlightScores": [], "score": 0}, {"highlights": [], "highlight_scores": [], "score": 0}),
-        ({"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"}, {}),
+        (
+            {"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"},
+            {"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"},
+        ),
+        ({"publishedDate": "2026-01-01"}, {}),
+        (
+            {"text": "full text", "highlightScores": [0.2], "publishedDate": None, "favicon": "f"},
+            {"highlight_scores": [0.2], "favicon": "f"},
+        ),
     ],
 )
-def test_transform_search_response_attaches_only_the_exa_result_fields_it_returned(
+def test_transform_search_response_carries_each_exa_result_field_once(
     exa_fields: dict[str, object], expected_extras: dict[str, object]
 ):
     response: Final = _transform(
@@ -177,7 +167,8 @@ def test_transform_search_response_attaches_only_the_exa_result_fields_it_return
         }
     )
 
-    assert [result.model_extra for result in response.results] == [{}, expected_extras]
+    assert response.results[0].model_extra == {}
+    assert response.results[1].model_extra == expected_extras
 
 
 @pytest.mark.parametrize(
@@ -198,7 +189,7 @@ def test_transform_search_response_keeps_the_exa_envelope_as_provider_metadata(
 ):
     response: Final = _transform(payload)
 
-    assert response.model_extra == {"provider_metadata": expected_metadata}
+    assert response.model_extra["provider_metadata"] == expected_metadata
     assert response.model_dump(mode="json")["provider_metadata"] == expected_metadata
 
 
@@ -283,3 +274,369 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
         ExaAISearchConfig().get_complete_url(api_base=api_base, optional_params={})
         == "https://gateway.example.com/exa/search"
     )
+
+
+OUTPUT_SCHEMA: Final = {"type": "object", "properties": {"answer": {"type": "string"}}}
+OUTPUT: Final = {
+    "content": {"answer": "Grounded answer"},
+    "grounding": [
+        {"field": "answer", "citations": [{"url": "https://example.com", "title": "Source"}], "confidence": "high"}
+    ],
+}
+FULL_RESULT: Final = {
+    "title": "Source",
+    "url": "https://example.com",
+    "publishedDate": "2026-01-01",
+    "author": None,
+    "id": "document-id",
+    "image": "https://example.com/image.png",
+    "favicon": "https://example.com/icon.png",
+    "text": "",
+    "highlights": ["relevant passage", "another passage"],
+    "highlightScores": [0.8, 0.7],
+    "summary": "summary",
+    "subpages": [{"title": "Subpage", "url": "https://example.com/sub"}],
+    "extras": {
+        "links": ["https://example.com/link"],
+        "richLinks": [{"url": "https://example.com/link", "anchor": "Link"}],
+    },
+    "entities": [{"id": "entity", "type": "company", "properties": {"name": "Example"}}],
+    "futureField": {"nested": [False, 0, None]},
+}
+FULL_RESPONSE: Final = {
+    "results": [FULL_RESULT],
+    "output": OUTPUT,
+    "requestId": "request-id",
+    "costDollars": {"total": 0.012},
+    "searchTime": 24,
+    "resolvedSearchType": "auto",
+    "context": "",
+    "futureMetadata": [],
+}
+
+
+@pytest.mark.parametrize("mode", ["instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.asyncio
+async def test_public_search_preserves_native_contract(respx_mock: respx.MockRouter, mode: str, asynchronous: bool):
+    native: Final = {
+        "type": mode,
+        "additionalQueries": ["related question"],
+        "outputSchema": OUTPUT_SCHEMA,
+        "systemPrompt": "Use grounded sources",
+        "objective": "Research",
+        "userIdentifier": "opaque-id",
+        "userLocation": {"latitude": 40.7, "longitude": -74.0, "country": "US"},
+        "includeDomains": ["example.com"],
+        "excludeDomains": ["other.example"],
+        "startPublishedDate": "2026-01-01T00:00:00Z",
+        "endPublishedDate": "2026-02-01T00:00:00Z",
+        "moderation": False,
+        "numResults": 3,
+        "category": "publication",
+        "compliance": "hipaa",
+        "contents": {
+            "highlights": {"query": "evidence", "dynamic": True, "verbosity": "medium"},
+            "extras": {"links": 2, "imageLinks": 2, "richLinks": 2, "richImageLinks": 2, "codeBlocks": 2},
+            "maxAgeHours": -1,
+            "livecrawlTimeout": 5000,
+            "subpages": 1,
+            "subpageTarget": ["about"],
+        },
+    }
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json=FULL_RESPONSE)
+    headers: Final = {"Exa-Beta": "dynamic-highlights-2026-08-28"}
+    result: Final = (
+        await litellm.asearch(query="question", search_provider="exa_ai", extra_headers=headers, **native)
+        if asynchronous
+        else litellm.search(query="question", search_provider="exa_ai", extra_headers=headers, **native)
+    )
+    assert json.loads(route.calls.last.request.content) == {"query": "question", **native}
+    assert route.calls.last.request.headers["exa-beta"] == headers["Exa-Beta"]
+    assert result.model_dump() == {
+        "object": "search",
+        "results": [
+            {
+                "title": "Source",
+                "url": "https://example.com",
+                "snippet": "relevant passage\n\nanother passage",
+                "date": "2026-01-01",
+                "last_updated": None,
+                "author": None,
+                "id": "document-id",
+                "image": "https://example.com/image.png",
+                "favicon": "https://example.com/icon.png",
+                "highlights": ["relevant passage", "another passage"],
+                "highlight_scores": [0.8, 0.7],
+                "summary": "summary",
+                "subpages": [{"title": "Subpage", "url": "https://example.com/sub"}],
+                "extras": {
+                    "links": ["https://example.com/link"],
+                    "richLinks": [{"url": "https://example.com/link", "anchor": "Link"}],
+                },
+                "entities": [{"id": "entity", "type": "company", "properties": {"name": "Example"}}],
+                "futureField": {"nested": [False, 0, None]},
+            }
+        ],
+        "provider_metadata": {key: value for key, value in FULL_RESPONSE.items() if key != "results"},
+    }
+    assert json.loads(result.model_dump_json()) == result.model_dump()
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        None,
+        {},
+        {"text": False},
+        {"highlights": True},
+        {
+            "text": {
+                "maxCharacters": 800,
+                "includeHtmlTags": True,
+                "verbosity": "full",
+                "includeSections": ["body"],
+                "excludeSections": ["footer"],
+            }
+        },
+        {"summary": {"query": "summarize", "schema": OUTPUT_SCHEMA}},
+        {"highlights": {"maxCharacters": 700, "query": "evidence"}, "snapshotAsOf": "2026-01-01"},
+        {"text": True, "livecrawl": "never", "crawledBeforeDate": "2026-01-01", "context": {"maxCharacters": 200}},
+    ],
+)
+@pytest.mark.usefixtures("exa_api_key")
+def test_contents_are_sent_without_injecting_text(respx_mock: respx.MockRouter, contents: object):
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    litellm.search(query="question", search_provider="exa_ai", contents=contents)
+    assert json.loads(route.calls.last.request.content) == {"query": "question", "contents": contents}
+
+
+@pytest.mark.parametrize(
+    "output", [None, {}, {"content": "", "grounding": []}, {"content": {}, "grounding": []}, OUTPUT]
+)
+def test_output_preserves_present_empty_and_null_values(output: object):
+    response: Final = _transform({"results": [], "output": output})
+    assert response.model_dump() == {"results": [], "object": "search", "provider_metadata": {"output": output}}
+
+
+def test_absent_output_stays_absent():
+    assert _transform({"results": []}).model_dump() == {"results": [], "object": "search", "provider_metadata": {}}
+
+
+@pytest.fixture(autouse=True)
+def use_httpx_for_respx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def test_legacy_parameters_and_unified_precedence_are_preserved():
+    legacy: Final = {
+        "max_results": 4,
+        "numResults": 9,
+        "country": "US",
+        "userLocation": "GB",
+        "search_domain_filter": ["example.com"],
+        "includeDomains": ["other.example"],
+        "startCrawlDate": "2020-01-01",
+        "endCrawlDate": "2021-01-01",
+        "includeText": ["one"],
+        "excludeText": ["two"],
+        "context": True,
+        "max_tokens_per_page": 100,
+    }
+    before: Final = json.dumps(legacy, sort_keys=True)
+    request: Final = ExaAISearchConfig().transform_search_request(["first", "second"], legacy)
+    assert request == {
+        "query": "first second",
+        "numResults": 4,
+        "userLocation": "US",
+        "includeDomains": ["example.com"],
+        "startCrawlDate": "2020-01-01",
+        "endCrawlDate": "2021-01-01",
+        "includeText": ["one"],
+        "excludeText": ["two"],
+        "context": True,
+        "contents": {"text": True},
+    }
+    assert json.dumps(legacy, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("total", [0, 0.012, 2])
+@pytest.mark.parametrize("serialized", [False, True])
+def test_exa_reported_total_prices_the_whole_request(total: float, serialized: bool) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    response: Final = SearchResponse.model_validate(
+        {"results": [], "costDollars": {"total": 999}, "provider_metadata": {"costDollars": {"total": total}}}
+    )
+    payload: Final = response.model_dump() if serialized else response
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", number_of_queries=3, response=payload) == (
+        total,
+        0.0,
+    )
+    assert (
+        litellm.completion_cost(
+            completion_response=payload,
+            model="exa_ai/search",
+            custom_llm_provider="exa_ai",
+            call_type="search",
+            optional_params={"query": ["one", "two"], "costDollars": {"total": 999}},
+        )
+        == total
+    )
+    assert litellm.cost_per_token(
+        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search", response=payload
+    ) == (total, 0.0)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        None,
+        {},
+        {"total": None},
+        {"total": -1},
+        {"total": True},
+        {"total": "0.01"},
+        {"total": float("nan")},
+        {"total": float("inf")},
+        [],
+    ],
+)
+def test_exa_missing_or_invalid_total_uses_estimate(reported: object) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    estimate: Final = search_provider_cost_per_query("exa_ai/search", "exa_ai")
+    assert (
+        search_provider_cost_per_query(
+            "exa_ai/search",
+            "exa_ai",
+            response={"costDollars": {"total": 999}, "provider_metadata": {"costDollars": reported}},
+            optional_params={"costDollars": {"total": 999}},
+        )
+        == estimate
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_adds_each_result_above_the_included_ten() -> None:
+    from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_ADDITIONAL_RESULT_COST
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    base, _ = search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+    assert base > 0.0
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params={"max_results": 5}) == (base, 0.0)
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"max_results": 25}
+    ) == pytest.approx((base + 15 * EXA_AI_ADDITIONAL_RESULT_COST, 0.0))
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"numResults": 12}
+    ) == pytest.approx((base + 2 * EXA_AI_ADDITIONAL_RESULT_COST, 0.0))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("contents", "summarized_pages"),
+    [
+        (None, 0),
+        ({"text": True}, 0),
+        ({"summary": False}, 0),
+        ({"summary": True}, 12),
+        ({"summary": {}}, 12),
+        ({"summary": {"query": "key facts"}}, 12),
+    ],
+)
+def test_exa_estimate_adds_each_summarized_page(contents: object, summarized_pages: int) -> None:
+    from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_SUMMARY_COST_PER_PAGE
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    unsummarized, _ = search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params={"max_results": 12})
+    params: Final = {"max_results": 12, **({"contents": contents} if contents is not None else {})}
+
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=params) == pytest.approx(
+        (unsummarized + summarized_pages * EXA_AI_SUMMARY_COST_PER_PAGE, 0.0)
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_adds_no_summary_charge_on_lite() -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    lite: Final = {"type": "lite", "max_results": 12}
+    # https://exa.ai/docs/reference/pricing (2026-10-28) lists no AI page summary price for Lite
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={**lite, "contents": {"summary": True}}
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=lite)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", number_of_queries=3
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("search_type", "pricing_model"),
+    [
+        ("lite", "exa_ai/search-lite"),
+        ("instant", "exa_ai/search-instant"),
+        ("auto", "exa_ai/search"),
+        ("fast", "exa_ai/search"),
+        ("deep-lite", "exa_ai/search-deep-lite"),
+        ("deep", "exa_ai/search-deep"),
+        ("deep-reasoning", "exa_ai/search-deep-reasoning"),
+    ],
+)
+def test_exa_estimate_uses_the_price_of_its_search_type(search_type: str, pricing_model: str) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    model_info: Final = litellm.get_model_info(model=pricing_model, custom_llm_provider="exa_ai")
+
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params={"type": search_type}) == (
+        model_info["input_cost_per_query"],
+        0.0,
+    )
+
+
+@pytest.mark.parametrize("native_count", [1, 100])
+def test_exa_estimate_uses_the_result_count_sent_to_provider(native_count: int) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    params: Final = {"max_results": 25, "numResults": native_count}
+    outgoing: Final = ExaAISearchConfig().transform_search_request("question", params)
+    assert outgoing["numResults"] == 25
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=params) == (
+        search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=outgoing)
+    )
+
+
+@pytest.mark.parametrize("count", [True, -1, 1.5, float("nan"), float("inf"), "25"])
+def test_exa_estimate_ignores_invalid_result_counts(count: object) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"numResults": count}
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.asyncio
+async def test_lite_search_preserves_mode_and_highlights(respx_mock: respx.MockRouter, asynchronous: bool) -> None:
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json=FULL_RESPONSE)
+    response: Final = (
+        await litellm.asearch(query="question", search_provider="exa_ai", type="lite", contents={"highlights": True})
+        if asynchronous
+        else litellm.search(query="question", search_provider="exa_ai", type="lite", contents={"highlights": True})
+    )
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "question",
+        "type": "lite",
+        "contents": {"highlights": True},
+    }
+    assert response.results[0].snippet == "\n\n".join(FULL_RESULT["highlights"])
