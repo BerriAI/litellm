@@ -57,6 +57,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    undeliverable_tool_calls_reason,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -441,6 +442,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
+        *,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
@@ -511,6 +514,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
 
+            pre_guardrail_tool_call_count: Final = len(tool_calls_with_server_calls)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -520,6 +524,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+            undeliverable_reason: Final = (
+                undeliverable_tool_calls_reason(returned_tool_calls, pre_guardrail_tool_call_count)
+                if deliver_ended_stream_rewrites and isinstance(returned_tool_calls, list)
+                else None
+            )
+            if undeliverable_reason is not None:
+                from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown", undeliverable_reason)
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
                 cast(list[dict[str, object]], returned_tool_calls)
                 if isinstance(returned_tool_calls, list)
@@ -726,6 +739,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             litellm_logging_obj=litellm_logging_obj,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
         )
         if not deliver_ended_stream_rewrites:
             return

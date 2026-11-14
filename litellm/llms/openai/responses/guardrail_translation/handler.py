@@ -39,7 +39,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast, runtime_checkable
 
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import (
     ReadOnly,
     TypedDict,
@@ -65,12 +65,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
     list_field,
     merge_guardrailed_scoped_messages,
+    returned_tool_call_function,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    undeliverable_tool_calls_reason,
     web_search_call,
     with_web_search_call_arguments,
 )
@@ -92,7 +94,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     claude_web_search_call_tool_call,
     tool_output_to_chat_content,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
@@ -149,19 +150,6 @@ class _ToolCallShape(NamedTuple):
     arguments: str
 
 
-class _ToolCallFunctionFields(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    name: str | None = None
-    arguments: str = ""
-
-
-class _ToolCallFields(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    function: _ToolCallFunctionFields
-
-
 def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
     return tuple(
         _ToolCallShape(name=tool_call["function"].get("name"), arguments=tool_call["function"].get("arguments", ""))
@@ -170,21 +158,28 @@ def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tupl
 
 
 def _returned_tool_call_shape(tool_call: object) -> _ToolCallShape | None:
-    payload: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
-    try:
-        fields: Final = _ToolCallFields.model_validate(payload)
-    except ValidationError:
-        return None
-    return _ToolCallShape(name=fields.function.name, arguments=fields.function.arguments)
+    function: Final = returned_tool_call_function(tool_call)
+    return None if function is None else _ToolCallShape(name=function.name, arguments=function.arguments)
 
 
 def _post_guardrail_tool_call_shapes(
     returned_tool_calls: Sequence[object] | None,
     pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
     guardrail_name: str | None,
+    *,
+    deliver_ended_stream_rewrites: bool = False,
 ) -> tuple[_ToolCallShape, ...]:
     if not pre_guardrail_tool_calls:
         return pre_guardrail_tool_calls
+    undeliverable_reason: Final = (
+        undeliverable_tool_calls_reason(returned_tool_calls, len(pre_guardrail_tool_calls))
+        if deliver_ended_stream_rewrites
+        else None
+    )
+    if undeliverable_reason is not None:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        raise UndeliverableStreamRewrite(guardrail_name or "unknown", undeliverable_reason)
     if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
         verbose_proxy_logger.warning(
             "OpenAI Responses API: guardrail %s returned %s tool calls for the %d scanned, "
@@ -1405,6 +1400,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                     pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                     guardrail_name=guardrail_to_apply.guardrail_name,
+                    deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
                 )
 
                 # Write guardrailed texts back into the output items in-place.

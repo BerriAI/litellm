@@ -14,6 +14,7 @@ import json
 from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import (
@@ -30,6 +31,8 @@ from litellm.proxy.utils import _pipelines_stream_live
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageToolCall,
+    ChatCompletionToolCallChunk,
     Delta,
     Function,
     FunctionCall,
@@ -562,18 +565,376 @@ async def test_windowed_buffer_with_explicit_end_of_stream_only_stays_fully_buff
     assert guardrail.scan_count == 1
 
 
+MASKED_MARKER = "[MASKED]"
+
+
+class _MaskingGuardrail(_CountingPassingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        masked: GenericGuardrailAPIInputs = {
+            "texts": [text.replace(ORIGINAL_MARKER, MASKED_MARKER) for text in inputs.get("texts") or []]
+        }
+        tool_calls = inputs.get("tool_calls")
+        if tool_calls:
+            masked["tool_calls"] = [_mask_tool_call(tool_call) for tool_call in tool_calls]
+        return masked
+
+
+def _mask_tool_call(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
+) -> ChatCompletionToolCallChunk | ChatCompletionMessageToolCall:
+    if isinstance(tool_call, dict):
+        function = tool_call["function"]
+        arguments = function["arguments"].replace(TOOL_ARGUMENTS_MARKER, MASKED_MARKER)
+        return {**tool_call, "function": {**function, "arguments": arguments}}
+    tool_call.function.arguments = tool_call.function.arguments.replace(TOOL_ARGUMENTS_MARKER, MASKED_MARKER)
+    return tool_call
+
+
+class _ToolDroppingGuardrail(_MaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        return {**masked, "tool_calls": []}
+
+
+class _ToolClearingGuardrail(_MaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        tool_calls = inputs.get("tool_calls")
+        if tool_calls is not None:
+            tool_calls.clear()
+        return {**masked, "tool_calls": tool_calls or []}
+
+
+class _ToolManglingGuardrail(_MaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        return {**masked, "tool_calls": [{"type": "function"} for _ in inputs.get("tool_calls") or []]}
+
+
+async def _anthropic_tool_use_stream():
+    yield _sse_event(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_tool",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+    )
+    yield _sse_event(
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    )
+    yield _sse_event(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": f"Sending {ORIGINAL_MARKER}"},
+        },
+    )
+    yield _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield _sse_event(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "send_email", "input": {}},
+        },
+    )
+    for partial in ['{"to": "', TOOL_ARGUMENTS_MARKER, '"}']:
+        yield _sse_event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": partial}},
+        )
+    yield _sse_event("content_block_stop", {"type": "content_block_stop", "index": 1})
+    yield _sse_event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        },
+    )
+    yield _sse_event("message_stop", {"type": "message_stop"})
+
+
+async def _run_messages_stream(guardrail: CustomGuardrail, stream: AsyncGenerator[bytes, None]) -> str:
+    guardrail.streaming_end_of_stream_only = True
+    guardrail.streaming_buffer_until_moderated = True
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/messages")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=stream,
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return _decode(collected)
+
+
+async def _run_buffered_chat(
+    guardrail: CustomGuardrail, content_chunks: list[str], tool_argument_chunks: list[str] | None = None
+) -> list[Any]:
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    guardrail.streaming_end_of_stream_only = False
+    guardrail.streaming_sampling_rate = 2
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    yielded_count: list[int] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_windowed_chat_stream(yielded_count, collected, content_chunks, tool_argument_chunks, False),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    assert yielded_count == [0] * len(yielded_count), "buffered stream released a chunk before the end scan"
+    return collected
+
+
 @pytest.mark.asyncio
-async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
-    """Buffered replay yields the withheld *original* chunks verbatim, which
-    is unsafe for a guardrail that rewrites response text (e.g. PII masking):
-    the client would get the unredacted original instead of the moderated
-    output. mask_response_content=True must force buffering off so the
-    request falls back to the (correctly moderated) non-buffered path."""
-    guardrail = _PassingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+async def test_buffered_messages_stream_delivers_masked_text_to_the_client():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
     raw = await _run(guardrail)
-    assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
-    assert ORIGINAL_MARKER in raw
+    assert guardrail.scan_count == 1
+    assert MASKED_MARKER in raw, raw
+    assert ORIGINAL_MARKER not in raw, raw
     assert BLOCK_MESSAGE not in raw
+
+
+@pytest.mark.asyncio
+async def test_buffered_messages_stream_delivers_masked_tool_call_input():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
+    raw = await _run_messages_stream(guardrail, _anthropic_tool_use_stream())
+    assert guardrail.scan_count == 1
+    assert TOOL_ARGUMENTS_MARKER not in raw, raw
+    assert ORIGINAL_MARKER not in raw, raw
+    assert raw.count(MASKED_MARKER) == 2, raw
+    assert "message_stop" in raw
+
+
+@pytest.mark.asyncio
+async def test_buffered_chat_stream_delivers_masked_text_and_tool_arguments():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
+    collected = await _run_buffered_chat(
+        guardrail, [f"call {ORIGINAL_MARKER} now"], ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}']
+    )
+    assert _chat_text(collected) == f"call {MASKED_MARKER} now"
+    assert _tool_argument_text(collected) == f'{{"cmd": "{MASKED_MARKER}"}}'
+    assert collected[-1].choices[0].finish_reason == "tool_calls"
+
+
+def _two_choice_tool_call_chunk(finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-two-choices",
+        created=1724900000,
+        model="gpt-4",
+        choices=[
+            StreamingChoices(
+                index=index,
+                finish_reason=finish_reason,
+                delta=Delta(
+                    role="assistant",
+                    content=f"call {ORIGINAL_MARKER} now",
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id=f"call_{index}",
+                            type="function",
+                            index=0,
+                            function=Function(name="run_shell", arguments=f'{{"cmd": "{TOOL_ARGUMENTS_MARKER}"}}'),
+                        )
+                    ],
+                ),
+            )
+            for index in (0, 1)
+        ],
+    )
+
+
+async def _two_choice_tool_call_stream() -> AsyncGenerator[ModelResponseStream, None]:
+    yield _two_choice_tool_call_chunk()
+    yield _two_choice_tool_call_chunk(finish_reason="tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_buffered_messages_stream_withholds_everything_when_the_guardrail_drops_a_tool_call():
+    guardrail = _ToolDroppingGuardrail(guardrail_name="dropper", event_hook="post_call")
+    with pytest.raises(HTTPException) as raised:
+        await _run_messages_stream(guardrail, _anthropic_tool_use_stream())
+    assert raised.value.status_code == 500
+    assert "dropper" in str(raised.value.detail)
+    assert guardrail.scan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_buffered_chat_stream_withholds_everything_when_the_tool_call_rewrite_cannot_be_placed():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+
+    async def drain() -> None:
+        async for chunk in unified.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict, response=_two_choice_tool_call_stream(), request_data=request_data
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(HTTPException) as raised:
+        await drain()
+    assert raised.value.status_code == 500
+    assert "masker" in str(raised.value.detail)
+    assert guardrail.scan_count == 1
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_buffered_responses_stream_delivers_masked_text_to_the_client():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/responses")
+    request_data = {
+        "input": "hi",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_replay(_responses_message_stream_events(["Here is ", ORIGINAL_MARKER])),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    raw = json.dumps([chunk if isinstance(chunk, dict) else str(chunk) for chunk in collected])
+    assert guardrail.scan_count == 1
+    assert MASKED_MARKER in raw, raw
+    assert ORIGINAL_MARKER not in raw, raw
+    assert "response.completed" in raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_cls", [_ToolDroppingGuardrail, _ToolManglingGuardrail], ids=["returns fewer", "returns a nameless call"]
+)
+async def test_buffered_responses_stream_withholds_everything_when_the_guardrail_drops_a_tool_call(guardrail_cls: type):
+    guardrail = guardrail_cls(guardrail_name="dropper", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/responses")
+    request_data = {
+        "input": "hi",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+
+    async def drain() -> None:
+        async for chunk in unified.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=_replay(
+                _responses_truncated_function_call_events("Running", ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+            ),
+            request_data=request_data,
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(HTTPException) as raised:
+        await drain()
+
+    assert raised.value.status_code == 500
+    assert "dropper" in str(raised.value.detail)
+    assert guardrail.scan_count == 1
+    assert collected == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_cls", [_ToolDroppingGuardrail, _ToolClearingGuardrail], ids=["returns fewer", "clears in place"]
+)
+async def test_buffered_chat_stream_withholds_everything_when_the_guardrail_drops_a_tool_call(guardrail_cls: type):
+    guardrail = guardrail_cls(guardrail_name="dropper", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    with pytest.raises(HTTPException) as raised:
+        await _run_buffered_chat(guardrail, ["Running"], ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+    assert raised.value.status_code == 500
+    assert "dropper" in str(raised.value.detail)
+    assert guardrail.scan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_live_messages_stream_keeps_block_only_for_a_masking_guardrail():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = False
+    guardrail.streaming_end_of_stream_only = True
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/messages")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict, response=_anthropic_stream(), request_data=request_data
+    ):
+        collected.append(chunk)
+    raw = _decode(collected)
+    assert ORIGINAL_MARKER in raw
+    assert MASKED_MARKER not in raw
 
 
 def _detect_only_pipeline(guardrail: CustomGuardrail) -> tuple[tuple[str, GuardrailPipeline], ...]:
@@ -605,3 +966,60 @@ def test_pipeline_live_streaming_resolves_the_flag_like_the_flat_streaming_path(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     assert _pipelines_stream_live(_detect_only_pipeline(guardrail)) is streams_live
+
+
+async def _a2a_ndjson_stream(yielded_count: list[int], collected: list[Any]) -> AsyncGenerator[str, None]:
+    for text in ["Here is ", ORIGINAL_MARKER, " for you."]:
+        yielded_count.append(len(collected))
+        yield (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": text}]}},
+                }
+            )
+            + "\n"
+        )
+
+
+@pytest.mark.asyncio
+async def test_buffered_masking_guardrail_streams_live_on_a_translation_that_cannot_deliver_rewrites():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/a2a/agent-1/message/stream")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    yielded_count: list[int] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_a2a_ndjson_stream(yielded_count, collected),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    assert len(collected) == 3
+    assert yielded_count == [0, 1, 2], "the stream was withheld although the rewrite cannot be delivered"
+
+
+@pytest.mark.asyncio
+async def test_buffered_chat_stream_withholds_everything_when_the_guardrail_returns_a_malformed_tool_call():
+    guardrail = _ToolManglingGuardrail(guardrail_name="mangler", event_hook="post_call")
+    with pytest.raises(HTTPException) as raised:
+        await _run_buffered_chat(guardrail, [f"call {ORIGINAL_MARKER}"], ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+    assert raised.value.status_code == 500
+    assert "mangler" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_buffered_messages_stream_withholds_everything_when_the_guardrail_returns_a_malformed_tool_call():
+    guardrail = _ToolManglingGuardrail(guardrail_name="mangler", event_hook="post_call")
+    with pytest.raises(HTTPException) as raised:
+        await _run_messages_stream(guardrail, _anthropic_tool_use_stream())
+    assert raised.value.status_code == 500
+    assert "mangler" in str(raised.value.detail)
