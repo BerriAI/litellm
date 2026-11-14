@@ -6297,6 +6297,11 @@ def get_optional_params(
         for path in nested_paths:
             optional_params = delete_nested_value(optional_params, path)
 
+    if thinking is not None and _should_drop_param(k="thinking", additional_drop_params=additional_drop_params):
+        from litellm.llms.anthropic.common_utils import drop_clear_thinking_edits_for_model
+
+        drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
+
     return optional_params
 
 

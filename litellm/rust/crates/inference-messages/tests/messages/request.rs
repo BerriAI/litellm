@@ -275,6 +275,59 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
+#[rstest]
+#[case::thinking_dropped(
+    MessagesModelCapabilities::default(),
+    json!({"type": "enabled", "budget_tokens": 1024}),
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[case::model_thinks_by_default(
+    MessagesModelCapabilities {
+        thinking_on_by_default: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"type": "adaptive"}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::no_thinking_sent(
+    MessagesModelCapabilities::default(),
+    Value::Null,
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[tokio::test]
+async fn additional_drop_params_thinking_drops_the_clear_thinking_edit(
+    call: MessagesCall,
+    #[case] capabilities: MessagesModelCapabilities,
+    #[case] thinking: Value,
+    #[case] expected_edits: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".into()],
+                ..MessagesSettings::default()
+            },
+        },
+        ..with_fields(
+            call,
+            json!({
+                "thinking": thinking,
+                "context_management": {"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]},
+            }),
+        )
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(sent.get("thinking"), None);
+    assert_eq!(sent["context_management"]["edits"], expected_edits);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));

@@ -2196,12 +2196,6 @@ def _is_clear_thinking_edit(edit: object) -> bool:
 
 
 def drop_clear_thinking_edits(params: MutableMapping[str, object]) -> bool:  # mutable-ok: edits in place
-    """
-    Remove the ``clear_thinking_*`` context-management edits, which Anthropic
-    rejects without ``thinking``.  ``context_management`` itself goes only when
-    such an edit was removed and nothing else is left in it.  Returns whether an
-    edit was removed.
-    """
     raw_context_management: Final = params.get("context_management")
     if not isinstance(raw_context_management, dict):
         return False
@@ -2228,7 +2222,6 @@ def drop_clear_thinking_edits_for_model(
     model: str,
     custom_llm_provider: str,
 ) -> None:
-    """Remove the clear_thinking edits unless the request still thinks with its outgoing ``thinking`` param."""
     if AnthropicModelInfo.will_think(model, custom_llm_provider, params) or not drop_clear_thinking_edits(params):
         return
     litellm.verbose_logger.warning(

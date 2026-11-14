@@ -3596,6 +3596,41 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
     params like prompt_cache_key to be passed to Bedrock, resulting in errors.
     """
 
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        ("model", "thinking", "kept_thinking_edit"),
+        [
+            pytest.param(
+                "claude-sonnet-4-5",
+                {"type": "enabled", "budget_tokens": 1024},
+                False,
+                id="dropped-thinking-takes-the-edit",
+            ),
+            pytest.param("claude-sonnet-5-5", {"type": "adaptive"}, True, id="model-thinking-by-default-keeps-the-edit"),
+            pytest.param("claude-sonnet-4-5", None, True, id="no-thinking-sent-keeps-the-edit"),
+        ],
+    )
+    def test_deployment_dropped_thinking_drops_the_clear_thinking_edit(
+        self, model: str, thinking: dict[str, object] | None, kept_thinking_edit: bool
+    ):
+        from litellm.utils import get_optional_params
+
+        clear_thinking: Final = {"type": "clear_thinking_20251015"}
+        clear_tool_uses: Final = {"type": "clear_tool_uses_20250919"}
+        result: Final = get_optional_params(
+            model=model,
+            custom_llm_provider="anthropic",
+            thinking=thinking,
+            context_management={"edits": [clear_thinking, clear_tool_uses]},
+            max_tokens=2048,
+            additional_drop_params=["thinking"],
+        )
+
+        assert "thinking" not in result
+        assert result["context_management"] == {
+            "edits": [clear_thinking, clear_tool_uses] if kept_thinking_edit else [clear_tool_uses]
+        }
+
     def test_additional_drop_params_filters_for_bedrock(self):
         """
         Test that additional_drop_params correctly filters params for Bedrock provider.

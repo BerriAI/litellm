@@ -253,8 +253,6 @@ fn is_clear_thinking_edit(edit: &Recognized<ContextEdit>) -> bool {
     }
 }
 
-/// Anthropic rejects `clear_thinking_*` edits without thinking. `context_management` goes
-/// only when such an edit was removed and nothing else is left in it.
 fn without_clear_thinking_edits(
     context_management: Option<Recognized<ContextManagement>>,
 ) -> Option<Recognized<ContextManagement>> {
@@ -298,7 +296,7 @@ fn with_thinking_off(
     }
 }
 
-fn without_thinking(
+pub fn without_thinking(
     params: MessagesOptionalParams,
     context: &ThinkingContext,
 ) -> MessagesOptionalParams {
