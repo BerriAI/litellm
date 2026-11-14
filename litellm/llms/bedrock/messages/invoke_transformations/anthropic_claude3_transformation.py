@@ -863,7 +863,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             raw_response=raw_response,
             logging_obj=logging_obj,
         )
-        if not bedrock_invoke_guardrail_blocked(response):
+        if not bedrock_invoke_guardrail_blocked(response, raw_response.headers):
             return response
         return {**response, "stop_reason": "refusal"}
 

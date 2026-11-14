@@ -315,7 +315,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             api_key,
             json_mode,
         )
-        if not bedrock_invoke_guardrail_blocked(_INVOKE_RESPONSE_BODY.validate_python(raw_response.json())):
+        if not bedrock_invoke_guardrail_blocked(
+            _INVOKE_RESPONSE_BODY.validate_python(raw_response.json()), raw_response.headers
+        ):
             return response
         return response.model_copy(
             update={
