@@ -168,6 +168,7 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
 
 
 _FOUNDRY_PROJECT: Final = "https://x.services.ai.azure.com/api/projects/proj"
+_DEPLOYMENT_ROUTE: Final = "https://gateway.example.com/base/openai/deployments/my-deployment"
 
 
 @pytest.mark.parametrize(
@@ -267,6 +268,59 @@ def test_gateway_v1_base_without_the_opt_out_keeps_its_api_version() -> None:
 )
 def test_websocket_url_on_an_openai_v1_base_dials_v1_responses_once(api_base: str, expected_url: str) -> None:
     assert AzureOpenAIResponsesAPIConfig().get_websocket_url(api_base=api_base, litellm_params={}) == expected_url
+
+
+@pytest.mark.parametrize(
+    ("api_base", "litellm_params", "expected_url"),
+    [
+        (
+            _DEPLOYMENT_ROUTE,
+            {"api_version": "2025-04-01-preview"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            f"{_DEPLOYMENT_ROUTE}/",
+            {"api_version": "2025-04-01-preview"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            f"{_DEPLOYMENT_ROUTE}/responses",
+            {"api_version": "2025-04-01-preview"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            f"{_DEPLOYMENT_ROUTE}?tenant=example&api-version=2025-03-01-preview",
+            {"api_version": "2025-04-01-preview"},
+            f"{_DEPLOYMENT_ROUTE}/responses?tenant=example&api-version=2025-03-01-preview",
+        ),
+        (
+            _DEPLOYMENT_ROUTE,
+            {"api_version": "2024-10-21"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version={AZURE_DEFAULT_RESPONSES_API_VERSION}",
+        ),
+        (
+            _DEPLOYMENT_ROUTE,
+            {"api_version": "2024-10-21", "responses_api_version": "2025-04-01-preview"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version=2025-04-01-preview",
+        ),
+        (
+            _DEPLOYMENT_ROUTE,
+            {"api_version": "v1"},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version=v1",
+        ),
+        (
+            _DEPLOYMENT_ROUTE,
+            {},
+            f"{_DEPLOYMENT_ROUTE}/responses?api-version={AZURE_DEFAULT_RESPONSES_API_VERSION}",
+        ),
+    ],
+)
+def test_an_api_base_naming_a_deployment_gets_the_deployment_scoped_responses_route(
+    api_base: str, litellm_params: dict[str, str], expected_url: str
+) -> None:
+    result: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(api_base=api_base, litellm_params=litellm_params)
+
+    assert result == expected_url
 
 
 @pytest.mark.serial
@@ -1244,6 +1298,25 @@ def test_explicit_v1_base_sends_responses_to_the_gateway(gateway_responses: resp
 
     assert text == "Done."
     assert gateway_responses.call_count == 1
+
+
+def test_a_gateway_that_only_serves_the_deployment_route_receives_the_responses_call(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        f"{_DEPLOYMENT_ROUTE}/responses?api-version=2025-04-01-preview"
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    response: Final = litellm.responses(
+        model="azure/my-deployment",
+        input="hi",
+        api_base=_DEPLOYMENT_ROUTE,
+        api_key="azure-test-key",
+        api_version="2025-04-01-preview",
+    )
+
+    assert response.output[0].content[0].text == "Done."
+    assert route.call_count == 1
 
 
 @pytest.mark.parametrize("stream", [False, True])

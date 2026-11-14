@@ -83,6 +83,22 @@ def _v1_responses_url(api_base: str) -> httpx.URL:
     return parsed_url.copy_with(path=f"{root}/openai/v1/responses", query=None)
 
 
+_DEPLOYMENT_ROUTE_ROOT: Final = re.compile(r"(?P<root>.*/openai/deployments/[^/]+)(?:/responses)?")
+
+
+def _deployment_scoped_responses_url(api_base: str, litellm_params: Mapping[str, object]) -> str | None:
+    parsed_url: Final = httpx.URL(api_base)
+    route: Final = _DEPLOYMENT_ROUTE_ROOT.fullmatch(parsed_url.path.rstrip("/"))
+    if route is None:
+        return None
+    api_version: Final = _resolve_responses_api_version(api_base, litellm_params) or AZURE_DEFAULT_RESPONSES_API_VERSION
+    query: Final = {
+        **dict(parsed_url.params),
+        **({} if "api-version" in parsed_url.params else {"api-version": api_version}),
+    }
+    return str(parsed_url.copy_with(path=f"{route['root']}/responses", params=query))
+
+
 def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
@@ -244,6 +260,11 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             else base
         )
+        deployment_scoped_url: Final = (
+            _deployment_scoped_responses_url(resolved_api_base, litellm_params) if resolved_api_base else None
+        )
+        if deployment_scoped_url is not None:
+            return deployment_scoped_url
         responses_params: Final = _with_responses_api_version(resolved_api_base, litellm_params)
         parsed_base: Final = urlsplit(resolved_api_base or "")
         path: Final = parsed_base.path.rstrip("/")
