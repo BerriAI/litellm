@@ -284,6 +284,7 @@ class BaseEmailLogger(CustomLogger):
         email_html_content = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
+            budget_owner="account" if event.event_group == Litellm_EntityType.USER else "API key",
             soft_budget=soft_budget_str,
             spend=spend_str,
             max_budget_info=max_budget_info,

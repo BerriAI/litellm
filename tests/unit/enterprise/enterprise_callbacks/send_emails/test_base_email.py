@@ -1528,3 +1528,33 @@ async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without
     assert 'href="' in body
     assert "secret-token-hash" not in body
     assert "sk-raw-secret" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_group", "owner_line", "other_line"),
+    [
+        (Litellm_EntityType.USER, "Your LiteLLM account has crossed", "Your LiteLLM API key"),
+        (Litellm_EntityType.KEY, "Your LiteLLM API key has crossed", "Your LiteLLM account"),
+    ],
+)
+async def test_soft_budget_alert_email_names_what_crossed_the_budget(
+    base_email_logger, mock_send_email, mock_lookup_user_email, event_group, owner_line, other_line
+):
+    event = WebhookEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        token="hashed-token",
+        event_group=event_group,
+        event="soft_budget_crossed",
+        event_message="Soft Budget Crossed - Total Soft Budget: $100.0",
+        spend=105.0,
+        soft_budget=100.0,
+    )
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.send_soft_budget_alert_email(event)
+
+    html_body = mock_send_email.call_args[1]["html_body"]
+    assert owner_line in html_body
+    assert other_line not in html_body

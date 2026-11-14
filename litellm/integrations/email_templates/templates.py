@@ -68,7 +68,7 @@ SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
 
                     <p> Hi {recipient_email}, <br/>
 
-                    Your LiteLLM API key has crossed its <b>soft budget limit of {soft_budget}</b>. <br /> <br />
+                    Your LiteLLM {budget_owner} has crossed its <b>soft budget limit of {soft_budget}</b>. <br /> <br />
 
                     <b>Current Spend:</b> {spend} <br />
                     <b>Soft Budget:</b> {soft_budget} <br />

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -309,6 +309,36 @@ describe("CreateUserButton", () => {
     const dialog = screen.getByRole("dialog", { name: /invite user/i });
 
     expectControlBesideLabel(within(dialog).getByRole("checkbox", { name: "Send invitation email" }));
+  });
+
+  describe("soft budget", () => {
+    it.each([
+      ["25.5", { soft_budget: 25.5 }],
+      ["", {}],
+    ])("sends soft_budget %j as %j in the create payload", async (typed, expected) => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "soft-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-soft",
+        user_id: "soft-user",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+      );
+      await user.click(await screen.findByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      fireEvent.change(within(dialog).getByLabelText(/user email/i), { target: { value: "soft@example.com" } });
+      fireEvent.change(within(dialog).getByLabelText(/soft budget/i), { target: { value: typed } });
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => expect(mockUserCreateCall).toHaveBeenCalledTimes(1));
+      const payload = mockUserCreateCall.mock.calls[0][2];
+      expect(payload).toMatchObject({ user_email: "soft@example.com", ...expected });
+      expect("soft_budget" in payload).toBe("soft_budget" in expected);
+    });
   });
 
   describe("organizations", () => {

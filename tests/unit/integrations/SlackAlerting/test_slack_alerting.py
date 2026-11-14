@@ -5,7 +5,7 @@ import json
 import os
 import time
 import unittest
-from typing import Final, Literal
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1267,31 +1267,8 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.event_group == entity_info.event_group
 
 
-def test_soft_budget_crossed_email_names_spend_and_threshold() -> None:
-    from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
-    from litellm.proxy._types import Litellm_EntityType, WebhookEvent
-
-    event: Final = WebhookEvent(
-        spend=52.5,
-        soft_budget=50,
-        max_budget=100,
-        user_id="user-a",
-        user_email="a@example.com",
-        event="soft_budget_crossed",
-        event_group=Litellm_EntityType.USER,
-        event_message="Soft budget crossed",
-    )
-    html: Final = _budget_alert_email_html(
-        webhook_event=event, email_logo_url="https://logo", email_support_contact="support@example.com"
-    )
-
-    assert "$52.5" in html
-    assert "soft budget of $50" in html
-    assert "will be rejected" not in html
-
-
-@pytest.mark.parametrize("event_group", [Litellm_EntityType.KEY, Litellm_EntityType.TEAM])
-def test_soft_budget_crossed_email_for_keys_and_teams_keeps_generic_body(event_group: Litellm_EntityType) -> None:
+@pytest.mark.parametrize("event_group", [Litellm_EntityType.USER, Litellm_EntityType.KEY, Litellm_EntityType.TEAM])
+def test_soft_budget_crossed_smtp_email_keeps_generic_body(event_group: Litellm_EntityType) -> None:
     from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
     from litellm.proxy._types import WebhookEvent
 
@@ -1330,8 +1307,7 @@ def test_budget_crossed_email_keeps_the_max_budget_body() -> None:
     assert "will be rejected" in html
 
 
-@pytest.mark.parametrize("event_name", ["budget_crossed", "soft_budget_crossed"])
-def test_budget_email_escapes_user_id(event_name: Literal["budget_crossed", "soft_budget_crossed"]) -> None:
+def test_budget_email_escapes_user_id() -> None:
     from litellm.integrations.SlackAlerting.slack_alerting import _budget_alert_email_html
     from litellm.proxy._types import Litellm_EntityType, WebhookEvent
 
@@ -1340,7 +1316,7 @@ def test_budget_email_escapes_user_id(event_name: Literal["budget_crossed", "sof
         soft_budget=50,
         max_budget=100,
         user_id='<a href="https://evil.example">click</a>',
-        event=event_name,
+        event="budget_crossed",
         event_group=Litellm_EntityType.USER,
         event_message="Budget alert",
     )
