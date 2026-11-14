@@ -162,9 +162,8 @@ async def test_patch_user_manages_group_memberships():
 
     assert mock_add_fn.called
     assert mock_del_fn.called
-    # Check that the database update was called with the correct teams
     call_args = mock_db.litellm_usertable.update.call_args
-    assert "new-team" in call_args[1]["data"]["teams"]
+    assert "teams" not in call_args[1]["data"]
     assert result == mock_scim_user
 
 
