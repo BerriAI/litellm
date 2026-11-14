@@ -15,6 +15,7 @@ import pytest
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.llms.custom_httpx.http2_connection_spread import (
+    END_OF_STREAM_WAIT_SECONDS,
     HTTP2_CONNECTIONS_PER_LANE,
     HTTP2_STREAMS_PER_CONNECTION,
     AsyncHTTP2ConnectionSpread,
@@ -56,6 +57,10 @@ class _TraceRecorder:
 
     async def __call__(self, event: str, _info: Mapping[str, object]) -> None:
         self.events = (*self.events, event)
+
+
+def _spoken_over(request: httpx.Request) -> dict[str, bytes]:
+    return {"http_version": b"HTTP/2" if request.url.scheme == "https" else b"HTTP/1.1"}
 
 
 class _Body(httpx.AsyncByteStream):
@@ -103,7 +108,7 @@ class _GatedAsyncConnection(httpx.AsyncBaseTransport):
         self.in_flight -= 1
         self.unread_ends = 0
         self.served += 1
-        return httpx.Response(200, stream=_Body(self))
+        return httpx.Response(200, stream=_Body(self), extensions=_spoken_over(request))
 
     async def _refuse_past_the_stream_limit(self, request: httpx.Request) -> None:
         if self.streams is None or self.in_flight + self.unread_ends < self.streams:
@@ -387,6 +392,48 @@ async def test_async_spread_lets_the_next_request_through_when_opening_a_connect
         )
     assert isinstance(failed, ImportError)
     assert isinstance(served, httpx.Response) and served.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_async_spread_counts_and_closes_the_connection_a_retry_opens_at_the_cap_after_the_first_failed():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate)
+    one_lane: Final = httpx.Limits(max_connections=HTTP2_CONNECTIONS_PER_LANE)
+    spread: Final = AsyncHTTP2ConnectionSpread(_OpensAfterOneFailure(connections), one_lane)
+    async with httpx.AsyncClient(transport=spread) as client:
+        with pytest.raises(ImportError):
+            await client.get(URL)
+        assert (await client.get(OTHER_URL)).text == "ok"
+
+        gate.clear()
+        retry: Final = asyncio.create_task(client.get(URL))
+        await _until(lambda: connections.in_flight() == 1)
+        other: Final = asyncio.create_task(client.get(OTHER_URL))
+        await _until(lambda: connections.in_flight() == 2)
+        assert len(connections.opened) == 2
+
+        gate.set()
+        assert [response.text for response in await asyncio.gather(retry, other)] == ["ok", "ok"]
+    assert all(connection.closed for connection in connections.opened)
+
+
+@pytest.mark.asyncio
+async def test_async_spread_raises_a_pool_timeout_when_the_first_connection_to_an_upstream_does_not_open_in_time():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate)
+    connections.settings_arrive.clear()
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
+        first: Final = asyncio.create_task(client.get(URL))
+        await _until(lambda: connections.in_flight() == 1)
+
+        with pytest.raises(httpx.PoolTimeout):
+            await asyncio.wait_for(client.get(URL, timeout=httpx.Timeout(None, pool=0.05)), 1)
+
+        connections.settings_arrive.set()
+        assert (await first).text == "ok"
+        assert len(connections.opened) == 1
 
 
 @pytest.mark.asyncio
@@ -748,6 +795,19 @@ async def test_async_spread_keeps_no_more_idle_connections_than_the_keepalive_li
 
 
 @pytest.mark.asyncio
+async def test_async_spread_keeps_its_one_idle_connection_when_the_keepalive_limit_is_one():
+    gate: Final = asyncio.Event()
+    gate.set()
+    connections: Final = _AsyncConnections(gate)
+    limits: Final = httpx.Limits(max_connections=2 * HTTP2_CONNECTIONS_PER_LANE, max_keepalive_connections=1)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, limits)) as client:
+        for _ in range(3):
+            assert (await client.get(URL)).text == "ok"
+        assert len(connections.opened) == 1
+        assert not connections.opened[0].closed
+
+
+@pytest.mark.asyncio
 async def test_async_spread_keeps_connections_within_the_cap_after_upstreams_report_low_stream_limits():
     gate: Final = asyncio.Event()
     single_stream_hosts: Final = tuple(f"single-stream-{index}.example" for index in range(4))
@@ -862,21 +922,6 @@ async def test_async_spread_holds_a_stream_until_its_response_is_closed():
 
 
 @pytest.mark.asyncio
-async def test_async_spread_moves_off_a_connection_whose_only_stream_was_closed_before_its_end():
-    gate: Final = asyncio.Event()
-    gate.set()
-    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": 1}))
-    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(connections, UNCAPPED)) as client:
-        hung_up: Final = await client.send(client.build_request("GET", URL), stream=True)
-        await hung_up.aclose()
-
-        assert (await client.get(URL)).text == "ok"
-        assert [connection.served for connection in connections.opened] == [1, 1]
-        assert connections.opened[0].closed
-    assert connections.opened[1].closed
-
-
-@pytest.mark.asyncio
 async def test_async_spread_moves_off_a_connection_whose_only_stream_was_cancelled_while_awaiting_its_response():
     gate: Final = asyncio.Event()
     connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": 1}))
@@ -886,11 +931,114 @@ async def test_async_spread_moves_off_a_connection_whose_only_stream_was_cancell
         cancelled.cancel()
         with pytest.raises(asyncio.CancelledError):
             await cancelled
+        assert connections.opened[0].closed
 
         gate.set()
         assert (await client.get(URL)).text == "ok"
         assert [connection.served for connection in connections.opened] == [0, 1]
-        assert connections.opened[0].closed
+
+
+class _BodyGivenUpAfterItsFirstChunk(httpx.AsyncByteStream):
+    def __init__(self, after_first_chunk: Callable[[], Awaitable[None]]) -> None:
+        self._after_first_chunk: Final = after_first_chunk
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"o"
+        await self._after_first_chunk()
+        yield b"k"
+
+
+class _OneStreamConnection(httpx.AsyncBaseTransport):
+    def __init__(self, after_first_chunk: Callable[[], Awaitable[None]]) -> None:
+        self._after_first_chunk: Final = after_first_chunk
+        self.closed = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await _emit(request, "http2.send_request_headers.started", {})
+        await _emit_settings(request, 1)
+        return httpx.Response(
+            200, stream=_BodyGivenUpAfterItsFirstChunk(self._after_first_chunk), extensions=_spoken_over(request)
+        )
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def _never_answer() -> None:
+    await asyncio.Event().wait()
+
+
+async def _time_out() -> None:
+    raise httpx.ReadTimeout("no chunk in time")
+
+
+async def _end_shortly() -> None:
+    await asyncio.sleep(END_OF_STREAM_WAIT_SECONDS / 10)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("rest_of_body", "retired"), [(_never_answer, True), (_end_shortly, False), (_time_out, False)])
+async def test_async_spread_retires_a_one_stream_connection_closed_early_only_while_its_response_is_still_arriving(
+    rest_of_body: Callable[[], Awaitable[None]], retired: bool
+):
+    connection: Final = _OneStreamConnection(rest_of_body)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        async with client.stream("GET", URL) as response:
+            chunks: Final = response.aiter_raw()
+            assert await anext(chunks) == b"o"
+        assert connection.closed is retired
+
+
+@pytest.mark.asyncio
+async def test_async_spread_keeps_the_connection_when_a_read_is_abandoned_just_before_its_response_is_closed():
+    connection: Final = _OneStreamConnection(_end_shortly)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        async with client.stream("GET", URL) as response:
+            async for _chunk in response.aiter_raw():
+                break
+        assert not connection.closed
+
+
+@pytest.mark.asyncio
+async def test_async_spread_retires_a_one_stream_connection_when_closing_its_response_is_cancelled_before_its_end():
+    connection: Final = _OneStreamConnection(_end_shortly)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        response: Final = await client.send(client.build_request("GET", URL), stream=True)
+        chunks: Final = response.aiter_raw()
+        assert await anext(chunks) == b"o"
+        closing: Final = asyncio.create_task(response.aclose())
+        await asyncio.sleep(0)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert connection.closed
+
+
+@pytest.mark.asyncio
+async def test_async_spread_closes_a_plain_http_response_early_without_waiting_for_its_end():
+    connection: Final = _OneStreamConnection(_never_answer)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        response: Final = await client.send(client.build_request("GET", "http://search.example/v1/search"), stream=True)
+        chunks: Final = response.aiter_raw()
+        assert await anext(chunks) == b"o"
+        await asyncio.wait_for(response.aclose(), END_OF_STREAM_WAIT_SECONDS / 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("after_first_chunk", "given_up"), [(_never_answer, asyncio.TimeoutError), (_time_out, httpx.ReadTimeout)]
+)
+async def test_async_spread_closes_a_one_stream_connection_once_a_read_of_its_response_is_given_up(
+    after_first_chunk: Callable[[], Awaitable[None]], given_up: type[BaseException]
+):
+    connection: Final = _OneStreamConnection(after_first_chunk)
+    async with httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED)) as client:
+        async with client.stream("GET", URL) as response:
+            chunks: Final = response.aiter_raw()
+            assert await anext(chunks) == b"o"
+            with pytest.raises(given_up):
+                await asyncio.wait_for(anext(chunks), 0.05)
+            assert connection.closed
 
 
 @pytest.mark.asyncio

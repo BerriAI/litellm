@@ -1,14 +1,16 @@
 import asyncio
+import contextlib
 import copy
 import inspect
 import itertools
 import time
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+import anyio
 import h2.events
 import h2.exceptions
 import h2.settings
@@ -17,9 +19,12 @@ import httpx
 
 HTTP2_STREAMS_PER_CONNECTION: Final = 100
 HTTP2_CONNECTIONS_PER_LANE: Final = 2
+END_OF_STREAM_WAIT_SECONDS: Final = 0.25
 _REMOTE_SETTINGS_RECEIVED: Final = "http2.receive_remote_settings.complete"
 _HTTP1_REQUEST_STARTED: Final = "http11.send_request_headers.started"
+_HTTP2_STREAM_OPENED: Final = "http2.send_request_headers.started"
 _HTTP2_REQUEST_HEADERS_FAILED: Final = "http2.send_request_headers.failed"
+_HTTP2: Final = b"HTTP/2"
 
 _Origin: TypeAlias = tuple[str, str, int | None]
 _Trace: TypeAlias = Callable[[str, Mapping[str, object]], Awaitable[None]]
@@ -77,6 +82,33 @@ def _is_refused_for_want_of_a_stream(event: str, info: Mapping[str, object]) -> 
     )
 
 
+def _given_up(failure: BaseException) -> bool:
+    return isinstance(failure, (asyncio.CancelledError, httpx.TimeoutException))
+
+
+async def _ends_soon(chunks: AsyncIterator[bytes]) -> bool:
+    with anyio.move_on_after(END_OF_STREAM_WAIT_SECONDS):
+        with contextlib.suppress(httpx.TransportError):
+            async for _ in chunks:
+                pass
+        return True
+    return False
+
+
+async def _chunks_of(stream: httpx.AsyncByteStream) -> AsyncGenerator[bytes, None]:
+    async for chunk in stream:
+        yield chunk
+
+
+@dataclass(frozen=True, slots=True)
+class _SentStream:
+    opened: asyncio.Event = field(default_factory=asyncio.Event)
+    refused: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def given_up_on(self, failure: BaseException) -> bool:
+        return self.opened.is_set() and _given_up(failure)
+
+
 def _least_busy(lanes: tuple[_Lane, ...]) -> _Lane:
     return min(lanes, key=lambda lane: lane.in_flight)
 
@@ -100,7 +132,9 @@ def _past_keepalive_limit(idle: tuple[_Lane, ...], max_keepalive_connections: in
     if max_keepalive_connections is None:
         return frozenset()
     newest_first: Final = sorted(idle, key=lambda lane: lane.idle_since, reverse=True)
-    kept_through: Final = itertools.accumulate(lane.most_connections or 0 for lane in newest_first)
+    kept_through: Final = itertools.accumulate(
+        min(lane.most_connections or 0, max_keepalive_connections) for lane in newest_first
+    )
     return frozenset(lane for lane, kept in zip(newest_first, kept_through) if kept > max_keepalive_connections)
 
 
@@ -177,9 +211,9 @@ class _OriginLanes:
     def drop(self, lanes: frozenset[_Lane]) -> None:
         self.lanes = tuple(lane for lane in self.lanes if lane not in lanes)
 
-    async def take_turn(self) -> bool:
+    async def take_turn(self, pool_timeout: float | None) -> bool:
         while self.protocol is None and self._probe is not None:
-            _raise_shared(await asyncio.shield(self._probe))
+            _raise_shared(await asyncio.wait_for(asyncio.shield(self._probe), pool_timeout))
         if self.protocol is not None:
             return False
         self._probe = asyncio.get_running_loop().create_future()
@@ -267,11 +301,9 @@ class _Lanes:
         room: Final = self._make_room(HTTP2_CONNECTIONS_PER_LANE)
         if room is not None and room <= 0:
             return None
-        if known is not None:
-            return known
-        created: Final = _OriginLanes(self._most_streams_per_connection, may_speak_http2=origin[0] == "https")
-        self._origins = MappingProxyType({**self._origins, origin: created})
-        return created
+        tracked: Final = known or _OriginLanes(self._most_streams_per_connection, may_speak_http2=origin[0] == "https")
+        self._origins = MappingProxyType({**self._origins, origin: tracked})
+        return tracked
 
     def _place(self, origin: _OriginLanes) -> _Placement | None:
         free: Final = origin.free_lane()
@@ -338,30 +370,57 @@ class _AsyncReleasingStream(httpx.AsyncByteStream):
         stream: httpx.AsyncByteStream,
         release: Callable[[bool], None],
         close_dropped: Callable[[], Awaitable[None]],
+        waits_for_its_end: bool,
     ) -> None:
         self._stream: Final = stream
+        self._chunks: Final = _chunks_of(stream)
         self._release: Final = release
         self._release_dropped: Final = weakref.finalize(self, release, True)
         self._close_dropped: Final = close_dropped
+        self._waits_for_its_end: Final = waits_for_its_end
+        self._closing = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         try:
-            async for chunk in self._stream:
+            async for chunk in self._chunks:
                 yield chunk
-        except BaseException:
-            self._release_once()
+        except GeneratorExit:
+            await self.aclose()
+            raise
+        except BaseException as failure:
+            given_up: Final = _given_up(failure)
+            self._release_once(stream_lost=given_up)
+            if given_up:
+                await self._close_dropped()
             raise
 
     async def aclose(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
         try:
+            ended: Final = await self._ended_by_the_upstream()
+        except BaseException:
+            await self._close(stream_lost=True)
+            raise
+        await self._close(stream_lost=not ended)
+
+    async def _ended_by_the_upstream(self) -> bool:
+        if not self._waits_for_its_end or not self._release_dropped.alive:
+            return True
+        return await _ends_soon(self._chunks)
+
+    async def _close(self, stream_lost: bool) -> None:
+        try:
+            await self._chunks.aclose()
             await self._stream.aclose()
         finally:
-            self._release_once()
+            self._release_once(stream_lost)
         await self._close_dropped()
 
-    def _release_once(self) -> None:
+    def _release_once(self, stream_lost: bool) -> None:
         if self._release_dropped.detach() is not None:
-            self._release(False)
+            self._release(stream_lost)
 
 
 def _allowed_over_http2(name: bytes, value: bytes) -> bool:
@@ -374,11 +433,13 @@ def _headers_for_lane(request: httpx.Request) -> tuple[tuple[bytes, bytes], ...]
     return tuple((name, value) for name, value in request.headers.raw if _allowed_over_http2(name, value))
 
 
-def _tracer(origin: _OriginLanes, lane: _Lane, refused: asyncio.Event, caller_trace: object) -> _Trace:
+def _tracer(origin: _OriginLanes, lane: _Lane, sent: _SentStream, caller_trace: object) -> _Trace:
     async def trace(event: str, info: Mapping[str, object]) -> None:
         origin.observe(event, info, lane)
+        if event == _HTTP2_STREAM_OPENED:
+            sent.opened.set()
         if _is_refused_for_want_of_a_stream(event, info):
-            refused.set()
+            sent.refused.set()
         if not callable(caller_trace):
             return
         outcome: Final = caller_trace(event, info)
@@ -388,9 +449,7 @@ def _tracer(origin: _OriginLanes, lane: _Lane, refused: asyncio.Event, caller_tr
     return trace
 
 
-def _for_lane(
-    request: httpx.Request, origin: _OriginLanes | None, lane: _Lane, refused: asyncio.Event
-) -> httpx.Request:
+def _for_lane(request: httpx.Request, origin: _OriginLanes | None, lane: _Lane, sent: _SentStream) -> httpx.Request:
     caller_trace: Final[object] = request.extensions.get("trace")
     return httpx.Request(
         request.method,
@@ -399,7 +458,7 @@ def _for_lane(
         stream=request.stream,
         extensions=request.extensions
         if origin is None
-        else {**request.extensions, "trace": _tracer(origin, lane, refused, caller_trace)},
+        else {**request.extensions, "trace": _tracer(origin, lane, sent, caller_trace)},
     )
 
 
@@ -430,7 +489,7 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
             origin.leave()
 
     async def _send_in_turn(self, request: httpx.Request, origin: _OriginLanes) -> httpx.Response:
-        probing: Final = await origin.take_turn()
+        probing: Final = await self._turn(request, origin)
         try:
             response: Final = await self._send_on_a_lane(request, origin)
         except BaseException as failure:
@@ -441,6 +500,12 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
             origin.end_probe(None)
         return response
 
+    async def _turn(self, request: httpx.Request, origin: _OriginLanes) -> bool:
+        try:
+            return await origin.take_turn(_pool_timeout(request))
+        except asyncio.TimeoutError:
+            raise httpx.PoolTimeout("No connection to this upstream opened in time", request=request) from None
+
     async def _send_on_a_lane(self, request: httpx.Request, origin: _OriginLanes | None) -> httpx.Response:
         while (sent := await self._try_a_lane(request, origin)) is None:
             pass
@@ -449,23 +514,32 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
     async def _try_a_lane(self, request: httpx.Request, origin: _OriginLanes | None) -> httpx.Response | None:
         placement: Final = await self._placement(request, origin)
         lane: Final = placement.lane
-        refused: Final = asyncio.Event()
+        sent: Final = _SentStream()
         try:
             await self._lanes.close_dropped()
             response: Final = await lane.transport.handle_async_request(
-                _for_lane(request, placement.origin, lane, refused)
+                _for_lane(request, placement.origin, lane, sent)
             )
         except BaseException as failure:
-            self._lanes.release(lane, stream_lost=refused.is_set())
-            if refused.is_set() and isinstance(failure, httpx.LocalProtocolError):
+            given_up: Final = sent.given_up_on(failure)
+            self._lanes.release(lane, stream_lost=sent.refused.is_set() or given_up)
+            if sent.refused.is_set() and isinstance(failure, httpx.LocalProtocolError):
                 return None
+            if given_up:
+                await self._lanes.close_dropped()
             raise
         stream: Final = response.stream
         if not isinstance(stream, httpx.AsyncByteStream):
             self._lanes.release(lane, stream_lost=False)
             return response
         return _with_stream(
-            response, _AsyncReleasingStream(stream, _releaser(self._lanes, placement), self._lanes.close_dropped)
+            response,
+            _AsyncReleasingStream(
+                stream,
+                _releaser(self._lanes, placement),
+                self._lanes.close_dropped,
+                waits_for_its_end=placement.origin is not None and response.extensions.get("http_version") == _HTTP2,
+            ),
         )
 
     async def _placement(self, request: httpx.Request, origin: _OriginLanes | None) -> _Placement:
