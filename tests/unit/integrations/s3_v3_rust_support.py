@@ -39,6 +39,8 @@ class ScriptedBucket:
     objects: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: GET serves what PUT stored
     script: list[tuple[str, list[tuple[int, str]]]] = field(default_factory=list)  # mutable-ok: replies are consumed
     delay: float = 0.0
+    in_flight: int = 0
+    peak: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -77,8 +79,12 @@ def _handler(bucket: ScriptedBucket) -> type[BaseHTTPRequestHandler]:
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
             with bucket.lock:
                 bucket.received.append(Received("PUT", self.path, headers, body, time.monotonic()))
+                bucket.in_flight += 1
+                bucket.peak = max(bucket.peak, bucket.in_flight)
             if bucket.delay:
                 time.sleep(bucket.delay)
+            with bucket.lock:
+                bucket.in_flight -= 1
             status, text = bucket.next_reply(self.path)
             if status == DROP:
                 self.close_connection = True

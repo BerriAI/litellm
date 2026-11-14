@@ -1,8 +1,10 @@
+import asyncio
 import base64
 import copy
 import hashlib
 import json
 import re
+import time
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Final
@@ -53,7 +55,7 @@ def bucket() -> Iterator[ScriptedBucket]:
 def _logger(
     monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, **params: object
 ) -> S3LoggerV3:  # kwargs-ok: S3Logger keywords
-    return rust_s3_logger(
+    logger: Final = rust_s3_logger(
         monkeypatch,
         **{
             "s3_bucket_name": "test-bucket",
@@ -64,6 +66,8 @@ def _logger(
             **params,
         },
     )
+    _ = logger.periodic_flush_task.cancel()
+    return logger
 
 
 def _payload(response_id: str = "test", **fields: object) -> dict[str, object]:  # kwargs-ok: payload fields
@@ -1094,3 +1098,407 @@ async def test_hour_upload_ignores_a_cold_storage_key_owned_by_another_logger(
 
     assert cold_key == f"2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
     assert uploaded == f"2026-09-29/14/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+def _key(response_id: str) -> str:
+    return f"2025-09-14/time-09-05-07-000042_{response_id}.json"
+
+
+async def _log_all(logger: S3LoggerV3, payloads: list[dict[str, object]]) -> None:
+    for payload in payloads:
+        await log_payload(logger, payload, START)
+
+
+async def _log_once_a_put_arrives(
+    logger: S3LoggerV3, bucket: ScriptedBucket, payloads: list[dict[str, object]]
+) -> None:
+    while not bucket.puts():
+        await asyncio.sleep(0.005)
+    await _log_all(logger, payloads)
+
+
+def _put_calls(bucket: ScriptedBucket) -> list[tuple[str, bytes]]:
+    return [(put.path, put.body) for put in bucket.puts()]
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_bounds_concurrent_uploads(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=4)
+    bucket.delay = 0.05
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(40)])
+
+    await logger.flush_queue()
+
+    assert bucket.peak == 4
+    assert len(bucket.puts()) == 40
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_uploads_single_jsonl_file(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_batch_file_upload=True)
+    payloads: Final[list[dict[str, object]]] = [{"id": "req-1"}, {"id": "req-2"}, {"id": "req-3"}]
+    await _log_all(logger, payloads)
+
+    await logger.flush_queue()
+
+    (put,) = bucket.puts()
+    assert put.path.endswith(".jsonl")
+    assert [json.loads(line) for line in put.body.decode().splitlines()] == payloads
+    assert put.headers["content-type"] == "application/x-ndjson"
+
+
+@pytest.mark.asyncio
+async def test_flush_queue_preserves_events_added_during_upload(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.delay = 0.2
+    await log_payload(logger, _payload("first"), START)
+
+    await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+
+    assert logger.sink.queued_keys() == [_key("late")]
+
+
+@pytest.mark.parametrize(("configured", "batch_file"), [("false", False), ("true", True)])
+@pytest.mark.asyncio
+async def test_env_backed_false_string_keeps_per_request_uploads(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, configured: str, batch_file: bool
+) -> None:
+    await _upload(_logger(monkeypatch, bucket, s3_batch_file_upload=configured), _payload("req-1"))
+
+    (put,) = bucket.puts()
+    assert put.path.endswith(".jsonl") is batch_file
+
+
+@pytest.mark.parametrize("bad", [0, -3, "0", "abc", ""])
+@pytest.mark.asyncio
+async def test_invalid_concurrency_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, bad: object
+) -> None:
+    from litellm.constants import DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=bad)
+    bucket.delay = 0.1
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(2 * DEFAULT_S3_MAX_CONCURRENT_UPLOADS)])
+
+    await logger.flush_queue()
+
+    assert bucket.peak == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+
+
+@pytest.mark.asyncio
+async def test_env_backed_concurrency_string_is_parsed(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads="4")
+    bucket.delay = 0.05
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(12)])
+
+    await logger.flush_queue()
+
+    assert bucket.peak == 4
+
+
+@pytest.mark.asyncio
+async def test_failed_uploads_stay_queued_for_next_flush(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("_elem-2.json", (503, "<Error><Code>SlowDown</Code></Error>"))
+    bucket.reply("_elem-4.json", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == [_key("elem-2"), _key("elem-4")]
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_file_upload_failure_keeps_whole_batch(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_batch_file_upload=True)
+    bucket.reply(".jsonl", (503, "<Error><Code>SlowDown</Code></Error>"))
+    payloads: Final[list[dict[str, object]]] = [{"id": f"elem-{i}", "i": i} for i in range(3)]
+    await _log_all(logger, payloads)
+
+    await logger.flush_queue()
+
+    assert len(bucket.puts()) == 3
+    assert len(logger.sink.queued_keys()) == 1
+    assert bucket.puts()[-1].body.decode() == "\n".join(json.dumps(payload) for payload in payloads)
+
+
+@pytest.mark.asyncio
+async def test_events_appended_during_failed_flush_survive(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("_first.json", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await log_payload(logger, _payload("first"), START)
+
+    await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+
+    assert logger.sink.queued_keys() == [_key("first"), _key("late")]
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_file_key_shape(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+    await _upload(_logger(monkeypatch, bucket, s3_path="logs", s3_batch_file_upload=True), {"id": "req-1"})
+
+    (put,) = bucket.puts()
+    assert re.search(r".*/2025-09-14/batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", put.path)
+    assert put.headers["content-disposition"].endswith('.jsonl"')
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_file_is_requeued_and_resent_unchanged(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_batch_file_upload=True)
+    bucket.reply(".jsonl", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await _log_all(logger, [{"id": f"elem-{i}", "i": i} for i in range(3)])
+
+    await logger.flush_queue()
+
+    (queued,) = logger.sink.queued_keys()
+    assert queued.endswith(".jsonl")
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    calls: Final = _put_calls(bucket)
+    assert len(calls) == 4
+    assert calls[0] == calls[1]
+
+
+@pytest.mark.asyncio
+async def test_elements_appended_after_failed_batch_file_get_their_own_file(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_batch_file_upload=True)
+    bucket.reply(".jsonl", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await log_payload(logger, {"id": "first"}, START)
+
+    await logger.flush_queue()
+
+    await log_payload(logger, {"id": "late"}, START)
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    calls: Final = _put_calls(bucket)
+    assert len(calls) == 5
+    assert calls[0] == calls[1]
+    second_flush: Final = calls[3:]
+    assert calls[0] in second_flush
+    late_call: Final = next(call for call in second_flush if call != calls[0])
+    assert late_call[0] != calls[0][0]
+    assert late_call[1].decode() == json.dumps({"id": "late"})
+
+
+@pytest.mark.asyncio
+async def test_batch_file_mode_disabled_when_s3_v2_is_cold_storage_logger(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_batch_file_upload=True)
+
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    await _upload(logger, {"id": "req-1"})
+
+    assert len(bucket.puts()) == 1
+    assert bucket.puts()[0].path.endswith("_req-1.json")
+
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", None)
+    await _upload(logger, {"id": "req-2"})
+
+    assert len(bucket.puts()) == 2
+    assert bucket.puts()[1].path.endswith(".jsonl")
+
+
+def _coded_body(code: str | None, raw_body: str | None = None) -> str:
+    return raw_body if raw_body is not None else (f"<Error><Code>{code}</Code></Error>" if code is not None else "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code", "raw_body", "puts_per_element"),
+    [
+        pytest.param(403, "AccessDenied", None, 3, id="access-denied-403"),
+        pytest.param(403, None, None, 3, id="empty-403"),
+        pytest.param(403, None, "<html>Forbidden</html>", 3, id="html-403"),
+        pytest.param(400, "KMS.DisabledException", None, 1, id="kms-disabled-400"),
+        pytest.param(404, "NoSuchBucket", None, 1, id="no-such-bucket-404"),
+    ],
+)
+async def test_non_terminal_failure_is_requeued_and_delivered_on_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    status: int,
+    code: str | None,
+    raw_body: str | None,
+    puts_per_element: int,
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (status, _coded_body(code, raw_body)))
+    keys: Final = [_key(f"elem-{i}") for i in range(5)]
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    await logger.flush_queue()
+
+    assert len(logger.sink.queued_keys()) == 5
+    assert len(bucket.puts()) == 5 * puts_per_element
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    assert len(bucket.puts()) == 5 * puts_per_element + 5
+    landed: Final = frozenset(key for key in keys if any(put.path.endswith(key) for put in bucket.puts()[-5:]))
+    assert landed == frozenset(keys)
+
+
+@pytest.mark.asyncio
+async def test_persistent_500_stays_queued_through_a_dozen_failed_flushes(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (500, "<Error><Code>InternalError</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    for _ in range(12):
+        await logger.flush_queue()
+        assert len(logger.sink.queued_keys()) == 5
+
+    assert len(bucket.puts()) == 12 * 15
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    assert len(bucket.puts()) == 12 * 15 + 5
+
+
+@pytest.mark.asyncio
+async def test_terminal_object_is_dropped_once_next_to_delivered_siblings_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_drop_on_terminal_error=True)
+    bucket.reply("_elem-1.json", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    await logger.flush_queue()
+
+    assert len(bucket.puts()) == 5
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_object_is_requeued_when_opted_out(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_drop_on_terminal_error=False)
+    bucket.reply("_elem-1.json", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    await logger.flush_queue()
+
+    (queued,) = logger.sink.queued_keys()
+    assert queued.endswith("_elem-1.json")
+    assert sum(put.path.endswith("_elem-1.json") for put in bucket.puts()) == 1
+    assert len(bucket.puts()) == 5
+
+
+@pytest.mark.asyncio
+async def test_terminal_objects_are_requeued_when_every_upload_in_the_flush_fails(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_drop_on_terminal_error=True)
+    bucket.reply("/test-bucket/", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    await logger.flush_queue()
+
+    assert len(logger.sink.queued_keys()) == 5
+
+
+@pytest.mark.asyncio
+async def test_overflow_after_a_failed_flush_trims_failed_first_and_counts_upload_failures_only(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_queue_size=4)
+    bucket.reply("/test-bucket/", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await _log_all(logger, [_payload("first"), _payload("second")])
+
+    with _failures() as mock_failure:
+        await asyncio.gather(
+            logger.flush_queue(),
+            _log_once_a_put_arrives(logger, bucket, [_payload(f"late-{index}") for index in range(3)]),
+        )
+
+    assert logger.sink.queued_keys() == [_key("second"), _key("late-0"), _key("late-1"), _key("late-2")]
+    failed_uploads: Final = 2
+    assert mock_failure.call_count == failed_uploads
+
+
+@pytest.mark.asyncio
+async def test_queue_grows_past_the_cap_while_the_sink_fails_and_everything_lands(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_queue_size=5)
+    bucket.reply("/test-bucket/", (503, "<Error><Code>SlowDown</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{index}") for index in range(5)])
+
+    with _failures() as mock_failure:
+        await logger.flush_queue()
+
+    assert len(logger.sink.queued_keys()) == 5
+    upload_failures: Final = 5
+    assert mock_failure.call_count == upload_failures
+
+    await _log_all(logger, [_payload(f"elem-{index}") for index in range(5, 8)])
+
+    bucket.script.clear()
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    landed: Final = frozenset(put.path.rsplit("_", 1)[-1] for put in bucket.puts()[-8:])
+    assert landed == frozenset(f"elem-{index}.json" for index in range(8))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        pytest.param(404, "NoSuchKey", id="404"),
+        pytest.param(401, None, id="401"),
+        pytest.param(400, None, id="uncoded-400"),
+    ],
+)
+async def test_unlisted_status_gets_one_put_and_stays_queued(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, code: str | None
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (status, _coded_body(code)))
+    await _log_all(logger, [_payload(f"elem-{index}") for index in range(4)])
+
+    started: Final = time.monotonic()
+    await logger.flush_queue()
+
+    assert len(bucket.puts()) == 4
+    assert time.monotonic() - started < 0.5
+    assert len(logger.sink.queued_keys()) == 4
