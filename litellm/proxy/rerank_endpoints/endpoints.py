@@ -1,6 +1,7 @@
 #### Rerank Endpoints #####
 
 import asyncio
+from datetime import datetime
 from typing import Final
 
 import orjson
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -80,6 +82,14 @@ async def rerank(
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="rerank")
+
+        logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the except block logs the latest request data
+            original_function=CallTypes.arerank.value,
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+            **data,
+        )
+        data["litellm_logging_obj"] = logging_obj
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
