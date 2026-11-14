@@ -1,19 +1,22 @@
 import copy
 import json
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from functools import reduce
 from operator import getitem
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
@@ -36,7 +39,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
-from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
 @pytest.mark.asyncio
@@ -1831,6 +1834,146 @@ async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_requ
     assert without_optional_fields.total_tokens == 37
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edit_type", "expected_beta"),
+    [("clear_tool_uses_20250919", "context-management-2025-06-27"), ("compact_20260112", "compact-2026-01-12")],
+)
+async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_inference_sends(
+    edit_type: str, expected_beta: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        posted: tuple[tuple[dict[str, str], dict[str, object]], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted = (*self.posted, (headers, json))
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            messages_format="anthropic",
+            context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+        )
+
+    assert result is not None
+    assert result.total_tokens == 21
+    ((headers, body),) = fake_http_client.posted
+    assert body["context_management"] == spec
+    assert headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_drops", "thinking_sent"),
+    (({}, True), ({"additional_drop_params": ["thinking"]}, False)),
+)
+async def test_vertex_claude_count_sends_the_thinking_vertex_inference_sends(
+    deployment_drops: Mapping[str, JsonValue], thinking_sent: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        posted: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted = (*self.posted, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5", **deployment_drops}
+            },
+            messages_format="anthropic",
+            count_options={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        )
+
+    assert result is not None
+    assert result.total_tokens == 21
+    (body,) = fake_http_client.posted
+    assert ("thinking" in body) is thinking_sent
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            return FakeResponse()
+
+    class FetchThreads:
+        seen: tuple[int, ...] = ()
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            self.seen = (*self.seen, threading.get_ident())
+            return httpx.Response(200, json={})
+
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    fetch_threads: Final = FetchThreads()
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            messages_format="anthropic",
+            context_management=CountContextManagement(
+                spec={"edits": [{"type": "clear_tool_uses_20250919"}]}, drop_invalid_edits=False
+            ),
+        )
+
+    assert result is not None
+    assert len(fetch_threads.seen) == 1
+    assert threading.get_ident() not in fetch_threads.seen
+
+
 _PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
     {"role": "user", "content": "Weather in SF?"},
     {
@@ -1847,9 +1990,9 @@ _PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
 }
 
 
-async def _partner_counted_bodies(
-    model: str, chat_params: dict[str, JsonValue] | None = None
-) -> tuple[dict[str, object], ...]:
+async def _partner_count(
+    model: str, messages: list[dict[str, object]], chat_params: dict[str, JsonValue] | None = None
+) -> tuple[TokenCountResponse | None, tuple[dict[str, object], ...]]:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
 
     class FakeResponse:
@@ -1878,16 +2021,43 @@ async def _partner_counted_bodies(
     ):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use=model,
-            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            messages=copy.deepcopy(messages),
             contents=None,
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=[_PARTNER_RESPONSES_TOOL],
             chat_params=chat_params or {},
         )
+    return result, fake_http_client.posted_bodies
 
+
+async def _partner_counted_bodies(
+    model: str, chat_params: dict[str, JsonValue] | None = None
+) -> tuple[dict[str, object], ...]:
+    result, bodies = await _partner_count(model, _PARTNER_CHAT_TOOL_TURNS, chat_params)
     assert result is not None
     assert result.total_tokens == 37
-    return fake_http_client.posted_bodies
+    return bodies
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_rejects_a_tool_call_chat_inference_rejects_without_calling_vertex() -> None:
+    unparseable_arguments: Final = [
+        _PARTNER_CHAT_TOOL_TURNS[0],
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "sunny?"}}
+            ],
+        },
+        _PARTNER_CHAT_TOOL_TURNS[2],
+    ]
+
+    result, bodies = await _partner_count("claude-opus-5-5", unparseable_arguments)
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
 @pytest.mark.asyncio

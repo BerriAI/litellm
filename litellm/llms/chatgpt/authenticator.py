@@ -66,6 +66,13 @@ def get_cached_authenticator(auth_file: str) -> "Authenticator":
     return Authenticator(auth_file=auth_file)
 
 
+def resolve_chatgpt_authenticator(
+    litellm_params: "Mapping[str, object] | GenericLiteLLMParams | None", default: "Authenticator"
+) -> "Authenticator":
+    auth_file: Final = get_chatgpt_auth_file(litellm_params)
+    return get_cached_authenticator(auth_file) if auth_file else default
+
+
 def _token_refresh_timeout() -> httpx.Timeout:
     configured: Final = get_configured_request_timeout()
     seconds: Final = (

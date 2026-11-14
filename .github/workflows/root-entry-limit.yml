@@ -1,0 +1,27 @@
+name: Root entry limit
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  root-entry-limit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+      - name: Check root entry count
+        env:
+          MAX_ROOT_ENTRIES: 15
+        run: |
+          count=$(find . -mindepth 1 -maxdepth 1 -printf '.\n' | wc -l)
+          echo "Root has $count entries. Maximum is $MAX_ROOT_ENTRIES."
+          if [ "$count" -gt "$MAX_ROOT_ENTRIES" ]; then
+            echo "::error::Repository root exceeds $MAX_ROOT_ENTRIES entries. Move new files into an existing directory."
+            exit 1
+          fi

@@ -2,6 +2,10 @@
 Tests for litellm.llms.gigachat.chat.streaming
 """
 
+import json
+from collections.abc import AsyncIterator
+from typing import Final
+
 from litellm.llms.gigachat.chat.streaming import GigaChatModelResponseIterator
 
 
@@ -85,3 +89,32 @@ class TestChunkParserUsage:
         assert parsed["usage"]["prompt_tokens"] == 45
         assert parsed["usage"]["total_tokens"] == 52
         assert parsed["usage"]["prompt_tokens_details"]["cached_tokens"] == 20
+
+
+def _content_chunk(text: str) -> dict[str, object]:
+    return {"choices": [{"delta": {"content": text}, "index": 0, "finish_reason": None}]}
+
+
+STREAM_ITEMS: Final = (
+    f"data: {json.dumps(_content_chunk('Hel'))}",
+    _content_chunk("lo"),
+    "data: {not json",
+    "data: [DONE]",
+    f"data: {json.dumps(_content_chunk('after done'))}",
+)
+
+
+class TestStreamIteration:
+    def test_sync_stream_reads_sse_lines_and_parsed_chunks_until_done(self):
+        iterator = GigaChatModelResponseIterator(streaming_response=iter(STREAM_ITEMS), sync_stream=True)
+
+        assert [chunk["text"] for chunk in iterator] == ["Hel", "lo", ""]
+
+    async def test_async_stream_reads_sse_lines_and_parsed_chunks_until_done(self):
+        async def stream() -> AsyncIterator[object]:
+            for item in STREAM_ITEMS:
+                yield item
+
+        iterator = GigaChatModelResponseIterator(streaming_response=stream(), sync_stream=False)
+
+        assert [chunk["text"] async for chunk in iterator] == ["Hel", "lo", ""]

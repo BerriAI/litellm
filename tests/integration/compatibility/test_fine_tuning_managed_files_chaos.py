@@ -12,6 +12,7 @@ import json
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -25,8 +26,6 @@ from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_pr
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, BadRequestError, OpenAI
 from pydantic import JsonValue, TypeAdapter
-
-pytestmark: Final = pytest.mark.timeout(480)
 
 MODEL: Final = "gpt-4.1-chaos"
 DEPLOYMENT_KEYS: Final = ("sk-chaos-deployment-a", "sk-chaos-deployment-b")
@@ -162,14 +161,11 @@ def _upload(client: OpenAI, purpose: str) -> str:
     return str(JSON_OBJECT.validate_json(uploaded.text)["id"])
 
 
-@pytest.fixture(scope="module")
-def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    directory: Final = tmp_path_factory.mktemp("fine-tuning-chaos")
+@contextmanager
+def _rig(directory: Path, healthcheck: WorkerHealthcheck) -> Iterator[Rig]:
     with gateway_from_environment() as shared, wire_server(_respond) as wire:
         config: Final = _config_file(directory, wire)
-        with owned_proxy_process(
-            shared, directory, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
-        ) as owned:
+        with owned_proxy_process(shared, directory, {}, config=config, workers=2, healthcheck=healthcheck) as owned:
             eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=120)
             unloaded: Final = Rig(owned, wire, "", "")
             with unloaded.sdk() as client:
@@ -177,6 +173,18 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 validation_file: Final = _upload(client, "validate")
             wire.drain()
             yield Rig(owned, wire, training_file, validation_file)
+
+
+@pytest.fixture(scope="module")
+def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(tmp_path_factory.mktemp("fine-tuning-chaos"), WorkerHealthcheck.STRICT) as rig:
+        yield rig
+
+
+@pytest.fixture(scope="module")
+def suspension_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(tmp_path_factory.mktemp("fine-tuning-suspension"), WorkerHealthcheck.LENIENT) as rig:
+        yield rig
 
 
 def _create(rig: Rig) -> tuple[int, Mapping[str, JsonValue]]:
@@ -241,13 +249,13 @@ def test_concurrent_sync_and_async_burst_sends_each_deployment_its_own_file_ids(
     _assert_caller_gets_its_own_ids(rig, synced + awaited)
 
 
-def test_each_worker_alone_sends_the_provider_file_ids(rig: Rig) -> None:
-    rig.wire.drain()
-    for paused in sorted(rig.owned.worker_pids()):
-        with rig.owned.suspended(paused):
-            outcomes = tuple(_create(rig) for _ in range(4))
-        _assert_caller_gets_its_own_ids(rig, outcomes)
-        _assert_each_deployment_got_its_own_ids(_sent_creates(rig, 4))
+def test_each_worker_alone_sends_the_provider_file_ids(suspension_rig: Rig) -> None:
+    suspension_rig.wire.drain()
+    for paused in sorted(suspension_rig.owned.worker_pids()):
+        with suspension_rig.owned.suspended(paused):
+            outcomes = tuple(_create(suspension_rig) for _ in range(4))
+        _assert_caller_gets_its_own_ids(suspension_rig, outcomes)
+        _assert_each_deployment_got_its_own_ids(_sent_creates(suspension_rig, 4))
 
 
 def test_a_replaced_worker_still_sends_the_provider_file_ids(rig: Rig) -> None:

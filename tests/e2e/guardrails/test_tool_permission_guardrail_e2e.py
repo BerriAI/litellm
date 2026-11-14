@@ -19,10 +19,9 @@ verdict comes from the proxy itself.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 import pytest
-
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, UnknownApiError
 from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
@@ -31,14 +30,29 @@ from guardrails_client import (
     ToolPermissionParamsBody,
     ToolPermissionRuleBody,
     poll_until_blocked,
+    poll_until_blocked_stream,
     poll_until_guardrail_applied,
 )
 from lifecycle import ResourceManager
-from models import ChatResponse, ChatTool, ChatToolFunction
+from models import (
+    AnthropicCustomTool,
+    AnthropicMessagesBody,
+    AnthropicMessagesResponse,
+    AnthropicToolChoice,
+    ChatMessage,
+    ChatResponse,
+    ChatTool,
+    ChatToolFunction,
+    JsonSchemaProperty,
+    ResponsesFunctionTool,
+    ResponsesToolBody,
+    ResponsesToolOutput,
+    ToolInputSchema,
+)
 
-pytestmark = pytest.mark.e2e
+pytestmark: Final = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL: Final = "gemini-2.5-flash"
 
 #: The one tool the guardrail permits, and one it does not. Both are declared by
 #: the caller in the request body; the guardrail reads them there.
@@ -63,11 +77,15 @@ DENIED_TOOL: Final = ChatTool(
 
 TOOL_PROMPT: Final = "What is the weather in Paris right now?"
 
+type FlatToolEndpoint = Literal["messages", "responses"]
+ALLOWED_TOOL_SCHEMA: Final = ToolInputSchema(properties={"city": JsonSchemaProperty(type="string")}, required=["city"])
+DENIED_TOOL_SCHEMA: Final = ToolInputSchema()
+
 
 def _register_tool_permission(client: GuardrailsClient, resources: ResourceManager, *, name: str) -> None:
     """Allow-list exactly one tool: everything else falls to `default_action=deny`
     and, with `on_disallowed_action=block`, is rejected outright."""
-    guardrail_id = client.register(
+    guardrail_id: Final = client.register(
         name,
         ToolPermissionParamsBody(
             mode="pre_call",
@@ -100,6 +118,57 @@ def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
     )
 
 
+def _send_flat_tool(
+    client: GuardrailsClient,
+    key: str,
+    endpoint: FlatToolEndpoint,
+    *,
+    guardrail: str,
+    tool: ChatTool,
+    schema: ToolInputSchema,
+    require_tool: bool = False,
+) -> StreamingResponse:
+    name: Final = tool.function.name
+    match endpoint:
+        case "messages":
+            return client.proxy.transport.send(
+                "/v1/messages",
+                headers=client.proxy.transport.bearer(key),
+                json=AnthropicMessagesBody(
+                    model=MODEL,
+                    messages=[ChatMessage(role="user", content=TOOL_PROMPT)],
+                    max_tokens=128,
+                    tools=[
+                        AnthropicCustomTool(name=name, description=tool.function.description or "", input_schema=schema)
+                    ],
+                    tool_choice=AnthropicToolChoice(type="any") if require_tool else None,
+                    guardrails=[guardrail],
+                ),
+            )
+        case "responses":
+            return client.proxy.transport.send(
+                "/v1/responses",
+                headers=client.proxy.transport.bearer(key),
+                json=ResponsesToolBody(
+                    model=MODEL,
+                    input=TOOL_PROMPT,
+                    tools=[ResponsesFunctionTool(name=name, description=tool.function.description, parameters=schema)],
+                    tool_choice="required" if require_tool else None,
+                    guardrails=[guardrail],
+                ),
+            )
+
+
+def _flat_tool_call_names(endpoint: FlatToolEndpoint, body: str) -> tuple[str, ...]:
+    match endpoint:
+        case "messages":
+            content: Final = AnthropicMessagesResponse.model_validate_json(body).content or []
+            return tuple(block.name for block in content if block.type == "tool_use" and block.name)
+        case "responses":
+            output: Final = ResponsesToolOutput.model_validate_json(body).output
+            return tuple(item.name for item in output if item.type == "function_call" and item.name)
+
+
 class TestToolPermissionPreCall:
     @pytest.mark.covers("guardrail.tool_permission.pre_call.blocks", exercised_on=["chat_completions"])
     @meta(
@@ -118,10 +187,10 @@ class TestToolPermissionPreCall:
         rejected with a 400 that names the denied tool. An unauthorized tool that
         merely reaches the model is the whole failure mode this guardrail exists
         to prevent, so a 200 here is a hard failure."""
-        name = f"e2e-toolperm-block-{unique_marker()}"
+        name: Final = f"e2e-toolperm-block-{unique_marker()}"
         _register_tool_permission(client, resources, name=name)
 
-        result = poll_until_blocked(
+        result: Final = poll_until_blocked(
             lambda: client.chat(
                 scoped_key,
                 MODEL,
@@ -161,10 +230,10 @@ class TestToolPermissionPreCall:
         and the model calls it. Without the header check a guardrail that never
         attached would pass this test for the wrong reason, so the 200 alone is
         not the contract."""
-        name = f"e2e-toolperm-allow-{unique_marker()}"
+        name: Final = f"e2e-toolperm-allow-{unique_marker()}"
         _register_tool_permission(client, resources, name=name)
 
-        outcome = poll_until_guardrail_applied(
+        outcome: Final = poll_until_guardrail_applied(
             lambda: client.chat_raw(
                 scoped_key,
                 MODEL,
@@ -178,13 +247,117 @@ class TestToolPermissionPreCall:
         )
 
         assert outcome.ok, f"the permitted tool must be served, got {outcome.status_code}: {outcome.body[:400]}"
-        applied = _applied_guardrails(outcome)
+        applied: Final = _applied_guardrails(outcome)
         assert name in applied, (
             "the allowed call must carry x-litellm-applied-guardrails naming the guardrail; "
             f"without it the 200 only proves the guardrail never ran. Got {applied!r}"
         )
 
-        called = _tool_call_names(ChatResponse.model_validate_json(outcome.body))
+        called: Final = _tool_call_names(ChatResponse.model_validate_json(outcome.body))
+        assert called == (ALLOWED_TOOL.function.name,), (
+            f"the served call must carry one tool call for the permitted tool, got {called!r}: {outcome.body[:400]}"
+        )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            pytest.param(
+                "messages",
+                marks=pytest.mark.covers("guardrail.tool_permission.pre_call.blocks", exercised_on=["messages"]),
+            ),
+            pytest.param(
+                "responses",
+                marks=pytest.mark.covers("guardrail.tool_permission.pre_call.blocks", exercised_on=["responses"]),
+            ),
+        ],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_pre_call_blocks_flat_tool_outside_the_allow_list(
+        self,
+        client: GuardrailsClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        endpoint: FlatToolEndpoint,
+    ) -> None:
+        name: Final = f"e2e-toolperm-block-{endpoint}-{unique_marker()}"
+        _register_tool_permission(client, resources, name=name)
+
+        outcome: Final = poll_until_blocked_stream(
+            lambda: _send_flat_tool(
+                client, scoped_key, endpoint, guardrail=name, tool=DENIED_TOOL, schema=DENIED_TOOL_SCHEMA
+            )
+        )
+
+        assert outcome.status_code == 400, (
+            f"tool_permission let a tool outside the allow-list through /{endpoint}; "
+            f"got {outcome.status_code}: {outcome.body[:400]}"
+        )
+        assert DENIED_TOOL.function.name in outcome.body, (
+            f"the block must name the denied tool so the caller can fix the request; got: {outcome.body[:400]}"
+        )
+        assert "Violated guardrail policy" in outcome.body, (
+            f"the block must be a guardrail verdict, got: {outcome.body[:400]}"
+        )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            pytest.param(
+                "messages",
+                marks=pytest.mark.covers("guardrail.tool_permission.pre_call.allows", exercised_on=["messages"]),
+            ),
+            pytest.param(
+                "responses",
+                marks=pytest.mark.covers("guardrail.tool_permission.pre_call.allows", exercised_on=["responses"]),
+            ),
+        ],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_pre_call_allows_permitted_flat_tool(
+        self,
+        client: GuardrailsClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        endpoint: FlatToolEndpoint,
+    ) -> None:
+        name: Final = f"e2e-toolperm-allow-{endpoint}-{unique_marker()}"
+        _register_tool_permission(client, resources, name=name)
+
+        outcome: Final = poll_until_guardrail_applied(
+            lambda: _send_flat_tool(
+                client,
+                scoped_key,
+                endpoint,
+                guardrail=name,
+                tool=ALLOWED_TOOL,
+                schema=ALLOWED_TOOL_SCHEMA,
+                require_tool=True,
+            ),
+            name,
+        )
+
+        assert outcome.ok, f"the permitted tool must be served, got {outcome.status_code}: {outcome.body[:400]}"
+        applied: Final = _applied_guardrails(outcome)
+        assert name in applied, (
+            f"the allowed call must carry x-litellm-applied-guardrails naming the guardrail; got {applied!r}"
+        )
+        called: Final = _flat_tool_call_names(endpoint, outcome.body)
         assert called == (ALLOWED_TOOL.function.name,), (
             f"the served call must carry one tool call for the permitted tool, got {called!r}: {outcome.body[:400]}"
         )

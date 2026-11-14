@@ -39,7 +39,11 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.redis.stores.spend_counters import (
+    shadow_eval_counter,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -202,7 +206,7 @@ def _chat_final_text(response_obj: object) -> str:
     if read is None:
         return ""
     prose: Final = extract_text_from_content(read("content"))
-    if not (read("tool_calls") or read("function_call")):
+    if not _tool_calls_list(read):
         return prose
     serialized: Final = _serialize_tool_calls(read)
     return f"{prose} {serialized}".strip() if prose else serialized
@@ -218,8 +222,9 @@ _RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_cal
 
 
 def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
-    calls: Final = read("tool_calls")
-    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    listed: Final = tool_calls_with_server_tool_calls(
+        {"tool_calls": read("tool_calls"), "provider_specific_fields": read("provider_specific_fields")}
+    )
     single: Final = read("function_call")
     return listed if listed else ((single,) if single is not None else ())
 
@@ -587,7 +592,7 @@ def _leg_eval_spend(sums: Mapping[str, object]) -> float:
 
 
 def _job_spend_counter_key(job_id: str) -> str:
-    return f"spend:shadow_eval:{job_id}"
+    return shadow_eval_counter(job_id)
 
 
 async def _job_spend_from_counter(counter_key: str, fallback_spend: float, max_budget: float) -> float:

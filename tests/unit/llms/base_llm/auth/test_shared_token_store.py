@@ -111,6 +111,44 @@ def test_a_minted_assertion_never_reaches_the_shared_store(tmp_path: Path):
     assert second.access_token.get_secret_value() != first.access_token.get_secret_value()
 
 
+def test_a_google_metadata_assertion_is_exchanged_again_inside_the_mandatory_window(tmp_path: Path):
+    """A Google metadata-server token carries no ``jti``, so Anthropic exchanges it as often as asked. The
+    store used to answer a mandatory refresh with the stored token minted from that same assertion, which
+    was the 20-seconds-left token the refresh existed to replace."""
+    poster = ScriptedPoster([token_response("sk-ant-oat01-first", expires_in=600), token_response("sk-ant-oat01-second")])
+    clock = FakeClock()
+    google_ref = "oidc/google/https://api.anthropic.com"
+    engine = store_engine(
+        poster, FileTokenStore(tmp_path), reader={google_ref: "google-id-token"}, clock=clock, wall_clock=clock
+    )
+    spec = make_spec(assertion_ref=google_ref)
+
+    first = minted(engine.get_token(spec))
+    clock.advance(580.0)
+    refreshed = minted(engine.get_token(spec))
+
+    assert refreshed.access_token.get_secret_value() == "sk-ant-oat01-second"
+    assert refreshed.expires_at - clock.now == pytest.approx(3600.0), (first.expires_at, refreshed.expires_at)
+    assert [request.json_body()["assertion"] for request in poster.requests] == ["google-id-token", "google-id-token"]
+    assert stored_files(tmp_path) == [], "a re-exchangeable assertion has no token to share across workers"
+
+
+def test_a_token_file_assertion_still_serves_the_stored_token_inside_the_mandatory_window(tmp_path: Path):
+    """The projected token file is the case the store was built for: with the file unrotated, a second
+    exchange would only be refused as ``jti_reused``, so the stored token keeps serving until it dies."""
+    poster = SingleUsePoster(expires_in=600)
+    clock = FakeClock()
+    store = FileTokenStore(tmp_path)
+    engine = store_engine(poster, store, clock=clock, wall_clock=clock)
+
+    first = minted(engine.get_token(make_spec()))
+    clock.advance(580.0)
+    served = minted(store_engine(poster, store, clock=clock, wall_clock=clock).get_token(make_spec()))
+
+    assert served.access_token.get_secret_value() == first.access_token.get_secret_value()
+    assert len(poster.requests) == 1
+
+
 def test_a_failed_write_leaves_no_staging_file_holding_a_live_token(tmp_path: Path):
     """Nothing ever sweeps this directory, so a staging file a failed write leaves behind would keep a
     working token readable on disk for as long as the pod lives."""

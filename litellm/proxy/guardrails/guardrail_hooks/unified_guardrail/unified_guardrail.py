@@ -25,6 +25,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -142,6 +143,15 @@ def _ends_stream(endpoint_translation: object, item: object) -> bool:
         endpoint_translation, "_check_streaming_has_ended", None
     )
     return has_ended is not None and has_ended((item,))
+
+
+def _passthrough_delta(delta: object) -> Delta:
+    server_call_fields: Final = anthropic_server_call_fields(delta)
+    role: Final = getattr(delta, "role", None)
+    tool_calls: Final = getattr(delta, "tool_calls", None)
+    if not server_call_fields:
+        return Delta(content=None, role=role, tool_calls=tool_calls)
+    return Delta(content=None, role=role, tool_calls=tool_calls, provider_specific_fields=dict(server_call_fields))
 
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
@@ -974,7 +984,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     def _chunk_has_tool_calls(item: object) -> bool:
         for choice in _chunk_choices(item):
             delta = getattr(choice, "delta", None)
-            if getattr(delta, "tool_calls", None):
+            if getattr(delta, "tool_calls", None) or anthropic_server_call_fields(delta):
                 return True
         return False
 
@@ -1042,11 +1052,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             synthetic_choices.append(
                 StreamingChoices(
                     index=idx,
-                    delta=Delta(
-                        content=None,
-                        role=getattr(delta, "role", None),
-                        tool_calls=getattr(delta, "tool_calls", None),
-                    ),
+                    delta=_passthrough_delta(delta),
                     finish_reason=passthrough_finish,
                 )
             )

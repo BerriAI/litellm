@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
+from typing import Final, TypeAlias
 
 import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
-
-if TYPE_CHECKING:
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
 
 Detector: TypeAlias = Callable[[NativeCall], bool]
 Detectors: TypeAlias = Mapping[Feature, Detector]
@@ -35,9 +34,16 @@ def mock_response(request: NativeCall) -> bool:
     return present(request, "mock_response")
 
 
+def latest_alias(request: NativeCall) -> bool:
+    return is_model_latest_alias(
+        optional_str(request.resolved.get("model")) or "",
+        optional_str(request.resolved.get("custom_llm_provider")),
+    )
+
+
 def caller_client(request: NativeCall) -> bool:
-    """Python sends through the caller's HTTP client or shared session."""
-    return present(request, "client") or present(request, "shared_session")
+    """Python sends through the caller's HTTP client; a shared session only reuses connections, which native pools."""
+    return present(request, "client")
 
 
 def extra_body(request: NativeCall) -> bool:
@@ -61,12 +67,10 @@ def timeout_variants(request: NativeCall) -> bool:
 
 def proxy_mcp_tools(request: NativeCall) -> bool:
     """Python expands proxy MCP tools and may execute their tool calls."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
     tools: Final = optional_sequence(request.resolved.get("tools"))
-    return tools is not None and LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(
-        cast("Iterable[ToolParam]", tools)  # cast-ok: the predicate skips entries that are not MCP tool dicts
-    )
+    return tools is not None and may_name_litellm_mcp_gateway(tools)
 
 
 def prompt_management(request: NativeCall) -> bool:
@@ -160,15 +164,27 @@ def response_cache(request: NativeCall) -> bool:
     return litellm.cache is not None and cache.get("no-cache") is not True
 
 
-_NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
+@functools.lru_cache(maxsize=32)
+def _tls_unsupported(security_level: str | None, ecdh_curve: str | None) -> bool:
+    from litellm.rust_bridge import _native
+
+    return bool(_native.unsupported_tls_settings(security_level, ecdh_curve))
 
 
 def tls_policy(_request: NativeCall) -> bool:
     """Python applies TLS settings or ECDH curves the native client cannot configure."""
-    curve: Final = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
-    return bool(os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)) or (
-        bool(curve) and str(curve).strip().lower() not in _NATIVE_ECDH_CURVES
+    return unsupported_tls()
+
+
+def unsupported_tls() -> bool:
+    configured: Final[tuple[object, object]] = (
+        os.environ.get("SSL_SECURITY_LEVEL", litellm.ssl_security_level),
+        os.environ.get("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve),
     )
+    if any(value and not isinstance(value, str) for value in configured):  # pyright: ignore[reportUnnecessaryIsInstance]  # callers assign the ssl settings untyped
+        return True
+    security_level, ecdh_curve = (value if isinstance(value, str) else None for value in configured)
+    return _tls_unsupported(security_level, ecdh_curve)
 
 
 COMMON: Final[Detectors] = MappingProxyType(
@@ -179,5 +195,6 @@ COMMON: Final[Detectors] = MappingProxyType(
         Feature.TIMEOUT_VARIANTS: timeout_variants,
         Feature.AGENTIC_LOOP_HOOK: agentic_loop_hook,
         Feature.TLS_POLICY: tls_policy,
+        Feature.LATEST_ALIAS: latest_alias,
     }
 )

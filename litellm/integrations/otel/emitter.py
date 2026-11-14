@@ -6,8 +6,7 @@ from types import MappingProxyType
 from typing import Final
 
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
-from opentelemetry.sdk.trace import Span as SdkSpan
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
@@ -36,7 +35,7 @@ from litellm.integrations.otel.model.spans import (
 )
 from litellm.integrations.otel.plumbing.context import destination_backends
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
-from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
+from litellm.integrations.otel.plumbing.providers import span_limits, to_otel_span_kind
 
 # Roles emit() knows how to name and emit. PROXY_REQUEST and the management
 # routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
@@ -88,9 +87,7 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
 
 def span_attribute_limit(span: Span) -> int | None:
     """The attribute count limit ``span`` was built with, ``None`` when unbounded."""
-    if not isinstance(span, SdkSpan):
-        return SpanLimits().max_span_attributes
-    return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+    return span_limits(span).max_span_attributes
 
 
 def _carried_keys(

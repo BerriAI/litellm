@@ -13,8 +13,9 @@ from _azure_storage_support import (
     collect_files,
 )
 from _s3_v2_support import matched_ids, mixed_burst, surface_reply
+from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, JsonValue, eventually
-from integration._support.process import group_members, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, group_members, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import wire_server
 
@@ -175,7 +176,7 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
             )
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(2 * readiness_seconds(WORKERS) + 2 * graceful_stop_seconds() + 120)
 def test_restarting_the_proxy_before_the_queue_flushes_bounds_the_loss_to_the_unflushed_queue_and_recovers(
     gateway: Gateway, tmp_path: Path
 ) -> None:

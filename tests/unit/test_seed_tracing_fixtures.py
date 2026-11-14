@@ -15,7 +15,7 @@ from pydantic import InstanceOf, TypeAdapter
 
 from litellm.tracing.generated.responses import TraceSQLResponse
 from litellm.tracing.types import SpendLogRecord
-from scripts.seed_tracing_fixtures import (
+from litellm.scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
     fixture_capture,
@@ -218,7 +218,7 @@ async def test_seed_copy_uses_lens_authenticated_tenant_for_both_spend_stores(mo
 async def test_seed_copy_ids_come_from_lens_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from litellm.tracing.remote import RemoteTraceStore
-    from scripts.seed_tracing_fixtures import seeded_trace_ids
+    from litellm.scripts.seed_tracing_fixtures import seeded_trace_ids
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", "fixture-admin")
 

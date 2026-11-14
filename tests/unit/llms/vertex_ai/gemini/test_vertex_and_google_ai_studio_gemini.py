@@ -1,4 +1,4 @@
-import asyncio, importlib, os, uuid
+import asyncio, base64, importlib, os, uuid
 import json
 import logging
 import re
@@ -36,7 +36,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -328,7 +329,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -1812,6 +1815,289 @@ def test_vertex_ai_map_tools():
     assert tools == new_tools
 
 
+def test_vertex_ai_map_tools_declares_a_namespace_by_its_members() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [
+            {"type": "function", "name": "create_issue", "parameters": {"type": "object", "properties": {}}},
+            {"type": "function", "function": {"name": "close_issue"}},
+        ],
+    }
+
+    tools = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    assert [declaration["name"] for declaration in tools[0]["function_declarations"]] == [
+        "create_issue",
+        "close_issue",
+    ]
+
+
+def test_vertex_ai_map_tools_declares_a_namespace_member_like_the_same_chat_tool() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"repo": {"$ref": "#/$defs/Repo"}, "label": {"type": ["string", "null"]}},
+        "$defs": {"Repo": {"type": "string"}},
+    }
+    function = {"name": "create_issue", "description": "Open an issue", "parameters": parameters}
+    namespace = {"type": "namespace", "name": "github", "tools": [{"type": "function", **function}]}
+
+    from_namespace = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+    from_chat_tool = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}], optional_params={}
+    )
+
+    assert from_namespace == from_chat_tool
+
+
+_GET_WEATHER = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+_WEATHER_NAMESPACE = {"type": "namespace", "name": "weather", "tools": [_GET_WEATHER]}
+_TOP_LEVEL_GET_WEATHER = {"type": "function", "function": {k: v for k, v in _GET_WEATHER.items() if k != "type"}}
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [{"type": "namespace", "name": "forecast", "tools": [_GET_WEATHER]}, _WEATHER_NAMESPACE],
+            ["forecast__get_weather", "weather__get_weather"],
+        ),
+        ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather__get_weather"]),
+        ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather__get_weather", "get_weather"]),
+    ],
+    ids=["namespaces_share_a_member", "top_level_first", "namespace_first"],
+)
+def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_declares_a_member_name(
+    tools: list[dict], declared: list[str]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == declared
+
+
+def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from_its_first_entry() -> None:
+    first = {**_GET_WEATHER, "description": "Current weather"}
+    repeat = {**_GET_WEATHER, "description": "Forecast"}
+    namespace = {"type": "namespace", "name": "weather", "tools": [first, repeat]}
+
+    mapped = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration["description"]) for declaration in declarations] == [
+        ("get_weather", "Current weather")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [
+                _WEATHER_NAMESPACE,
+                _TOP_LEVEL_GET_WEATHER,
+                {"type": "function", "function": {"name": "weather__get_weather", "description": "Top level"}},
+            ],
+            [("get_weather", None), ("weather__get_weather", "Top level")],
+        ),
+        (
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "mcp", "tools": [{"type": "function", "name": "ops__exec"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            [("mcp__ops__exec", None), ("exec", None), ("ops__exec", None)],
+        ),
+        (
+            [_TOP_LEVEL_GET_WEATHER, _TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE],
+            [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
+        ),
+    ],
+    ids=["top_level_function_has_the_qualified_name", "namespaces_build_one_qualified_name", "client_repeats_a_function"],
+)
+def test_vertex_ai_map_tools_never_repeats_a_generated_name(
+    tools: list[dict], declared: list[tuple[str, str | None]]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration.get("description")) for declaration in declarations] == declared
+
+
+def test_vertex_ai_map_openai_params_qualifies_members_by_the_namespace_top_level_name() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "safe",
+        "function": {"name": "lookup"},
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["safe__lookup"]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == ["safe__lookup"]
+
+
+def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}],
+            "functions": [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["mcp__weather__lookup", "lookup"]
+
+
+def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
+    function = {k: v for k, v in _GET_WEATHER.items() if k != "type"}
+
+    mapped = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}, {"type": "function", "function": function}],
+        optional_params={},
+    )
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "other_tools", "allowed_function_names"),
+    [
+        ("github", [], ["create_issue", "close_issue"]),
+        ("close_issue", [], ["close_issue"]),
+        ("github", [{"type": "function", "function": {"name": "github"}}], ["github"]),
+        (
+            "github",
+            [{"type": "function", "function": {"name": "close_issue"}}],
+            ["github__create_issue", "github__close_issue"],
+        ),
+        (
+            "close_issue",
+            [{"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]}],
+            ["github__close_issue", "gitlab__close_issue"],
+        ),
+        (
+            "github",
+            [
+                {"type": "function", "function": {"name": "close_issue"}},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["github__create_issue"],
+        ),
+        (
+            "close_issue",
+            [
+                {"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["gitlab__close_issue"],
+        ),
+        (
+            "mcp",
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {
+                    "type": "namespace",
+                    "name": "mcp",
+                    "tools": [{"type": "function", "name": "ops__exec"}, {"type": "function", "name": "status"}],
+                },
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            ["mcp__status"],
+        ),
+    ],
+    ids=[
+        "names_the_namespace",
+        "names_a_member",
+        "names_a_function_sharing_the_namespace_name",
+        "names_a_namespace_whose_member_a_function_repeats",
+        "names_a_member_two_namespaces_share",
+        "names_a_namespace_whose_generated_name_a_function_holds",
+        "names_a_member_whose_generated_name_a_function_holds",
+        "names_a_namespace_whose_generated_name_another_namespace_holds",
+    ],
+)
+def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
+    forced_name: str, other_tools: list[dict[str, object]], allowed_function_names: list[str]
+) -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [{"type": "function", "name": "create_issue"}, {"type": "function", "name": "close_issue"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace, *other_tools],
+            "tool_choice": {"type": "function", "function": {"name": forced_name}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for declaration in mapped["tools"][0]["function_declarations"]]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == allowed_function_names
+    assert set(allowed_function_names) <= set(declared)
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "tools"),
+    [
+        (
+            "weather",
+            [
+                {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "lookup"}]},
+                {"type": "function", "function": {"name": "lookup"}},
+                {"type": "function", "function": {"name": "weather__lookup"}},
+            ],
+        ),
+        (
+            "ops__exec",
+            [
+                {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "ops__exec", "tools": [{"type": "function", "name": "status"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "status"}},
+                {"type": "function", "function": {"name": "ops__exec__status"}},
+            ],
+        ),
+    ],
+    ids=["its_members_lose_to_functions", "another_namespace_generates_its_name"],
+)
+def test_vertex_ai_tool_choice_naming_a_namespace_gemini_gets_no_member_of(
+    forced_name: str, tools: list[dict[str, object]]
+) -> None:
+    params = {"tools": tools, "tool_choice": {"type": "function", "function": {"name": forced_name}}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"tool_choice '{forced_name}'"):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=False
+        )
+    dropped = VertexGeminiConfig().map_openai_params(
+        non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert "tool_choice" not in dropped
+    assert dropped["tools"][0]["function_declarations"]
+
+
 def test_vertex_ai_map_tool_with_anyof():
     """
     Related issue: https://github.com/BerriAI/litellm/issues/11164
@@ -2229,6 +2515,61 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
         None,
     ]
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": audio_base64}}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+    }
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tts_stream_carries_audio_in_delta_and_rebuilds_full_clip(respx_mock: respx.MockRouter) -> None:
+    first_audio: Final = base64.b64encode(b"\x01\x02\x03").decode()
+    second_audio: Final = base64.b64encode(b"\x04\x05").decode()
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).mock(
+        return_value=_gemini_sse(
+            _gemini_tts_audio_event(first_audio),
+            _gemini_tts_audio_event(second_audio),
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 40, "totalTokenCount": 49},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="gemini/gemini-3.8-flash-tts",
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio={"voice": "Kore", "format": "pcm16"},
+            stream=True,
+            api_key="test-api-key",
+        )
+    )
+    complete_response: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [chunk.choices[0].delta.audio for chunk in chunks if chunk.choices[0].delta.audio is not None] == [
+        {"data": first_audio},
+        {"data": second_audio},
+    ]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert base64.b64decode(complete_response.choices[0].message.audio.data) == b"\x01\x02\x03\x04\x05"
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -3497,9 +3838,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3629,9 +3968,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
@@ -7909,7 +8246,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -9424,7 +9761,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9530,7 +9867,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -10454,6 +10791,106 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
+)
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio=audio(audio_format),
+            api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
+
+
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
+def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=request_drop_params,
+    )
+
+    assert optional_params == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
+
+
 _CACHED_PROMPT_USAGE_METADATA = {
     "promptTokenCount": 1536,
     "candidatesTokenCount": 40,
@@ -10790,6 +11227,90 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_GEMINI_ROUTES: Final = (
+    pytest.param(VertexGeminiConfig, "vertex_ai", id="vertex_ai"),
+    pytest.param(GoogleAIStudioGeminiConfig, "gemini", id="gemini"),
+)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_a_hosted_mcp_tool_answers_400_on_gemini_without_drop_params(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=True,
+        )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every_hosted_mcp_tool(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL],
+            "functions": [_WEATHER_FUNCTION_TOOL["function"]],
+            "tool_choice": "none",
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
 
 
 class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):

@@ -199,14 +199,14 @@ def test_utils_token_counter_adds_title_and_context_once_per_document(
 
 
 @pytest.mark.parametrize("label", list(_UNREADABLE))
-def test_utils_token_counter_prices_unreadable_pdf_bytes_like_one_image(
+def test_utils_token_counter_uses_the_same_bounded_fallback_for_unreadable_pdf_bytes(
     gateway: Gateway, provider: SharedProvider, label: str
 ) -> None:
     data: Final = _UNREADABLE[label]
     as_pdf: Final = _local(gateway, provider, [document(base64_source(data))])
-    as_png: Final = _local(gateway, provider, [document(base64_source(data, media_type="image/png"))])
+    fallback: Final = _local(gateway, provider, [document(base64_source(encoded(b"unreadable-document")))])
     without: Final = _local(gateway, provider, [])
-    assert as_pdf == as_png, (as_pdf, as_png)
+    assert as_pdf == fallback, (as_pdf, fallback)
     assert 0 <= as_pdf - without < rendered_tokens((LETTER,)), (as_pdf, without)
 
 

@@ -2,7 +2,7 @@
 DashScope Anthropic-compatible Messages transformation config.
 """
 
-from typing import ClassVar, Final
+from typing import Final
 
 import litellm
 from litellm.exceptions import AuthenticationError
@@ -24,8 +24,6 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     ``{origin}/apps/anthropic`` for every DashScope domain, including
     ``dashscope.aliyuncs.com`` and ``{workspace}.{region}.maas.aliyuncs.com``.
     """
-
-    _workload_identity_eligible: ClassVar[bool] = False
 
     @property
     def custom_llm_provider(self) -> str | None:

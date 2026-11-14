@@ -2,6 +2,7 @@
 Unit tests for Qualifire guardrail integration.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -735,3 +736,41 @@ class TestQualifireGuardrailRegistry:
 
         assert "qualifire" in guardrail_class_registry
         assert guardrail_class_registry["qualifire"] == QualifireGuardrail
+
+
+def test_convert_messages_sends_replayed_server_tool_calls_with_client_tool_calls() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+        QualifireGuardrail,
+    )
+
+    guardrail: Final = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail")
+
+    result: Final = guardrail._convert_messages_to_api_format(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location": "NYC"}'},
+                    }
+                ],
+                "provider_specific_fields": {
+                    "server_tool_calls": [
+                        {
+                            "id": "srvtoolu_01",
+                            "type": "function",
+                            "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com"}'},
+                        }
+                    ]
+                },
+            },
+        ]
+    )
+
+    assert result[0]["tool_calls"] == [
+        {"id": "srvtoolu_01", "name": "web_fetch", "arguments": {"url": "https://example.com"}},
+        {"id": "call_123", "name": "get_weather", "arguments": {"location": "NYC"}},
+    ]

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.repositories.base_repository import (
     BaseRepository,
@@ -66,10 +67,12 @@ class _PrismaTeamDb(_TeamTables, Protocol):
     def tx(self) -> _TeamTransactionManager: ...
 
 
-class _PrismaClientView(Protocol):
+class _PrismaReaderClientView(Protocol):
     @property
     def db(self) -> _PrismaTeamDb: ...
 
+
+class _PrismaWriterClientView(Protocol):
     @property
     def writer_db(self) -> _PrismaTeamDb: ...
 
@@ -95,8 +98,10 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     @property
     def _db(self) -> _PrismaTeamDb:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.writer_db if self._use_writer else client.db
+        client: Final = self._connected_client()
+        if self._use_writer:
+            return require_attributes(client, _PrismaWriterClientView, "writer_db").writer_db
+        return require_attributes(client, _PrismaReaderClientView, "db").db
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:

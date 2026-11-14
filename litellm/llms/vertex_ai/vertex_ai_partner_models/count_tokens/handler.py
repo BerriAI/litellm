@@ -9,12 +9,15 @@ their respective publisher-specific count-tokens endpoints.
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
+    AnthropicModelInfo,
+    context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
     tools_without_custom_field,
@@ -31,6 +34,8 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 
 
 _REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
+_CONTEXT_MANAGEMENT: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def count_tokens_request_body(
@@ -55,8 +60,17 @@ def count_tokens_publisher(model: str) -> str | None:
 
 def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) -> Mapping[str, str]:
     authorization: Final = {"Authorization": f"Bearer {access_token}"}
-    betas: Final = count_tokens_feature_betas(
-        "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
+    betas: Final = (
+        *count_tokens_feature_betas(
+            "vertex_ai", request_data, _REQUEST_MESSAGES.validate_python(request_data["messages"])
+        ),
+        *filter_and_transform_beta_headers(
+            [
+                *context_management_betas(_CONTEXT_MANAGEMENT.validate_python(request_data.get("context_management"))),
+                *AnthropicModelInfo().thinking_betas(request_data.get("thinking")),
+            ],
+            "vertex_ai",
+        ),
     )
     return {**authorization, "anthropic-beta": ",".join(betas)} if betas else authorization
 
@@ -193,6 +207,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             api_base=litellm_params.get("api_base"),
         )
 
+        if request_data.get("context_management") is not None:
+            await aload_beta_headers_config()
         headers: Final = dict(count_tokens_headers(access_token, request_data))
 
         # Get async HTTP client
@@ -215,7 +231,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
-        result: Final = response.json()
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
 
         # Return token count
         # Vertex AI Anthropic returns: {"input_tokens": 123}

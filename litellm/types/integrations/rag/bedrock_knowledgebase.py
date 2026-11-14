@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -114,10 +114,20 @@ class BedrockKBRetrievalConfiguration(TypedDict, total=False):
     vectorSearchConfiguration: BedrockKBVectorSearchConfiguration | None
 
 
+BedrockKBImageFormat: TypeAlias = Literal["png", "jpeg", "gif", "webp"]
+
+
+class BedrockKBInputImage(TypedDict):
+    format: ReadOnly[BedrockKBImageFormat]
+    inlineContent: ReadOnly[str]
+
+
 class BedrockKBRetrievalQuery(TypedDict, total=False):
     """Query structure for retrieval."""
 
     text: str | None
+    type: ReadOnly[Literal["TEXT", "IMAGE"]]
+    image: ReadOnly[BedrockKBInputImage]
 
 
 class BedrockKBGuardrailConfiguration(TypedDict, total=False):

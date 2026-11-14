@@ -34,7 +34,7 @@ _COUNTS_ONLY_REPLY: Final[dict[str, JsonValue]] = {
     "input_tokens": 10,
     "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
     "output_tokens": 20,
-    "output_tokens_details": {"image_tokens": 20, "text_tokens": 0},
+    "output_tokens_details": {},
 }
 
 
@@ -167,7 +167,7 @@ def test_gemini_image_edit_rejects_an_image_config_string_that_is_not_json(
                 "input_tokens": 0,
                 "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
                 "output_tokens": 0,
-                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens_details": {},
             },
             id="empty-usage-object",
         ),

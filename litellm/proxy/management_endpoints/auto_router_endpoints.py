@@ -60,6 +60,7 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -235,8 +236,10 @@ _RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(st
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    from litellm.proxy.utils import query_raw_rows
+
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
+        return _RAW_ROWS.validate_python(await query_raw_rows(prisma_client.db, query, *args))
 
 
 async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
@@ -614,7 +617,7 @@ async def preview_auto_router_routing(
     try:
         complexity_strategy: Final = ComplexityRouter(
             model_name=resolved.router_name,
-            litellm_router_instance=llm_router,
+            ctx=RoutingContext(llm_router),
             complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
             default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
             derive_savings_baseline=False,
@@ -938,7 +941,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.registry().all() or ())
+        for key in map(_strategy_router_key, llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -1049,7 +1052,7 @@ async def get_auto_router_session(
     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -1060,6 +1063,11 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
+    total: Final = (
+        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
+        if user_api_key_dict.api_key
+        else None
+    )
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
@@ -1071,6 +1079,7 @@ async def get_auto_router_session(
         turns=row.turns,
         last_model=row.last_model,
         spend=row.spend,
+        total_spend=total,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
@@ -1111,6 +1120,7 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
             router_registry.plugins("complexity"),
             router_registry.plugins("adaptive"),
             router_registry.plugins("quality"),
+            router_registry.plugins("switchyard"),
         )
     )
 

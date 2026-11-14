@@ -5,10 +5,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import json_contains, map_finish_reason, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PredibaseConfig(BaseConfig):
@@ -163,13 +166,13 @@ class PredibaseConfig(BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise PredibaseError(message=raw_response.text, status_code=422)
 
-        if "error" in completion_response:
+        if json_contains(completion_response, "error"):
             raise PredibaseError(
-                message=str(completion_response["error"]),
+                message=str(subscript(completion_response, "error")),
                 status_code=raw_response.status_code,
             )
         elif not isinstance(completion_response, dict):

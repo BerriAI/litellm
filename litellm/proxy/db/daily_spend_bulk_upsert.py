@@ -10,13 +10,15 @@ the window in which those locks are held.
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import groupby
+from json import dumps
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
-DailySpendEntity = Literal["user", "team", "org", "tag", "end_user", "agent"]
+DailySpendEntity: TypeAlias = Literal["user", "team", "org", "tag", "end_user", "agent", "customer_member"]
 
 SqlValue = str | int | float | None
 
@@ -32,10 +34,21 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
+    parent_id_columns: tuple[str, ...] = ()
+    # The customer table arbitrates on a bounded hash of its identity (model group
+    # included) stored in ``id``, so three long customer ids never exceed an index entry
+    # and rows already written under that identity keep accumulating.
+    hashed_identity: bool = False
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
     {
+        "customer_member": DailySpendTable(
+            name="LiteLLM_DailyCustomerMemberSpend",
+            entity_id_column="customer_member_id",
+            parent_id_columns=("customer_team_id", "customer_org_id"),
+            hashed_identity=True,
+        ),
         "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
         "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
         "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
@@ -47,6 +60,7 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
 
 _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
     {
+        "customer_member": "customer_member_id",
         "user": "user",
         "team": "team_id",
         "org": "organization_id",
@@ -55,10 +69,16 @@ _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
         "tag": "request_tags",
     }
 )
-_TAGS: Final = TypeAdapter(tuple[str, ...])
+_TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
+    if entity == "customer_member" and not (
+        isinstance(payload.get("customer_org_id"), str)
+        and payload.get("customer_org_id")
+        and all(isinstance(payload.get(column), str) for column in ("customer_member_id", "customer_team_id"))
+    ):
+        return ()
     key: Final = _ENTITY_INPUT_KEYS[entity]
     if key not in payload:
         return ()
@@ -67,7 +87,7 @@ def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEnti
         if value is None:
             return ()
         tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
-        return tuple(dict.fromkeys(tags))
+        return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
     if value is None:
         return (None,) if entity == "user" else ()
     if not isinstance(value, str) or (entity == "end_user" and not value):
@@ -98,6 +118,7 @@ _SPEND_COLUMNS: Final = (
     "prompt_caching_savings_spend",
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
+    "guardrail_spend",
 )
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(
@@ -124,9 +145,24 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _identity_columns(table: DailySpendTable) -> tuple[str, ...]:
+    return (
+        table.entity_id_column,
+        *table.parent_id_columns,
+        *_KEY_COLUMNS,
+        *(("model_group",) if table.hashed_identity else ()),
+    )
+
+
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
+    return tuple(_as_text(transaction.get(column)) for column in _identity_columns(table))
+
+
+def hashed_row_id(table: DailySpendTable, key: tuple[str, ...]) -> str:
+    """The ``id`` of a hashed-identity row, identical for every writer of the same identity."""
+    pairs: Final = sorted(zip(_identity_columns(table), key, strict=True))
+    return sha256(dumps(pairs, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -161,10 +197,11 @@ def _row_params(
     transaction: SpendRow,
 ) -> tuple[SqlValue, ...]:
     request_id: Final = transaction.get("request_id")
+    model_group: Final = transaction.get("model_group")
     return (
-        str(uuid.uuid4()),
-        *key,
-        None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
+        hashed_row_id(table, key) if table.hashed_identity else str(uuid.uuid4()),
+        *key[: len(key) - 1 if table.hashed_identity else len(key)],
+        _as_text(model_group) if table.hashed_identity or model_group is not None else None,
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
@@ -175,6 +212,7 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
         table.entity_id_column,
+        *table.parent_id_columns,
         *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
@@ -213,7 +251,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted(('id',) if table.hashed_identity else _identity_columns(table))}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
