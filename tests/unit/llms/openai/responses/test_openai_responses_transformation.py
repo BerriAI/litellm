@@ -2393,6 +2393,33 @@ class TestPromptCacheOptionsOnResponsesPath:
         }
 
 
+@pytest.mark.parametrize(
+    ("model", "temperature", "drop_params", "global_drop_params", "expected"),
+    (
+        ("o3-mini", 0.5, True, False, {"max_output_tokens": 128}),
+        ("o3-mini", 1, True, False, {"temperature": 1, "max_output_tokens": 128}),
+        ("o3-mini", 0.5, False, True, {"max_output_tokens": 128}),
+        ("o3-mini", 0.5, False, False, {"temperature": 0.5, "max_output_tokens": 128}),
+        ("gpt-4o", 0.5, True, False, {"temperature": 0.5, "max_output_tokens": 128}),
+    ),
+)
+def test_o_series_responses_drops_only_unsupported_temperature_when_enabled(
+    model: str,
+    temperature: float,
+    drop_params: bool,
+    global_drop_params: bool,
+    expected: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": temperature, "max_output_tokens": 128},
+        model=model,
+        drop_params=drop_params,
+    )
+    assert mapped == expected
+
+
 class TestResponsesSurfaceSharesTheEffortRule:
     """The Responses API reaches the same gpt-5 models over a different wire, and the default
     /v1/messages bridge for openai models routes through it. It carried its own copy of the
