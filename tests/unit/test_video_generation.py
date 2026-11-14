@@ -74,6 +74,93 @@ def test_completion_cost_flat_video_deployment_override_counts_videos(
     assert cost == pytest.approx(0.37 * count)
 
 
+_OFF_PEAK: Final = {"hours_utc": "00:00-00:00", "output_cost_per_second": 0.05}
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        pytest.param({"output_cost_per_second": 0.1, "off_peak_pricing": _OFF_PEAK}, id="with_off_peak_pricing"),
+        pytest.param({"output_cost_per_second": 0.1, "id": "openai/test-flat-video-row"}, id="id_is_the_catalog_key"),
+        pytest.param(
+            {"output_cost_per_video_per_second": 0.1, "id": "openai/test-flat-video-row"},
+            id="video_per_second_key_on_the_catalog_key",
+        ),
+    ],
+)
+def test_deployment_per_second_video_price_beats_the_catalog_rows_flat_price(model_info: dict[str, object]) -> None:
+    catalog_key: Final = "openai/test-flat-video-row"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "flat-row-per-second",
+                    "litellm_params": {"model": catalog_key, "api_key": "synthetic"},
+                    "model_info": model_info,
+                }
+            ]
+        )
+        deployment: Final = router.get_deployment_by_model_group_name("flat-row-per-second")
+        assert deployment is not None
+        logging_obj: Final = LitellmLogging(
+            model=catalog_key,
+            messages=[],
+            stream=False,
+            call_type="create_video",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="flat-row-per-second",
+            function_id="flat-row-per-second",
+        )
+        logging_obj.litellm_params = {"metadata": {"model_info": deployment.model_info.model_dump()}}
+        cost: Final = litellm.completion_cost(
+            completion_response=VideoObject(
+                id="vid",
+                object="video",
+                status="completed",
+                usage={"duration_seconds": 5.0, "video_resolution": "720p"},
+            ),
+            model=catalog_key,
+            call_type="create_video",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=logging_obj,
+            router_model_id=deployment.model_info.id,
+        )
+        assert cost == pytest.approx(0.5)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
+def test_resolution_only_per_second_price_keeps_the_flat_price_for_other_resolutions() -> None:
+    catalog_key: Final = "openai/test-flat-video-tiered"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        litellm.register_model({catalog_key: {"output_cost_per_second_720p": 0.1}})
+        cost: Final = default_video_cost_calculator(
+            catalog_key, 5.0, custom_llm_provider="openai", video_resolution="1080p"
+        )
+        assert cost == pytest.approx(0.91)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
+def test_deployment_flat_video_price_still_wins_beside_its_own_per_second_price() -> None:
+    catalog_key: Final = "openai/test-flat-video-kept"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        litellm.register_model({catalog_key: {"output_cost_per_video": 0.37, "output_cost_per_second": 0.1}})
+        assert default_video_cost_calculator(catalog_key, 5.0, custom_llm_provider="openai") == pytest.approx(0.37)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
 class TestVideoGeneration:
     """Test suite for video generation functionality."""
 
