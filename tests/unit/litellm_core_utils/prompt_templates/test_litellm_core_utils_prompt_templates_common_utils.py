@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import tracemalloc
 from collections.abc import Mapping
 from typing import Final, cast
 
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
     converse_redacted_content,
+    defs_unpacked,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
@@ -2492,3 +2494,51 @@ def test_parse_tool_call_arguments_repair_warning_redacts_arguments_when_message
     assert result == {"patient": "Jane Doe"}
     assert f"Original ({len(arguments)} chars): {REDACTED_BY_LITELLM}" in caplog.text
     assert "Jane Doe" not in caplog.text
+
+
+def test_defs_unpacked_keeps_memory_flat_for_a_schema_with_many_unused_defs() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"p{i}": {"type": "string"} for i in range(2000)},
+        "$defs": {f"D{i}": {"type": "string"} for i in range(2000)},
+    }
+    tracemalloc.start()
+    try:
+        defs_unpacked(schema)
+        peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak_bytes < 10_000_000
+
+
+def test_defs_unpacked_resolves_each_ref_against_its_nearest_defs() -> None:
+    nested: Final = {
+        "$defs": {"Leaf": {"type": "integer"}},
+        "type": "object",
+        "properties": {"leaf": {"$ref": "#/$defs/Leaf"}},
+    }
+    schema: Final = {
+        "type": "object",
+        "properties": {"outer": {"$ref": "#/$defs/Leaf"}, "nested": nested},
+        "$defs": {"Leaf": {"type": "string"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {
+            "outer": {"type": "string"},
+            "nested": {**nested, "properties": {"leaf": {"type": "integer"}}},
+        },
+    }
+
+
+def test_defs_unpacked_resolves_refs_into_both_defs_and_definitions() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/definitions/B"}},
+        "$defs": {"A": {"type": "string"}},
+        "definitions": {"B": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+    }
