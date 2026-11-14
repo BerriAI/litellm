@@ -4,7 +4,10 @@ Helper util for handling openai-specific cost calculation
 """
 
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal, SupportsFloat, SupportsIndex
+
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -31,9 +34,9 @@ def cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
-          inferred from api_base. Applies the model's regional-processing
-          uplift multiplier when set.
+        - data_residency: optional OpenAI data-residency mode (e.g. "eu", "us", "fedramp"),
+          inferred from api_base, including gov.api.openai.com. Applies the
+          model's regional-processing uplift multiplier when set.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -100,8 +103,14 @@ def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
     return safe
 
 
+def _native_float(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+
+
 def video_output_cost_per_second(
-    model_info: Mapping[str, Any],
+    model_info: Mapping[str, object],
     video_resolution: str | None,
 ) -> float | None:
     """
@@ -118,14 +127,36 @@ def video_output_cost_per_second(
             tier_key: Final = f"output_cost_per_second_{suffix}"
             tier_rate: Final = model_info.get(tier_key)
             if tier_rate is not None:
-                return float(tier_rate)
+                return _native_float(tier_rate)
     out: Final = model_info.get("output_cost_per_second")
     if out is not None:
-        return float(out)
+        return _native_float(out)
     return None
 
 
 _video_output_cost_per_second = video_output_cost_per_second
+
+
+_VIDEO_CLIP_PRICES: Final = TypeAdapter(Mapping[str, Mapping[str, float]])
+
+
+def video_clip_cost(model_info: Mapping[str, object], duration: object, resolution: object) -> float | None:
+    if not isinstance(resolution, str):
+        return None
+    try:
+        prices: Final = _VIDEO_CLIP_PRICES.validate_python(model_info.get("output_cost_per_video_clip"))
+    except ValidationError:
+        return None
+    if isinstance(duration, bool) or not isinstance(duration, (str, int, float)):
+        return None
+    try:
+        duration_seconds: Final = float(duration)
+        if duration_seconds <= 0:
+            return None
+        requested_key: Final = f"{round(duration_seconds)}s"
+    except (ValueError, OverflowError):
+        return None
+    return prices.get(requested_key, {}).get(resolution.strip().lower())
 
 
 def video_generation_cost(
@@ -153,6 +184,14 @@ def video_generation_cost(
     ## GET MODEL INFO
     if model_info is None:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
+
+    clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
+
+    video_cost: Final = model_info.get("output_cost_per_video")
+    if video_cost is not None:
+        return video_cost
 
     # Check for video-specific cost per second
     video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")

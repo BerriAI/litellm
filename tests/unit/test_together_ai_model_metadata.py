@@ -64,7 +64,6 @@ DEPRECATED_MODELS: Final = {
     "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo": "2026-02-06",
     "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": "2026-02-06",
     "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": "2026-02-03",
-    "together_ai/mistralai/Mistral-7B-Instruct-v0.1": "2025-11-13",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": "2025-11-13",
 }
 

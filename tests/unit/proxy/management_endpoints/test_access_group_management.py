@@ -2,6 +2,7 @@
 Test access group management endpoints
 """
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -584,6 +585,16 @@ class _FakeBudgetRow:
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
 
+    def model_dump(self) -> Mapping[str, object]:
+        return {
+            "budget_id": self.budget_id,
+            "max_budget": self.max_budget,
+            "soft_budget": self.soft_budget,
+            "budget_duration": self.budget_duration,
+            "budget_reset_at": self.budget_reset_at,
+            "budget_limits": None,
+        }
+
 
 @dataclass
 class _FakeAccessGroupBudgetRow:
@@ -611,6 +622,9 @@ class _FakeBudgetTable:
         self.update_calls: list[tuple[str, dict]] = []
         self.deleted_ids: list[str] = []
         self._sequence = 0
+
+    async def find_unique(self, where: Mapping[str, str]) -> _FakeBudgetRow | None:
+        return self.rows.get(where["budget_id"])
 
     async def create(self, data, include=None):
         self._sequence += 1
@@ -830,10 +844,14 @@ class _FakePrismaClient:
         self.model_table = _FakeModelTable(journal, deployments, failing_model_ids)
         self.db = SimpleNamespace(
             litellm_budgettable=self.budget_table,
+            litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_modelaccessgroupbudgettable=self.access_group_budget_table,
             litellm_proxymodeltable=self.model_table,
             tx=lambda timeout=None: _FakeModelTableTx(journal, self.model_table),
         )
+        self.writer_db = self.db
 
     def jsonify_object(self, data):
         return dict(data)
