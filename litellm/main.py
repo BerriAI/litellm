@@ -418,8 +418,8 @@ def _has_its_own_async_prompt_hook(prompt_manager: CustomLogger | None) -> bool:
     )
 
 
-def _routes_through_a_prompt_manager(model: str) -> bool:
-    return model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
+def _routes_through_a_prompt_manager(model: str | None) -> bool:
+    return model is not None and model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
 
 
 def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> ControlOptions:
@@ -817,6 +817,7 @@ async def acompletion(
         )
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and not each_fallback_applies_its_own_prompt
+        and not prompt_management_applied(caller_kwargs)
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id,
             non_default_params=kwargs,

@@ -15,7 +15,7 @@ from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -7201,6 +7201,16 @@ async def test_acompletion_falls_back_to_a_model_behind_a_prompt_routing_prefix(
 
 
 @pytest.mark.asyncio
+async def test_acompletion_without_a_model_raises_a_bad_request_error() -> None:
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.acompletion(
+            model=cast(str, None),  # cast-ok: a caller that ignores the annotation and passes no model
+            messages=[SKY_QUESTION],
+            mock_response="Blue",
+        )
+
+
+@pytest.mark.asyncio
 async def test_a_caller_supplied_prompt_management_flag_does_not_skip_the_template() -> None:
     requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
     async with _openai_rejecting_the_primary_model(requests) as client:
@@ -7265,6 +7275,53 @@ async def test_a_chat_call_bridged_to_the_responses_api_sends_the_template_once(
             callbacks=[prompt_manager()],
             api_key="sk-test",
             api_base="https://api.openai.com/v1",
+        )
+    )
+
+    assert response.choices[0].message.content == "Blue"
+    assert route.calls.last.request.content.decode().count(ONE_WORD) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt_manager", [_PromptManager, _SyncOnlyPromptManager], ids=["both-hooks", "sync-hook-only"]
+)
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["acompletion", "completion"])
+async def test_a_chat_call_the_responses_api_hands_back_to_chat_sends_the_template_once(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    prompt_manager: type[CustomPromptManagement],
+    asynchronous: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_one_word",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Blue"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 28, "output_tokens": 1},
+        }
+    )
+
+    response: Final = (
+        await litellm.acompletion(
+            model="anthropic/responses/claude-haiku-5-5",
+            messages=[SKY_QUESTION],
+            prompt_id="one-word",
+            callbacks=[prompt_manager()],
+            api_key="sk-test",
+        )
+        if asynchronous
+        else litellm.completion(
+            model="anthropic/responses/claude-haiku-5-5",
+            messages=[SKY_QUESTION],
+            prompt_id="one-word",
+            callbacks=[prompt_manager()],
+            api_key="sk-test",
         )
     )
 
