@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 import httpx
 
@@ -388,8 +389,8 @@ class TestOpenAIContainerTransformation:
         assert actual_cost == expected_cost
 
 
-def test_validate_environment_sends_the_deployment_organization():
-    headers = OpenAIContainerConfig().validate_environment(
+def test_validate_environment_sends_the_deployment_organization() -> None:
+    headers: Final = OpenAIContainerConfig().validate_environment(
         headers={},
         api_key="test-key",
         litellm_params=GenericLiteLLMParams(organization="org-deployment"),

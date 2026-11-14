@@ -1,5 +1,5 @@
 from io import BufferedReader, BytesIO
-from typing import Dict
+from typing import Dict, Final
 
 import pytest
 
@@ -315,8 +315,8 @@ def test_input_fidelity_passes_through_optional_param_filter():
 
 def test_validate_environment_sends_the_deployment_organization(
     image_edit_config: OpenAIImageEditConfig,
-):
-    headers = image_edit_config.validate_environment(
+) -> None:
+    headers: Final = image_edit_config.validate_environment(
         headers={},
         model="gpt-image-1",
         api_key="test-key",

@@ -242,7 +242,7 @@ class _ClientWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_async_realtime_sends_the_deployment_organization():
+async def test_async_realtime_sends_the_deployment_organization() -> None:
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
     upstream: Final = _UpstreamThatRefusesTheHandshake()

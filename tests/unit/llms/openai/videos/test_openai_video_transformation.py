@@ -122,8 +122,8 @@ def test_video_edit_request_without_file_sends_json_id_reference():
     assert files is None
 
 
-def test_validate_environment_sends_the_deployment_organization():
-    headers = OpenAIVideoConfig().validate_environment(
+def test_validate_environment_sends_the_deployment_organization() -> None:
+    headers: Final = OpenAIVideoConfig().validate_environment(
         headers={},
         model="sora-2",
         api_key="test-key",

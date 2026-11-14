@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
@@ -89,8 +91,8 @@ class TestOpenAIVectorStoreAPIConfig:
         assert url == "https://x.openai.azure.com/openai/vector_stores/vs_1/search?api-version=2024-10-21"
 
 
-def test_validate_environment_sends_the_deployment_organization():
-    headers = OpenAIVectorStoreConfig().validate_environment(
+def test_validate_environment_sends_the_deployment_organization() -> None:
+    headers: Final = OpenAIVectorStoreConfig().validate_environment(
         headers={},
         litellm_params=GenericLiteLLMParams(api_key="test-key", organization="org-deployment"),
     )

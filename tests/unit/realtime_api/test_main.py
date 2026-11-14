@@ -763,8 +763,8 @@ async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
 )
 async def test_bearer_health_check_sends_the_deployment_organization_to_openai(
     custom_llm_provider: str, model_params: Mapping[str, object], expected_headers: Mapping[str, str]
-):
-    connect = _CapturingConnect()
+) -> None:
+    connect: Final = _CapturingConnect()
     with patch("websockets.connect", connect):
         assert await realtime_main._realtime_health_check(
             model="gpt-realtime",

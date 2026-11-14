@@ -591,8 +591,8 @@ async def test_delete_eval_sends_delete_to_requested_id_and_parses_confirmation(
     assert response.model_dump() == {"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID}
 
 
-def test_validate_environment_sends_the_deployment_organization(config: OpenAIEvalsConfig):
-    result = config.validate_environment(
+def test_validate_environment_sends_the_deployment_organization(config: OpenAIEvalsConfig) -> None:
+    result: Final = config.validate_environment(
         headers={},
         litellm_params=GenericLiteLLMParams(api_key="test-key", organization="org-deployment"),
     )

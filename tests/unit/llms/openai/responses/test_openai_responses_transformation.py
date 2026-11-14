@@ -860,8 +860,8 @@ class TestOpenAIResponsesAPIConfig:
             assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
             assert result.response.id == "resp_123"
 
-    def test_validate_environment_sends_the_deployment_organization(self):
-        result = self.config.validate_environment(
+    def test_validate_environment_sends_the_deployment_organization(self) -> None:
+        result: Final = self.config.validate_environment(
             headers={},
             model=self.model,
             litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),
@@ -869,8 +869,8 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["OpenAI-Organization"] == "org-deployment"
 
-    def test_validate_environment_keeps_the_callers_organization_header(self):
-        result = self.config.validate_environment(
+    def test_validate_environment_keeps_the_callers_organization_header(self) -> None:
+        result: Final = self.config.validate_environment(
             headers={"openai-organization": "org-caller"},
             model=self.model,
             litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),
@@ -879,8 +879,8 @@ class TestOpenAIResponsesAPIConfig:
         assert result["openai-organization"] == "org-caller"
         assert "OpenAI-Organization" not in result
 
-    def test_validate_environment_keeps_the_organization_off_other_providers(self):
-        result = LiteLLMProxyResponsesAPIConfig().validate_environment(
+    def test_validate_environment_keeps_the_organization_off_other_providers(self) -> None:
+        result: Final = LiteLLMProxyResponsesAPIConfig().validate_environment(
             headers={},
             model=self.model,
             litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),

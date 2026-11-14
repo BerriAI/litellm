@@ -169,8 +169,8 @@ def test_transform_delete_response(config: OpenAIVectorStoreFilesConfig):
     assert result["deleted"] is True
 
 
-def test_validate_environment_sends_the_deployment_organization(config: OpenAIVectorStoreFilesConfig):
-    result = config.validate_environment(
+def test_validate_environment_sends_the_deployment_organization(config: OpenAIVectorStoreFilesConfig) -> None:
+    result: Final = config.validate_environment(
         headers={},
         litellm_params=GenericLiteLLMParams(api_key="test-key", organization="org-deployment"),
     )
