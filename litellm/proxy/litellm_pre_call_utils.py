@@ -51,6 +51,10 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
+from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
+from litellm.integrations.custom_logger_v2.host import enter_request_scope
+from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
+from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -587,6 +591,11 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
+
+
+def _is_proxy_owned_metadata_key(key: str) -> bool:
+    return key.startswith("user_api_key_") or key in _UNTRUSTED_METADATA_CONTROL_FIELDS
+
 
 UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
@@ -1501,6 +1510,26 @@ def _dynamically_disabled_backends(
     return frozenset(name.lower() for name in disabled if isinstance(name, str))
 
 
+def bind_v2_request_scope(
+    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, request_headers: Mapping[str, str]
+) -> RequestScope | None:
+    if not CustomLoggerV2.declared_hooks:
+        return None
+    scope: Final = enter_request_scope(
+        RequestSelection(
+            caller_opt_outs=_dynamically_disabled_backends(user_api_key_dict, request_headers),
+            no_log=data.get("no-log") is True and not litellm.global_disable_no_log_param,
+        )
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.v2_scope = scope
+        logging_obj.v2_auth = user_api_key_dict
+    return scope
+
+
 def resolve_tenant_otel_destinations(
     user_api_key_dict: UserAPIKeyAuth,
     request_headers: Mapping[str, str] | None = None,
@@ -2227,6 +2256,40 @@ class LiteLLMProxyRequestSetup:
         team_tags: Final = (user_api_key_dict.team_metadata or {}).get("tags") or ()
         project_tags: Final = (user_api_key_dict.project_metadata or {}).get("tags") or ()
         return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
+
+    @staticmethod
+    def caller_metadata(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: field
+            for key, field in _REQUEST_FIELDS.validate_python(value).items()
+            if not _is_proxy_owned_metadata_key(key)
+        }
+
+    @staticmethod
+    def merged_request_tags(
+        request: Request,
+        metadata_buckets: tuple[Mapping[str, object], ...],
+        body_tags: object,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> tuple[str, ...]:
+        header: Final = request.headers.get("x-litellm-tags") or ""
+        body_string_tags: Final = _metadata_string_tags(({"tags": body_tags},))
+        caller_tags: Final = (
+            body_string_tags
+            if isinstance(body_tags, list)
+            else tuple(tag.strip() for tag in header.split(",") if tag.strip())
+        )
+        return tuple(
+            dict.fromkeys(
+                (
+                    *_metadata_string_tags(metadata_buckets),
+                    *LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict),
+                    *caller_tags,
+                )
+            )
+        )
 
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(
@@ -3006,9 +3069,7 @@ async def add_litellm_data_to_request(
                 _user_meta.get("headers"),
                 allow_client_message_redaction_opt_out=(_allow_client_message_redaction_opt_out),
             )
-            for _k in [
-                k for k in _user_meta if k.startswith("user_api_key_") or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
-            ]:
+            for _k in [k for k in _user_meta if isinstance(k, str) and _is_proxy_owned_metadata_key(k)]:
                 _user_meta.pop(_k, None)
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
