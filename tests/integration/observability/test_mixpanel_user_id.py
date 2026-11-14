@@ -207,9 +207,16 @@ def _without_the_id(spans: tuple[Span, ...], caller: str) -> list[tuple[str, Jso
     ]
 
 
+_PRE_BODY_KEY_READ: Final = "redis.get auth_cache"
+
+
 def _outside_auth(spans: tuple[Span, ...]) -> tuple[Span, ...]:
+    """The spans after the caller is known: not the auth span's children, and not the cached key read the proxy
+    makes before reading the body, to refuse a blocked key, since both end before auth names the caller."""
     auth_spans: Final = {span["span_id"] for span in spans if str(span["name"]).startswith("auth ")}
-    return tuple(span for span in spans if span["parent_span_id"] not in auth_spans)
+    return tuple(
+        span for span in spans if span["parent_span_id"] not in auth_spans and span["name"] != _PRE_BODY_KEY_READ
+    )
 
 
 def _inside_the_mcp_session(spans: tuple[Span, ...]) -> tuple[Span, ...]:
