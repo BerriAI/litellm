@@ -539,6 +539,26 @@ async def test_async_spread_keeps_connections_within_the_cap_after_upstreams_rep
 
 
 @pytest.mark.asyncio
+async def test_async_spread_runs_a_request_on_every_connection_the_cap_leaves_when_the_upstream_allows_one_stream():
+    gate: Final = asyncio.Event()
+    connections: Final = _AsyncConnections(gate, advertised=MappingProxyType({"search.example": 1}))
+    cap: Final = 2 * FEW_STREAMS
+    async with httpx.AsyncClient(
+        transport=AsyncHTTP2ConnectionSpread(connections, httpx.Limits(max_connections=cap))
+    ) as client:
+        first: Final = asyncio.create_task(client.get(URL))
+        await _until(lambda: connections.in_flight() == 1)
+
+        after_the_first: Final = cap - HTTP2_CONNECTIONS_PER_LANE
+        pending: Final = tuple(asyncio.create_task(client.get(URL)) for _ in range(after_the_first))
+        await _until(lambda: connections.in_flight() == 1 + after_the_first)
+        assert [connection.peak for connection in connections.opened] == [1] * (1 + after_the_first)
+
+        gate.set()
+        assert {response.status_code for response in await asyncio.gather(first, *pending)} == {200}
+
+
+@pytest.mark.asyncio
 async def test_async_spread_runs_another_upstreams_burst_at_once_after_the_first_upstream_reports_many_streams():
     gate: Final = asyncio.Event()
     connections: Final = _MixedConnections(gate, MappingProxyType({"search.example": MORE_STREAMS_THAN_WE_RUN}))

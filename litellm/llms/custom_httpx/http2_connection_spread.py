@@ -91,7 +91,9 @@ class _OriginLanes:
         match self.protocol:
             case _OneRequestPerConnection():
                 return self._most_streams_per_connection
-            case _Multiplexed() | None:
+            case _Multiplexed(streams=streams):
+                return min(streams, HTTP2_CONNECTIONS_PER_LANE)
+            case None:
                 return HTTP2_CONNECTIONS_PER_LANE
 
     def open_lane(self, transport: httpx.AsyncBaseTransport, most_connections: int | None) -> _Lane:
