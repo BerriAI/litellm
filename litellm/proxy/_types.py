@@ -2962,8 +2962,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
     redact_tokens_in_spend_logs: bool = Field(
-        True,
-        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
+        False,
+        description="Set True to mask token-shaped secrets in stored spend log request and response content. Default is False.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
@@ -4676,7 +4676,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     Headers a user can pass that will get added to litellm metadata for the request
     """
 
-    spend_logs_metadata: dict | None
+    spend_logs_metadata: ReadOnly[object]
     agent_id: str | None
     trace_id: str | None
     session_id: str | None

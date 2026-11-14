@@ -4466,7 +4466,7 @@ def cost_map_omits_token_price(*keys: object) -> bool:
 
 
 def register_model(
-    model_cost: str | dict,
+    model_cost: str | dict | None,
     *,
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
@@ -4506,6 +4506,8 @@ def register_model(
     keys are opaque ids rather than model names (e.g. router deployment ids).
     """
 
+    if model_cost is None:
+        return None
     loaded_model_cost: Final = (
         model_cost if isinstance(model_cost, dict) else (fetch_registration_document(model_cost) or {})
     )
@@ -6867,6 +6869,7 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
 
 
 _model_cost_lowercase_map: Final[None] = None
+_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: main's name, always empty
 
 
 def _invalidate_model_cost_lowercase_map() -> None:  # pyright: ignore[reportUnusedFunction]  # downstream code calls main's name
