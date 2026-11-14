@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -47,6 +47,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     get_usage_object,
@@ -545,6 +546,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+ServedRound: TypeAlias = tuple[Usage, float]
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -778,8 +780,11 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
+        self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
+        self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -809,6 +814,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "first_api_call_start_time": None,
             "litellm_params": litellm_params,
         }
+        new_call.deferred_success_result = None
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
         return new_call
@@ -2307,6 +2313,63 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    def carry_failed_attempt_usage(self) -> None:
+        """A billed response the router discards after its success log was parked (a safeguard refusal it falls
+        back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
+        parked: Final = self.deferred_success_result
+        if parked is None or self.enqueue_deferred_logging is None:
+            return
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
+        served: Final = self.served_round(parked[0])
+        if served is None:
+            return
+        self.model_call_details["failed_attempts_usage"] = (
+            *self.model_call_details.get("failed_attempts_usage", ()),
+            served,
+        )
+        self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+
+    def served_round(self, response: object) -> ServedRound | None:
+        usage: Final = get_usage_object(completion_response=response)
+        if usage is None:
+            return None
+        return usage, self._price_without_recording(response) or 0.0
+
+    def _price_without_recording(self, result: object) -> float | None:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
+        try:
+            return self.response_cost_calculator(result=result, cache_hit=None)
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if previous_failure_debug_info is None:
+                self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
+
+    def _add_failed_attempts_spend(self, own_usage: Usage | None) -> None:
+        own_cost: Final = self.model_call_details.get("response_cost")
+        if own_usage is None or not isinstance(own_cost, (int, float)):
+            return
+        failed_attempts: Final = self._failed_attempts_owed_on_success
+        if not failed_attempts:
+            return
+        failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
+        self.model_call_details.pop("failed_attempts_usage", None)
+        self.failed_attempts_billed_on_success = failed_attempts
+        self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
+        )
+        self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        if self.cost_breakdown is not None:
+            self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
+
     def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
@@ -2535,7 +2598,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _process_hidden_params_and_response_cost(
         self,
-        logging_result,
+        logging_result: object,
         start_time,
         end_time,
         build_logging_payload: bool = True,
@@ -2555,9 +2618,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
+            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
+            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -2565,6 +2630,7 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
 
         if not build_logging_payload:
             return None
@@ -7230,6 +7296,13 @@ def get_standard_logging_object_payload(
     except Exception as e:
         verbose_logger.exception("Error creating standard logging object - %s", e)
         return None
+
+
+def _with_failed_attempts_cost(breakdown: CostBreakdown, own_cost: float, failed_attempts_cost: float) -> CostBreakdown:
+    return breakdown | CostBreakdown(
+        total_cost=own_cost + failed_attempts_cost,
+        additional_costs={**breakdown.get("additional_costs", {}), "failed_attempts_cost": failed_attempts_cost},
+    )
 
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):

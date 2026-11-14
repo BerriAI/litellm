@@ -2963,24 +2963,9 @@ class ProxyBaseLLMRequestProcessing:
             )
             phase_event("litellm.request.pre_call_completed")
 
-        # Defer async logging when post-call guardrails are configured so the
-        # StandardLoggingPayload is built after guardrails write to metadata.
-        # Cache the result to avoid scanning litellm.callbacks twice.
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 
-        # Non-streaming: defer the create_task in wrapper_async so the
-        # SLP is built after guardrails write to metadata.  Streaming
-        # uses a separate closure mechanism (see below).
-        #
-        # Edge case: if _is_streaming_request is False but the response
-        # turns out to be a CustomStreamWrapper (rare provider behavior),
-        # wrapper_async exits early before the _defer_async_logging block
-        # so _enqueue_deferred_logging is never stored — the finally
-        # block is a no-op.  The CSW path handles this correctly via
-        # _on_deferred_stream_complete, which fires its own logging.
-        if _post_call_guardrails_active and not self._is_streaming_request(
-            data=self.data, is_streaming_request=is_streaming_request
-        ):
+        if not self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):
             logging_obj.defer_async_logging = True
 
         tasks: Final = []
@@ -3975,8 +3960,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Called from the finally block around post_call_success_hook so the
         StandardLoggingPayload is built after post-call guardrails write to
-        metadata (deferred logging is enabled for non-streaming requests with
-        a registered post_call guardrail).
+        metadata for non-streaming requests.
 
         On exception (e.g. a post-call guardrail blocks the response), skip
         firing the closure — the exception propagates to post_call_failure_hook
@@ -3991,11 +3975,10 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
-            if pending is not None:
-                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                pending.release(not exception_raised)
+        pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+        if pending is not None:
+            logging_obj._native_pending_logging = None  # rebind-ok: consume the native release signal once
+            pending.release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return

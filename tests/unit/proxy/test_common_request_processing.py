@@ -11388,6 +11388,59 @@ class TestPostCallMaskedOutputReachesDeferredLogging:
         assert result.choices[0].message.content == "Card: <CREDIT_CARD>"
         assert recorded_at_enqueue[SERVED_OUTPUT_TEXTS_KEY] == ("Card: <CREDIT_CARD>",)
 
+    @pytest.mark.asyncio
+    async def test_non_streaming_success_log_waits_for_post_call_hooks_without_any_guardrail(self, monkeypatch):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "refusal-fallback-call"
+        logging_obj.defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {}
+        logging_obj.enqueue_deferred_logging = None
+        events: list[str] = []
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "oa", "litellm_logging_obj": logging_obj})
+
+        async def post_call_success_hook(data, user_api_key_dict, response):
+            events.append("post-call hooks")
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(side_effect=post_call_success_hook)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                if logging_obj.defer_async_logging:
+                    logging_obj.enqueue_deferred_logging = lambda: events.append("success log")
+                else:
+                    events.append("success log")
+                return ModelResponse(choices=[Choices(index=0, message=Message(content="hello", role="assistant"))])
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            is_streaming_request=False,
+            skip_pre_call_logic=True,
+        )
+
+        assert events == ["post-call hooks", "success log"]
+
 
 class TestStreamingResponseHeadersFollowFallback:
     """LIT-6767: the streaming branch has to publish the deployment that served the stream."""

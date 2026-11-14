@@ -2284,6 +2284,52 @@ def test_usage_the_stream_already_recovered_beats_an_estimate():
     assert lifted == (recovered, 0.25)
 
 
+@pytest.mark.parametrize(
+    "recovered_tokens, recovered_cost, expected_tokens, expected_cost",
+    [(None, None, (25, 1), 0.25), ((25, 4), 0.5, (50, 5), 0.75)],
+    ids=["fallback-failed-before-usage", "fallback-stream-cut"],
+)
+def test_a_failed_fallback_still_bills_the_refused_reply_it_fell_back_from(
+    recovered_tokens: tuple[int, int] | None,
+    recovered_cost: float | None,
+    expected_tokens: tuple[int, int],
+    expected_cost: float,
+) -> None:
+    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.types.utils import Usage
+
+    recovered: Final = (
+        {}
+        if recovered_tokens is None
+        else {
+            "combined_usage_object": Usage(
+                prompt_tokens=recovered_tokens[0],
+                completion_tokens=recovered_tokens[1],
+                total_tokens=sum(recovered_tokens),
+            ),
+            "response_cost": recovered_cost,
+        }
+    )
+    lifted: Final = _failure_fields_to_lift(
+        {
+            "litellm_logging_obj": _LoggingObj(
+                {
+                    **recovered,
+                    "call_type": "acompletion",
+                    "model": FAILURE_USAGE_MODEL,
+                    "messages": ONE_USER_MESSAGE,
+                    "failed_attempts_usage": ((Usage(prompt_tokens=25, completion_tokens=1, total_tokens=26), 0.25),),
+                }
+            )
+        }
+    )
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == expected_tokens
+    assert lifted["response_cost"] == pytest.approx(expected_cost)
+
+
 def test_a_timed_out_request_on_an_unmapped_model_keeps_its_row_at_zero_cost():
     from litellm.proxy.utils import _failure_usage_to_lift
 

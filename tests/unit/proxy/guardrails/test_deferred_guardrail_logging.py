@@ -244,7 +244,7 @@ async def test_deferred_flag_stores_and_executes_closure():
     When defer_async_logging is True on logging_obj:
     1. wrapper_async stores a callable closure instead of calling create_task
     2. Calling the closure fires create_task
-    3. Sync callbacks fire immediately (not deferred)
+    3. Sync callbacks wait for the closure too
     """
     mock_logging_obj = MagicMock()
     mock_logging_obj.defer_async_logging = True
@@ -261,8 +261,7 @@ async def test_deferred_flag_stores_and_executes_closure():
     enqueue_fn = mock_logging_obj.enqueue_deferred_logging
     assert callable(enqueue_fn), "Closure should be stored on logging_obj"
 
-    # Sync callbacks fired immediately
-    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
 
     # Calling the closure fires create_task
     created_tasks = []
@@ -277,6 +276,7 @@ async def test_deferred_flag_stores_and_executes_closure():
         enqueue_fn()
 
     assert len(created_tasks) >= 1, "Closure should fire asyncio.create_task"
+    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
 
     for task in created_tasks:
         if not task.done():
@@ -315,7 +315,7 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
 
     logging_obj.async_success_handler.assert_awaited_once()
     assert logging_obj.async_success_handler.await_args.kwargs["result"] is inner_result
-    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 2
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -443,7 +443,7 @@ async def test_no_flag_fires_create_task_normally():
 
 @pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
 @pytest.mark.parametrize("exception_raised", [False, True])
-def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
+def test_native_pending_logging_is_released_for_every_call_type(call_type: str, exception_raised: bool) -> None:
     pending: Final = MagicMock()
     enqueue: Final = MagicMock()
     logger: Final = MagicMock(
@@ -461,12 +461,8 @@ def test_native_pending_logging_is_released_only_for_ocr(call_type: str, excepti
         exception_raised=exception_raised,
     )
 
-    if call_type in ("ocr", "aocr"):
-        pending.release.assert_called_once_with(not exception_raised)
-        assert logger._native_pending_logging is None
-    else:
-        pending.release.assert_not_called()
-        assert logger._native_pending_logging is pending
+    pending.release.assert_called_once_with(not exception_raised)
+    assert logger._native_pending_logging is None
     if exception_raised:
         enqueue.assert_not_called()
     else:

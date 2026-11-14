@@ -68,6 +68,7 @@ from litellm.constants import (
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
+from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
@@ -1114,7 +1115,43 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+_FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
+
+
+def _billed_across_attempts(
+    failed_attempts: tuple[tuple[Usage, float], ...], recovered_usage: object, recovered_cost: object
+) -> tuple[Usage, float]:
+    this_attempt: Final = (
+        ((recovered_usage, float(recovered_cost) if isinstance(recovered_cost, (int, float)) else 0.0),)
+        if isinstance(recovered_usage, Usage)
+        else ()
+    )
+    attempts: Final = (*failed_attempts, *this_attempt)
+    return (
+        BaseTokenUsageProcessor.combine_usage_objects([usage for usage, _ in attempts]),
+        sum(response_cost for _, response_cost in attempts),
+    )
+
+
 def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+    provider_billed: bool = False,
+    deployment_id: str | None = None,
+    base_model: str | None = None,
+) -> tuple[object, object] | None:
+    current_attempt: Final = _current_failure_usage_to_lift(
+        model_call_details, request_body, dispatched, provider_billed, deployment_id, base_model
+    )
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    if not failed_attempts:
+        return current_attempt
+    current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)
+    return _billed_across_attempts(failed_attempts, current_usage, current_cost)
+
+
+def _current_failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,

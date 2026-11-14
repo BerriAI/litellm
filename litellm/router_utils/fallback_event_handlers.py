@@ -8,12 +8,14 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -49,6 +51,13 @@ else:
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
 _NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
+_FALLBACK_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def carry_superseded_attempt_usage(kwargs: Mapping[str, object]) -> None:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.carry_failed_attempt_usage()
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -833,6 +842,7 @@ async def run_async_fallback(
             kwargs["attempted_targets"] = attempted
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
+            carry_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
             response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(

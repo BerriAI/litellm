@@ -1794,6 +1794,63 @@ async def test_non_streaming_refusal_with_fallback_row_returns_fallback_response
     assert "claude-opus-5" in fake.calls[1]
 
 
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events = (*self.events, (dict(kwargs), response_obj))
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages"])
+async def test_a_refusal_fallback_logs_the_served_reply_billed_with_the_refused_attempt(call_type: str) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = Logging(
+        model="fable-tier",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.now(),
+        litellm_call_id="refused-then-served",
+        function_id="refused-then-served",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.defer_async_logging = True
+    router: Final = _router(content_policy_fallbacks=[{"fable-tier": ["opus-target"]}])
+    call: Final = router.acompletion if call_type == "acompletion" else router.aanthropic_messages
+
+    with FakeAnthropicUpstream().install():
+        await call(
+            model="fable-tier",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_logging_obj=logging_obj,
+        )
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    refused_cost: Final = sum(litellm.cost_per_token(model="claude-fable-5", prompt_tokens=25, completion_tokens=1))
+    served_cost: Final = sum(litellm.cost_per_token(model="claude-opus-5", prompt_tokens=25, completion_tokens=2))
+    ((kwargs, _),) = recorder.events
+    payload: Final = kwargs["standard_logging_object"]
+    assert isinstance(payload, dict)
+    assert "hello" in json.dumps(payload["response"])
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (50, 3)
+    assert kwargs["response_cost"] == pytest.approx(refused_cost + served_cost)
+    assert payload["response_cost"] == pytest.approx(refused_cost + served_cost)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
