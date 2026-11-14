@@ -14,7 +14,7 @@ URL/ARN handling, and the error class. AWS auth/sigv4 is the only external seam
 we mock; everything else runs for real.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -834,14 +834,26 @@ def _is_bedrock_embedding_model(cost_map_entry: Mapping[str, object]) -> bool:
     return cost_map_entry.get("litellm_provider") == "bedrock" and cost_map_entry.get("mode") == "embedding"
 
 
+def _with_batch_mode(entry: Mapping[str, object]) -> dict[str, object]:
+    return {**entry, "mode": "batch"}
+
+
+def _without_vector_size(entry: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in entry.items() if key != "output_vector_size"}
+
+
+@pytest.mark.parametrize("edit_row", [_with_batch_mode, _without_vector_size])
 @pytest.mark.parametrize(
     "job_model_id",
     sorted(model_id for model_id, entry in litellm.model_cost.items() if _is_bedrock_embedding_model(entry)),
 )
-def test_retrieve_response_endpoint_survives_a_batch_deployment_overriding_the_models_mode(
-    config: BedrockBatchesConfig, monkeypatch: pytest.MonkeyPatch, job_model_id: str
+def test_retrieve_response_endpoint_stays_embeddings_while_the_row_keeps_either_embedding_signal(
+    config: BedrockBatchesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    job_model_id: str,
+    edit_row: Callable[[Mapping[str, object]], dict[str, object]],
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, job_model_id, {**litellm.model_cost[job_model_id], "mode": "batch"})
+    monkeypatch.setitem(litellm.model_cost, job_model_id, edit_row(litellm.model_cost[job_model_id]))
     out: Final = config.transform_retrieve_batch_response(
         model=None,
         raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
