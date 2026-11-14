@@ -1,9 +1,10 @@
 import json
 import os
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -2194,3 +2195,49 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+_FOUNDRY_PROJECT_ROOT: Final = "https://r.services.ai.azure.com/api/projects/p"
+_CHAT_COMPLETION_BODY: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5-nano",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT_ROOT}/openai/v1", None, f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions"),
+        (
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
+            "2025-04-01-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
+        ),
+        (
+            _FOUNDRY_PROJECT_ROOT,
+            "2025-11-15-preview",
+            f"{_FOUNDRY_PROJECT_ROOT}/openai/deployments/model-router/chat/completions?api-version=2025-11-15-preview",
+        ),
+    ],
+)
+def test_chat_on_a_foundry_project_v1_base_sends_no_api_version(
+    respx_mock, api_base: str, api_version: str | None, expected_url: str
+) -> None:
+    route: Final = respx_mock.post(host="r.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_BODY)
+    )
+
+    response: Final = litellm.completion(
+        model="azure/model-router",
+        api_base=api_base,
+        api_key="project-key",
+        api_version=api_version,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert route.calls.last.request.url == httpx.URL(expected_url)
+    assert response.choices[0].message.content == "ok"

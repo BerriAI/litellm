@@ -225,7 +225,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         parsed_url: Final = httpx.URL(api_base)
         path = parsed_url.path.rstrip("/")
         # Strip existing /openai/responses path if the api_base already contains it
-        for suffix in ("/openai/v1/responses", "/openai/responses"):
+        for suffix in ("/openai/v1/responses", "/openai/responses", "/openai/v1"):
             if path.endswith(suffix):
                 path = path[: -len(suffix)]
                 break
