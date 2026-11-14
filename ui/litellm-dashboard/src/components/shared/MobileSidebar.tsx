@@ -47,33 +47,38 @@ export function ShellSidebar({
   children,
 }: ShellSidebarProps) {
   const { isMobile, openMobile, setOpenMobile } = useSidebar();
-  if (!isMobile) {
-    return (
-      <Sidebar collapsible="icon" role="complementary" aria-label={label} className="border-sidebar-border ease-in-out">
-        {children}
-      </Sidebar>
-    );
-  }
   return (
-    <Sheet handle={handle} open={openMobile} onOpenChange={setOpenMobile}>
-      <SheetContent
-        side="left"
-        initialFocus={sheetInitialFocus}
-        showCloseButton={false}
-        className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))]"
-      >
-        <SheetHeader className="sr-only">
-          <SheetTitle>{sheetTitle}</SheetTitle>
-          {sheetDescription && <SheetDescription>{sheetDescription}</SheetDescription>}
-        </SheetHeader>
+    <>
+      {!isMobile && (
         <Sidebar
-          collapsible="none"
+          collapsible="icon"
           role="complementary"
-          className="w-full flex-none overflow-hidden border-r border-sidebar-border"
+          aria-label={label}
+          className="border-sidebar-border ease-in-out"
         >
           {children}
         </Sidebar>
-      </SheetContent>
-    </Sheet>
+      )}
+      <Sheet handle={handle} open={isMobile && openMobile} onOpenChange={setOpenMobile}>
+        <SheetContent
+          side="left"
+          initialFocus={sheetInitialFocus}
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))]"
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>{sheetTitle}</SheetTitle>
+            {sheetDescription && <SheetDescription>{sheetDescription}</SheetDescription>}
+          </SheetHeader>
+          <Sidebar
+            collapsible="none"
+            role="complementary"
+            className="w-full flex-none overflow-hidden border-r border-sidebar-border"
+          >
+            {children}
+          </Sidebar>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }

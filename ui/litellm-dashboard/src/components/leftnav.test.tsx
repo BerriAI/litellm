@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { createMobileSidebarHandle, MobileSidebarTrigger } from "@/components/shared/MobileSidebar";
+import {
+  createMobileSidebarHandle,
+  MobileSidebarTrigger,
+  useCloseMobileSidebarOn,
+} from "@/components/shared/MobileSidebar";
 import LeftNav, { menuGroups, getBreadcrumb } from "./leftnav";
 
 type LeftNavProps = Omit<ComponentProps<typeof LeftNav>, "mobileNavigationHandle">;
@@ -16,10 +20,16 @@ const Sidebar = ({ collapsed = false, ...props }: LeftNavProps & { collapsed?: b
   </SidebarProvider>
 );
 
+const CloseOnBreakpointChange = () => {
+  useCloseMobileSidebarOn();
+  return null;
+};
+
 const PhoneShell = () => {
   const handle = createMobileSidebarHandle();
   return (
     <SidebarProvider>
+      <CloseOnBreakpointChange />
       <MobileSidebarTrigger handle={handle} label="Open navigation" />
       <LeftNav mobileNavigationHandle={handle} />
     </SidebarProvider>
@@ -737,6 +747,31 @@ describe("Sidebar (leftnav)", () => {
     const reopened = await screen.findByRole("dialog", { name: "Navigation" });
     expect(group(reopened, "Tools")).toHaveAttribute("aria-expanded", "true");
     expect(group(reopened, "Agentic")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the phone drawer closed after the window widens to desktop and narrows again", async () => {
+    const breakpointListeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      matches: false,
+      media,
+      addEventListener: (_: string, listener: () => void) => breakpointListeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => breakpointListeners.delete(listener),
+    }));
+    const resizeTo = async (width: number) => {
+      vi.stubGlobal("innerWidth", width);
+      await act(async () => breakpointListeners.forEach((listener) => listener()));
+    };
+    vi.stubGlobal("innerWidth", 390);
+    renderWithProviders(<PhoneShell />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+    await resizeTo(1200);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    await resizeTo(390);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open navigation" })).toBeInTheDocument();
   });
 
   it("marks Home active at the dashboard root", () => {
