@@ -153,18 +153,18 @@ def _prompt(marker: str) -> str:
     return f"Weather in Paris and the ACME price marker-{marker}"
 
 
-def _search_result(marker: str) -> dict[str, JsonValue]:
+def _search_result(marker: str, found_tool: str = "get_weather") -> dict[str, JsonValue]:
     return {
         "type": "tool_search_tool_result",
         "tool_use_id": f"srvtoolu_{marker}",
         "content": {
             "type": "tool_search_tool_search_result",
-            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+            "tool_references": [{"type": "tool_reference", "tool_name": found_tool}],
         },
     }
 
 
-def _search_blocks(marker: str) -> tuple[dict[str, JsonValue], ...]:
+def _search_blocks(marker: str, found_tool: str = "get_weather") -> tuple[dict[str, JsonValue], ...]:
     return (
         {
             "type": "server_tool_use",
@@ -172,12 +172,12 @@ def _search_blocks(marker: str) -> tuple[dict[str, JsonValue], ...]:
             "name": _REGEX_TOOL_NAME,
             "input": json.loads(_SEARCH_ARGUMENTS),
         },
-        _search_result(marker),
+        _search_result(marker, found_tool),
     )
 
 
-def _message(marker: str, searched: bool, tool_use_name: str) -> dict[str, JsonValue]:
-    search_blocks: Final = _search_blocks(marker) if searched else ()
+def _message(marker: str, searched: bool, tool_use_name: str, found_tool: str = "get_weather") -> dict[str, JsonValue]:
+    search_blocks: Final = _search_blocks(marker, found_tool) if searched else ()
     return {
         "id": f"msg_{marker}",
         "type": "message",
@@ -194,7 +194,7 @@ def _message(marker: str, searched: bool, tool_use_name: str) -> dict[str, JsonV
     }
 
 
-def _search_events(marker: str, search_arguments: str) -> tuple[Event, ...]:
+def _search_events(marker: str, search_arguments: str, found_tool: str) -> tuple[Event, ...]:
     half: Final = len(search_arguments) // 2
     opened: Final[Event] = {
         "type": "server_tool_use",
@@ -215,14 +215,16 @@ def _search_events(marker: str, search_arguments: str) -> tuple[Event, ...]:
             "delta": {"type": "input_json_delta", "partial_json": search_arguments[half:]},
         },
         {"type": "content_block_stop", "index": 1},
-        {"type": "content_block_start", "index": 2, "content_block": _search_result(marker)},
+        {"type": "content_block_start", "index": 2, "content_block": _search_result(marker, found_tool)},
         {"type": "content_block_stop", "index": 2},
     )
 
 
-def _events(marker: str, search_arguments: str, searched: bool, tool_use_name: str) -> tuple[Event, ...]:
+def _events(
+    marker: str, search_arguments: str, searched: bool, tool_use_name: str, found_tool: str = "get_weather"
+) -> tuple[Event, ...]:
     opened: Final = {**_message(marker, searched, tool_use_name), "content": [], "stop_reason": None}
-    search_events: Final = _search_events(marker, search_arguments) if searched else ()
+    search_events: Final = _search_events(marker, search_arguments, found_tool) if searched else ()
     tool_index: Final = 3 if searched else 1
     tool_use: Final[Event] = {"type": "tool_use", "id": f"toolu_{marker}", "name": tool_use_name, "input": {}}
     return (
@@ -266,6 +268,7 @@ class _Vendor:
     pause: float = 0
     searched: bool | None = None
     tool_use_name: str = "get_weather"
+    found_tool: str = "get_weather"
     error: tuple[int, str] | None = None
 
     def respond(self, request: Request) -> Reply:
@@ -284,15 +287,17 @@ class _Vendor:
             return _anthropic_error(400, f"tools: {_ALL_DEFERRED_ERROR} marker-{marker}")
         searched: Final = bool(regex_tools) if self.searched is None else self.searched
         if request.target.endswith("/invoke-with-response-stream"):
-            events: Final = _events(marker, self.search_arguments, searched, self.tool_use_name)
+            events: Final = _events(marker, self.search_arguments, searched, self.tool_use_name, self.found_tool)
             return Reply(content_type=EVENT_STREAM, chunks=aws_chunks(events), pause_between_chunks=self.pause)
         if _streams(request, body):
             return Reply(
                 content_type="text/event-stream",
-                chunks=sse_chunks(_events(marker, self.search_arguments, searched, self.tool_use_name)),
+                chunks=sse_chunks(
+                    _events(marker, self.search_arguments, searched, self.tool_use_name, self.found_tool)
+                ),
                 pause_between_chunks=self.pause,
             )
-        return Reply(body=json.dumps(_message(marker, searched, self.tool_use_name)).encode())
+        return Reply(body=json.dumps(_message(marker, searched, self.tool_use_name, self.found_tool)).encode())
 
 
 def _base_url(gateway: Gateway) -> str:
@@ -413,8 +418,8 @@ def _search_call_fields(item: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _assert_search_call_output(payload: Mapping[str, JsonValue], marker: str) -> None:
     items: Final = _tool_items(payload)
-    assert len(items) == 2, payload
-    search, function = items
+    assert len(items) == 3, payload
+    search, search_output, function = items
     assert search["type"] == "tool_search_call", payload
     assert _search_call_fields(search) == {
         "id": f"tsc_srvtoolu_{marker}",
@@ -423,6 +428,14 @@ def _assert_search_call_output(payload: Mapping[str, JsonValue], marker: str) ->
         "execution": "server",
         "status": "completed",
     }, search
+    assert {key: search_output[key] for key in ("type", "id", "call_id", "execution", "status")} == {
+        "type": "tool_search_output",
+        "id": f"tso_srvtoolu_{marker}",
+        "call_id": f"srvtoolu_{marker}",
+        "execution": "server",
+        "status": "completed",
+    }, search_output
+    assert [tool["name"] for tool in _ITEMS.validate_python(search_output["tools"])] == ["get_weather"], search_output
     assert (function["type"], function["name"], function["call_id"]) == (
         "function_call",
         "get_weather",
@@ -445,6 +458,8 @@ def _item_events(events: Sequence[Mapping[str, JsonValue]], item_type: str) -> l
 
 
 def _assert_search_call_events(events: Sequence[Mapping[str, JsonValue]], marker: str, final_status: str) -> None:
+    added_indexes: Final = [event["output_index"] for event in events if event["type"] == "response.output_item.added"]
+    assert added_indexes == list(range(len(added_indexes))), [event["type"] for event in events]
     search_events: Final = _item_events(events, "tool_search_call")
     assert [event["type"] for event in search_events] == [
         "response.output_item.added",
@@ -593,6 +608,24 @@ def test_tool_search_reaches_claude_with_deferred_tools_and_returns_a_tool_searc
         _assert_spend_rows(model, (str(answer.payload["id"]),))
 
 
+def test_the_openai_sdk_stream_helper_reads_a_streamed_claude_tool_search(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        body: Final = _responses_body(model, marker, (_tool_search(), _function_tool(), _namespace_tool()), True)
+        with _sdk(gateway).responses.stream(
+            model=model,
+            input=str(body["input"]),
+            tools=_ITEMS.validate_python(body["tools"]),
+            extra_body=dict(_CACHE_BUST),
+        ) as stream:
+            events: Final = [event.model_dump() for event in stream]
+            final: Final = stream.get_final_response()
+        _assert_search_call_output(final.model_dump(), marker)
+        _assert_search_call_events(events, marker, "completed")
+        _only_request(wire)
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
 @pytest.mark.parametrize("provider", ["bedrock_invoke", "vertex_ai"])
 def test_bedrock_invoke_and_vertex_claude_keep_the_tool_search_tool(
@@ -665,8 +698,10 @@ def test_search_arguments_that_never_parse_stream_an_incomplete_tool_search_call
         tools: Final = (_tool_search(), _function_tool())
         answer: Final = _raw_answer(gateway, _responses_body(model, marker, tools, True))
         _assert_search_call_events(answer.events, marker, "incomplete")
-        search, function = _tool_items(answer.payload)
+        search, search_output, function = _tool_items(answer.payload)
         assert (search["type"], search["status"], search["arguments"]) == ("tool_search_call", "incomplete", {}), search
+        assert search_output["type"] == "tool_search_output", search_output
+        assert search_output["call_id"] == search["call_id"], (search, search_output)
         assert (function["type"], function["name"]) == ("function_call", "get_weather"), function
         request, body = _only_request(wire)
         _assert_anthropic_wire(request, body, ("get_weather",))
@@ -678,7 +713,11 @@ def test_tool_search_alone_reaches_claude_as_the_only_tool(gateway: Gateway) -> 
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
         answer: Final = _raw_answer(gateway, _responses_body(model, marker, (_tool_search(),), False))
-        assert [item["type"] for item in _tool_items(answer.payload)] == ["tool_search_call", "function_call"], answer
+        assert [item["type"] for item in _tool_items(answer.payload)] == [
+            "tool_search_call",
+            "tool_search_output",
+            "function_call",
+        ], answer
         request, body = _only_request(wire)
         _assert_anthropic_wire(request, body, ())
 
@@ -889,9 +928,18 @@ def _assert_only_the_function_call_is_replayed(messages: Sequence[Mapping[str, J
     assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
 
 
-def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
-    marker: Final = uuid.uuid4().hex
-    history: Final[list[JsonValue]] = [
+def _assert_the_search_is_replayed_before_the_function_call(
+    messages: Sequence[Mapping[str, JsonValue]], marker: str
+) -> None:
+    (assistant,) = [turn for turn in messages if turn["role"] == "assistant"]
+    blocks: Final = _ITEMS.validate_python(assistant["content"])
+    assert blocks[:2] == list(_search_blocks(marker)), blocks
+    assert [(block["type"], block.get("id")) for block in blocks[2:]] == [("tool_use", f"toolu_{marker}")], blocks
+    assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
+
+
+def _replayed_search_history(marker: str) -> list[JsonValue]:
+    return [
         {"role": "user", "content": _prompt(marker)},
         {
             "type": "tool_search_call",
@@ -919,11 +967,16 @@ def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
         {"type": "function_call_output", "call_id": f"toolu_{marker}", "output": "22C"},
         {"role": "user", "content": f"And tomorrow? marker-{marker}"},
     ]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke", "vertex_ai"])
+def test_a_replayed_tool_search_reaches_claude_as_its_search_and_result(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
         body: Final[dict[str, JsonValue]] = {
             "model": model,
-            "input": history,
+            "input": _replayed_search_history(marker),
             "tools": [_tool_search(), _function_tool()],
             **_CACHE_BUST,
         }
@@ -931,8 +984,83 @@ def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
         assert response.status_code == 200, response.text
         _assert_search_call_output(_JSON_OBJECT.validate_json(response.content), marker)
         request, sent = _only_request(wire)
-        _assert_anthropic_wire(request, sent, ("get_weather",))
+        _assert_claude_wire(provider, False, request, sent, ("get_weather",))
+        _assert_the_search_is_replayed_before_the_function_call(_ITEMS.validate_python(sent["messages"]), marker)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke", "vertex_ai"])
+def test_a_replayed_tool_search_whose_tool_is_no_longer_sent_is_left_out(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
+        body: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "input": _replayed_search_history(marker),
+            "tools": [_tool_search(), _namespace_tool()],
+            **_CACHE_BUST,
+        }
+        response: Final = _raw(gateway, "/v1/responses", body)
+        assert response.status_code == 200, response.text
+        request, sent = _only_request(wire)
         _assert_only_the_function_call_is_replayed(_ITEMS.validate_python(sent["messages"]), marker)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_tool_name_anthropic_rewrites_comes_back_and_is_replayed_under_the_callers_name(
+    gateway: Gateway, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    vendor: Final = _Vendor(tool_use_name="weather_get", found_tool="weather_get")
+    tools: Final = (_tool_search(), {**_function_tool(), "name": "weather.get"})
+    with wire_server(vendor.respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        items: Final = _tool_items(_raw_answer(gateway, _responses_body(model, marker, tools, stream)).payload)
+        _only_request(wire)
+        assert [(item["type"], item.get("name")) for item in items] == [
+            ("tool_search_call", None),
+            ("tool_search_output", None),
+            ("function_call", "weather.get"),
+        ], items
+        assert [tool["name"] for tool in _ITEMS.validate_python(items[1]["tools"])] == ["weather.get"], items[1]
+        replay: Final = _raw(
+            gateway,
+            "/v1/responses",
+            {
+                "model": model,
+                "store": False,
+                "input": [
+                    {"role": "user", "content": _prompt(marker)},
+                    *items,
+                    {"type": "function_call_output", "call_id": f"toolu_{marker}", "output": "22C"},
+                    {"role": "user", "content": f"And tomorrow? marker-{marker}"},
+                ],
+                "tools": [dict(tool) for tool in tools],
+                **_CACHE_BUST,
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        _, sent = _only_request(wire)
+        (assistant,) = [turn for turn in _ITEMS.validate_python(sent["messages"]) if turn["role"] == "assistant"]
+        blocks: Final = _ITEMS.validate_python(assistant["content"])
+        assert [block for block in blocks if block["type"] != "text"] == [
+            *_search_blocks(marker, "weather_get"),
+            {"type": "tool_use", "id": f"toolu_{marker}", "name": "weather_get", "input": {"city": "Paris"}},
+        ], blocks
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke"])
+def test_the_tool_search_output_lists_the_callers_tool_when_anthropic_rewrites_its_name(
+    gateway: Gateway, provider: Provider, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    vendor: Final = _Vendor(tool_use_name="weather_get", found_tool="weather_get")
+    tools: Final = (_tool_search(), {**_function_tool(), "name": "weather.get"})
+    with wire_server(vendor.respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
+        items: Final = _tool_items(_raw_answer(gateway, _responses_body(model, marker, tools, stream)).payload)
+        (search_output,) = [item for item in items if item["type"] == "tool_search_output"]
+        assert [tool["name"] for tool in _ITEMS.validate_python(search_output["tools"])] == ["weather.get"], items
 
 
 def test_chat_completions_drop_a_replayed_search_call_that_has_no_result(gateway: Gateway) -> None:

@@ -24,7 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -45,6 +45,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -127,7 +129,9 @@ from ..common_utils import (
     refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
+    without_stale_tool_search_results,
 )
 
 if TYPE_CHECKING:
@@ -267,6 +271,17 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     content: ReadOnly[object]
 
 
+def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:
+    provider_fields: Final = as_str_mapping(message_field(message, "provider_specific_fields"))
+    replayed_results: Final = parts_of(provider_fields.get("tool_results")) if provider_fields is not None else ()
+    if provider_fields is None or not replayed_results:
+        return None
+    return {
+        **provider_fields,
+        "tool_results": [tool_search_result_renamed(result, forward_map) for result in replayed_results],
+    }
+
+
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
@@ -313,7 +328,7 @@ def _basic_sanitize_anthropic_tool_name(name: str) -> str:
     return _ANTHROPIC_TOOL_NAME_INVALID_CHARS.sub("_", name)[:_ANTHROPIC_TOOL_NAME_MAX_LEN]
 
 
-def _build_anthropic_tool_name_maps(
+def build_anthropic_tool_name_maps(
     original_names: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build (forward, reverse) tool-name maps for a single request.
@@ -1309,8 +1324,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         name_forward_map: dict[str, str],
     ) -> list[AllMessageValues]:
-        """Return a copy of `messages` with tool_call/function_call names
-        rewritten using the per-request forward map.
+        """Return a copy of `messages` with tool_call/function_call names, and
+        the tools a replayed tool search found, rewritten using the per-request
+        forward map.
 
         Only mutates messages whose tool_call/function_call name is *in* the
         forward map. Names absent from the map (already valid, no collision)
@@ -1326,7 +1342,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 continue
             tool_calls = msg.get("tool_calls")
             function_call = msg.get("function_call")
-            if not tool_calls and not function_call:
+            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
+            if not tool_calls and not function_call and renamed_provider_fields is None:
                 new_messages.append(msg)
                 continue
             new_msg = dict(msg)
@@ -1352,6 +1369,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_fc = dict(function_call)
                 new_fc["name"] = name_forward_map[fc_name]
                 new_msg["function_call"] = new_fc
+            if renamed_provider_fields is not None:
+                new_msg["provider_specific_fields"] = renamed_provider_fields
             new_messages.append(cast(AllMessageValues, new_msg))
         return new_messages
 
@@ -1368,7 +1387,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         callers that need to compute the maps from the raw OpenAI shape --
         e.g. test setup or future pre-mapping consumers.
 
-        See _build_anthropic_tool_name_maps for the collision rules. Pulls
+        See build_anthropic_tool_name_maps for the collision rules. Pulls
         the original name out of either ``{"function": {"name": ...}}``
         (legacy OpenAI shape) or ``{"name": ...}`` (rare top-level shape).
         """
@@ -1381,7 +1400,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 original = tool.get("name")
             if isinstance(original, str) and original:
                 original_names.append(original)
-        return _build_anthropic_tool_name_maps(original_names)
+        return build_anthropic_tool_name_maps(original_names)
 
     @staticmethod
     def _sanitize_tool_names_in_request(
@@ -1409,7 +1428,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # 1. Collect originals from the Anthropic-shaped custom-tool entries.
         #    Order matters: the first occurrence wins the canonical slot;
         #    later collisions get numeric suffixes (see
-        #    ``_build_anthropic_tool_name_maps``).
+        #    ``build_anthropic_tool_name_maps``).
         original_names: Final[list[str]] = []
         for t in tools:
             if not isinstance(t, dict):
@@ -1423,7 +1442,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not original_names:
             return {}, {}
 
-        forward, reverse = _build_anthropic_tool_name_maps(original_names)
+        forward, reverse = build_anthropic_tool_name_maps(original_names)
         if not forward:
             # Every name was already valid -- nothing to do.
             return forward, reverse
@@ -2329,7 +2348,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # The reverse map only contains entries for names that were actually
         # rewritten -- so a tool legitimately named ``foo_bar`` is never
         # incorrectly retyped to ``foo/bar`` on the response side.
-        # See _build_anthropic_tool_name_maps for the collision-handling
+        # See build_anthropic_tool_name_maps for the collision-handling
         # rules and rationale.
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
@@ -2374,8 +2393,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _all_tools: Final = optional_params.get("tools") or []
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
-        if not _has_advisor:
-            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
+        anthropic_messages = list(
+            without_stale_tool_search_results(
+                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                _TOOLS_ADAPTER.validate_python(_all_tools),
+            )
+        )
 
         ## Add code_execution tool if container_upload is in messages
         _tools: Final = (
@@ -3000,7 +3023,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Reverse-map rewritten tool names back to caller's originals so a
         # downstream OpenAI-style dispatcher can match on the registered name.
-        # See _build_anthropic_tool_name_maps for why this is keyed on the
+        # See build_anthropic_tool_name_maps for why this is keyed on the
         # per-request reverse map (so a tool legitimately named `foo_bar` is
         # never incorrectly retyped to `foo/bar`). No-op when the map is
         # empty (the common case).
