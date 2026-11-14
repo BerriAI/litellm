@@ -3435,6 +3435,21 @@ def _log_generate_request(
     )
 
 
+def _decoded_body(response: httpx.Response) -> str:
+    try:
+        return response.content.decode(response.charset_encoding or "utf-8")
+    except (LookupError, UnicodeError):
+        return response.content.decode("utf-8", errors="replace")
+
+
+def _rejected_stream_error(rejection: httpx.HTTPStatusError) -> VertexAIError:
+    return VertexAIError(
+        status_code=rejection.response.status_code,
+        message=VertexGeminiConfig().translate_exception_str(_decoded_body(rejection.response)),
+        headers=rejection.response.headers,
+    )
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,  # module-level client
     gemini_client: AsyncHTTPHandler | None,  # if passed by user
@@ -3466,13 +3481,9 @@ async def make_call(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
-        exception_string: Final = str(await e.response.aread())
+        await e.response.aread()
         known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
-        raise VertexAIError(
-            status_code=e.response.status_code,
-            message=VertexGeminiConfig().translate_exception_str(exception_string),
-            headers=e.response.headers,
-        )
+        raise _rejected_stream_error(e)
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
@@ -3542,7 +3553,7 @@ def make_sync_call(
         )
     except httpx.HTTPStatusError as e:
         known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
-        raise
+        raise _rejected_stream_error(e)
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
