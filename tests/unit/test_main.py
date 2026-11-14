@@ -5454,7 +5454,7 @@ _ROUTES_WITHOUT_A_NATIVE_FAKE_STREAM: Final = pytest.mark.parametrize(
 )
 
 
-async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelResponseStream]:
+async def _fake_streamed(model: str, asynchronous: bool) -> tuple[CustomStreamWrapper, list[ModelResponseStream]]:
     if asynchronous:
         streamed: Final = await litellm.acompletion(
             model=model,
@@ -5465,7 +5465,7 @@ async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelRes
             fake_stream=True,
         )
         assert isinstance(streamed, CustomStreamWrapper), streamed
-        return [chunk async for chunk in streamed]
+        return streamed, [chunk async for chunk in streamed]
     replayed: Final = litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
@@ -5475,7 +5475,12 @@ async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelRes
         fake_stream=True,
     )
     assert isinstance(replayed, CustomStreamWrapper), replayed
-    return list(replayed)
+    return replayed, list(replayed)
+
+
+async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelResponseStream]:
+    _, chunks = await _fake_streamed(model, asynchronous)
+    return chunks
 
 
 @pytest.mark.asyncio
@@ -5533,6 +5538,38 @@ async def test_a_replayed_fake_stream_keeps_the_token_logprobs_of_the_plain_answ
 
     replayed: Final = [chunk.choices[0].logprobs for chunk in chunks if chunk.choices and chunk.choices[0].logprobs]
     assert [ChoiceLogprobs.model_validate(item).model_dump(exclude_none=True) for item in replayed] == [logprobs], chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_replayed_fake_stream_keeps_the_provider_headers_and_served_tier_of_the_plain_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"x-request-id": "req_replayed", "x-ratelimit-remaining-requests": "99"},
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "service_tier": "flex",
+                "system_fingerprint": "fp_replayed",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    stream, chunks = await _fake_streamed("openai/gpt-5.6", asynchronous)
+
+    headers: Final = stream._hidden_params["additional_headers"]
+    assert headers["llm_provider-x-request-id"] == "req_replayed", headers
+    assert headers["x-ratelimit-remaining-requests"] == "99", headers
+    assert {getattr(chunk, "service_tier", None) for chunk in chunks} == {"flex"}, chunks
+    assert {chunk.system_fingerprint for chunk in chunks} == {"fp_replayed"}, chunks
 
 
 @pytest.mark.asyncio

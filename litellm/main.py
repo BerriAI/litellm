@@ -1150,11 +1150,18 @@ def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> lis
 def _replayed_stream(
     response: ModelResponse, logging_obj: LiteLLMLoggingObj, stream_options: Mapping[str, object] | None
 ) -> CustomStreamWrapper:
+    hidden_params: Final = get_hidden_params(response)
+    provider_headers: Final = hidden_params.get("additional_headers") if hidden_params is not None else None
     return CustomStreamWrapper(
         completion_stream=MockResponseIterator(model_response=response),
         model=response.model,
         logging_obj=logging_obj,
         stream_options=stream_options,
+        _response_headers=(
+            _RESPONSE_HEADERS_ADAPTER.validate_python(provider_headers)
+            if isinstance(provider_headers, Mapping)
+            else None
+        ),
     )
 
 
@@ -4172,6 +4179,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RESPONSE_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)

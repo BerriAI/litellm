@@ -56,6 +56,7 @@ from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
+    DynamicPromptManagementParamLiteral,
     LlmProviders,
     ProviderRoutingHints,
 )
@@ -266,7 +267,9 @@ def image_generation(
             "size",
             "style",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs, excluding=(*openai_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        )
 
         image_generation_config: BaseImageGenerationConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
@@ -771,7 +774,9 @@ def image_edit(
             "style",
             "async_call",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs, excluding=(*openai_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        )
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)

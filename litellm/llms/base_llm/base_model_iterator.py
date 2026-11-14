@@ -47,12 +47,19 @@ def convert_model_response_to_streaming(
                     logprobs=getattr(choice, "logprobs", None),
                 )
             )
-        processed_chunk: Final = ModelResponseStream(
+        streaming_chunk: Final = ModelResponseStream(
             id=model_response.id,
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        )
+        service_tier: Final[object] = getattr(model_response, "service_tier", None)
+        processed_chunk: Final = (
+            streaming_chunk
+            if service_tier is None
+            else streaming_chunk.model_copy(update={"service_tier": service_tier})
         )
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
