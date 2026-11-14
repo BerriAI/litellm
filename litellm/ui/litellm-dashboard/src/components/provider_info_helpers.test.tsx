@@ -285,6 +285,7 @@ describe("provider_info_helpers", () => {
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
+        Providers.AxForge,
       ];
       const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
       expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
@@ -416,6 +417,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return axforge/glm-5.3-flash placeholder for AxForge provider", () => {
+      expect(getPlaceholder("AxForge")).toBe("axforge/glm-5.3-flash");
     });
 
     it("should return zerogpu/gpt-oss-120b placeholder for ZeroGPU provider", () => {

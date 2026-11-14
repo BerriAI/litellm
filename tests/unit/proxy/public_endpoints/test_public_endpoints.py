@@ -429,6 +429,23 @@ def test_zai_provider_fields():
     assert fields_by_key["api_base"]["placeholder"] == ZAI_API_BASE
 
 
+def test_axforge_add_model_form_defaults_resolve_to_axforge():
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    axforge: Final = next(p for p in providers if p["litellm_provider"] == "axforge")
+    fields_by_key: Final = {f["key"]: f for f in axforge["credential_fields"]}
+    model, provider, _, api_base = get_llm_provider(model=axforge["default_model_placeholder"])
+
+    assert (model, provider) == ("glm-5.3-flash", "axforge")
+    assert api_base == fields_by_key["api_base"]["placeholder"] == "https://api.axforge.ai/v1"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
     import litellm
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
