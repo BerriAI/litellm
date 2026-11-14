@@ -15,6 +15,8 @@ const FORM_PARAMS = new Set([
   "cache_read_input_token_cost",
   "cache_creation_input_token_cost",
   "cache_creation_input_token_cost_above_1hr",
+  "pricing_currency",
+  "usd_per_currency_unit",
   "litellm_credential_name",
   "cache_control_injection_points",
   "vector_store_ids",

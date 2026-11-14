@@ -80,3 +80,33 @@ describe("ModelPricingSummary", () => {
     expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
   });
 });
+
+describe("ModelPricingSummary with a source currency", () => {
+  it("shows the billed USD rates beside the entered HUF rates and says spend stays in USD", () => {
+    render(
+      <ModelPricingSummary
+        model={{
+          input_cost: "2.00",
+          output_cost: "4.00",
+          litellm_params: {
+            model: "openai/huf",
+            pricing_currency: "HUF",
+            usd_per_currency_unit: "0.0025",
+            input_cost_per_token: 0.0008,
+          },
+          model_info: { output_cost_per_token: 0.0016 },
+        }}
+      />,
+    );
+    expect(screen.getByText("Input: $2.00/1M tokens")).toBeInTheDocument();
+    expect(screen.getByText("Prices entered in HUF at 1 HUF = $0.0025")).toBeInTheDocument();
+    expect(screen.getByText("Entered: HUF 800/1M input tokens")).toBeInTheDocument();
+    expect(screen.getByText("Entered: HUF 1600/1M output tokens")).toBeInTheDocument();
+    expect(screen.getByText("Spend and budgets are tracked in USD.")).toBeInTheDocument();
+  });
+
+  it("adds no currency lines to a USD model", () => {
+    render(<ModelPricingSummary model={{ ...tokenPriced, litellm_params: { model: "m", pricing_currency: "USD" } }} />);
+    expect(screen.queryByText("Spend and budgets are tracked in USD.")).not.toBeInTheDocument();
+  });
+});

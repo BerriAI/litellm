@@ -167,3 +167,44 @@ describe("transformModelData", () => {
     expect(result.data[0].output_cost).toBeNull();
   });
 });
+
+describe("transformModelData with a source currency", () => {
+  it("shows the server's USD rates rather than the entered HUF prices", () => {
+    const result = transformModelData(
+      {
+        data: [
+          {
+            model_name: "huf-model",
+            litellm_params: {
+              model: "openai/huf",
+              pricing_currency: "HUF",
+              usd_per_currency_unit: "0.0025",
+              input_cost_per_token: 0.0008,
+              output_cost_per_second: 400,
+            },
+            model_info: {
+              id: "huf",
+              input_cost_per_token: 0.0008,
+              output_cost_per_token: 0.0016,
+              output_cost_per_second_720p: 800,
+              usd_pricing: {
+                input_cost_per_token: 0.000002,
+                output_cost_per_token: 0.000004,
+                output_cost_per_second: 1,
+                output_cost_per_second_720p: 2,
+              },
+            },
+          },
+        ],
+      },
+      () => "openai",
+    );
+
+    expect(result.data[0]).toMatchObject({
+      input_cost: "2.00",
+      output_cost: "4.00",
+      output_cost_per_second: 1,
+      output_cost_per_second_tiers: [{ resolution: "720p", cost: 2 }],
+    });
+  });
+});

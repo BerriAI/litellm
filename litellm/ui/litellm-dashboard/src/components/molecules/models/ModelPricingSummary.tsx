@@ -1,13 +1,38 @@
 import { useTranslation } from "react-i18next";
 
-import { ModelData, ModelInfo } from "@/components/model_dashboard/types";
+import { LiteLLMParams, ModelData, ModelInfo } from "@/components/model_dashboard/types";
 import { Badge } from "@/components/ui/badge";
 import { formatPerSecondCost } from "@/utils/dataUtils";
+import { formatAmount, storedCurrencySetting } from "@/utils/pricingCurrency";
 
 type PricingFields = Pick<
   ModelData,
   "input_cost" | "output_cost" | "output_cost_per_second" | "output_cost_per_second_tiers"
-> & { model_info?: Pick<ModelInfo, "pricing_overrides"> };
+> & {
+  model_info?: Pick<ModelInfo, "pricing_overrides" | "input_cost_per_token" | "output_cost_per_token">;
+  litellm_params?: LiteLLMParams;
+};
+
+const perMillion = (rate: unknown): string | null =>
+  typeof rate === "number" && Number.isFinite(rate) ? formatAmount(rate * 1_000_000) : null;
+
+function SourceCurrency({ model }: { model: PricingFields }) {
+  const { t } = useTranslation();
+  const setting = storedCurrencySetting(model.litellm_params);
+  if (setting.currency === "USD") return null;
+  const input = perMillion(model.litellm_params?.input_cost_per_token ?? model.model_info?.input_cost_per_token);
+  const output = perMillion(model.litellm_params?.output_cost_per_token ?? model.model_info?.output_cost_per_token);
+  return (
+    <div className="mt-2 text-xs text-muted-foreground">
+      <p>{t("pricingCurrency.configuredIn", { currency: setting.currency, rate: setting.rate })}</p>
+      {input !== null && <p>{t("modelPricingSummary.configuredInput", { currency: setting.currency, cost: input })}</p>}
+      {output !== null && (
+        <p>{t("modelPricingSummary.configuredOutput", { currency: setting.currency, cost: output })}</p>
+      )}
+      <p>{t("pricingCurrency.spendInUsd")}</p>
+    </div>
+  );
+}
 
 function PricingSource({ overrides }: { overrides: string[] | undefined }) {
   const { t } = useTranslation();
@@ -50,6 +75,7 @@ export function ModelPricingSummary({ model }: { model: PricingFields }) {
           {t("modelPricingSummary.outputPerSecondTier", { resolution, cost: formatPerSecondCost(cost) })}
         </p>
       ))}
+      <SourceCurrency model={model} />
       <PricingSource overrides={model.model_info?.pricing_overrides} />
     </div>
   );

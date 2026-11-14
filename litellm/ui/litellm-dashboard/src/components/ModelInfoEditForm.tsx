@@ -39,6 +39,19 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
 import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
 import {
+  PRICING_CURRENCIES,
+  configuredPrices,
+  isPricingCurrency,
+  parsedRate,
+  pricePreview,
+  rateProblem,
+  reinterpretedFields,
+  storedCurrencySetting,
+  withoutDerivedPricing,
+  type CurrencySetting,
+} from "../utils/pricingCurrency";
+import { PricingCurrencyPreview } from "./molecules/models/PricingCurrencyPreview";
+import {
   MAX_COST_PER_PTU_PER_HOUR,
   MAX_PTU_COUNT,
   PTU_COUNT_FIELD,
@@ -122,6 +135,8 @@ const modelEditShape = {
   cache_read_cost: perMillionToPerToken,
   cache_write_cost: perMillionToPerToken,
   cache_write_cost_1h: perMillionToPerToken,
+  pricing_currency: textish,
+  usd_per_currency_unit: textish,
   ptu_count: scalar,
   cost_per_ptu_per_hour: scalar,
   ptu_effective_from: z.custom<Dayjs | null>().nullish(),
@@ -152,6 +167,13 @@ const buildSchema = (
 
     if (parseModelExtraParams(values.litellm_extra_params) === null) {
       reject("litellm_extra_params", t("modelInfoEditForm.validation.invalidJson"));
+    }
+    const currency = formCurrencySetting(values);
+    const problem = rateProblem(currency);
+    if (problem === "required") {
+      reject("usd_per_currency_unit", t("pricingCurrency.rateRequired", { currency: currency.currency }));
+    } else if (problem === "positive") {
+      reject("usd_per_currency_unit", t("pricingCurrency.ratePositive"));
     }
 
     // antd validates only mounted fields, and the PTU block does not render when the flag is off.
@@ -195,6 +217,25 @@ const buildSchema = (
     }
   });
 
+export const formCurrencySetting = (values: {
+  pricing_currency?: string;
+  usd_per_currency_unit?: string;
+}): CurrencySetting => ({
+  currency: isPricingCurrency(values.pricing_currency) ? values.pricing_currency : "USD",
+  rate: values.usd_per_currency_unit ?? "",
+});
+
+const pricingEdits = (
+  values: Partial<Record<TouchedPricingField, string | number | null | undefined>>,
+  isFieldTouched: (field: TouchedPricingField) => boolean,
+): Record<string, number | null> =>
+  Object.fromEntries(
+    PRICING_FIELDS.filter(isFieldTouched).map((field) => {
+      const perMillion = values[field];
+      return [COST_SOURCES[field], isBlank(perMillion) ? null : Number(perMillion) / 1_000_000];
+    }),
+  );
+
 type ModelEditSchema = ReturnType<typeof buildSchema>;
 export type ModelEditFormValues = z.input<ModelEditSchema>;
 export type ModelEditSubmitValues = z.output<ModelEditSchema>;
@@ -215,6 +256,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   max_retries: localModelData.litellm_params.max_retries,
   timeout: localModelData.litellm_params.timeout,
   stream_timeout: localModelData.litellm_params.stream_timeout,
+  pricing_currency: storedCurrencySetting(localModelData.litellm_params).currency,
+  usd_per_currency_unit: storedCurrencySetting(localModelData.litellm_params).rate,
   input_cost: perMillionTokens(
     localModelData.litellm_params.input_cost_per_token,
     localModelData.model_info?.input_cost_per_token,
@@ -261,7 +304,10 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
 const displayCost = (localModelData: any, field: TouchedPricingField, t: TFunction = i18n.t.bind(i18n)): string => {
   const key = COST_SOURCES[field];
   const rate = localModelData?.litellm_params?.[key] ?? localModelData?.model_info?.[key];
-  return rate != null ? (Number(rate) * 1_000_000).toFixed(4) : t("modelInfoEditForm.notSet");
+  const { currency } = storedCurrencySetting(localModelData?.litellm_params);
+  const amount = rate != null ? (Number(rate) * 1_000_000).toFixed(4) : null;
+  if (amount === null) return t("modelInfoEditForm.notSet");
+  return currency === "USD" ? amount : `${currency} ${amount}`;
 };
 
 interface ModelInfoEditFormProps {
@@ -379,6 +425,17 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
       await onSubmit(values, isFieldTouched);
     })(event);
 
+  const storedSetting = storedCurrencySetting(localModelData.litellm_params);
+  const watchedValues = form.watch();
+  const editedSetting = formCurrencySetting(watchedValues);
+  const currencySuffix = editedSetting.currency === "USD" ? "" : ` (${editedSetting.currency})`;
+  const previewRows = pricePreview(
+    configuredPrices(localModelData),
+    pricingEdits(watchedValues, isFieldTouched),
+    editedSetting,
+  );
+  const showCurrencyPreview = editedSetting.currency !== "USD" || storedSetting.currency !== "USD";
+
   const cancel = () => {
     form.reset(toModelEditFormValues(localModelData, isWildcardModel));
     touchedRef.current = new Set<string>();
@@ -411,8 +468,9 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
     </div>
   );
 
-  const pricingField = (name: TouchedPricingField, label: string, placeholder: string, description?: string) =>
-    isEditing ? (
+  const pricingField = (name: TouchedPricingField, baseLabel: string, placeholder: string, description?: string) => {
+    const label = `${baseLabel}${isEditing ? currencySuffix : ""}`;
+    return isEditing ? (
       <FormField control={form.control} name={name} label={label} description={description}>
         {({ value, onChange, ...control }) => (
           <NumericalInput
@@ -432,6 +490,64 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
         <Display>{displayCost(localModelData, name, t)}</Display>
       </div>
     );
+  };
+
+  const currencySection = isEditing ? (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <FormField
+        control={form.control}
+        name="pricing_currency"
+        label={t("pricingCurrency.currencyLabel")}
+        description={t("pricingCurrency.currencyDescription")}
+      >
+        {({ id, value, onChange, onBlur }) => (
+          <Select
+            items={PRICING_CURRENCIES.map((currency) => ({ value: currency, label: currency }))}
+            value={(value as string | undefined) ?? "USD"}
+            onValueChange={(next: string | null) => onChange(next ?? "USD")}
+          >
+            <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PRICING_CURRENCIES.map((currency) => (
+                <SelectItem key={currency} value={currency}>
+                  {currency}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </FormField>
+      {editedSetting.currency !== "USD" && (
+        <FormField
+          control={form.control}
+          name="usd_per_currency_unit"
+          label={t("pricingCurrency.rateLabel", { currency: editedSetting.currency })}
+          description={t("pricingCurrency.rateDescription")}
+        >
+          {({ value, ...control }) => (
+            <Input
+              {...control}
+              value={(value as string | undefined) ?? ""}
+              inputMode="decimal"
+              placeholder={t("pricingCurrency.ratePlaceholder")}
+            />
+          )}
+        </FormField>
+      )}
+    </div>
+  ) : (
+    <div>
+      <FieldLabel>{t("pricingCurrency.currencyLabel")}</FieldLabel>
+      <Display>
+        {storedSetting.currency === "USD"
+          ? "USD"
+          : t("pricingCurrency.configuredIn", { currency: storedSetting.currency, rate: storedSetting.rate })}
+        <p className="mt-1 text-xs text-muted-foreground">{t("pricingCurrency.spendInUsd")}</p>
+      </Display>
+    </div>
+  );
 
   const tagsField = (
     name: "model_access_group" | "guardrails" | "tags",
@@ -469,6 +585,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               t("modelInfoEditForm.fields.litellmModelName.placeholder"),
               localModelData.litellm_model_name,
             )}
+
+            {currencySection}
 
             {pricingField(
               "input_cost",
@@ -535,6 +653,15 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               t("modelInfoEditForm.fields.cacheWriteCost1h.label"),
               t("modelInfoEditForm.fields.cacheWriteCost1h.placeholder"),
               t("modelInfoEditForm.fields.cacheWriteCost1h.description"),
+            )}
+
+            {isEditing && showCurrencyPreview && (
+              <PricingCurrencyPreview
+                currency={editedSetting.currency}
+                rows={previewRows}
+                reinterpreted={reinterpretedFields(previewRows, storedSetting, editedSetting)}
+                rateValid={parsedRate(editedSetting) !== null}
+              />
             )}
 
             {textField(
@@ -813,7 +940,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                       {...control}
                       rows={4}
                       placeholder={codeSamples.models.perModelLimitsJson}
-                      defaultValue={JSON.stringify(modelData.model_info, null, 2)}
+                      defaultValue={JSON.stringify(withoutDerivedPricing(modelData.model_info), null, 2)}
                     />
                   )}
                 </FormField>

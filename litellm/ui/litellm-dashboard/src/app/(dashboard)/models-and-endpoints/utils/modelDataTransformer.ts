@@ -1,4 +1,5 @@
 import { LiteLLMParams, ModelData, ModelInfo, PerSecondCostTier } from "@/components/model_dashboard/types";
+import { usdRate } from "@/utils/pricingCurrency";
 
 const PER_SECOND_TIER_KEY = /^output_cost_per_second_(.+)$/;
 
@@ -46,14 +47,21 @@ const transformModel = (rawModel: RawModel, getProviderFromModel: (model: string
   const model: RawModel = JSON.parse(JSON.stringify(rawModel));
   const litellmParams = model.litellm_params;
   const modelInfo = model.model_info;
+  const usdPricing = modelInfo?.usd_pricing;
+  const usdModelInfo =
+    usdPricing !== null && typeof usdPricing === "object" ? { ...modelInfo, ...usdPricing } : modelInfo;
 
   return {
     ...model,
     provider: resolveProvider(litellmParams.model, litellmParams.custom_llm_provider, getProviderFromModel),
-    input_cost: costPerMillionTokens(modelInfo?.input_cost_per_token),
-    output_cost: costPerMillionTokens(modelInfo?.output_cost_per_token),
-    output_cost_per_second: litellmParams.output_cost_per_second ?? modelInfo?.output_cost_per_second ?? null,
-    output_cost_per_second_tiers: perSecondCostTiers(modelInfo),
+    input_cost: costPerMillionTokens(usdModelInfo?.input_cost_per_token as number | null | undefined),
+    output_cost: costPerMillionTokens(usdModelInfo?.output_cost_per_token as number | null | undefined),
+    output_cost_per_second: usdRate(
+      modelInfo,
+      "output_cost_per_second",
+      litellmParams.output_cost_per_second ?? modelInfo?.output_cost_per_second ?? null,
+    ) as number | null,
+    output_cost_per_second_tiers: perSecondCostTiers(usdModelInfo),
     litellm_model_name: litellmParams.model,
     max_tokens: modelInfo?.max_tokens,
     max_input_tokens: modelInfo?.max_input_tokens,

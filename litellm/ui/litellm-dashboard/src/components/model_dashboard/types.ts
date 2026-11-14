@@ -16,6 +16,9 @@ export interface ModelInfo {
   team_public_model_name?: string;
   key?: string;
   pricing_overrides?: string[];
+  usd_pricing?: Record<string, unknown>;
+  input_cost_per_token?: number | null;
+  output_cost_per_token?: number | null;
 }
 
 export interface LiteLLMParams {

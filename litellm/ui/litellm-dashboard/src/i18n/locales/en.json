@@ -19991,7 +19991,9 @@
     "inputPerMillion": "Input: ${{cost}}/1M tokens",
     "outputPerMillion": "Output: ${{cost}}/1M tokens",
     "outputPerSecond": "Output: {{cost}}",
-    "outputPerSecondTier": "Output ({{resolution}}): {{cost}}"
+    "outputPerSecondTier": "Output ({{resolution}}): {{cost}}",
+    "configuredInput": "Entered: {{currency}} {{cost}}/1M input tokens",
+    "configuredOutput": "Entered: {{currency}} {{cost}}/1M output tokens"
   },
   "errorPatterns": {
     "missingApiKey": "Missing API Key",
@@ -21010,6 +21012,38 @@
       "teams": "Customer teams",
       "member": "Customer member",
       "members": "Customer members"
+    }
+  },
+  "pricingCurrency": {
+    "currencyLabel": "Price currency",
+    "currencyDescription": "Prices on this model are entered in this currency. Spend, budgets and exports stay in USD.",
+    "rateLabel": "USD per 1 {{currency}}",
+    "rateDescription": "The manual rate used to convert this model's prices to USD. It is not updated automatically.",
+    "ratePlaceholder": "For example 1.08",
+    "rateRequired": "Enter the USD value of 1 {{currency}}",
+    "ratePositive": "Enter a number above 0",
+    "configuredIn": "Prices entered in {{currency}} at 1 {{currency}} = ${{rate}}",
+    "spendInUsd": "Spend and budgets are tracked in USD.",
+    "preview": {
+      "caption": "USD preview of {{currency}} prices",
+      "field": "Price",
+      "configured": "Entered ({{currency}})",
+      "usd": "Billed (USD)",
+      "amount": "{{currency}} {{amount}} {{unit}}",
+      "needsRate": "Enter a valid rate",
+      "empty": "No custom prices are set on this model yet.",
+      "reinterpreted": "Changing the currency or rate re-reads these existing prices as {{currency}}: {{fields}}. Check the USD values before saving."
+    },
+    "units": {
+      "million_tokens": "per 1M tokens",
+      "million_characters": "per 1M characters",
+      "second": "per second",
+      "image": "per image",
+      "query": "per query",
+      "page": "per page",
+      "pixel": "per pixel",
+      "ptu_hour": "per PTU-hour",
+      "unit": "per unit"
     }
   }
 }

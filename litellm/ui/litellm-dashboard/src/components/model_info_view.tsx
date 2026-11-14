@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
+import { currencyPatch, storedCurrencySetting, withoutDerivedPricing } from "../utils/pricingCurrency";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
@@ -49,7 +50,11 @@ import {
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm, {
+  formCurrencySetting,
+  type ModelEditSubmitValues,
+  type TouchedPricingField,
+} from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -306,6 +311,10 @@ export default function ModelInfoView({
       if (isFieldTouched("cache_write_cost_1h")) {
         updatedLitellmParams.cache_creation_input_token_cost_above_1hr = values.cache_write_cost_1h;
       }
+      Object.assign(
+        updatedLitellmParams,
+        currencyPatch(storedCurrencySetting(localModelData?.litellm_params), formCurrencySetting(values)),
+      );
 
       const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
       const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
@@ -339,7 +348,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
+        updatedModelInfo = values.model_info ? withoutDerivedPricing(JSON.parse(values.model_info)) : {};
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
@@ -392,10 +401,11 @@ export default function ModelInfoView({
           selectedCredentialName === null
             ? localLitellmParams
             : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
-        model_info: updatedModelInfo,
+        model_info: { ...localModelData?.model_info, ...updatedModelInfo },
       };
 
       setLocalModelData(updatedModelData);
+      queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
 
       if (onModelUpdate) {
         onModelUpdate(updatedModelData);

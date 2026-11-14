@@ -27,13 +27,14 @@ const renderForm = ({
   onSubmit = vi.fn().mockResolvedValue(undefined),
   isEditing = true,
   litellmParams = { model: "gpt-4o" } as Record<string, unknown>,
+  modelInfo = {} as Record<string, unknown>,
 } = {}) =>
   render(
     <ModelInfoEditForm
       localModelData={{
         model_name: "gpt-4o",
         litellm_params: litellmParams,
-        model_info: {},
+        model_info: modelInfo,
       }}
       modelData={{ model_info: {} }}
       teamAlias={null}
@@ -189,5 +190,78 @@ describe("ModelInfoEditForm existing-credentials picker", () => {
 
     renderForm({ isEditing: false });
     expect(screen.getByText("Manual")).toBeInTheDocument();
+  });
+});
+
+describe("ModelInfoEditForm price currency", () => {
+  const hufModel = {
+    litellmParams: {
+      model: "openai/huf",
+      pricing_currency: "HUF",
+      usd_per_currency_unit: "0.0025",
+      input_cost_per_token: 0.0008,
+      output_cost_per_second: 400,
+    },
+    modelInfo: { usd_pricing: { input_cost_per_token: 0.000002, output_cost_per_second: 1 } },
+  };
+
+  it("shows a HUF model's entered prices with their USD values in each price's own unit", async () => {
+    renderForm(hufModel);
+
+    expect(screen.getByLabelText("USD per 1 HUF")).toHaveValue("0.0025");
+    expect(screen.getByText("Input Cost (per 1M tokens) (HUF)")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter input cost")).toHaveValue(800);
+    const preview = screen.getByRole("table", { name: "USD preview of HUF prices" });
+    expect(preview).toHaveTextContent("HUF 800 per 1M tokens");
+    expect(preview).toHaveTextContent("USD 2 per 1M tokens");
+    expect(preview).toHaveTextContent("HUF 400 per second");
+    expect(preview).toHaveTextContent("USD 1 per second");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("warns which saved prices a new rate re-reads before saving", async () => {
+    renderForm(hufModel);
+
+    fireEvent.change(screen.getByLabelText("USD per 1 HUF"), { target: { value: "0.003" } });
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "re-reads these existing prices as HUF: input_cost_per_token, output_cost_per_second",
+    );
+    expect(screen.getByRole("table", { name: "USD preview of HUF prices" })).toHaveTextContent("USD 2.4 per 1M tokens");
+  });
+
+  it("asks for a rate before a USD model is saved in EUR, then submits the currency and rate", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({
+      onSubmit,
+      litellmParams: { model: "gpt-4o", input_cost_per_token: 0.000003 },
+      modelInfo: { pricing_overrides: ["input_cost_per_token"] },
+    });
+
+    await user.click(screen.getByRole("combobox", { name: "Price currency" }));
+    await user.click(await screen.findByRole("option", { name: "EUR" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(await screen.findByText("Enter the USD value of 1 EUR")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("USD per 1 EUR"), { target: { value: "1.08" } });
+    expect(await screen.findByRole("status")).toHaveTextContent("input_cost_per_token");
+    expect(screen.getByRole("table", { name: "USD preview of EUR prices" })).toHaveTextContent(
+      "USD 3.24 per 1M tokens",
+    );
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ pricing_currency: "EUR", usd_per_currency_unit: "1.08" });
+  });
+
+  it("labels a HUF model's saved prices and says spend stays in USD when not editing", () => {
+    renderForm({ ...hufModel, isEditing: false });
+
+    expect(screen.getByText("Prices entered in HUF at 1 HUF = $0.0025")).toBeInTheDocument();
+    expect(screen.getByText("Spend and budgets are tracked in USD.")).toBeInTheDocument();
+    expect(screen.getByText("HUF 800.0000")).toBeInTheDocument();
   });
 });
