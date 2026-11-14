@@ -110,16 +110,17 @@ def separate_cached_messages(
     messages: list[AllMessageValues],
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
-    Returns the first continuous block of cached messages, plus every system message once
-    any message is cached, since generateContent rejects a system_instruction beside a
-    cachedContent, and the remaining messages.
+    Returns the conversation prefix ending at the first continuous block of cached messages,
+    plus every system message once any message is cached, since generateContent rejects a
+    system_instruction beside a cachedContent, and the remaining messages. Gemini reads
+    cachedContent as a prefix of contents, so the cache must hold everything before the block.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
         return [], messages
 
     last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    cached_block: Final = range(filtered_messages[0][0], filtered_messages[last_continuous_block_idx][0] + 1)
+    cached_block: Final = range(filtered_messages[last_continuous_block_idx][0] + 1)
     goes_in_cache: Final = tuple(
         idx in cached_block or message.get("role") == "system" for idx, message in enumerate(messages)
     )
