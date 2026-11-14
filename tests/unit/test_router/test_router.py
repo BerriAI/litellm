@@ -18648,14 +18648,19 @@ class TestTierParamsTheTargetAccepts:
 
         assert accepted == {"allowed_openai_params": ["seed"]}
 
-    def test_declared_param_allowlist_reads_a_bare_string_as_one_param_name(self):
-        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": ["reasoning_effort", 3]}) == frozenset(
-            {"reasoning_effort"}
-        )
-        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": "reasoning_effort"}) == frozenset(
-            {"reasoning_effort"}
-        )
-        assert litellm.Router._declared_param_allowlist({}) == frozenset()
+    @pytest.mark.parametrize(
+        "allowlist, expected",
+        [
+            (["reasoning_effort", 3], {"reasoning_effort"}),
+            ("reasoning_effort", {"reasoning_effort"}),
+            ("seed, reasoning_effort", {"seed", "reasoning_effort"}),
+            ({"reasoning_effort": True}, {"reasoning_effort"}),
+            (None, set()),
+        ],
+        ids=["list", "bare-string", "comma-separated", "dict", "unset"],
+    )
+    def test_declared_param_allowlist_reads_names_from_any_allowlist_shape(self, allowlist, expected):
+        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": allowlist}) == frozenset(expected)
 
     def test_deployment_accepts_param_honors_deployment_allowlist(self):
         deployment = {
