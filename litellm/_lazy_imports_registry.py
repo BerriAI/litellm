@@ -135,6 +135,10 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
         "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
         "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
+        "VercelAIGatewayDecisionsConfig": (
+            ".llms.vercel_ai_gateway.decisions.transformation",
+            "VercelAIGatewayDecisionsConfig",
+        ),
         "NvidiaNimRerankConfig": (".llms.nvidia_nim.rerank.transformation", "NvidiaNimRerankConfig"),
         "NvidiaNimRankingConfig": (".llms.nvidia_nim.rerank.ranking_transformation", "NvidiaNimRankingConfig"),
         "VertexAIRerankConfig": (".llms.vertex_ai.rerank.transformation", "VertexAIRerankConfig"),
