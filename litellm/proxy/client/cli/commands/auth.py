@@ -682,7 +682,6 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
 
 
 def _match_requested_team(teams: Sequence[CliTeam], requested_team: str | None) -> str | None:
-    """The team_id `--team` names: an exact team_id wins, else an alias only one team has."""
     if not requested_team:
         return None
     named: Final = tuple((team.get("team_id"), team.get("team_alias")) for team in teams)
@@ -948,6 +947,19 @@ def _revoke_the_replaced_login(login: Mapping[str, object], http: Http, report: 
         )
 
 
+_LOGIN_TEAM_ENVVAR: Final = "LITELLM_PROXY_TEAM"
+_LOGIN_PKCE_ENVVAR: Final = "LITELLM_PROXY_LOGIN_PKCE"
+
+
+def login_team_from_env() -> str | None:
+    return os.environ.get(_LOGIN_TEAM_ENVVAR) or None
+
+
+def login_pkce_from_env(default: bool) -> bool:
+    raw: Final = os.environ.get(_LOGIN_PKCE_ENVVAR)
+    return click.BOOL.convert(raw, None, None) if raw else default
+
+
 def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: str | None = None) -> None:
     http: Final = requests.Session()
     credential: Final = run_pkce_login(base_url, http, echo=click.echo, team=team)
@@ -972,7 +984,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: st
 @click.option(
     "--pkce/--no-pkce",
     default=None,
-    envvar="LITELLM_PROXY_LOGIN_PKCE",
+    envvar=_LOGIN_PKCE_ENVVAR,
     show_envvar=True,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
@@ -983,7 +995,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: st
 @click.option(
     "--team",
     default=None,
-    envvar="LITELLM_PROXY_TEAM",
+    envvar=_LOGIN_TEAM_ENVVAR,
     show_envvar=True,
     help=(
         "Team id or alias to attribute this login to. Skips the team pick when it matches one of your teams, "

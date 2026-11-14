@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from litellm.proxy.client.cli.commands import up as up_module
 from litellm.proxy.client.cli.commands.agents import AgentRunError
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError, StaticToken
+from litellm.proxy.client.cli.commands.pkce_login import PkceFailure
 from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
@@ -625,6 +626,42 @@ class TestUpCanInvokeTheRealLoginCommand:
 
         assert not isinstance(result.exception, TypeError), result.exception
         assert reached == ["http://127.0.0.1:9"]
+
+    @pytest.mark.parametrize(
+        ("env", "saved_pkce", "flow", "team"),
+        [
+            ({"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Team A"}, False, "pkce", "Team A"),
+            ({"LITELLM_PROXY_TEAM": "team-b"}, False, "classic", "team-b"),
+            ({"LITELLM_PROXY_LOGIN_PKCE": "false"}, True, "classic", None),
+            ({}, True, "pkce", None),
+        ],
+        ids=["pkce-and-team-from-env", "team-from-env", "env-pkce-off-beats-saved-setting", "no-env-keeps-saved-setting"],
+    )
+    def test_the_login_lite_up_starts_honors_the_login_env_vars(self, env, saved_pkce, flow, team):
+        reached = []
+        with (
+            patch(f"{UP_MODULE}.sys", wraps=sys) as up_sys,
+            patch(f"{UP_MODULE}.load_token", return_value=None),
+            patch(f"{UP_MODULE}.get_stored_api_key", return_value=None),
+            patch(f"{UP_MODULE}.pkce_default", return_value=saved_pkce),
+            patch(
+                f"{AUTH_MODULE}.run_pkce_login",
+                side_effect=lambda *_, **kwargs: reached.append(("pkce", kwargs["team"])) or PkceFailure("stop"),
+            ),
+            patch(
+                f"{AUTH_MODULE}._start_cli_sso_flow",
+                return_value={"login_id": "cli-1", "poll_secret": "secret", "user_code": "ABCD"},
+            ),
+            patch(f"{AUTH_MODULE}.webbrowser.open"),
+            patch(
+                f"{AUTH_MODULE}._poll_for_authentication",
+                side_effect=lambda **kwargs: reached.append(("classic", kwargs["requested_team"])),
+            ),
+        ):
+            up_sys.stdin.isatty.return_value = True
+            result = CliRunner().invoke(up, obj={"base_url": "http://localhost:4000"}, env=env)
+
+        assert reached == [(flow, team)], result.output
 
     def test_ctx_invoke_leaves_claude_settings_alone(self, tmp_path):
         from litellm.proxy.client.cli.commands.auth import login as real_login

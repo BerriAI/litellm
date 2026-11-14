@@ -36,6 +36,7 @@ from litellm.proxy.client.cli.commands.agents import (
 from litellm.proxy.client.cli.commands.auth import save_token
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.config import save_config
+from litellm.proxy.client.cli.commands.pkce_login import PkceFailure
 from litellm.proxy.client.cli.main import cli as lite
 
 if sys.version_info >= (3, 11):
@@ -44,6 +45,7 @@ else:
     import tomli as tomllib
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
+AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 
 
@@ -2906,6 +2908,47 @@ class TestAgentCommands:
 
         assert result.exit_code == 0, result.output
         assert logins == [expected_pkce]
+
+    @pytest.mark.parametrize(
+        ("env", "saved_pkce", "flow", "team"),
+        [
+            ({"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Team A"}, False, "pkce", "Team A"),
+            ({"LITELLM_PROXY_TEAM": "team-b"}, False, "classic", "team-b"),
+            ({"LITELLM_PROXY_LOGIN_PKCE": "false"}, True, "classic", None),
+            ({}, True, "pkce", None),
+        ],
+        ids=["pkce-and-team-from-env", "team-from-env", "env-pkce-off-beats-saved-setting", "no-env-keeps-saved-setting"],
+    )
+    def test_the_login_lite_claude_starts_honors_the_login_env_vars(
+        self, secret_vault_factory, env, saved_pkce, flow, team
+    ):
+        reached = []
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(f"{AGENTS_MODULE}.run_agent"),
+            patch(f"{AGENTS_MODULE}.pkce_default", return_value=saved_pkce),
+            patch(
+                f"{AUTH_MODULE}.run_pkce_login",
+                side_effect=lambda *_, **kwargs: reached.append(("pkce", kwargs["team"])) or PkceFailure("stop"),
+            ),
+            patch(
+                f"{AUTH_MODULE}._start_cli_sso_flow",
+                return_value={"login_id": "cli-1", "poll_secret": "secret", "user_code": "ABCD"},
+            ),
+            patch(f"{AUTH_MODULE}.webbrowser.open"),
+            patch(
+                f"{AUTH_MODULE}._poll_for_authentication",
+                side_effect=lambda **kwargs: reached.append(("classic", kwargs["requested_team"])),
+            ),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": None, "secret_vault": secret_vault_factory()},
+                env=env,
+            )
+
+        assert reached == [(flow, team)], result.output
 
     def test_child_exit_code_reaches_the_shell(self):
         with patch(f"{AGENTS_MODULE}.run_agent", side_effect=SystemExit(42)):

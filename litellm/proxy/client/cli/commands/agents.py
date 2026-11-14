@@ -28,7 +28,16 @@ from litellm.proxy.common_utils.codex_model_catalog import (
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
-from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_pkce_login, load_token, login
+from .auth import (
+    cli_context_obj,
+    context_secret_vault,
+    get_stored_api_key,
+    is_pkce_login,
+    load_token,
+    login,
+    login_pkce_from_env,
+    login_team_from_env,
+)
 from .claude_settings import (
     API_KEY_HELPER_KEY,
     ENV_KEY,
@@ -1271,7 +1280,7 @@ def resolve_api_key(ctx: click.Context) -> str:
         return api_key
 
     vault: Final = context_secret_vault(ctx)
-    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
+    pkce: Final = login_pkce_from_env(default=is_pkce_login(load_token(vault=vault), base_url) or pkce_default())
     if not _is_interactive():
         raise click.ClickException(
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
@@ -1279,7 +1288,7 @@ def resolve_api_key(ctx: click.Context) -> str:
         )
 
     click.echo("No LiteLLM credentials found; starting login...")
-    ctx.invoke(login, pkce=pkce)
+    ctx.invoke(login, pkce=pkce, team=login_team_from_env())
     api_key = get_stored_api_key(expected_base_url=base_url, vault=vault)
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")

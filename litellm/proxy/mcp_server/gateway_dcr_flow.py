@@ -768,7 +768,6 @@ def aggregate_authorize(
 
 
 def _hinted_team_id(teams: tuple[ConsentTeam, ...], team_hint: str | None) -> str | None:
-    """The team a native client asked to preselect: an exact team_id wins, else an alias only one team has."""
     if not team_hint:
         return None
     by_id: Final = tuple(team.team_id for team in teams if team.team_id == team_hint)
