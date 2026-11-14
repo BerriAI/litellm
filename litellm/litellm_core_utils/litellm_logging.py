@@ -2987,7 +2987,9 @@ class Logging(LiteLLMLoggingBaseClass):
             exception, traceback_exception, start_time, end_time, estimate_prompt_tokens=False
         )
         if attempt._should_estimate_failed_prompt():
-            attempt.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await attempt._offloaded_prompt_token_estimate()
+            attempt.model_call_details[
+                FAILED_PROMPT_TOKEN_ESTIMATE_KEY
+            ] = await attempt._offloaded_prompt_token_estimate()
         for callback in callbacks:
             try:
                 if not attempt.should_run_callback(callback, params, "async_failure_handler"):

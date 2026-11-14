@@ -31,10 +31,9 @@ from urllib.parse import urlparse
 import httpx
 import psutil
 import yaml
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
-
-from integration._support.ports import allocate_port
 
 INTERNAL_MARKERS: Final = ("gen_ai.operation.name", "mcp.method.name", "litellm.guardrail_name")
 
