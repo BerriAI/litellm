@@ -326,6 +326,11 @@ def _tool_mapping(entry: object) -> Mapping[str, object] | None:
         return None
 
 
+def _with_nested_function_fields(tool: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final[Mapping[str, object]] = _tool_mapping(tool.get("function")) or {}
+    return {**nested, **{key: value for key, value in tool.items() if value is not None}}
+
+
 def _tool_mappings(raw_tools: object) -> tuple[Mapping[str, object], ...]:
     try:
         entries: Final = _OBJECT_LIST_ADAPTER.validate_python(raw_tools)
@@ -3075,7 +3080,7 @@ class LiteLLMCompletionResponsesConfig:
                 ),
             )
         if tool_type == "function":
-            typed_tool: Final = cast(FunctionToolParam, tool)
+            typed_tool: Final = cast(FunctionToolParam, _with_nested_function_fields(tool))
             raw_parameters: Final = typed_tool.get("parameters", {}) or {}
             parameters: Final = {**raw_parameters} if "type" in raw_parameters else {**raw_parameters, "type": "object"}
             chat_completion_tool: Final[dict[str, object]] = {
