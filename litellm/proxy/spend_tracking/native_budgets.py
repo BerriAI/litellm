@@ -52,6 +52,20 @@ class _PendingRequest:
     window_resets: Mapping[str, str]
     request: Request | None = None
 
+    def hold(self, held: BudgetReservation | None) -> None:
+        self.reservation[NATIVE_CALL_ID_KEY] = self.reservation_id
+        from litellm.proxy.spend_tracking.budget_reservation import start_reservation_lease_renewal
+
+        start_reservation_lease_renewal(
+            budget_reservation=self.reservation,
+            counter_keys=frozenset(
+                entry.counter_key
+                for entry in (held.entries or () if held is not None else ())
+                if entry is not None and entry.counter_key is not None
+            ),
+            request_task=self.request_task,
+        )
+
 
 _pending: Final[dict[str, _PendingRequest]] = {}  # mutable-ok: by reservation id until pre_call claims the plan
 _refusals: Final[weakref.WeakKeyDictionary[Exception, _PendingRequest]] = weakref.WeakKeyDictionary()
@@ -98,8 +112,7 @@ def pending_native_reservation(
         )
         if request_task is not None:
             request_task.add_done_callback(lambda _: _pending.pop(reservation_id, None))
-    identity.budget_plan = coerce_record(BudgetPlan, plan)
-    identity.budget_reservation = reservation
+    identity.bind_budget_reservation(reservation, coerce_record(BudgetPlan, plan))
     return reservation
 
 
@@ -313,24 +326,10 @@ class NativeBudgetsLogger(RustLogger):
         outcome: Final = _stamped(await super().run_rust(hook, reads, view, ctx), pending.window_resets)
         held: Final = _reservation_write(outcome)
         if held is not None:
-            self._hold(pending, _reservation_record(held))
+            pending.hold(_reservation_record(held))
         if isinstance(outcome, Abort) and outcome.exception is not None:
             _refusals[outcome.exception] = pending
         return outcome
-
-    def _hold(self, pending: _PendingRequest, held: BudgetReservation | None) -> None:
-        pending.reservation[NATIVE_CALL_ID_KEY] = pending.reservation_id
-        from litellm.proxy.spend_tracking.budget_reservation import start_reservation_lease_renewal
-
-        start_reservation_lease_renewal(
-            budget_reservation=pending.reservation,
-            counter_keys=frozenset(
-                entry.counter_key
-                for entry in (held.entries or () if held is not None else ())
-                if entry is not None and entry.counter_key is not None
-            ),
-            request_task=pending.request_task,
-        )
 
 
 class _CurrentSpend(BaseModel):

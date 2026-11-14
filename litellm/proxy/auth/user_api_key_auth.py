@@ -4439,8 +4439,7 @@ async def _reserve_budget_after_common_checks(
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
 ) -> None:
-    user_api_key_auth_obj.budget_reservation = None
-    user_api_key_auth_obj.budget_plan = None
+    user_api_key_auth_obj.bind_budget_reservation(None, None)
     if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
         from litellm.proxy.spend_tracking.budget_reservation import (
             reserve_budget_for_request,
