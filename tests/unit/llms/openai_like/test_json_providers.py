@@ -309,3 +309,142 @@ class TestDarkbloom:
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
+
+
+class TestBourse:
+    def test_bourse_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        bourse = JSONProviderRegistry.get("bourse")
+        assert bourse is not None
+        assert bourse.base_url == "https://api.bourse.run/v1"
+        assert bourse.api_key_env == "BOURSE_API_KEY"
+        assert bourse.api_base_env == "BOURSE_API_BASE"
+        assert bourse.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_bourse_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="bourse/claude-opus-5",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "claude-opus-5"
+        assert provider == "bourse"
+        assert api_base == "https://api.bourse.run/v1"
+
+    def test_bourse_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        default_base, _ = config._get_openai_compatible_provider_info(None, None)
+        assert default_base == "https://api.bourse.run/v1"
+
+        custom_base, custom_key = config._get_openai_compatible_provider_info(
+            "https://custom.bourse.run/v1", "test-key"
+        )
+        assert custom_base == "https://custom.bourse.run/v1"
+        assert custom_key == "test-key"
+
+    def test_bourse_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.bourse.run/v1",
+            api_key="test-key",
+            model="bourse/claude-opus-5",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.bourse.run/v1/chat/completions"
+
+    def test_bourse_parameter_mapping(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        optional_params = {}
+        non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
+        result = config.map_openai_params(
+            non_default_params, optional_params, "claude-opus-5", False
+        )
+
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100
+        assert "max_completion_tokens" not in result
+        assert result["temperature"] == 0.7
+
+    def test_bourse_registered_as_openai_compatible(self):
+        import litellm
+        from litellm.types.utils import LlmProviders
+
+        assert LlmProviders("bourse") == LlmProviders.BOURSE
+        assert "bourse" in litellm.openai_compatible_providers
+
+    def test_bourse_accepts_tools(self):
+        from litellm.utils import get_optional_params
+
+        tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+        params = get_optional_params(
+            model="claude-opus-5", custom_llm_provider="bourse", tools=tools
+        )
+
+        assert params["tools"] == tools
+
+    def test_bourse_missing_key_never_falls_back_to_openai_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+        monkeypatch.delenv("BOURSE_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+
+        with patch("litellm.main.openai_chat_completions.completion") as mock_openai, patch(
+            "litellm.main.base_llm_http_handler.completion"
+        ) as mock_http:
+            with pytest.raises(litellm.AuthenticationError, match="BOURSE_API_KEY"):
+                litellm.completion(
+                    model="bourse/claude-opus-5",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+
+        mock_openai.assert_not_called()
+        mock_http.assert_not_called()
+
+    def test_bourse_uses_its_own_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leak")
+        monkeypatch.setenv("BOURSE_API_KEY", "bourse-key")
+
+        with patch("litellm.main.openai_chat_completions.completion") as mock_openai, patch(
+            "litellm.main.base_llm_http_handler.completion"
+        ) as mock_http:
+            try:
+                litellm.completion(
+                    model="bourse/claude-opus-5",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            except Exception:
+                pass  # the mocked transport returns no real response; only the key matters here
+
+        calls = mock_openai.call_args_list + mock_http.call_args_list
+        assert calls, "expected the request to reach a transport"
+        assert all(c.kwargs.get("api_key") == "bourse-key" for c in calls)
