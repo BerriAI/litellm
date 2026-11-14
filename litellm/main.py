@@ -176,7 +176,6 @@ from litellm.types.completion import (
 )
 from litellm.types.litellm_params import (
     PROMPT_MANAGEMENT_APPLIED,
-    PROMPT_MANAGEMENT_APPLIED_FIELD,
     ControlOptions,
     RetryStrategy,
     prompt_management_applied,
@@ -806,9 +805,8 @@ async def acompletion(
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
-    inherits_applied_prompt: Final = prompt_management_applied(caller_kwargs) and not _routes_through_a_prompt_manager(
-        model
-    )
+    routes_through_a_prompt_manager: Final = _routes_through_a_prompt_manager(model)
+    each_fallback_applies_its_own_prompt: Final = fallbacks is not None and not routes_through_a_prompt_manager
     prompt_management_logger: Final = (
         litellm_logging_obj.get_custom_logger_for_prompt_management(
             model=model,
@@ -818,7 +816,7 @@ async def acompletion(
             dynamic_callback_params=litellm_logging_obj.standard_callback_dynamic_params,
         )
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
-        and not inherits_applied_prompt
+        and not each_fallback_applies_its_own_prompt
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id,
             non_default_params=kwargs,
@@ -834,8 +832,9 @@ async def acompletion(
     )
     prompt_management_marker: Final[Mapping[str, object]] = (
         PROMPT_MANAGEMENT_APPLIED
-        if inherits_applied_prompt
-        or (applies_prompt_management and _has_its_own_async_prompt_hook(prompt_management_logger))
+        if applies_prompt_management
+        and not routes_through_a_prompt_manager
+        and _has_its_own_async_prompt_hook(prompt_management_logger)
         else MappingProxyType({})
     )
 
@@ -951,11 +950,7 @@ async def acompletion(
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
             **{**completion_kwargs, **prompt_overrides},
-            kwargs={
-                "fallbacks": fallbacks,
-                **without(caller_kwargs, *prompt_overrides, PROMPT_MANAGEMENT_APPLIED_FIELD),
-                **prompt_management_marker,
-            },
+            kwargs={"fallbacks": fallbacks, **without(caller_kwargs, *prompt_overrides)},
         )
         if response is None:
             raise Exception(
@@ -982,10 +977,7 @@ async def acompletion(
         func: Final = partial(
             completion,
             **{**completion_kwargs, **prompt_overrides},
-            **{
-                **without(request_kwargs, *prompt_overrides, PROMPT_MANAGEMENT_APPLIED_FIELD),
-                **prompt_management_marker,
-            },
+            **{**without(request_kwargs, *prompt_overrides), **prompt_management_marker},
         )
 
         # Add the context to the function
@@ -5813,7 +5805,7 @@ def completion(
     metadata: Final = kwargs.get("metadata", None)
     model_info: Final = kwargs.get("model_info", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
-    fallbacks = kwargs.get("fallbacks", None)
+    fallbacks: Final = kwargs.get("fallbacks", None) or litellm.model_fallbacks
     provider_specific_header: Final = cast(
         ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
         kwargs.get("provider_specific_header", None),
@@ -5912,6 +5904,7 @@ def completion(
     if (
         isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and not prompt_management_applied(routing_kwargs)
+        and fallbacks is None
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
@@ -5949,7 +5942,6 @@ def completion(
         elif num_retries is not None:
             max_retries = num_retries
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
-        fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
                 **args

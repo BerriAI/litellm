@@ -15,7 +15,7 @@ from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar, Final, Literal
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -7000,7 +7000,21 @@ async def test_an_invalid_stream_chunk_size_is_rejected_before_any_prompt_hook_r
 
 ONE_WORD: Final = "Answer in one word."
 ONE_WORD_INSTRUCTION: Final[AllMessageValues] = {"role": "system", "content": ONE_WORD}
+ONE_SENTENCE_INSTRUCTION: Final[AllMessageValues] = {"role": "system", "content": "Answer in one sentence."}
 SKY_QUESTION: Final[AllMessageValues] = {"role": "user", "content": "What color is the sky?"}
+PROMPT_TEMPLATES: Final[Mapping[str, tuple[AllMessageValues, Mapping[str, object]]]] = MappingProxyType(
+    {
+        "one-word": (ONE_WORD_INSTRUCTION, MappingProxyType({})),
+        "one-sentence-at-low-temperature": (ONE_SENTENCE_INSTRUCTION, MappingProxyType({"temperature": 0.25})),
+    }
+)
+
+
+def _render_prompt(
+    prompt_id: str | None, model: str, messages: list[AllMessageValues], non_default_params: Mapping[str, object]
+) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+    instruction, settings = PROMPT_TEMPLATES[prompt_id or "one-word"]
+    return model, [instruction, *messages], {**non_default_params, **settings}
 
 
 def _openai_rejecting_the_primary_model(requests: asyncio.Queue[httpx.Request]) -> AsyncOpenAI:
@@ -7033,7 +7047,7 @@ def _sent_bodies(requests: asyncio.Queue[httpx.Request]) -> tuple[Mapping[str, o
     return tuple(json.loads(requests.get_nowait().content) for _ in range(requests.qsize()))
 
 
-class _SyncOnlyOneWordPromptManager(CustomPromptManagement):
+class _SyncOnlyPromptManager(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -7048,12 +7062,10 @@ class _SyncOnlyOneWordPromptManager(CustomPromptManagement):
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
     ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
-        return model, [ONE_WORD_INSTRUCTION, *messages], dict(non_default_params)
+        return _render_prompt(prompt_id, model, messages, non_default_params)
 
 
-class _OneWordPromptManager(_SyncOnlyOneWordPromptManager):
-    template_settings: ClassVar[Mapping[str, object]] = MappingProxyType({})
-
+class _PromptManager(_SyncOnlyPromptManager):
     async def async_get_chat_completion_prompt(
         self,
         model: str,
@@ -7070,20 +7082,16 @@ class _OneWordPromptManager(_SyncOnlyOneWordPromptManager):
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
     ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
-        return model, [ONE_WORD_INSTRUCTION, *messages], {**non_default_params, **self.template_settings}
-
-
-class _LowTemperatureOneWordPromptManager(_OneWordPromptManager):
-    template_settings: ClassVar[Mapping[str, object]] = MappingProxyType({"temperature": 0.25})
+        return _render_prompt(prompt_id, model, messages, non_default_params)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("prompt_manager", "template_settings"),
+    ("prompt_manager", "prompt_id"),
     [
-        (_OneWordPromptManager, {}),
-        (_SyncOnlyOneWordPromptManager, {}),
-        (_LowTemperatureOneWordPromptManager, {"temperature": 0.25}),
+        (_PromptManager, "one-word"),
+        (_SyncOnlyPromptManager, "one-word"),
+        (_PromptManager, "one-sentence-at-low-temperature"),
     ],
     ids=["both-hooks", "sync-hook-only", "template-sets-temperature"],
 )
@@ -7097,7 +7105,7 @@ class _LowTemperatureOneWordPromptManager(_OneWordPromptManager):
 )
 async def test_acompletion_sends_the_prompt_managers_template_to_the_provider_once(
     prompt_manager: type[CustomPromptManagement],
-    template_settings: Mapping[str, object],
+    prompt_id: str,
     model: str,
     fallbacks: list[str] | None,
     sent_models: tuple[str, ...],
@@ -7107,17 +7115,73 @@ async def test_acompletion_sends_the_prompt_managers_template_to_the_provider_on
         response: Final = await litellm.acompletion(
             model=model,
             messages=[SKY_QUESTION],
-            prompt_id="one-word",
+            prompt_id=prompt_id,
             callbacks=[prompt_manager()],
             fallbacks=fallbacks,
             client=client,
         )
 
+    instruction, template_settings = PROMPT_TEMPLATES[prompt_id]
     assert response.choices[0].message.content == "Blue"
     assert _sent_bodies(requests) == tuple(
-        {"model": sent_model, "messages": [ONE_WORD_INSTRUCTION, SKY_QUESTION], **template_settings}
+        {"model": sent_model, "messages": [instruction, SKY_QUESTION], **template_settings}
         for sent_model in sent_models
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_manager", [_PromptManager, _SyncOnlyPromptManager], ids=["both-hooks", "sync-hook-only"])
+async def test_a_registered_prompt_manager_applies_once_behind_a_prompt_routing_prefix(
+    prompt_manager: type[CustomPromptManagement],
+) -> None:
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    async with _openai_rejecting_the_primary_model(requests) as client:
+        await litellm.acompletion(
+            model="litellm_agent/openai/backup",
+            messages=[SKY_QUESTION],
+            prompt_id="one-word",
+            callbacks=[prompt_manager()],
+            client=client,
+        )
+
+    assert _sent_bodies(requests) == ({"model": "backup", "messages": [ONE_WORD_INSTRUCTION, SKY_QUESTION]},)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_with_its_own_prompt_settings_sends_the_template_they_render() -> None:
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    async with _openai_rejecting_the_primary_model(requests) as client:
+        await litellm.acompletion(
+            model="openai/primary",
+            messages=[SKY_QUESTION],
+            prompt_id="one-word",
+            callbacks=[_PromptManager()],
+            fallbacks=[{"model": "openai/backup", "prompt_id": "one-sentence-at-low-temperature", "temperature": 1.0}],
+            client=client,
+        )
+
+    assert _sent_bodies(requests) == (
+        {"model": "primary", "messages": [ONE_WORD_INSTRUCTION, SKY_QUESTION]},
+        {"model": "backup", "messages": [ONE_SENTENCE_INSTRUCTION, SKY_QUESTION], "temperature": 0.25},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["completion", "acompletion"])
+async def test_a_prompt_manager_runs_once_for_a_call_with_fallbacks(is_async: bool) -> None:
+    on_prompt: Final = MagicMock()
+
+    await _call_completion(
+        is_async,
+        model="openai/gpt-4.1-mini",
+        messages=[SKY_QUESTION],
+        prompt_id="greeting",
+        callbacks=[_PromptHookRecorder(on_prompt)],
+        fallbacks=["openai/gpt-4.1-nano"],
+        mock_response="Blue",
+    )
+
+    assert on_prompt.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -7144,7 +7208,7 @@ async def test_a_caller_supplied_prompt_management_flag_does_not_skip_the_templa
             model="openai/backup",
             messages=[SKY_QUESTION],
             prompt_id="one-word",
-            callbacks=[_SyncOnlyOneWordPromptManager()],
+            callbacks=[_SyncOnlyPromptManager()],
             client=client,
             **{PROMPT_MANAGEMENT_APPLIED_FIELD: True},
         )
@@ -7154,7 +7218,7 @@ async def test_a_caller_supplied_prompt_management_flag_does_not_skip_the_templa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prompt_manager", [_OneWordPromptManager, _SyncOnlyOneWordPromptManager], ids=["both-hooks", "sync-hook-only"]
+    "prompt_manager", [_PromptManager, _SyncOnlyPromptManager], ids=["both-hooks", "sync-hook-only"]
 )
 @pytest.mark.parametrize("asynchronous", [True, False], ids=["acompletion", "completion"])
 async def test_a_chat_call_bridged_to_the_responses_api_sends_the_template_once(
