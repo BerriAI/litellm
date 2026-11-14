@@ -1117,6 +1117,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._await_pending_logging()
             raise
 
+    async def aclose(self) -> None:
+        await self.response.aclose()
+
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
