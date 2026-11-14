@@ -5,6 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import pytest
+from fastapi import Request
 
 import litellm
 from litellm.integrations.custom_logger_v2.call import CallContext
@@ -15,6 +16,7 @@ from litellm.integrations.custom_logger_v2.legacy import PROXY_REQUEST_KEYS, Kwa
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking import budget_reservation, native_budgets
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -64,6 +66,30 @@ async def native_pre_call(auth: UserAPIKeyAuth, data: Mapping[str, object]) -> P
     if isinstance(outcome, Patch):
         _ = fields.apply(outcome)
     return outcome
+
+
+async def admit_native_plan(auth: UserAPIKeyAuth, data: Mapping[str, object]) -> None:
+    if auth.budget_plan is None:
+        return
+    outcome: Final = await native_pre_call(auth, data)
+    if isinstance(outcome, Abort) and outcome.exception is not None:
+        raise outcome.exception
+
+
+async def authorize_and_admit(
+    token: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict[str, object],
+    route: str,
+    api_key: str,
+    *,
+    force_virtual_key_checks: bool = False,
+) -> UserAPIKeyAuth | None:
+    billed: Final = await _authorize_authenticated_request(
+        token, request, request_data, route, api_key, force_virtual_key_checks=force_virtual_key_checks
+    )
+    await admit_native_plan(billed or token, request_data)
+    return billed
 
 
 UNLIMITED_BUDGET: Final = 1e12

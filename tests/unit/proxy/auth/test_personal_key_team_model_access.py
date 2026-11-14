@@ -20,7 +20,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, common_checks
-from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
 from litellm.proxy.auth.fallback_model_access import RouterFallbackAccessCheck
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, move_guardrails_to_metadata
 from litellm.proxy.common_request_processing import (
@@ -37,6 +36,7 @@ from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router_api import RoutingContext
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import get_available_models_for_user
+from tests.unit.proxy.spend_tracking.native_budgets_replica import authorize_and_admit, install_native_owner
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     UI_TEAM_ID: LiteLLM_TeamTableCachedObj(team_id=UI_TEAM_ID, models=[]),
@@ -72,7 +72,7 @@ _ROUTER: Final = litellm.Router(
 
 
 @pytest.fixture
-def teams(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def teams(monkeypatch: pytest.MonkeyPatch, native_budgets_on: None) -> Iterator[None]:
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
         if team_id not in _TEAMS:
             raise Exception(f"team {team_id} lookup failed")
@@ -648,6 +648,7 @@ def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable)
     monkeypatch.setattr(proxy_server, "llm_model_list", _ROUTER.model_list)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
+    _ = install_native_owner(proxy_server.spend_counter_store)
     monkeypatch.setattr(proxy_server, "master_key", "test-master")
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
 
@@ -670,13 +671,13 @@ async def test_dashboard_batches_require_own_model_grants(
     try:
         if denied:
             with pytest.raises(HTTPException) as error:
-                await _authorize_authenticated_request(
+                await authorize_and_admit(
                     token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
                     force_virtual_key_checks=True,
                 )
             assert error.value.status_code == 403
         else:
-            billed: Final = await _authorize_authenticated_request(
+            billed: Final = await authorize_and_admit(
                 token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
                 force_virtual_key_checks=True,
             )
@@ -706,7 +707,7 @@ async def test_dashboard_admitted_team_reservation_does_not_deny_same_team_fallb
         user_role=LitellmUserRoles.INTERNAL_USER, max_budget=20, spend=0,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
+    billed: Final = await authorize_and_admit(
         token, request, {"model": "shared"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     assert billed is not None and billed.budget_reservation is not None
@@ -739,7 +740,7 @@ async def test_dashboard_own_primary_alias_keeps_its_admitted_billing_identity(
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
+    billed: Final = await authorize_and_admit(
         token, request, {"model": "caller-alias"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     assert billed is not None
@@ -788,7 +789,7 @@ async def test_dashboard_spend_row_and_budget_use_the_same_granting_team(
         spend=0,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    admitted: Final = await _authorize_authenticated_request(
+    admitted: Final = await authorize_and_admit(
         token, request, {"model": model}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     billed: Final = admitted or token
@@ -827,7 +828,7 @@ async def test_dashboard_denied_fallback_keeps_its_existing_reservation(
         spend=0,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
+    billed: Final = await authorize_and_admit(
         token, request, {"model": "gpt-a"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     assert billed is not None
@@ -906,7 +907,7 @@ async def test_dashboard_fallback_stays_with_the_original_billing_team(
         spend=0,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
+    billed: Final = await authorize_and_admit(
         token, request, {"model": initial}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     assert billed is not None
@@ -974,7 +975,7 @@ async def test_dashboard_primary_call_inherits_team_guardrails_and_policies_like
         api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, user_role=LitellmUserRoles.INTERNAL_USER
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    billed: Final = await _authorize_authenticated_request(
+    billed: Final = await authorize_and_admit(
         token, request, {"model": "shared"}, "/chat/completions", "dashboard-key", force_virtual_key_checks=True
     )
     assert billed is not None
