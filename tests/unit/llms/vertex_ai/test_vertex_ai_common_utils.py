@@ -21,7 +21,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
-    _MAX_JSON_SCHEMA_HOISTS_PER_PATH,
+    _JSON_SCHEMA_HOIST_BUDGET,
     _fix_enum_types,
     build_json_schema,
     build_vertex_schema,
@@ -1552,7 +1552,6 @@ def test_fix_enum_types():
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
 
-
 def test_build_vertex_schema_sends_integer_enum_as_string_values():
     """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
@@ -1666,6 +1665,7 @@ def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
 
     assert schema.get("enum") == expected_enum
     assert "format" not in schema
+
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1862,7 +1862,9 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
     fake_http_client: Final = FakeHttpClient()
     spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -1907,7 +1909,9 @@ async def test_vertex_claude_count_sends_the_thinking_vertex_inference_sends(
 
     fake_http_client: Final = FakeHttpClient()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -1955,7 +1959,9 @@ async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_o
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     fetch_threads: Final = FetchThreads()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
         respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
         result: Final = await VertexAITokenCounter().count_tokens(
@@ -2834,7 +2840,10 @@ def test_build_json_schema_declares_a_required_name_from_every_branch_keyword(ke
         ({"anyOf": [_UNION]}, ("anyOf", 0)),
         ({"oneOf": [_UNION]}, ("oneOf", 0)),
         ({"allOf": [_UNION]}, ("allOf", 0)),
-        ({"properties": {"a": {"items": {"properties": {"b": _UNION}}}}}, ("properties", "a", "items", "properties", "b")),
+        (
+            {"properties": {"a": {"items": {"properties": {"b": _UNION}}}}},
+            ("properties", "a", "items", "properties", "b"),
+        ),
     ],
 )
 def test_build_json_schema_reaches_every_schema_position(schema: dict, path: tuple[str | int, ...]) -> None:
@@ -3068,10 +3077,46 @@ def test_build_json_schema_output_stays_near_its_input_size_on_nested_hoists() -
     assert len(json.dumps(build_json_schema(nested))) < 200 * len(json.dumps(nested))
 
 
-@pytest.mark.parametrize(
-    ("levels", "declared"), [(_MAX_JSON_SCHEMA_HOISTS_PER_PATH, True), (_MAX_JSON_SCHEMA_HOISTS_PER_PATH + 1, False)]
-)
-def test_build_json_schema_hoists_up_to_the_limit_on_one_path(levels: int, declared: bool) -> None:
-    built: Final = build_json_schema(_nested_hoists(levels))
+def _recursive_fan_out(names: int) -> dict:
+    required: Final = [f"p{index}" for index in range(names)]
+    node_property: Final = {"anyOf": [{"$ref": "#/$defs/Node"}], "required": required}
+    return {
+        "$defs": {"Node": {"properties": {name: node_property for name in required}, "required": required}},
+        "$ref": "#/$defs/Node",
+    }
 
-    assert ("properties" in reduce(getitem, ("properties", "x") * (levels - 1), built)) is declared
+
+def test_build_json_schema_output_stays_within_the_budget_on_a_recursive_fan_out() -> None:
+    schema: Final = _recursive_fan_out(6)
+
+    assert len(json.dumps(build_json_schema(schema))) < len(json.dumps(schema)) + 2 * _JSON_SCHEMA_HOIST_BUDGET
+
+
+def _union_with_description(size: int) -> dict:
+    return {"anyOf": [{"properties": {"name": {"description": "x" * size}}}], "required": ["name"]}
+
+
+def test_build_json_schema_shares_one_budget_across_the_schema() -> None:
+    half: Final = _union_with_description(_JSON_SCHEMA_HOIST_BUDGET // 2)
+
+    built: Final = build_json_schema({"properties": {"first": half, "second": half}})
+
+    assert ("properties" in built["properties"]["first"], "properties" in built["properties"]["second"]) == (
+        True,
+        False,
+    )
+
+
+def test_build_json_schema_leaves_a_copy_larger_than_the_budget_as_sent() -> None:
+    schema: Final = _union_with_description(_JSON_SCHEMA_HOIST_BUDGET)
+
+    assert build_json_schema(schema) == schema
+
+
+def test_build_json_schema_stops_searching_branches_past_the_budget() -> None:
+    schema: Final = {
+        "anyOf": [*({} for _ in range(_JSON_SCHEMA_HOIST_BUDGET)), _NAME_BRANCHES[0]],
+        "required": ["name"],
+    }
+
+    assert build_json_schema(schema) == schema
