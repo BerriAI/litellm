@@ -307,11 +307,18 @@ async def test_vertex_embedding_usage_carries_the_billable_character_count_googl
     )
 
 
-def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(predict_endpoint: respx.Route) -> None:
-    predict_endpoint.mock(return_value=_predict_response({"predictions": [_gecko_prediction([0.1, 2], 3)]}))
+@pytest.mark.parametrize(
+    ("model", "prediction", "instance"),
+    [(GECKO, _gecko_prediction([0.1, 2], 3), {"content": "hello"}), (BGE, [0.1, 2], {"prompt": "hello"})],
+    ids=["gecko", "bge"],
+)
+def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(
+    predict_endpoint: respx.Route, model: str, prediction: object, instance: dict[str, str]
+) -> None:
+    predict_endpoint.mock(return_value=_predict_response({"predictions": [prediction]}))
 
     litellm.embedding(
-        model=f"vertex_ai/{GECKO}",
+        model=f"vertex_ai/{model}",
         input=["hello"],
         vertex_project=PUBLIC_CALL_PROJECT,
         vertex_location="us-central1",
@@ -319,6 +326,6 @@ def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(pre
     )
 
     body: Final = json.loads(predict_endpoint.calls.last.request.content)
-    assert body["instances"] == [{"content": "hello"}]
+    assert body["instances"] == [instance]
     assert "extra_body" not in body["parameters"]
     assert body["parameters"]["autoTruncate"] is False
