@@ -809,6 +809,177 @@ async def test_counter_rejects_input_chat_translation_would_leave_out_without_ca
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
+@pytest.mark.parametrize(
+    ("messages_format", "message", "problem"),
+    (
+        ("anthropic", {"role": "user"}, "Message 1 must have a 'content' field"),
+        ("anthropic", {"content": "Hello"}, "Message 1 must have a 'role' field"),
+        ("openai", {"content": "Hello"}, "Message 1 must have a 'role' field"),
+    ),
+    ids=("anthropic-without-content", "anthropic-without-role", "openai-without-role"),
+)
+async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthropic(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages_format: TokenCountMessagesFormat,
+    message: dict[str, JsonValue],
+    problem: str,
+) -> None:
+    result, bodies = await _counted_body(
+        counter_type, count_endpoint, [{"role": "user", "content": "Hi"}, message], None, messages_format
+    )
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("messages", "problem"),
+    (
+        ([{"role": "system"}, {"role": "user", "content": "Hi"}], "Message 0 must have a 'content' field"),
+        ([{"role": "developer"}, {"role": "user", "content": "Hi"}], "Message 0 must have a 'content' field"),
+        ([{"role": "user", "content": "Hi"}, {}], "Message 1 must have a 'role' field"),
+        (
+            [{"role": "user"}, _CHAT_TOOL_TURNS[2], {"role": "tool", "tool_call_id": "call_1"}],
+            "Message 2 must have a 'content' field",
+        ),
+        ([{"role": "assistant"}], "At least one non-system message with content is required"),
+        (
+            [_CHAT_TOOL_TURNS[0], {"role": "assistant", "content": None}],
+            "At least one non-system message with content is required",
+        ),
+    ),
+    ids=(
+        "system-without-content",
+        "developer-without-content",
+        "empty-message",
+        "tool-result-without-content",
+        "lone-assistant-without-content",
+        "nothing-left-after-system",
+    ),
+)
+async def test_counter_names_the_chat_message_chat_translation_cannot_send(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    messages: list[dict[str, JsonValue]],
+    problem: str,
+) -> None:
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("role", ([], {"name": "user"}))
+async def test_counter_rejects_a_chat_message_with_a_non_string_role_before_the_provider_call(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    role: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": role, "content": "Hi", "name": "critic"}]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_blames_the_message_chat_translation_fails_on_not_a_null_content_tool_result(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    messages: Final = [
+        *_CHAT_TOOL_TURNS[1:3],
+        {"role": "tool", "tool_call_id": "call_1", "content": None},
+        {"role": "tool", "content": "sunny"},
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message is not None
+    assert "'tool_call_id'" in result.error_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "message", ({"role": "user"}, {"role": "user", "content": None}, {"role": "system", "content": None})
+)
+async def test_counter_counts_a_chat_message_without_content_as_chat_inference_sends_it(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    message: dict[str, JsonValue],
+) -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert [body["messages"] for body in bodies] == [inference["messages"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize("role", ("developer", "critic", [], {"name": "user"}))
+async def test_counter_sends_a_null_content_turn_chat_translation_cannot_send_to_anthropic_as_given(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    role: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": role, "content": None}, {"role": "user", "content": "Hi"}]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert result.error is False
+    assert [body["messages"] for body in bodies] == [messages]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_counts_a_chat_tool_call_turn_sent_without_a_content_key(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    turns: Final = [
+        {key: value for key, value in message.items() if (key, value) != ("content", None)}
+        for message in _CHAT_TOOL_TURNS
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, turns, None, "openai")
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
 async def test_counter_sends_a_tool_with_a_non_string_type_to_anthropic_as_given(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
 ) -> None:
