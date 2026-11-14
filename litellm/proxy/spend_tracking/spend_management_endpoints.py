@@ -31,7 +31,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
@@ -83,6 +82,7 @@ from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.auth.user_api_key_auth import INTERNAL_HEALTH_CHECK_API_KEYS
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
@@ -124,10 +124,6 @@ _SPEND_LOG_LIST_COLUMNS: Final = """
                     (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
 """
 
-INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
-)
 
 _RowT = TypeVar("_RowT")
 

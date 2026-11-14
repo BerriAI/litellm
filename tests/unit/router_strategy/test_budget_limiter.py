@@ -184,7 +184,7 @@ async def test_a_health_check_probe_does_not_spend_its_deployment_budget(
 ) -> None:
     limiter: Final = RouterBudgetLimiting(
         dual_cache=DualCache(),
-        provider_budget_config=None,
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
         model_list=[
             {
                 "model_name": "some-model",
@@ -205,7 +205,9 @@ async def test_a_health_check_probe_does_not_spend_its_deployment_budget(
     )
 
     spend: Final = await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d")
+    provider_spend: Final = await limiter.dual_cache.async_get_cache("provider_spend:openai:1d")
     assert spend == expected_spend, f"{user_api_key_hash} left deployment spend at {spend}"
+    assert provider_spend == 0.25, f"{user_api_key_hash} left provider spend at {provider_spend}"
 
 
 _MONTHLY_DEPLOYMENT: Final = {

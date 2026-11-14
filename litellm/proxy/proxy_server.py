@@ -1028,9 +1028,6 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     spend_counter_batch_scope,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
-    INTERNAL_HEALTH_CHECK_API_KEYS,
-)
-from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -1129,6 +1126,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds, CustomerScopeAuth
+from litellm.types.proxy.auth.user_api_key_auth import INTERNAL_HEALTH_CHECK_API_KEYS
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (

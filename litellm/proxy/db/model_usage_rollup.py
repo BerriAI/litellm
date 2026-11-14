@@ -20,6 +20,7 @@ from litellm.constants import (
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES, SpendLogsPayload
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
+from litellm.types.proxy.auth.user_api_key_auth import INTERNAL_HEALTH_CHECK_API_KEYS
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
@@ -114,6 +115,10 @@ def date_from_start_time(start_time: datetime | str) -> str | None:
     return start_time[:10] if len(start_time) >= 10 else None
 
 
+def model_usage_group(model_group: str | None, model: str, api_key: object) -> str:
+    return model if not model_group or api_key in INTERNAL_HEALTH_CHECK_API_KEYS else model_group
+
+
 def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransaction | None:
     date: Final = date_from_start_time(payload["startTime"])
     origin: Final = _internal_call_origin(payload["metadata"])
@@ -125,7 +130,7 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date=date,
-            model_group=payload["model_group"] or model,
+            model_group=model_usage_group(payload["model_group"], model, payload.get("api_key")),
             model=model,
             custom_llm_provider=payload["custom_llm_provider"] or "unknown",
             task_type=model_usage_task_type(payload["request_tags"]),

@@ -577,8 +577,6 @@ class RouterBudgetLimiting(CustomLogger):
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
-        if is_health_check_probe_log(callback_fields.get("standard_logging_object")):
-            return
 
         polled_response, response_cost = _JOB_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
@@ -606,7 +604,11 @@ class RouterBudgetLimiting(CustomLogger):
                 job=job,
             )
 
-        deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id)
+        deployment_budget_config: Final = (
+            None
+            if is_health_check_probe_log(callback_fields.get("standard_logging_object"))
+            else self._get_budget_config_for_deployment(model_id)
+        )
         if deployment_budget_config:
             # increment spend for specific deployment id
             deployment_spend_key: Final = f"deployment_spend:{model_id}:{deployment_budget_config.budget_duration}"
