@@ -137,6 +137,13 @@ def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> 
     weakref.finalize(stream, _release_transport_anchor, transport)
 
 
+def _abort_unreleased_connection(response: ClientResponse) -> None:
+    connection: Final = response.connection
+    transport: Final = None if connection is None else connection.transport
+    if transport is not None:
+        transport.abort()
+
+
 class AiohttpResponseStream(httpx.AsyncByteStream):
     CHUNK_SIZE = 1024 * 16
 
@@ -172,9 +179,11 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # until the proxy is restarted, even after the backend recovers.
             # On a fully-read response the connection was already released
             # at EOF and close() is a no-op.
+            _abort_unreleased_connection(self._aiohttp_response)
             self._aiohttp_response.close()
 
     async def aclose(self) -> None:
+        _abort_unreleased_connection(self._aiohttp_response)
         with map_aiohttp_exceptions():
             await self._aiohttp_response.__aexit__(None, None, None)
 
