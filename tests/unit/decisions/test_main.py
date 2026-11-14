@@ -1958,8 +1958,8 @@ async def test_non_string_safety_identifier_is_dropped_from_the_wire_under_drop_
     }
 
 
-_MALFORMED_EXTRA_HEADERS: Final[tuple[object, ...]] = ("X-Foo: bar", 7, ["X-Foo: bar"])
-_MALFORMED_EXTRA_HEADERS_IDS: Final = ("string", "int", "list")
+_MALFORMED_EXTRA_HEADERS: Final[tuple[object, ...]] = ("X-Foo: bar", 7, ["X-Foo: bar"], [["X-Foo", "bar"]])
+_MALFORMED_EXTRA_HEADERS_IDS: Final = ("string", "int", "list", "list_of_pairs")
 
 
 def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:

@@ -7504,6 +7504,22 @@ def test_traceparent_forwarding_leaves_non_object_extra_headers_for_the_endpoint
     assert data["extra_headers"] == forwarded
 
 
+@pytest.mark.parametrize("extra_headers", ({}, {"X-Kept": "yes"}), ids=("empty_object", "object"))
+def test_forwarded_traceparent_shows_in_the_logged_request_body(
+    extra_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+    data: Final = {"model": "decider", "extra_headers": extra_headers, "proxy_server_request": {"body": None}}
+    refresh_proxy_server_request_body_snapshot(data)
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=_make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT}))
+
+    assert data["proxy_server_request"]["body"]["extra_headers"]["traceparent"] == _TRACEPARENT
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_settings, expected_drop_params",
