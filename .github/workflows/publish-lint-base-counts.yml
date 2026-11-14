@@ -3,7 +3,7 @@ name: Publish lint base counts
 # Every commit on main can become a future merge-base.
 # Publishing its per-rule counts for each lint gate (strict ruff, type discipline,
 # test quality, basedpyright) as an artifact lets the gates download them through
-# scripts/lint_base_counts.py in seconds instead of scanning the merge-base tree in
+# litellm/scripts/lint_base_counts.py in seconds instead of scanning the merge-base tree in
 # a throwaway worktree on every fresh checkout or moved merge-base.
 # No concurrency group on purpose: runs must never cancel each other, because
 # every sha's artifact matters (any of them can become a merge-base).
@@ -30,15 +30,15 @@ jobs:
       matrix:
         include:
           - checker: ruff-strict
-            script: scripts/ruff_strict_gate.py
+            script: litellm/scripts/ruff_strict_gate.py
           - checker: type-discipline
-            script: scripts/type_discipline_gate.py
+            script: litellm/scripts/type_discipline_gate.py
           - checker: test-quality
-            script: scripts/test_quality_gate.py
+            script: litellm/scripts/test_quality_gate.py
           - checker: openapi-docs
-            script: scripts/openapi_docs_gate.py
+            script: litellm/scripts/openapi_docs_gate.py
           - checker: basedpyright
-            script: scripts/type_check_gate.py
+            script: litellm/scripts/type_check_gate.py
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -91,7 +91,7 @@ jobs:
       - name: Emit basedpyright counts for HEAD
         if: matrix.checker == 'basedpyright'
         run: |
-          python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/lint-counts"
+          python litellm/scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/lint-counts"
 
       - name: Name the counts artifact
         run: |

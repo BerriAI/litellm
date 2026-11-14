@@ -36,7 +36,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -1783,6 +1784,289 @@ def test_vertex_ai_map_tools():
     print(new_tools)
 
     assert tools == new_tools
+
+
+def test_vertex_ai_map_tools_declares_a_namespace_by_its_members() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [
+            {"type": "function", "name": "create_issue", "parameters": {"type": "object", "properties": {}}},
+            {"type": "function", "function": {"name": "close_issue"}},
+        ],
+    }
+
+    tools = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    assert [declaration["name"] for declaration in tools[0]["function_declarations"]] == [
+        "create_issue",
+        "close_issue",
+    ]
+
+
+def test_vertex_ai_map_tools_declares_a_namespace_member_like_the_same_chat_tool() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"repo": {"$ref": "#/$defs/Repo"}, "label": {"type": ["string", "null"]}},
+        "$defs": {"Repo": {"type": "string"}},
+    }
+    function = {"name": "create_issue", "description": "Open an issue", "parameters": parameters}
+    namespace = {"type": "namespace", "name": "github", "tools": [{"type": "function", **function}]}
+
+    from_namespace = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+    from_chat_tool = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}], optional_params={}
+    )
+
+    assert from_namespace == from_chat_tool
+
+
+_GET_WEATHER = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+_WEATHER_NAMESPACE = {"type": "namespace", "name": "weather", "tools": [_GET_WEATHER]}
+_TOP_LEVEL_GET_WEATHER = {"type": "function", "function": {k: v for k, v in _GET_WEATHER.items() if k != "type"}}
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [{"type": "namespace", "name": "forecast", "tools": [_GET_WEATHER]}, _WEATHER_NAMESPACE],
+            ["forecast__get_weather", "weather__get_weather"],
+        ),
+        ([_TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE], ["get_weather", "weather__get_weather"]),
+        ([_WEATHER_NAMESPACE, _TOP_LEVEL_GET_WEATHER], ["weather__get_weather", "get_weather"]),
+    ],
+    ids=["namespaces_share_a_member", "top_level_first", "namespace_first"],
+)
+def test_vertex_ai_map_tools_declares_qualified_member_names_when_another_tool_declares_a_member_name(
+    tools: list[dict], declared: list[str]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == declared
+
+
+def test_vertex_ai_map_tools_declares_a_member_a_namespace_lists_twice_once_from_its_first_entry() -> None:
+    first = {**_GET_WEATHER, "description": "Current weather"}
+    repeat = {**_GET_WEATHER, "description": "Forecast"}
+    namespace = {"type": "namespace", "name": "weather", "tools": [first, repeat]}
+
+    mapped = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration["description"]) for declaration in declarations] == [
+        ("get_weather", "Current weather")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "declared"),
+    [
+        (
+            [
+                _WEATHER_NAMESPACE,
+                _TOP_LEVEL_GET_WEATHER,
+                {"type": "function", "function": {"name": "weather__get_weather", "description": "Top level"}},
+            ],
+            [("get_weather", None), ("weather__get_weather", "Top level")],
+        ),
+        (
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "mcp", "tools": [{"type": "function", "name": "ops__exec"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            [("mcp__ops__exec", None), ("exec", None), ("ops__exec", None)],
+        ),
+        (
+            [_TOP_LEVEL_GET_WEATHER, _TOP_LEVEL_GET_WEATHER, _WEATHER_NAMESPACE],
+            [("get_weather", None), ("get_weather", None), ("weather__get_weather", None)],
+        ),
+    ],
+    ids=["top_level_function_has_the_qualified_name", "namespaces_build_one_qualified_name", "client_repeats_a_function"],
+)
+def test_vertex_ai_map_tools_never_repeats_a_generated_name(
+    tools: list[dict], declared: list[tuple[str, str | None]]
+) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [(declaration["name"], declaration.get("description")) for declaration in declarations] == declared
+
+
+def test_vertex_ai_map_openai_params_qualifies_members_by_the_namespace_top_level_name() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "safe",
+        "function": {"name": "lookup"},
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["safe__lookup"]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == ["safe__lookup"]
+
+
+def test_vertex_ai_map_openai_params_declares_qualified_member_names_when_functions_repeat_a_member() -> None:
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}],
+            "functions": [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for tool in mapped["tools"] for declaration in tool["function_declarations"]]
+    assert declared == ["mcp__weather__lookup", "lookup"]
+
+
+def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
+    function = {k: v for k, v in _GET_WEATHER.items() if k != "type"}
+
+    mapped = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}, {"type": "function", "function": function}],
+        optional_params={},
+    )
+
+    assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "other_tools", "allowed_function_names"),
+    [
+        ("github", [], ["create_issue", "close_issue"]),
+        ("close_issue", [], ["close_issue"]),
+        ("github", [{"type": "function", "function": {"name": "github"}}], ["github"]),
+        (
+            "github",
+            [{"type": "function", "function": {"name": "close_issue"}}],
+            ["github__create_issue", "github__close_issue"],
+        ),
+        (
+            "close_issue",
+            [{"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]}],
+            ["github__close_issue", "gitlab__close_issue"],
+        ),
+        (
+            "github",
+            [
+                {"type": "function", "function": {"name": "close_issue"}},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["github__create_issue"],
+        ),
+        (
+            "close_issue",
+            [
+                {"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["gitlab__close_issue"],
+        ),
+        (
+            "mcp",
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {
+                    "type": "namespace",
+                    "name": "mcp",
+                    "tools": [{"type": "function", "name": "ops__exec"}, {"type": "function", "name": "status"}],
+                },
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            ["mcp__status"],
+        ),
+    ],
+    ids=[
+        "names_the_namespace",
+        "names_a_member",
+        "names_a_function_sharing_the_namespace_name",
+        "names_a_namespace_whose_member_a_function_repeats",
+        "names_a_member_two_namespaces_share",
+        "names_a_namespace_whose_generated_name_a_function_holds",
+        "names_a_member_whose_generated_name_a_function_holds",
+        "names_a_namespace_whose_generated_name_another_namespace_holds",
+    ],
+)
+def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
+    forced_name: str, other_tools: list[dict[str, object]], allowed_function_names: list[str]
+) -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [{"type": "function", "name": "create_issue"}, {"type": "function", "name": "close_issue"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace, *other_tools],
+            "tool_choice": {"type": "function", "function": {"name": forced_name}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for declaration in mapped["tools"][0]["function_declarations"]]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == allowed_function_names
+    assert set(allowed_function_names) <= set(declared)
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "tools"),
+    [
+        (
+            "weather",
+            [
+                {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "lookup"}]},
+                {"type": "function", "function": {"name": "lookup"}},
+                {"type": "function", "function": {"name": "weather__lookup"}},
+            ],
+        ),
+        (
+            "ops__exec",
+            [
+                {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "ops__exec", "tools": [{"type": "function", "name": "status"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "status"}},
+                {"type": "function", "function": {"name": "ops__exec__status"}},
+            ],
+        ),
+    ],
+    ids=["its_members_lose_to_functions", "another_namespace_generates_its_name"],
+)
+def test_vertex_ai_tool_choice_naming_a_namespace_gemini_gets_no_member_of(
+    forced_name: str, tools: list[dict[str, object]]
+) -> None:
+    params = {"tools": tools, "tool_choice": {"type": "function", "function": {"name": forced_name}}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"tool_choice '{forced_name}'"):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=False
+        )
+    dropped = VertexGeminiConfig().map_openai_params(
+        non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert "tool_choice" not in dropped
+    assert dropped["tools"][0]["function_declarations"]
 
 
 def test_vertex_ai_map_tool_with_anyof():
@@ -7878,7 +8162,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -9393,7 +9677,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9499,7 +9783,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

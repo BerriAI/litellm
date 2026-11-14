@@ -19,7 +19,7 @@ import litellm.proxy.proxy_server
 import litellm.utils
 from litellm import Router
 from litellm.proxy._types import ProxyException, TokenCountRequest
-from litellm.proxy.proxy_server import token_counter
+from litellm.proxy.proxy_server import count_request_tokens
 
 
 def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
@@ -60,7 +60,7 @@ async def test_custom_tokenizer_from_model_info_is_used(monkeypatch):
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(7)
 
-        response = await token_counter(
+        response = await count_request_tokens(
             request=TokenCountRequest(
                 model="my-embedding-model",
                 messages=[{"role": "user", "content": "Bonjour le monde"}],
@@ -92,7 +92,7 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
-        response = await token_counter(
+        response = await count_request_tokens(
             request=TokenCountRequest(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "hello"}],
@@ -133,7 +133,7 @@ async def test_custom_tokenizer_counts_a_vertex_partner_model_without_a_count_ro
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(9)
 
-        response: Final = await token_counter(
+        response: Final = await count_request_tokens(
             request=TokenCountRequest(model="vertex-glm", messages=[{"role": "user", "content": "Return exactly OK."}]),
             call_endpoint=True,
         )
@@ -151,7 +151,7 @@ async def test_contents_only_count_of_a_vertex_partner_model_without_a_count_rou
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router_with_its_own_tokenizer())
 
     with pytest.raises(ProxyException) as raised:
-        await token_counter(
+        await count_request_tokens(
             request=TokenCountRequest(
                 model="vertex-glm", contents=[{"role": "user", "parts": [{"text": "Return exactly OK."}]}]
             ),
