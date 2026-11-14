@@ -15,7 +15,13 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.custom_logger_v2.call import CallContext
-from litellm.integrations.custom_logger_v2.derivations import budget_reservation, mapping, write_budget_reservation
+from litellm.integrations.custom_logger_v2.derivations import (
+    budget_reservation,
+    claim_budget_plan,
+    mapping,
+    write_budget_reservation,
+)
+from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch, SetField
@@ -429,6 +435,28 @@ def install_native_budgets(store: SpendCounterStore, callbacks: list[object]) ->
     register_abort_error("budget_reservation_failed", _reservation_failed)
     callbacks.insert(0, logger)
     _installed.append(_Owner(store=store, budgets=budgets, logger=logger))
+
+
+async def admit_native_reservation_now(
+    identity: UserAPIKeyAuth,
+) -> dict[str, object] | None:  # mutable-ok: the shared reservation auth hands the request
+    plan: Final = claim_budget_plan(HookArgs(auth=identity))
+    reservation: Final = identity.budget_reservation
+    if plan is None or not _installed:
+        return None
+    outcome: Final = await _installed[0].logger.run_rust(
+        Hook.pre_call,
+        frozenset({Field.budget_plan}),
+        FieldView({Field.budget_plan: plan}),
+        CallContext[object](hook=Hook.pre_call, call=None, state=None),
+    )
+    if isinstance(outcome, Abort):
+        raise outcome.exception or HTTPException(status_code=outcome.status, detail=outcome.message)
+    held: Final = _reservation_write(outcome)
+    if held is None or reservation is None:
+        return None
+    write_budget_reservation(HookArgs(auth=identity), held)
+    return reservation
 
 
 def _window_reset(entry: object) -> str | None:
