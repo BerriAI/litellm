@@ -492,8 +492,8 @@ _LOOKUP_TOOL: Final = {
     "function": {
         "name": "lookup",
         "parameters": {
-            "oneOf": [
-                {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+            "anyOf": [
+                {"type": "object", "properties": {"a": {"type": "integer", "enum": [1, 2]}}, "required": ["a"]},
                 {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]},
             ]
         },
@@ -508,16 +508,16 @@ _WEATHER_TOOL: Final = {
 }
 
 
-def _declarations(tool_choice: str, extra_body: dict[str, object] | None) -> list[dict[str, object]]:
+def _declarations(model: str, tool_choice: str, extra_body: dict[str, object] | None) -> list[dict[str, object]]:
     optional_params: Final = VertexGeminiConfig().map_openai_params(
         non_default_params={"tools": [_LOOKUP_TOOL, _WEATHER_TOOL], "tool_choice": tool_choice},
         optional_params={},
-        model="gemini-2.5-flash",
+        model=model,
         drop_params=False,
     )
     body: Final = transformation.transform_request_body(
         messages=[{"role": "user", "content": "Find the record named Atlas"}],
-        model="gemini-2.5-flash",
+        model=model,
         optional_params={**optional_params, **({} if extra_body is None else {"extra_body": extra_body})},
         custom_llm_provider="gemini",
         litellm_params={},
@@ -539,12 +539,13 @@ def _declarations(tool_choice: str, extra_body: dict[str, object] | None) -> lis
     ],
     ids=["any", "validated-snake-case", "any-named-union-tool", "any-named-other-tool", "auto", "no-mode", "none"],
 )
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-4-argon"])
 def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_tool_choice_does(
-    extra_body: dict[str, object] | None, forced: bool
+    model: str, extra_body: dict[str, object] | None, forced: bool
 ) -> None:
-    lookup, weather = _declarations("auto", extra_body)
-    forced_lookup, forced_weather = _declarations("required", None)
-    free_lookup, _ = _declarations("auto", None)
+    lookup, weather = _declarations(model, "auto", extra_body)
+    forced_lookup, forced_weather = _declarations(model, "required", None)
+    free_lookup, _ = _declarations(model, "auto", None)
 
     assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
     assert lookup == (forced_lookup if forced else free_lookup)

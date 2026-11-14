@@ -996,12 +996,12 @@ def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
             return False
 
 
-def _vertex_parameters(json_schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+def _vertex_parameters(json_schema: Mapping[str, JsonValue], send_integer_enums: bool) -> Mapping[str, JsonValue]:
     stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
-    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped))
+    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped, send_integer_enums=send_integer_enums))
 
 
-def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue) -> JsonValue:
+def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
     if not isinstance(declaration, dict):
         return declaration
     json_schema: Final = declaration.get("parametersJsonSchema")
@@ -1010,20 +1010,31 @@ def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue)
     if not _forces(function_calling_config, declaration.get("name")):
         return declaration
     kept: Final = {key: value for key, value in declaration.items() if key != "parametersJsonSchema"}
-    return {**kept, "parameters": dict(_vertex_parameters(json_schema))}
+    return {**kept, "parameters": dict(_vertex_parameters(json_schema, send_integer_enums))}
 
 
-def _tool_for(tool: JsonValue, function_calling_config: JsonValue) -> JsonValue:
+def _tool_for(tool: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
     declarations: Final = tool.get("function_declarations") if isinstance(tool, dict) else None
     if not isinstance(tool, dict) or not isinstance(declarations, list):
         return tool
-    return {**tool, "function_declarations": [_declaration_for(item, function_calling_config) for item in declarations]}
+    return {
+        **tool,
+        "function_declarations": [
+            _declaration_for(item, function_calling_config, send_integer_enums) for item in declarations
+        ],
+    }
 
 
-def with_forced_bare_root_unions_on_parameters(tools: JsonValue, tool_config: JsonValue) -> JsonValue:
+def with_forced_bare_root_unions_on_parameters(
+    tools: JsonValue, tool_config: JsonValue, send_integer_enums: bool
+) -> JsonValue:
     match tool_config:
         case {"functionCallingConfig": function_calling_config} | {"function_calling_config": function_calling_config}:
-            return [_tool_for(tool, function_calling_config) for tool in tools] if isinstance(tools, list) else tools
+            return (
+                [_tool_for(tool, function_calling_config, send_integer_enums) for tool in tools]
+                if isinstance(tools, list)
+                else tools
+            )
         case _:
             return tools
 
