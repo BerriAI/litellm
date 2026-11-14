@@ -5,6 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -3041,18 +3042,22 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
+        member_chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
-        flattened_namespace_names: Final = frozenset(
-            chain.from_iterable(LiteLLMCompletionResponsesConfig.member_chat_names(tools).items())
-        )
+        flattened_namespace_names: Final = frozenset(chain.from_iterable(member_chat_names.items()))
         conflicting_tool_names: Final = top_level_function_names & flattened_namespace_names
         if conflicting_tool_names:
             raise ValueError(
                 "Top-level function names conflict with flattened namespace tools: "
                 + ", ".join(sorted(conflicting_tool_names))
             )
+        shared_chat_names: Final = sorted(
+            chat_name for chat_name, count in Counter(member_chat_names.values()).items() if count > 1
+        )
+        if shared_chat_names:
+            raise ValueError("Flattened namespace tools share a name: " + ", ".join(shared_chat_names))
 
     @staticmethod
     def _responses_tool_to_chat_form(tool: Mapping[str, object]) -> ResponsesToolChatForm:

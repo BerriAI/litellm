@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
@@ -1159,6 +1160,28 @@ class TestLiteLLMCompletionResponsesConfig:
                         "type": "namespace",
                         "name": namespace,
                         "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}}],
+                    },
+                ]
+            )
+
+    def test_transform_tools_rejects_a_namespace_member_named_like_another_members_shortened_name(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = "_get_document_tool_schemas"
+        shortened: Final = chat_member_name(namespace, long_member)
+        with pytest.raises(ValueError, match=f"Flattened namespace tools share a name: {shortened}"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [
+                            {"type": "function", "name": long_member, "parameters": {"type": "object"}},
+                            {
+                                "type": "function",
+                                "name": shortened.removeprefix(f"{namespace}__"),
+                                "parameters": {"type": "object"},
+                            },
+                        ],
                     },
                 ]
             )
