@@ -29,6 +29,7 @@ from litellm.integrations.custom_logger_v2.rust import (
     verdict,
 )
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+from litellm.litellm_core_utils.total_deadline import total_timeout_held
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -321,6 +322,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
             )
         )
 
+    @total_timeout_held()
     async def _pre_call(
         self,
         data: dict[str, object],  # mutable-ok: the output cap is written into the request body

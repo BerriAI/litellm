@@ -5726,6 +5726,59 @@ async def _admit(handler, auth, data=None):
     )
 
 
+def test_a_total_timeout_never_interrupts_the_pre_call_so_its_counters_land_and_the_failure_path_refunds_them() -> None:
+    async def tag_limits_outlasting_the_budget(tags: Sequence[str]) -> Mapping[str, TagRateLimit]:
+        await asyncio.sleep(120)
+        return {}
+
+    api_key: Final = hash_token("sk-total-timeout-pre-call")
+    requests_key: Final = _counter("api_key", api_key, "requests")
+    tokens_key: Final = _counter("api_key", api_key, "tokens")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, rpm_limit=50, tpm_limit=100000)
+    data: Final = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 10,
+        "metadata": {"tags": ["slow-tag"]},
+    }
+
+    async def admit_under_a_total_timeout() -> tuple[bool, int, object, object, object, object]:
+        handler: Final = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            tag_rate_limit_resolver=tag_limits_outlasting_the_budget,
+        )
+        expired = False
+        try:
+            async with total_deadline(60, from_body=False):
+                await _admit(handler, auth, data)
+                await asyncio.sleep(3600)
+        except TotalTimeoutExpired as timeout:
+            expired = True
+            stash = get_request_stash()
+            reserved = 0 if stash is None else stash.reserved_tokens
+            admitted = (_local(handler, requests_key), _local(handler, tokens_key))
+            await handler.async_post_call_failure_hook(
+                request_data=data, original_exception=timeout, user_api_key_dict=auth
+            )
+            return expired, reserved, *admitted, _local(handler, requests_key), _local(handler, tokens_key)
+        return expired, 0, None, None, None, None
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        expired, reserved, admitted_requests, admitted_tokens, settled_requests, settled_tokens = (
+            loop.run_until_complete(admit_under_a_total_timeout())
+        )
+    finally:
+        loop.close()
+
+    assert expired
+    assert reserved > 0
+    assert admitted_requests == 1
+    assert admitted_tokens == reserved
+    assert settled_requests == 1
+    assert settled_tokens == 0
+
+
 def _handler_with_unreachable_redis(fail_closed: bool | None = None):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
