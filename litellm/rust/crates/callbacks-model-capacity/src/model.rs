@@ -391,7 +391,11 @@ impl UsageTokens {
     }
 
     pub fn failed(usage: Option<&Usage>) -> Option<Self> {
-        modeled(usage?.combined.as_ref()).map(Self::of)
+        let usage = usage?;
+        modeled(usage.response.as_ref())
+            .or_else(|| modeled(usage.combined.as_ref()))
+            .or(usage.socket_session.as_ref())
+            .map(Self::of)
     }
 
     pub fn settled(usage: Option<&Self>, rate_limit_type: TokenRateLimitType) -> i64 {
@@ -483,12 +487,15 @@ mod tests {
     }
 
     #[rstest]
-    fn a_failed_attempt_settles_only_the_combined_usage() {
+    fn a_failed_attempt_settles_the_usage_its_response_or_combined_usage_recorded() {
         let members = json!({
             "response": {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
             "logged": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         });
-        assert_eq!(UsageTokens::failed(Some(&usage(members))), None);
+        assert_eq!(UsageTokens::failed(Some(&usage(members))), tokens(7, 5, 12));
+        let logged =
+            json!({"logged": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}});
+        assert_eq!(UsageTokens::failed(Some(&usage(logged))), None);
         let combined =
             json!({"combined": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}});
         assert_eq!(UsageTokens::failed(Some(&usage(combined))), tokens(2, 3, 5));
