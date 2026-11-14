@@ -7,10 +7,16 @@ from pydantic import TypeAdapter
 from litellm.images.utils import image_to_data_url
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
+from litellm.llms.minimax.common_utils import image_params_without_stream
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
 _IMAGES: Final = TypeAdapter(tuple[object, ...])
+_NUMERIC_FORM_PARAMS: Final = frozenset({"output_compression"})
+
+
+def _form_number(key: str, value: object) -> object:
+    return int(value) if key in _NUMERIC_FORM_PARAMS and isinstance(value, str) and value.isdigit() else value
 
 
 class MinimaxImageEditConfig(OpenAIImageEditConfig):
@@ -64,9 +70,10 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         headers: Mapping[str, str],
     ) -> tuple[dict[str, object], RequestFiles]:  # mutable-ok: mirrors override contract
         images: Final = _IMAGES.validate_python(image) if isinstance(image, list) else (image,)
+        body_params: Final = image_params_without_stream(image_edit_optional_request_params, litellm_params.drop_params)
         return {
             "model": model,
             "images": [{"image_url": image_to_data_url(item)} for item in images if item is not None],
-            **image_edit_optional_request_params,
+            **{key: _form_number(key, value) for key, value in body_params.items()},
             **({} if prompt is None else {"prompt": prompt}),
         }, []

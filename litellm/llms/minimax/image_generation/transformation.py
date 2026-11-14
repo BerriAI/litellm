@@ -1,8 +1,11 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
+from litellm.llms.minimax.common_utils import image_params_without_stream
 from litellm.llms.openai.image_generation.gpt_transformation import (
     GPTImageGenerationConfig,
 )
@@ -10,6 +13,9 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
+from litellm.utils import EXTRA_BODY_ROUTING_KEYS
+
+_EXTRA_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
@@ -65,4 +71,15 @@ class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, str],
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return {"model": model, "prompt": prompt, **optional_params}
+        extra_body: Final = optional_params.get("extra_body")
+        extra_fields: Final[Mapping[str, object]] = (
+            _EXTRA_BODY.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}
+        )
+        body_params: Final = image_params_without_stream(
+            {
+                **{key: value for key, value in optional_params.items() if key != "extra_body"},
+                **{key: value for key, value in extra_fields.items() if key not in EXTRA_BODY_ROUTING_KEYS},
+            },
+            litellm_params.get("drop_params"),
+        )
+        return {"model": model, "prompt": prompt, **body_params}
