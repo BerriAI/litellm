@@ -937,7 +937,7 @@ def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_p
 
 
 _IMAGE_TEXT: Final = "Is the screen cracked?"
-_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_PNG_DATA_URL: Final = "data:image/png;base64,iVBORw0KGgo="
 _IMAGE_ENDPOINTS: Final = ("/v1/decisions", "/v1/systemone")
 _IMAGE_REQUEST_BODIES: Final[tuple[Mapping[str, object], ...]] = (
     {
@@ -962,6 +962,8 @@ _IMAGE_REQUEST_BODIES: Final[tuple[Mapping[str, object], ...]] = (
 )
 _IMAGE_REQUESTS: Final = tuple(zip(_IMAGE_ENDPOINTS, _IMAGE_REQUEST_BODIES, strict=True))
 _IMAGE_REQUEST_IDS: Final = ("openai_format", "systemone_format")
+_TEXT_ONLY_DEPLOYMENT: Final[Mapping[str, object]] = {"model": "nace/drex-v2.0", "api_key": "test-key"}
+_TEXT_ONLY_URL: Final = "https://console.nace.ai/v1/systemone"
 
 
 def _route_decider_to(monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object]) -> None:
@@ -1017,7 +1019,8 @@ def test_images_to_a_text_only_deployment_are_refused_without_drop_params(
     param: str,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    _route_decider_to(monkeypatch, _TEXT_ONLY_DEPLOYMENT)
+    upstream: Final = respx_mock.post(_TEXT_ONLY_URL).respond(json=_RESPONSE)
 
     response: Final = client.post(endpoint, json=request_body)
 
@@ -1035,16 +1038,14 @@ def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
     request_body: Mapping[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    _route_decider_to(
-        monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": True}
-    )
-    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    _route_decider_to(monkeypatch, {**_TEXT_ONLY_DEPLOYMENT, "drop_params": True})
+    upstream: Final = respx_mock.post(_TEXT_ONLY_URL).respond(json=_RESPONSE)
 
     response: Final = client.post(endpoint, json=request_body)
 
     assert response.status_code == 200, response.text
     assert json.loads(upstream.calls[0].request.content) == {
-        "model": "pplx-decider-v1-27b",
+        "model": "drex-v2.0",
         "state": _IMAGE_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
@@ -1104,7 +1105,12 @@ def test_malformed_assets_for_a_deployment_without_asset_support_are_dropped_onl
 
     response: Final = client.post(
         "/v1/systemone",
-        json={**_IMAGE_REQUEST_BODIES[1], "assets": {"photo-1": {"type": "image", "part": "file1"}}},
+        json={
+            "model": "decider",
+            "state": _IMAGE_TEXT,
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            "assets": {"photo-1": {"type": "image", "part": "file1"}},
+        },
     )
 
     if not deployment_drops_params:

@@ -321,7 +321,7 @@ def test_an_openai_decision_model_gets_system_one_images_as_input_image_parts(ga
 
 
 @pytest.mark.parametrize("route", ("/v1/systemone", "/v1/decisions"))
-def test_more_images_than_clef_takes_are_refused_before_any_download_or_upstream_call(
+def test_more_images_than_clef_takes_are_refused_before_any_download_or_trimmed_under_drop_params(
     gateway: Gateway, route: Route
 ) -> None:
     marker: Final = uuid.uuid4().hex
@@ -329,12 +329,15 @@ def test_more_images_than_clef_takes_are_refused_before_any_download_or_upstream
         strict: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
         dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
         remote: Final = [f"{wire.url}/image.png?n={index}&id=marker-{marker}" for index in range(5)]
-        for model in (strict, dropping):
-            refused = _decide(gateway, route, model, marker, remote)
-            assert refused.status_code == 400, refused.text
-            assert "at most 4 images per request, got 5" in refused.text, refused.text
+        refused: Final = _decide(gateway, route, strict, marker, remote)
+        assert refused.status_code == 400, refused.text
+        assert "at most 4 images per request, got 5" in refused.text, refused.text
         assert wire.drain() == ()
         four: Final = [_PNG_DATA_URL, _JPEG_DATA_URL, _PNG_DATA_URL, _JPEG_DATA_URL]
+        trimmed: Final = _decide(gateway, route, dropping, marker, [*four, _PNG_DATA_URL])
+        assert trimmed.status_code == 200, trimmed.text
+        (dropped_request,) = wire.drain()
+        assert _upstream_body(dropped_request) == _expected_upstream_body("clef", _state(marker), four)
         accepted: Final = _decide(gateway, route, strict, marker, four)
         assert accepted.status_code == 200, accepted.text
         (request,) = wire.drain()
@@ -500,41 +503,55 @@ def test_an_image_clef_refuses_does_not_count_toward_its_limit_when_the_deployme
 _MIB: Final = 1024 * 1024
 
 
+_PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_base64(decoded_bytes: int) -> str:
+    return base64.b64encode(_PNG_SIGNATURE.ljust(decoded_bytes, b"\0")).decode()
+
+
 def _png_data_url(decoded_bytes: int) -> str:
-    return f"data:image/png;base64,{base64.b64encode(bytes(decoded_bytes)).decode()}"
+    return f"data:image/png;base64,{_png_base64(decoded_bytes)}"
 
 
 def _png_object(decoded_bytes: int) -> dict[str, JsonValue]:
-    return {"content_type": "image/png", "base64": base64.b64encode(bytes(decoded_bytes)).decode()}
+    return {"content_type": "image/png", "base64": _png_base64(decoded_bytes)}
 
 
-_OVERSIZED: Final[tuple[tuple[str, Route, tuple[JsonValue, ...], str], ...]] = (
-    ("one_over_4mib", "/v1/systemone", (_png_object(4 * _MIB + 1),), "got one of 4,194,305 bytes"),
-    ("one_over_4mib", "/v1/decisions", (_png_data_url(4 * _MIB + 1),), "got one of 4,194,305 bytes"),
+_OVERSIZED: Final[tuple[tuple[str, Route, tuple[JsonValue, ...], int, str], ...]] = (
+    ("one_over_4mib", "/v1/systemone", (_png_object(4 * _MIB + 1), _PNG_DATA_URL), 0, "got one of 4,194,305 bytes"),
+    ("one_over_4mib", "/v1/decisions", (_PNG_DATA_URL, _png_data_url(4 * _MIB + 1)), 1, "got one of 4,194,305 bytes"),
     (
         "total_over_8mib",
         "/v1/systemone",
-        (_png_data_url(4 * _MIB), _png_object(4 * _MIB), _png_data_url(1)),
-        "got 8,388,609 bytes",
+        (_png_data_url(4 * _MIB), _png_object(4 * _MIB), _png_data_url(8)),
+        2,
+        "got 8,388,616 bytes",
     ),
 )
 
 
 @pytest.mark.parametrize(
-    ("label", "route", "images", "refusal"), _OVERSIZED, ids=[f"{label}{route}" for label, route, _, _ in _OVERSIZED]
+    ("label", "route", "images", "first_dropped", "refusal"),
+    _OVERSIZED,
+    ids=[f"{label}{route}" for label, route, _, _, _ in _OVERSIZED],
 )
-def test_images_over_clefs_size_limits_are_refused_before_the_upstream_call(
-    gateway: Gateway, label: str, route: Route, images: tuple[JsonValue, ...], refusal: str
+def test_images_over_clefs_size_limits_are_refused_before_the_upstream_call_or_dropped_under_drop_params(
+    gateway: Gateway, label: str, route: Route, images: tuple[JsonValue, ...], first_dropped: int, refusal: str
 ) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
         strict: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
         dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
-        for model in (strict, dropping):
-            refused = _decide(gateway, route, model, marker, images)
-            assert refused.status_code == 400, (label, refused.text[:500])
-            assert refusal in refused.text, (label, refused.text[:500])
+        refused: Final = _decide(gateway, route, strict, marker, images)
+        assert refused.status_code == 400, (label, refused.text[:500])
+        assert refusal in refused.text, (label, refused.text[:500])
         assert wire.drain() == (), label
+        kept: Final = (*images[:first_dropped], *images[first_dropped + 1 :])
+        trimmed: Final = _decide(gateway, route, dropping, marker, images)
+        assert trimmed.status_code == 200, (label, trimmed.text[:500])
+        (dropped_request,) = wire.drain()
+        assert _upstream_body(dropped_request) == _expected_upstream_body("clef", _state(marker), kept), label
         at_limits: Final[list[JsonValue]] = [_png_data_url(4 * _MIB), _png_object(4 * _MIB)]
         accepted: Final = _decide(gateway, "/v1/systemone", strict, marker, at_limits)
         assert accepted.status_code == 200, accepted.text[:500]
@@ -848,6 +865,16 @@ def test_a_missing_remote_image_is_refused_without_a_call_to_clef(allowlisted: G
 
 
 @pytest.mark.timeout(_OWNED_TIMEOUT)
+def test_remote_images_past_clefs_count_are_never_downloaded_under_drop_params(
+    allowlisted: Gateway, wire: Wire
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    images: Final = [f"{wire.url}/image.png?n={index}&id=marker-{marker}" for index in range(6)]
+    response: Final = _decide(allowlisted, "/v1/systemone", _ALLOWLISTED_MODEL, marker, images, drop_params=True)
+    assert response.status_code == 200, response.text
+    assert sorted(method for method, _ in _routes(wire.drain())) == ["GET"] * 4 + ["POST"]
+
+
 def test_a_remote_page_that_is_not_an_image_is_refused_without_a_call_to_clef(allowlisted: Gateway, wire: Wire) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = _decide(
