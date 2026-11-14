@@ -743,7 +743,10 @@ def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_re
     }
 
 
-ROUTED_MODELS: Final = (("gpt-realtime", "openai/gpt-realtime"),)
+ROUTED_MODELS: Final = (
+    ("gpt-realtime", "openai/gpt-realtime"),
+    ("gpt-image-1", "openai/gpt-image-1"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -757,6 +760,9 @@ FAMILIES: Final[Mapping[str, Family]] = {
     "batches": Family(*REFUSED_ROUTES["batches"], call_type="acreate_batch"),
     "realtime_client_secrets": Family(
         "/v1/realtime/client_secrets", {"model": "gpt-realtime"}, call_type="acreate_realtime_client_secret"
+    ),
+    "images": Family(
+        "/v1/images/generations", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_generation"
     ),
 }
 

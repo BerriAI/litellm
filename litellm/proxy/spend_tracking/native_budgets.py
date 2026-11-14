@@ -171,6 +171,8 @@ _NATIVE_CALL_TYPES: Final = frozenset(
         CallTypes.aresponses,
         CallTypes.create_batch,
         CallTypes.acreate_batch,
+        CallTypes.image_generation,
+        CallTypes.aimage_generation,
     }
 )
 _NATIVE_ROUTES: Final = frozenset(
