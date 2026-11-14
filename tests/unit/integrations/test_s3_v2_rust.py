@@ -30,6 +30,7 @@ from litellm.integrations import s3_v3
 from litellm.integrations.s3_v3 import S3LoggerV3
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.rust_bridge import _native
+from litellm.types.integrations.s3_v2 import S3LoggerSettings
 from litellm.types.integrations.custom_logger_v2 import Outcome
 
 pytestmark = pytest.mark.skipif(not hasattr(_native, "NativeS3Log"), reason="the built _native has no NativeS3Log")
@@ -2584,3 +2585,238 @@ async def test_async_upload_recovers_from_transient_5xx_through_production_http_
     _assert_backoff_gaps(requests)
     failure.assert_not_called()
     assert logger.sink.queued_keys() == []
+
+
+_CONSTRUCTOR_BASE: Final[S3LoggerSettings] = {
+    "s3_bucket_name": "test-bucket",
+    "s3_aws_access_key_id": "test-key",
+    "s3_aws_secret_access_key": "test-secret",
+    "s3_region_name": "us-east-1",
+}
+
+
+def _constructed(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    settings: S3LoggerSettings,
+    override: Mapping[str, object] | None = None,
+    *,
+    configured: Mapping[str, object] | None = None,
+    periodic: bool = False,
+) -> S3LoggerV3:
+    monkeypatch.setattr(litellm, "s3_callback_params", configured)
+    logger: Final = S3LoggerV3(override, **(_CONSTRUCTOR_BASE | {"s3_endpoint_url": bucket.url} | settings))
+    if not periodic:
+        _ = logger.periodic_flush_task.cancel()
+    return logger
+
+
+@pytest.mark.asyncio
+async def test_constructor_keywords_build_a_logger_that_uploads_under_them(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_path": "from-constructor"})
+
+    await _upload(logger, _payload("ctor"))
+
+    assert isinstance(logger, S3LoggerV3)
+    assert logger.s3_path == "from-constructor"
+    assert [put.path for put in bucket.puts()] == [f"/test-bucket/from-constructor/{_key('ctor')}"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "override", "expected"),
+    [
+        pytest.param(None, {"s3_path": "configured"}, "configured", id="override-wins"),
+        pytest.param({"s3_path": "global"}, None, "global", id="global-wins"),
+        pytest.param({"s3_path": "global"}, {}, "constructor", id="empty-override-is-opt-in"),
+        pytest.param(None, {"s3_path": ""}, "constructor", id="blank-falls-back"),
+    ],
+)
+async def test_callback_params_text_settings_win_over_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    configured: Mapping[str, object] | None,
+    override: Mapping[str, object] | None,
+    expected: str,
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_path": "constructor"}, override, configured=configured)
+
+    await _upload(logger, _payload("text"))
+
+    assert [put.path for put in bucket.puts()] == [f"/test-bucket/{expected}/{_key('text')}"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("constructor", "configured", "expected"),
+    [
+        pytest.param("hour", "day", "hour", id="constructor-wins"),
+        pytest.param(None, "hour", "hour", id="configured-when-constructor-unset"),
+    ],
+)
+async def test_constructor_partition_granularity_wins_over_callback_params(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, constructor: str | None, configured: str, expected: str
+) -> None:
+    logger: Final = _constructed(
+        monkeypatch, bucket, {"s3_partition_granularity": constructor}, {"s3_partition_granularity": configured}
+    )
+
+    assert logger.resolve_partition_granularity() == expected
+
+
+@pytest.mark.asyncio
+async def test_constructor_prompts_only_wins_over_callback_params(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    monkeypatch.delenv("S3_LOG_PROMPTS_ONLY", raising=False)
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_log_prompts_only": True}, {"s3_log_prompts_only": False})
+
+    await _upload(logger, _payload("prompts", response={"choices": [{"message": {"content": "secret answer"}}]}))
+
+    (put,) = bucket.puts()
+    assert b"secret answer" not in put.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("constructor", "override", "kept"),
+    [
+        pytest.param(7, {"s3_max_queue_size": 4}, 4, id="callback-params-win"),
+        pytest.param(4, {"s3_max_queue_size": "abc"}, 4, id="invalid-callback-params-fall-back-to-constructor"),
+        pytest.param(4, {}, 4, id="constructor-only"),
+    ],
+)
+async def test_queue_size_resolves_callback_params_then_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    constructor: int,
+    override: Mapping[str, object],
+    kept: int,
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_max_queue_size": constructor}, override)
+    bucket.reply("/test-bucket/", _SLOW_DOWN)
+    await _log_all(logger, [_payload("first"), _payload("second")])
+
+    with _failures():
+        await asyncio.gather(
+            logger.flush_queue(),
+            _log_once_a_put_arrives(logger, bucket, [_payload(f"late-{index}") for index in range(3)]),
+        )
+
+    assert len(logger.sink.queued_keys()) == kept
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("constructor", "override", "still_queued"),
+    [
+        pytest.param(0, {}, True, id="constructor-zero-disables-the-budget"),
+        pytest.param(None, {}, True, id="constructor-none-disables-the-budget"),
+        pytest.param(1, {"s3_max_retry_age_seconds": "abc"}, False, id="invalid-callback-params-fall-back"),
+        pytest.param(3600, {"s3_max_retry_age_seconds": 1}, False, id="callback-params-win"),
+        pytest.param(1, {"s3_max_retry_age_seconds": ""}, False, id="blank-callback-params-fall-back"),
+    ],
+)
+async def test_retry_age_resolves_callback_params_then_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    constructor: int | None,
+    override: Mapping[str, object],
+    still_queued: bool,
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_max_retry_age_seconds": constructor}, override)
+    bucket.reply("_poison.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload("poison"), _payload("good")])
+
+    with _failures():
+        await logger.flush_queue()
+        await asyncio.sleep(1.1)
+        await log_payload(logger, _payload("good-2"), START)
+        await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == ([_key("poison")] if still_queued else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("constructor", "override", "dropped"),
+    [
+        pytest.param(False, {"s3_drop_on_terminal_error": True}, True, id="callback-params-win"),
+        pytest.param(False, {}, False, id="constructor-opts-out"),
+        pytest.param(False, {"s3_drop_on_terminal_error": "banana"}, True, id="invalid-callback-params-drop"),
+    ],
+)
+async def test_drop_on_terminal_error_resolves_callback_params_then_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    constructor: bool,
+    override: Mapping[str, object],
+    dropped: bool,
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_drop_on_terminal_error": constructor}, override)
+    bucket.reply("_elem-1.json", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(5)])
+
+    with _failures():
+        await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == ([] if dropped else [_key("elem-1")])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [None, ""])
+async def test_empty_callback_params_concurrency_falls_back_to_constructor_value(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, empty: object
+) -> None:
+    logger: Final = _constructed(
+        monkeypatch, bucket, {"s3_max_concurrent_uploads": 4}, {"s3_max_concurrent_uploads": empty}
+    )
+
+    assert await _peak_width(logger, bucket, 12) == 4
+
+
+@pytest.mark.asyncio
+async def test_callback_params_concurrency_wins_over_constructor(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _constructed(
+        monkeypatch, bucket, {"s3_max_concurrent_uploads": 4}, {"s3_max_concurrent_uploads": 2}
+    )
+
+    assert await _peak_width(logger, bucket, 12) == 2
+
+
+@pytest.mark.asyncio
+async def test_constructor_batch_size_flushes_audit_logs_once_the_queue_reaches_it(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_batch_size": 2})
+
+    await logger.async_log_audit_log_event({"id": "audit-1"})
+
+    assert len(logger.sink.queued_keys()) == 1
+    assert bucket.puts() == []
+
+    await logger.async_log_audit_log_event({"id": "audit-2"})
+
+    assert logger.sink.queued_keys() == []
+    assert len(bucket.puts()) == 2
+
+
+@pytest.mark.asyncio
+async def test_constructor_flush_interval_drives_the_periodic_flush(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _constructed(monkeypatch, bucket, {"s3_flush_interval": 1}, periodic=True)
+    try:
+        await log_payload(logger, _payload("tick"), START)
+        for _ in range(100):
+            if bucket.puts():
+                break
+            await asyncio.sleep(0.05)
+
+        assert [put.path for put in bucket.puts()] == [f"/test-bucket/{_key('tick')}"]
+    finally:
+        _ = logger.periodic_flush_task.cancel()

@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable, Collection, Mapping
 from functools import cache
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,6 +17,7 @@ from litellm.constants import (
     S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS,
 )
 from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.derivations import (
@@ -30,10 +31,11 @@ from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
+from litellm.integrations.s3 import resolve_s3_max_queue_size, resolve_s3_max_retry_age_seconds
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.llms.bedrock.web_identity_session_policy import S3_LOGGING_SESSION_POLICY, session_policy_document
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.integrations.s3_v2 import S3PartitionGranularity
+from litellm.types.integrations.s3_v2 import S3LoggerSettings, S3PartitionGranularity
 from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -42,6 +44,7 @@ if TYPE_CHECKING:
 NATIVE_S3_V2_FLAG: Final = "LITELLM_NATIVE_S3_V2"
 CALLBACK_NAME: Final = "s3_v2"
 _WEB_IDENTITY_TOKEN_MIN_LENGTH: Final = 4
+_DEFAULT_MAX_RETRY_AGE_SECONDS: Final = 3600
 
 
 @cache
@@ -99,9 +102,9 @@ def _resolved_params(params_source: Mapping[str, object] | None) -> dict[str, ob
     }
 
 
-def _constants() -> Mapping[str, object]:
+def _constants(batch_size: int | None = DEFAULT_S3_BATCH_SIZE) -> Mapping[str, object]:
     return {
-        "batch_size": DEFAULT_S3_BATCH_SIZE or litellm.DEFAULT_BATCH_SIZE,
+        "batch_size": batch_size or litellm.DEFAULT_BATCH_SIZE,
         "max_concurrent_uploads": DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         "max_adaptive_concurrency": DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY,
         "upload_attempt_timeout_seconds": S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS,
@@ -111,8 +114,90 @@ def _constants() -> Mapping[str, object]:
     }
 
 
-def _flush_interval() -> float:
-    return DEFAULT_S3_FLUSH_INTERVAL_SECONDS or litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
+def _flush_interval(flush_interval: float | None = DEFAULT_S3_FLUSH_INTERVAL_SECONDS) -> float:
+    return flush_interval or litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
+
+
+_CONFIGURED_FIRST: Final = frozenset(
+    {
+        "s3_bucket_name",
+        "s3_path",
+        "s3_region_name",
+        "s3_api_version",
+        "s3_endpoint_url",
+        "s3_aws_access_key_id",
+        "s3_aws_secret_access_key",
+        "s3_aws_session_token",
+        "s3_aws_session_name",
+        "s3_aws_profile_name",
+        "s3_aws_role_name",
+        "s3_aws_web_identity_token",
+        "s3_aws_sts_endpoint",
+        "s3_config",
+        "s3_server_side_encryption",
+        "s3_sse_kms_key_id",
+    }
+)
+_CONSTRUCTOR_ENABLES: Final = frozenset(
+    {
+        "s3_use_team_prefix",
+        "s3_strip_base64_files",
+        "s3_use_key_prefix",
+        "s3_use_virtual_hosted_style",
+        "s3_adaptive_concurrency",
+        "s3_batch_file_upload",
+    }
+)
+_CONFIGURED_UNLESS_NONE: Final = frozenset({"s3_use_ssl", "s3_verify", "s3_drop_on_terminal_error"})
+_CONSTRUCTOR_UNLESS_NONE: Final = frozenset({"s3_log_prompts_only", "s3_partition_granularity"})
+_CONFIGURED_UNLESS_BLANK: Final = frozenset({"s3_max_concurrent_uploads", "s3_max_adaptive_concurrency"})
+_CONSTRUCTOR_DEFAULTS: Final[Mapping[str, object]] = {
+    "s3_use_ssl": True,
+    "s3_drop_on_terminal_error": True,
+    "s3_max_concurrent_uploads": DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
+    "s3_max_retry_age_seconds": _DEFAULT_MAX_RETRY_AGE_SECONDS,
+    "s3_flush_interval": DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+    "s3_batch_size": DEFAULT_S3_BATCH_SIZE,
+}
+
+
+def _blank(value: object) -> bool:
+    return value is None or value == ""
+
+
+def _constructor_wins(key: str, configured: object, value: object) -> bool:
+    return (
+        (key in _CONFIGURED_FIRST and not configured)
+        or (key in _CONFIGURED_UNLESS_NONE and configured is None)
+        or (key in _CONFIGURED_UNLESS_BLANK and _blank(configured))
+        or (key in _CONSTRUCTOR_UNLESS_NONE and value is not None)
+    )
+
+
+def _with_constructor_value(params: dict[str, object], key: str, value: object) -> None:  # mutable-ok: built here
+    configured: Final = params.get(key)
+    if _constructor_wins(key, configured, value):
+        params[key] = value
+    elif key in _CONSTRUCTOR_ENABLES and value:
+        params[key] = True
+    elif key == "s3_max_queue_size" and value is not None:
+        params[key] = resolve_s3_max_queue_size(
+            configured, resolve_s3_max_queue_size(value, CustomBatchLogger.DEFAULT_MAX_QUEUE_SIZE)
+        )
+    elif key == "s3_max_retry_age_seconds":
+        fallback: Final = resolve_s3_max_retry_age_seconds(value, _DEFAULT_MAX_RETRY_AGE_SECONDS)
+        resolved: Final = fallback if _blank(configured) else resolve_s3_max_retry_age_seconds(configured, fallback)
+        params[key] = 0 if resolved is None else resolved
+
+
+def _constructed_params(
+    params_source: Mapping[str, object] | None, settings: S3LoggerSettings
+) -> dict[str, object]:  # mutable-ok: handed to Rust
+    params: Final = _resolved_params(params_source)
+    for key, value in settings.items():
+        if value != _CONSTRUCTOR_DEFAULTS.get(key, False if key in _CONSTRUCTOR_ENABLES else None):
+            _with_constructor_value(params, key, value)
+    return params
 
 
 class _Base64Stripper(CustomLogger):
@@ -199,6 +284,20 @@ class S3LoggerV3(RustLogger):
     s3_host: ClassVar[_Host]
     periodic_flush_task: ClassVar["asyncio.Task[None]"]
 
+    def __new__(
+        cls,
+        s3_callback_params_override: Mapping[str, object] | None = None,
+        **settings: Unpack[S3LoggerSettings],  # kwargs-ok: the S3Logger constructor keywords
+    ) -> "S3LoggerV3":
+        return _native_logger(s3_callback_params_override, settings)
+
+    def __init__(
+        self,
+        s3_callback_params_override: Mapping[str, object] | None = None,
+        **settings: Unpack[S3LoggerSettings],  # kwargs-ok: the S3Logger constructor keywords
+    ) -> None:
+        return None
+
     async def run_rust(
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
@@ -277,6 +376,27 @@ class S3LoggerV3(RustLogger):
 S3_V2_LOGGER_TYPES: Final = (S3Logger, S3LoggerV3)
 
 
+def _native_logger(params_source: Mapping[str, object] | None, settings: S3LoggerSettings) -> S3LoggerV3:
+    from litellm.rust_bridge._native import NativeS3Log
+
+    host: Final = _Host()
+    sink: Final = NativeS3Log(
+        _constructed_params(params_source, settings),
+        _constants(settings.get("s3_batch_size", DEFAULT_S3_BATCH_SIZE)),
+        host,
+    )
+    periodic: Final = asyncio.create_task(
+        _periodic_flush(sink, _flush_interval(settings.get("s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS)))
+    )
+    generated: Final = type(rust_logger(sink.callback()))
+    cls: Final = type(
+        S3Logger.__name__, (S3LoggerV3, generated), {"sink": sink, "s3_host": host, "periodic_flush_task": periodic}
+    )
+    logger: Final[S3LoggerV3] = object.__new__(cls)
+    RustLogger.__init__(logger, sink.callback(), {Field.deprecated_kwargs: lambda _kwargs: None})
+    return logger
+
+
 def new_s3_v2_logger(s3_callback_params_override: Mapping[str, object] | None = None) -> S3Logger | S3LoggerV3:
     if not native_s3_v2_enabled():
         return (
@@ -284,19 +404,7 @@ def new_s3_v2_logger(s3_callback_params_override: Mapping[str, object] | None = 
             if s3_callback_params_override is None
             else S3Logger(s3_callback_params_override=dict(s3_callback_params_override))
         )
-    from litellm.rust_bridge._native import NativeS3Log
-
-    host: Final = _Host()
-    sink: Final = NativeS3Log(_resolved_params(s3_callback_params_override), _constants(), host)
-    periodic: Final = asyncio.create_task(_periodic_flush(sink, _flush_interval()))
-    generated: Final = type(rust_logger(sink.callback()))
-    cls: Final = type(
-        S3Logger.__name__, (S3LoggerV3, generated), {"sink": sink, "s3_host": host, "periodic_flush_task": periodic}
-    )
-    return cls(
-        sink.callback(),
-        {Field.deprecated_kwargs: lambda _kwargs: None},
-    )
+    return _native_logger(s3_callback_params_override, {})
 
 
 __all__ = [
