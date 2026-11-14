@@ -1681,6 +1681,26 @@ def test_azure_v1_api_uses_openai_client(api_version):
         ), f"base_url should contain /openai/v1/, got {async_client.base_url}"
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://test.openai.azure.com",
+        "https://test.openai.azure.com/",
+        "https://test.openai.azure.com/openai",
+        "https://test.openai.azure.com/openai/",
+        "https://test.openai.azure.com/openai/v1",
+        "https://test.openai.azure.com/openai/v1/",
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True])
+def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_in(api_base: str, is_async: bool):
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key="test-key", api_base=api_base, api_version="v1", _is_async=is_async
+    )
+
+    assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
+
+
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_with_azure_ad_token_provider(api_version):
     """
@@ -2228,6 +2248,11 @@ _CHAT_COMPLETION_BODY: Final = {
             "https://apim.example.com/my-foundry/openai/v1/chat/completions",
         ),
         (
+            "https://apim.example.com/my-foundry/openai",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/chat/completions",
+        ),
+        (
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
             "2025-04-01-preview",
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
@@ -2362,6 +2387,7 @@ _EMBEDDING_BODY: Final = {
     ("api_base", "api_version", "expected_url"),
     [
         ("https://r.openai.azure.com", "none", "https://r.openai.azure.com/openai/v1/embeddings"),
+        ("https://r.openai.azure.com/openai", "none", "https://r.openai.azure.com/openai/v1/embeddings"),
         (
             "https://apim.example.com/my-foundry/openai/v1",
             "None",

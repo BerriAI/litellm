@@ -578,10 +578,10 @@ class BaseAzureLLM(BaseOpenAILLM):
                 v1_api_key = _async_v1_api_key
 
             v1_base: Final = httpx.URL(api_base or "")
-            v1_root: Final = str(v1_base.copy_with(query=None)).rstrip("/").removesuffix("/openai/v1")
+            v1_root: Final = add_path_to_api_base(api_base=str(v1_base.copy_with(query=None)), ending_path="openai/v1")
             v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
-                "base_url": f"{v1_root}/openai/v1/",
+                "base_url": f"{v1_root}/",
                 "default_query": dict(v1_base.params.remove("api-version")),
             }
             if "timeout" in azure_client_params:
