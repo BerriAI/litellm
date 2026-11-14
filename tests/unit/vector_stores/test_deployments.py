@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Mapping
+from types import SimpleNamespace
 from typing import Final
 
 import aiohttp
@@ -7,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import ProxyException
+from litellm.vector_stores import deployments
 from litellm.vector_stores.deployments import (
     Failed,
     Served,
@@ -41,6 +43,14 @@ _SCUS: Final = {
         "order": 2,
     },
 }
+
+
+_NOW: Final = 1_800_000_000.0
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(deployments, "time", SimpleNamespace(time=lambda: _NOW))
 
 
 @pytest.fixture(autouse=True)
@@ -239,10 +249,8 @@ async def test_asearch_on_a_group_keeps_the_deployments_connection_over_the_call
 
 @pytest.mark.asyncio
 async def test_a_cooldown_entry_past_its_end_no_longer_holds_the_primary_back():
-    import time
-
     vector_store_deployment_cooldowns.in_memory_cache.set_cache(
-        "vector_store_deployment_cooldown:kb-search:eastus", time.time() - 1, ttl=600
+        "vector_store_deployment_cooldown:kb-search:eastus", _NOW - 1, ttl=600
     )
     attempt, calls = _scripted({"eastus": "ok", "scus": "ok"})
 
