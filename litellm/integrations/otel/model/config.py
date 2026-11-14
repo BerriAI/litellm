@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Final
@@ -93,6 +94,10 @@ class ExporterSpec(LiteLLMBaseModel):
             "credential source, so one tenant's vendor key never lands on a "
             "different backend's exporter."
         ),
+    )
+    resource_attributes: Mapping[str, str] = Field(
+        default_factory=dict,
+        description="Resource attributes only this exporter's copy of a span carries, under the provider's resource.",
     )
     options: dict[str, str] | None = Field(
         default=None,

@@ -124,21 +124,11 @@ def _arize_default_project() -> Mapping[str, str]:
     return MappingProxyType({"model_id": ARIZE_DEFAULT_PROJECT})
 
 
-def _stands_in_for_the_legacy_langfuse_logger() -> bool:
-    """Whether a Langfuse destination replaces the older Langfuse logger's copy, which a proxy without Langfuse keys
-    of its own sends for a key's or team's ``langfuse_otel``."""
-    return not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"))
-
-
 def _langfuse_environment(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
-    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``, where the older Langfuse
-    logger wrote it."""
-    from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``."""
+    from litellm.integrations.otel.presets.langfuse import langfuse_environment_attributes
 
-    if not _stands_in_for_the_legacy_langfuse_logger():
-        return _NO_ATTRS
-    environment: Final = params.get("langfuse_environment") or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
-    return MappingProxyType({LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value: environment} if environment else {})
+    return MappingProxyType(langfuse_environment_attributes(params.get("langfuse_environment")))
 
 
 #: Resource attributes a backend gets on every export the team receives, over the
