@@ -420,7 +420,11 @@ def _entra_params_owned_by_route(route: str | None) -> frozenset[str]:
     return frozenset()
 
 
-_NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
+_NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = (
+    "litellm_embedding_config",
+    "extra_body",
+    "router_settings_override",
+)
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -773,6 +777,31 @@ def _banned_param_error(param: str) -> ValueError:
     )
 
 
+_CONFIGURED_BANNED_REQUEST_BODY_PARAMS: Final = TypeAdapter(tuple[str, ...] | None)
+
+
+def _effective_banned_request_body_params(
+    general_settings: Mapping[str, object],
+    base_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
+) -> tuple[str, ...]:
+    raw: Final = general_settings.get("banned_request_body_params")
+    if raw is None:
+        return base_params
+    try:
+        configured: Final = _CONFIGURED_BANNED_REQUEST_BODY_PARAMS.validate_python(raw)
+    except ValidationError as exc:
+        raise ValueError(
+            "Invalid general_settings.banned_request_body_params: expected a list of strings."
+        ) from exc
+    if not configured:
+        return base_params
+    existing: Final = frozenset(base_params)
+    extra: Final = tuple(
+        dict.fromkeys(param for param in configured if param and param not in existing)
+    )
+    return base_params if not extra else (*base_params, *extra)
+
+
 def _check_banned_params(
     body: Mapping[str, object],
     general_settings: Mapping[str, object],
@@ -803,7 +832,7 @@ def _check_banned_params(
         reject_federated_credential_reference(body)
         if rejects_secret_references:
             _reject_secret_references(body)
-    for param in banned_params:
+    for param in _effective_banned_request_body_params(general_settings, banned_params):
         if param not in body:
             continue
         if param in route_owned_params:

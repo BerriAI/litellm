@@ -2786,6 +2786,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
+    banned_request_body_params: tuple[str, ...] | None = Field(
+        default=None,
+        description="Additional request-body parameter names rejected alongside the built-in client-side credential denylist unless allow_client_side_credentials or the deployment's configurable_clientside_auth_params permits them.",
+    )
     max_response_size_mb: int | None = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",

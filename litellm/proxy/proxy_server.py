@@ -7454,6 +7454,7 @@ class ProxyConfig:
                         "search_tool_deny_by_default",
                         "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
+                        "banned_request_body_params",
                         "request_tag_mappings",
                         "access_group_rules",
                     )
@@ -20960,6 +20961,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_file_size_mb": "Integer",
         "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",
+        "banned_request_body_params": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",

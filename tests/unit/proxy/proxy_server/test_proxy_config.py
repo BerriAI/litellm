@@ -3011,6 +3011,25 @@ async def test_load_config_rejects_a_malformed_vertex_drop_anthropic_betas_list(
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 
+@pytest.mark.parametrize(
+    "yaml_value", ["fallbacks", "[fallbacks, 7]"], ids=["bare-string", "non-string-entry"]
+)
+async def test_load_config_rejects_a_malformed_banned_request_body_params_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str
+):
+    config_file: Final = tmp_path / "banned_request_body_params.yaml"
+    config_file.write_text(
+        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
+        f"  banned_request_body_params: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match="banned_request_body_params"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
 @pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
     """Regression: router_settings.plugins dotted-path strings must be resolved to

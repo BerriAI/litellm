@@ -31936,6 +31936,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Banned Request Body Params
+             * @description Additional request-body parameter names rejected alongside the built-in client-side credential denylist unless allow_client_side_credentials or the deployment's configurable_clientside_auth_params permits them.
+             */
+            banned_request_body_params?: string[] | null;
+            /**
              * Blocked File Extensions
              * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set
              */
