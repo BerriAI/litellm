@@ -71,7 +71,7 @@ RED_SQUARE_PNG: Final = base64.b64decode(
 BOUNDED_OUTPUT_CHARS: Final = 1024
 PLACEHOLDER_INPUT: Final = "default-message-value"
 COMPLETION_BACKEND: Final = "openai/gpt-5.4-mini"
-IMAGE_BACKEND: Final = "openai/gpt-image-2.5-flare"
+IMAGE_BACKEND: Final = "openai/gpt-image-2.6-flare"
 SPEECH_BACKEND: Final = "openai/tts-1-1106"
 TRANSCRIPTION_BACKEND: Final = "openai/gpt-transcribe"
 MODERATION_BACKEND: Final = "openai/omni-moderation-latest"
@@ -123,14 +123,18 @@ def _generation(client: LoggingClient, creds: LangfuseCreds, *, alias: str, star
     return observation
 
 
-def _output_text(observation: LangfuseObservation) -> str:
+def _output_contents(observation: LangfuseObservation) -> tuple[str, ...]:
     assert observation.output not in (None, "", [], {}), f"generation output is empty: {observation!r}"
     try:
         messages: Final = _OUTPUT_MESSAGES.validate_python(observation.output)
     except ValidationError:
         pytest.fail(f"generation output is not a list of assistant messages: {observation!r}")
     assert messages, f"generation output is empty: {observation!r}"
-    return "\n".join(message.content for message in messages)
+    return tuple(message.content for message in messages)
+
+
+def _output_text(observation: LangfuseObservation) -> str:
+    return "\n".join(_output_contents(observation))
 
 
 def _input_text(observation: LangfuseObservation) -> str:
@@ -204,9 +208,9 @@ class TestOtelV2LangfuseGenerationOutput:
         texts: Final = tuple(choice.text.strip() for choice in response.choices)
         assert len(texts) == 2 and all(texts), f"/v1/completions returned no text: {response!r}"
 
-        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert all(text in output for text in texts), (
-            f"generation output lacks the completion texts {texts!r}: {output!r}"
+        contents: Final = _output_contents(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert sorted(content.strip() for content in contents) == sorted(texts), (
+            f"generation output does not hold one message per completion choice {texts!r}: {contents!r}"
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["images_generations"])

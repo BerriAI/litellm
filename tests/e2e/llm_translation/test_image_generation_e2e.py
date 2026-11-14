@@ -23,7 +23,7 @@ from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
-OPENAI_IMAGE_BACKEND: Final = "openai/gpt-image-2.5-flare"
+OPENAI_IMAGE_BACKEND: Final = "openai/gpt-image-2.6-flare"
 BEDROCK_IMAGE_BACKEND: Final = "bedrock/stability.stable-image-core-v1:1"
 # Nova Canvas reached end of life on 2026-09-30. Stable Image Core is active on Bedrock only in us-west-2:
 # https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-stability-ai-stable-image-core-1-0.html (2026-10-16)
