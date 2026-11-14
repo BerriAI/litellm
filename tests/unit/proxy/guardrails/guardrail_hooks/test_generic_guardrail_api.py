@@ -2791,6 +2791,24 @@ class TestToolCallsInResponse:
             await _tool_calls_after(guardrail)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_on_error", [True, False])
+    @pytest.mark.parametrize(
+        "tool_calls",
+        ["not a list", [{"function": {"name": "run_shell", "arguments": {"cmd": "echo [REDACTED]"}}}]],
+        ids=["not_a_list", "object_arguments"],
+    )
+    async def test_a_blocked_answer_blocks_even_when_its_tool_calls_are_malformed(
+        self, tool_calls: object, fail_on_error: bool
+    ) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "BLOCKED", "blocked_reason": "dangerous command", "tool_calls": tool_calls},
+            fail_on_error=fail_on_error,
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="dangerous command"):
+            await _tool_calls_after(guardrail)
+
+    @pytest.mark.asyncio
     async def test_fail_on_error_off_sends_the_calls_as_received_when_the_answer_cannot_be_applied(self) -> None:
         guardrail: Final = _guardrail_answering(
             {"action": "GUARDRAIL_INTERVENED", "tool_calls": [_run_shell_call("{}"), _run_shell_call("{}")]},

@@ -196,9 +196,6 @@ class GuardrailToolCallFunction(TypedDict):
 
 @with_config(ConfigDict(extra="allow"))
 class GuardrailToolCall(TypedDict):
-    """A rewritten tool call, one per call the guardrail received. The call's own ``id`` and
-    ``type`` are kept by the proxy, so ``function`` is all a guardrail has to send back."""
-
     function: ReadOnly[GuardrailToolCallFunction]
 
 
@@ -207,9 +204,7 @@ _SENT_FUNCTION: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-def tool_calls_from_response(value: object) -> tuple[GuardrailToolCall, ...] | None:
-    """A malformed ``tool_calls`` raises, so the guardrail's ``fail_on_error`` setting decides the
-    request's fate instead of the unrewritten calls going through."""
+def _tool_calls_from_response(value: object) -> tuple[GuardrailToolCall, ...] | None:
     return None if value is None else _TOOL_CALLS.validate_python(value)
 
 
@@ -223,12 +218,9 @@ def _with_returned_function(sent_call: Mapping[str, object], returned_call: Guar
 
 
 def tool_calls_to_write_back(
-    sent_calls: Sequence[Mapping[str, object]] | None, returned_calls: Sequence[GuardrailToolCall] | None
+    sent_calls: Sequence[Mapping[str, object]] | None, returned: object
 ) -> tuple[ChatCompletionToolCallChunk, ...] | None:
-    """The calls as the guardrail received them, carrying the ``function`` it handed back, so every
-    endpoint keeps each call's own ``id`` and ``type``. The guardrail answers one call per call received,
-    in the same order, and an empty list is no rewrite. Any other length cannot be matched to the calls
-    by position, which is a guardrail error rather than a reason to send the calls unrewritten."""
+    returned_calls: Final = _tool_calls_from_response(returned)
     if not returned_calls:
         return None
     sent_count: Final = 0 if sent_calls is None else len(sent_calls)
@@ -246,7 +238,7 @@ class GenericGuardrailAPIResponse:
     texts: list[str] | None
     images: list[str] | None
     tools: list[GuardrailToolParam] | None
-    tool_calls: Sequence[GuardrailToolCall] | None
+    tool_calls: object
     structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
@@ -261,7 +253,7 @@ class GenericGuardrailAPIResponse:
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
         structured_messages: Sequence[AllMessageValues] | None = None,
-        tool_calls: Sequence[GuardrailToolCall] | None = None,
+        tool_calls: object = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
@@ -290,5 +282,5 @@ class GenericGuardrailAPIResponse:
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
             structured_messages=structured_messages_from_response(data.get("structured_messages")),
-            tool_calls=tool_calls_from_response(fields.get("tool_calls")),
+            tool_calls=fields.get("tool_calls"),
         )

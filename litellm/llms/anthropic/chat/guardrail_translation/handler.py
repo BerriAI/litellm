@@ -469,8 +469,6 @@ def _write_back_tool_use_block(block: object, shape: _ToolCallShape, rewritten_i
 
 
 def _redact_output_safeguard_results(response: object, unchanged_tool_use_ids: frozenset[str]) -> None:
-    """The response's safeguard verdicts judged the tool inputs as the model wrote them, so only those
-    for unchanged ``tool_use`` blocks survive, and no explanation can quote an input the guardrail rewrote."""
     fields: Final = as_str_mapping(response)
     raw: Final = fields.get("safeguard_results") if fields is not None else None
     if raw is None or not isinstance(response, dict):
@@ -1768,14 +1766,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         returned_tool_calls: Sequence[object] | None,
         guardrail_name: str | None,
     ) -> frozenset[str] | None:
-        """The nth returned call belongs to the nth ``tool_use`` block, the order the calls were scanned
-        in. A returned list of another length cannot be placed, so the scanned calls stand, as on the
-        request side. Rewritten arguments that are not a JSON object cannot become a ``tool_use`` input,
-        so the response fails instead of carrying the arguments the guardrail meant to replace. Returns the
-        ids of the ``tool_use`` blocks left unchanged when any block was rewritten, else None."""
         post_guardrail_tool_calls: Final = _tool_call_shapes(
             returned_tool_calls
-            if returned_tool_calls is not None and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+            if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
             else scanned_tool_calls
         )
         tool_use_blocks: Final = tuple(
