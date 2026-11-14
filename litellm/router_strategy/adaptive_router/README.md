@@ -20,6 +20,7 @@ model_list:
       model: openai/gpt-5.6
     model_info:
       input_cost_per_token: 0.000004
+      output_cost_per_token: 0.00002
       adaptive_router_preferences:
         quality_tier: 3
         strengths: ["code_generation", "analytical_reasoning"]
@@ -29,6 +30,7 @@ model_list:
       model: openai/gpt-5.6-luna
     model_info:
       input_cost_per_token: 0.0000002
+      output_cost_per_token: 0.0000012
       adaptive_router_preferences:
         quality_tier: 2
         strengths: ["general", "factual_lookup"]
