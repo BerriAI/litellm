@@ -23,6 +23,7 @@ from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
+    async_transform_openai_messages_to_gemini_context_caching,
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
@@ -657,7 +658,7 @@ class ContextCachingEndpoints(VertexBase):
                 return google_cache_name
 
             ## TRANSFORM REQUEST
-            cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+            cached_content_request_body: Final = await async_transform_openai_messages_to_gemini_context_caching(
                 model=target.model,
                 messages=cached_messages,
                 cache_key=generated_cache_key,

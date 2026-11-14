@@ -753,3 +753,135 @@ async def test_success_callbacks_log_the_system_message_gemini_was_sent(sync_mod
     )
 
     assert logged == messages
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_the_cache_lives_as_long_as_the_longest_marked_ttl(sync_mode):
+    sent: Final = await _sent_bodies(
+        sync_mode,
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": _REFERENCE_DOCUMENT, "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Which section mentions watchlists?",
+                        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"},
+                    }
+                ],
+            },
+        ],
+    )
+
+    assert sent["cache"]["ttl"] == "43200s"
+
+
+_PDF_BASE64: Final = "JVBERi0xLjQKJSBsaXRlbGxtIGNhY2hlIHRlc3QK"
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+_MEDIA_PARTS: Final = (
+    ({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_PNG_BASE64}"}}, _PNG_BASE64),
+    ({"type": "file", "file": {"file_data": f"data:application/pdf;base64,{_PDF_BASE64}"}}, _PDF_BASE64),
+)
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marks", _CACHE_MARKS)
+@pytest.mark.parametrize("media_part, media_base64", _MEDIA_PARTS)
+@pytest.mark.asyncio
+async def test_a_mark_on_an_image_or_file_part_caches_the_prompt_through_it(sync_mode, marks, media_part, media_base64):
+    question: Final = "Which section mentions watchlists?"
+    sent: Final = await _sent_bodies(
+        sync_mode,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _REFERENCE_DOCUMENT},
+                    {**media_part, **marks},
+                    {"type": "text", "text": question},
+                ],
+            }
+        ],
+    )
+
+    assert media_base64 in json.dumps(sent["cache"])
+    assert media_base64 not in json.dumps(sent["generate"])
+    assert _sent_texts(sent["generate"]) == (question,)
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("marks", _CACHE_MARKS)
+@pytest.mark.asyncio
+async def test_an_async_call_downloads_a_remote_image_for_the_cache_without_blocking_the_event_loop(
+    async_only_image_fetch, marks
+):
+    image_url: Final = f"http://img.example/{uuid.uuid4()}.png"
+    sent: Final = await _sent_bodies(
+        False,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                    {"type": "text", "text": _REFERENCE_DOCUMENT, **marks},
+                    {"type": "text", "text": "What colour is the image?"},
+                ],
+            }
+        ],
+    )
+
+    assert async_only_image_fetch.fetched == [image_url]
+    assert async_only_image_fetch.base64_png in json.dumps(sent["cache"])
+    assert sent["generate"]["cachedContent"] == _BREAKPOINT_CACHE_NAME
+
+
+def _conversation_with_a_marked_tool_result() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": _REFERENCE_DOCUMENT},
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": '{"city": "Paris"}'}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Sunny", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+    ]
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_marker_on_a_tool_result_is_a_400_before_anything_reaches_gemini(sync_mode):
+    client: Final = _fake_gemini(HTTPHandler if sync_mode else AsyncHTTPHandler)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _complete_with(client, sync_mode, _conversation_with_a_marked_tool_result())
+
+    assert error.value.status_code == 400
+    assert "tool result" in str(error.value)
+    client.post.assert_not_called()
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_drop_params_sends_a_marked_tool_result_uncached(sync_mode):
+    sent: Final = await _sent_bodies(sync_mode, _conversation_with_a_marked_tool_result(), drop_params=True)
+
+    assert list(sent) == ["generate"]
+    assert "Sunny" in json.dumps(sent["generate"])

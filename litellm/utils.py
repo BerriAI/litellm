@@ -9444,12 +9444,7 @@ def is_cached_message(message: AllMessageValues) -> bool:
             continue
 
         cache_control = content_item.get("cache_control")
-        if (
-            content_item.get("type") == "text"
-            and cache_control is not None
-            and isinstance(cache_control, dict)
-            and cache_control.get("type") == "ephemeral"
-        ):
+        if cache_control is not None and isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
             return True
 
     return False

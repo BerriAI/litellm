@@ -8444,7 +8444,7 @@ def test_gemini_context_caching_with_ttl():
     )
 
     assert "ttl" in result
-    assert result["ttl"] == "3600s"
+    assert result["ttl"] == "7200s"
     assert result["model"] == "models/gemini-1.5-pro"
     assert result["displayName"] == "test-ttl-cache-key"
 

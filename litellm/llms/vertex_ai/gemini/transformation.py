@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
@@ -1260,10 +1261,13 @@ _transform_request_body = transform_request_body
 
 
 def _with_prompt_cache_breakpoints_as_cache_control(
-    messages: Sequence[AllMessageValues], litellm_params: Mapping[str, object]
+    messages: Sequence[AllMessageValues], litellm_params: Mapping[str, object], model: str
 ) -> tuple[AllMessageValues, ...]:
     drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-    return tuple(prompt_cache_breakpoints_as_context_cache_control(message, drop_params) for message in messages)
+    checked: Final = AnthropicCacheControlHook.prompt_cache_breakpoints_dropped_from_tool_results(
+        messages, drop_params, model
+    )
+    return tuple(prompt_cache_breakpoints_as_context_cache_control(message, drop_params) for message in checked)
 
 
 def sync_transform_request_body(
@@ -1296,6 +1300,7 @@ def sync_transform_request_body(
             _with_prompt_cache_breakpoints_as_cache_control(
                 messages,
                 cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
+                model,
             )
         ),
         optional_params=optional_params,
@@ -1437,6 +1442,7 @@ async def async_transform_request_body(
             _with_prompt_cache_breakpoints_as_cache_control(
                 messages,
                 cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
+                model,
             )
         ),
         optional_params=optional_params,

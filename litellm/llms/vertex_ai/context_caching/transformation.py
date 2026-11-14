@@ -5,11 +5,15 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -17,6 +21,7 @@ from litellm.utils import is_cached_message
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     gemini_convert_messages_with_history,
+    should_inline_remote_media,
     transform_system_message,
 )
 
@@ -53,39 +58,27 @@ def get_first_continuous_block_idx(
 
 def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | None:
     """
-    Extract TTL from cached messages. Returns the first valid TTL found.
-
-    Args:
-        messages: List of messages to extract TTL from
-
-    Returns:
-        Optional[str]: TTL normalized to Gemini's "<seconds>s" form, or None if not found/invalid
+    Returns the longest valid TTL on the cached parts, normalized to Gemini's "<seconds>s" form, since one
+    Gemini cache holds every marked part and must outlive the longest-lived of them.
     """
-    for message in messages:
-        if not is_cached_message(message):
-            continue
+    ttls: Final = chain.from_iterable(
+        _cache_control_ttls(message) for message in messages if is_cached_message(message)
+    )
+    return max(ttls, key=lambda ttl: float(ttl[:-1]), default=None)
 
-        content = message.get("content")
-        if not content or isinstance(content, str):
-            continue
 
-        for content_item in content:
-            # Type check to ensure content_item is a dictionary before calling .get()
-            if not isinstance(content_item, dict):
-                continue
+def _cache_control_ttls(message: AllMessageValues) -> Iterator[str]:
+    fields: Final = as_str_mapping(message)
+    parts: Final = None if fields is None else as_object_list(fields.get("content"))
+    return (ttl for part in parts or () if (ttl := _ephemeral_cache_control_ttl(part)) is not None)
 
-            cache_control = content_item.get("cache_control")
-            if not cache_control or not isinstance(cache_control, dict):
-                continue
 
-            if cache_control.get("type") != "ephemeral":
-                continue
-
-            normalized_ttl = _normalize_ttl_to_seconds(cache_control.get("ttl"))
-            if normalized_ttl is not None:
-                return normalized_ttl
-
-    return None
+def _ephemeral_cache_control_ttl(part: object) -> str | None:
+    fields: Final = as_str_mapping(part)
+    control: Final = None if fields is None else as_str_mapping(fields.get("cache_control"))
+    if control is None or control.get("type") != "ephemeral":
+        return None
+    return _normalize_ttl_to_seconds(control.get("ttl"))
 
 
 _TTL_PATTERN: Final = re.compile(r"^([0-9]*\.?[0-9]+)([smh])$")
@@ -206,3 +199,24 @@ def transform_openai_messages_to_gemini_context_caching(
         data["system_instruction"] = transformed_system_messages
 
     return data
+
+
+async def async_transform_openai_messages_to_gemini_context_caching(
+    model: str,
+    messages: Sequence[AllMessageValues],
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    cache_key: str,
+    vertex_project: str | None,
+    vertex_location: str | None,
+) -> CachedContentRequestBody:
+    inlined_messages: Final = await async_inline_remote_media(
+        list(messages), should_inline=should_inline_remote_media(custom_llm_provider)
+    )
+    return await asyncify(transform_openai_messages_to_gemini_context_caching)(
+        model=model,
+        messages=inlined_messages,
+        custom_llm_provider=custom_llm_provider,
+        cache_key=cache_key,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
