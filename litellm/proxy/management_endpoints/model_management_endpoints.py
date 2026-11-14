@@ -3249,9 +3249,19 @@ async def add_new_model(
             written_params=_written_routing_params(model_params.litellm_params, None),
         )
 
-        clean_model_info: Final = ModelInfo.model_validate(
-            dict(without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True)))
-        )
+        submitted_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
+        if not echoed_cost_map_pricing_fields(submitted_model_info):
+            # Pricing typed into model_info is not a /model/info echo (those carry `key`),
+            # so it is a per-deployment override the operator wrote. The strip below keeps
+            # model_info free of stored pricing, which is correct only when the value lands
+            # on litellm_params — where a deployment's own pricing lives and is billed —
+            # instead of being silently discarded.
+            for field in SPECIAL_MODEL_INFO_PARAMS:
+                value = submitted_model_info.get(field)
+                if value is not None and getattr(model_params.litellm_params, field, None) is None:
+                    setattr(model_params.litellm_params, field, value)
+
+        clean_model_info: Final = ModelInfo.model_validate(dict(without_server_derived_pricing(submitted_model_info)))
         model_params.model_info = (  # rebind-ok: downstream team-model handling mutates this same object
             clean_model_info.model_copy(update=MappingProxyType({"member_auto_router": True}))
             if member_write is not None

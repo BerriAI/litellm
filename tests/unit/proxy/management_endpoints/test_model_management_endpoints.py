@@ -4804,6 +4804,132 @@ class TestModelInfoServerDerivedPricingFilter:
         assert written["id"] == model_id, "filtering must not mint a fresh deployment id"
         assert written["access_groups"] == ["prod"]
 
+    @pytest.mark.asyncio
+    async def test_add_new_model_mirrors_typed_model_info_pricing_onto_litellm_params(self):
+        """A price the operator typed into model_info must still bill after the create-path
+        strip: it belongs on litellm_params, which /model/new persists and Deployment mirrors
+        back into model_info, so the typed value survives where pricing lives."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        model_id = "dep-create-priced-0"
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="haiku",
+            litellm_params={"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))
+
+        mock_router = MagicMock()
+        mock_router.registry.return_value.names.return_value = [model_id]
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="haiku",
+                    litellm_params=LiteLLM_Params(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+                    model_info={
+                        "id": model_id,
+                        "input_cost_per_token": 0.0000008,
+                        "output_cost_per_token": 0.000004,
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        data = mock_prisma.db.litellm_proxymodeltable.create.call_args.kwargs["data"]
+        written_info = json.loads(data["model_info"])
+        written_params = json.loads(data["litellm_params"])
+        assert "input_cost_per_token" not in written_info, "the create-path strip still applies"
+        assert written_params["input_cost_per_token"] == 0.0000008
+        assert written_params["output_cost_per_token"] == 0.000004
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_does_not_mirror_echoed_pricing(self):
+        """A body carrying ``key`` is a /model/info echo (as on PATCH, #46902): its pricing
+        is a display value nobody typed, so it is dropped, not mirrored onto litellm_params."""
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        entry = litellm.get_model_info("openai/gpt-5.6")
+        model_id = "dep-create-echo-0"
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-5.6",
+            litellm_params={"model": "openai/gpt-5.6"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))
+
+        mock_router = MagicMock()
+        mock_router.registry.return_value.names.return_value = [model_id]
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="gpt-5.6",
+                    litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+                    model_info={
+                        "id": model_id,
+                        "key": entry["key"],
+                        "input_cost_per_token": entry["input_cost_per_token"],
+                        "output_cost_per_token": entry["output_cost_per_token"],
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        data = mock_prisma.db.litellm_proxymodeltable.create.call_args.kwargs["data"]
+        written_info = json.loads(data["model_info"])
+        written_params = json.loads(data["litellm_params"])
+        assert "input_cost_per_token" not in written_info
+        assert "input_cost_per_token" not in written_params
+
 
 class TestModelInfoCostMapEchoFilter:
     """LIT-5534. ``/model/info`` fills a deployment's ``model_info`` from the cost map (context
