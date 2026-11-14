@@ -1058,15 +1058,17 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict[str, object]] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[tuple[Mapping[str, object], ...]] = (
+        {
+            **defs,
+            **schema.get("$defs", {}),
+            **schema.get("definitions", {}),
+        },
+    )
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, tuple, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1085,7 +1087,7 @@ def unpack_defs(
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
+                target_schema = next((scope[ref_name] for scope in active_defs if ref_name in scope), None)
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
@@ -1114,7 +1116,7 @@ def unpack_defs(
                     if isinstance(target_schema, dict)
                     and "$defs" not in target_schema
                     and "definitions" not in target_schema
-                    else {**active_defs, **target_schema.get("$defs", {}), **target_schema.get("definitions", {})}
+                    else ({**target_schema.get("$defs", {}), **target_schema.get("definitions", {})}, *active_defs)
                 )
 
                 # Replace the reference with resolved copy
@@ -1144,7 +1146,7 @@ def unpack_defs(
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
             current_defs = (
-                {**active_defs, **node.get("$defs", {}), **node.get("definitions", {})}
+                ({**node.get("$defs", {}), **node.get("definitions", {})}, *active_defs)
                 if "$defs" in node or "definitions" in node
                 else active_defs
             )
