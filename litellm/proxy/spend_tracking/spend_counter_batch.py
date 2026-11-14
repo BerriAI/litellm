@@ -110,6 +110,13 @@ class SpendCounterBatch:
             return None
         return loaded[counter_key], True
 
+    async def read_many(self, counter_keys: frozenset[str]) -> Mapping[str, float | None]:
+        bound: Final = counter_keys & self._keys if self._open else frozenset()
+        if not bound:
+            return _NO_VALUES
+        loaded: Final = await self._load()
+        return MappingProxyType({key: loaded[key] for key in bound if key in loaded})
+
     def record(self, counter_key: str, value: float) -> None:
         """A write returned the counter's new value; later reads in this scope see it instead of the MGET value."""
         if not self._open:
@@ -322,3 +329,11 @@ async def read_batched_spend_counter(counter_key: str) -> tuple[float | None, bo
         return None
     batch.bind(frozenset((counter_key,)))
     return await batch.read(counter_key)
+
+
+async def read_batched_spend_counters(counter_keys: frozenset[str]) -> Mapping[str, float | None]:
+    batch: Final = _active_batch.get()
+    if batch is None:
+        return _NO_VALUES
+    batch.bind(counter_keys)
+    return await batch.read_many(counter_keys)

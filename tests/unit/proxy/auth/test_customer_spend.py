@@ -15,6 +15,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     read_batched_spend_counter,
+    release_spend_counter_batch,
     spend_counter_batch_scope,
 )
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
@@ -108,6 +109,26 @@ async def test_customer_settlement_shares_seed_read_and_native_pipeline_with_key
         "spend:key:hashed": 1.5,
         **{customer_spend_counter(scope): scope.spend + 0.5 for scope in hierarchy.scopes},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True))
+async def test_customer_settlement_reads_directly_when_the_batch_is_unavailable_or_closed(closed: bool) -> None:
+    hierarchy: Final = _hierarchy()
+    handle: Final = FakeSpendCounters(
+        redis={customer_spend_counter(scope): scope.spend for scope in hierarchy.scopes[:-1]}, batch_reads=False
+    )
+    with spend_counter_batch_scope(handle.store()):
+        if closed:
+            release_spend_counter_batch()
+        await settle_customer_spend(
+            {"user_api_key_customer_hierarchy": hierarchy.model_dump(mode="json")}, 0.5, handle.store()
+        )
+    assert frozenset(command for command in handle.commands if command.startswith("GET ")) == frozenset(
+        f"GET {customer_spend_counter(scope)}" for scope in hierarchy.scopes
+    )
+    assert sum(command.startswith("SETNX ") for command in handle.commands) == 1
+    assert handle.redis == {customer_spend_counter(scope): scope.spend + 0.5 for scope in hierarchy.scopes}
 
 
 @pytest.mark.asyncio

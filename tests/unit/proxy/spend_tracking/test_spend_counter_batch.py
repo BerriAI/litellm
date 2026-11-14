@@ -25,6 +25,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     admission_counter_keys,
     bind_admission_counter_keys,
     post_call_counter_keys,
+    read_batched_spend_counters,
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
@@ -96,6 +97,35 @@ def test_post_call_counter_keys_skip_ids_that_are_not_strings():
         tags=[placeholder, "t1"],
         model_access_groups=None,
     ) == {"spend:team:team", "spend:end_user:eu", "spend:tag:t1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", (False, True))
+async def test_bulk_read_distinguishes_an_authoritative_miss_from_an_unavailable_batch(available: bool) -> None:
+    handle: Final = FakeSpendCounters(redis={"spend:key:hashed": 1.5}, batch_reads=available)
+    keys: Final = frozenset(("spend:key:hashed", "spend:team:team"))
+    with spend_counter_batch_scope(handle.store()):
+        assert await read_batched_spend_counters(frozenset()) == {}
+        assert await read_batched_spend_counters(keys) == (
+            {"spend:key:hashed": 1.5, "spend:team:team": None} if available else {}
+        )
+    assert await read_batched_spend_counters(keys) == {}
+
+
+@pytest.mark.asyncio
+async def test_bulk_reads_observe_recorded_writes_forgets_and_a_closed_scope() -> None:
+    handle: Final = FakeSpendCounters(redis={"spend:key:hashed": 1.5})
+    batch: Final = SpendCounterBatch(handle.store())
+    known: Final = frozenset(("spend:key:hashed", "spend:team:team"))
+    requested: Final = known | frozenset(("spend:user:unbound",))
+    batch.bind(known)
+    assert await batch.read_many(requested) == {"spend:key:hashed": 1.5, "spend:team:team": None}
+    batch.record("spend:key:hashed", 2.0)
+    batch.forget("spend:team:team")
+    assert await batch.read_many(requested) == {"spend:key:hashed": 2.0}
+    batch.close()
+    assert await batch.read_many(requested) == {}
+    assert handle.commands == ["MGET spend:key:hashed spend:team:team"]
 
 
 @pytest.mark.asyncio
