@@ -172,6 +172,79 @@ async def test_upstream_error_status_becomes_an_error_response_with_that_status_
 
 
 @pytest.mark.asyncio
+async def test_entra_rejecting_the_deployment_oidc_token_becomes_a_401_error_response_without_counting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    with respx.mock:
+        respx.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "error": "invalid_client",
+                    "error_description": "AADSTS700211: No matching federated identity record found for presented "
+                    "assertion issuer 'https://oidc.litellm-qa.invalid'. Trace ID: 0f5c2b1e",
+                    "error_codes": [700211],
+                },
+            )
+        )
+        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_base": API_BASE,
+                    "tenant_id": "qa-tenant",
+                    "client_id": "qa-client",
+                    "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                }
+            },
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 401)
+    assert "AADSTS700211" in (result.error_message or "")
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
+async def test_entra_throttling_the_deployment_oidc_token_exchange_keeps_its_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    with respx.mock:
+        respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
+            return_value=httpx.Response(429, json={"error": "temporarily_unavailable", "error_codes": [90055]})
+        )
+        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_base": API_BASE,
+                    "tenant_id": "throttled-tenant",
+                    "client_id": "qa-client",
+                    "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                }
+            },
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 429)
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
 async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_decoder_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

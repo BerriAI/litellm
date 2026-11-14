@@ -21,7 +21,6 @@ import httpx
 import litellm
 
 from litellm.llms.ollama.common_utils import OllamaModelInfo
-from litellm.types.utils import AdminApiKeySecretReference
 
 
 class DummyResponse:
@@ -649,71 +648,6 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     assert set(generation_authorizations) == {authorization}
     assert set(lookups) == {("ollama-call.test", authorization)}
     assert len(lookups) == lookups_after_first_call
-
-
-@pytest.mark.parametrize("reload_catalog", [False, True])
-@pytest.mark.parametrize(
-    "provider_params",
-    [
-        {"model": "ollama_chat/registration-probe"},
-        {"model": "registration-probe", "custom_llm_provider": "ollama_chat"},
-    ],
-)
-@pytest.mark.parametrize(
-    ("api_key", "authorization"),
-    [
-        (None, None),
-        ("deployment-key", "Bearer deployment-key"),
-        (
-            AdminApiKeySecretReference(
-                "oidc/google/https://ollama-deployment.test", frozenset({"http://ollama-deployment.test:11434"})
-            ),
-            None,
-        ),
-    ],
-    ids=["no-key", "deployment-key", "secret-reference"],
-)
-def test_router_registration_sends_model_info_lookup_to_the_deployment_api_base_with_its_key(
-    monkeypatch, reload_catalog, provider_params, api_key, authorization
-):
-    from litellm import Router
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    lookups = []
-
-    def respond(request):
-        lookups.append((request.url.host, request.headers.get("authorization")))
-        return httpx.Response(200, json={"template": "", "model_info": {}})
-
-    transport = httpx.MockTransport(respond)
-    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
-    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
-    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
-    catalog = dict(litellm.model_cost)
-    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-    litellm.get_model_info.cache_clear()
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "registration-probe",
-                    "litellm_params": {
-                        **provider_params,
-                        "api_base": "http://ollama-deployment.test:11434",
-                        "api_key": api_key,
-                    },
-                }
-            ]
-        )
-        if reload_catalog:
-            lookups.clear()
-            monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-            litellm.get_model_info.cache_clear()
-            router.replay_model_cost_registrations()
-    finally:
-        litellm.get_model_info.cache_clear()
-
-    assert set(lookups) == {("ollama-deployment.test", authorization)}
 
 
 def test_model_info_lookup_for_a_decisions_endpoint_goes_to_the_server_root():

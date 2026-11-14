@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -155,6 +156,265 @@ def test_api_base_line_is_left_out_when_a_password_breaks_the_url(configured_api
 )
 def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
     assert f"API Base: `{api_base}`" in _debug_info_for_api_base(api_base)
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "mapped_class"),
+    [
+        (
+            httpx.ReadError("peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")),
+            litellm.APIConnectionError,
+        ),
+        (RuntimeError("stream decoder failed"), litellm.APIConnectionError),
+        (AnthropicError(status_code=500, message="[Errno 104] Connection reset by peer"), litellm.InternalServerError),
+        (AnthropicError(status_code=429, message="rate_limit_error"), litellm.RateLimitError),
+    ],
+    ids=["unmapped_with_request", "unmapped_without_request", "anthropic_500", "anthropic_429"],
+)
+def test_mapped_provider_error_carries_the_deployment_debug_info(
+    provider_error: Exception, mapped_class: type[Exception]
+) -> None:
+    with pytest.raises(mapped_class) as caught:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=provider_error,
+            custom_llm_provider="anthropic",
+            completion_kwargs={"messages": [{"role": "user", "content": "CONFIDENTIAL patient record"}]},
+            extra_kwargs={
+                "api_base": "https://relay.example",
+                "metadata": {"model_group": "claude-alias", "deployment": "anthropic/claude-opus-5-5"},
+            },
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
+    assert "CONFIDENTIAL" not in debug_info
+
+
+_ROUTER_METADATA: Final = {
+    "api_base": "https://relay.example/v1",
+    "model_group": "claude-alias",
+    "deployment": "anthropic/claude-haiku-5-5",
+}
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "custom_llm_provider", "extra_kwargs"),
+    [
+        (
+            AnthropicError(status_code=529, message="Overloaded"),
+            "anthropic",
+            {"litellm_metadata": _ROUTER_METADATA},
+        ),
+        (
+            OpenAIError(status_code=500, message="upstream failed"),
+            "hosted_vllm",
+            {
+                "api_base": "https://relay.example/v1",
+                "metadata": {"user_id": "set by the caller"},
+                "litellm_metadata": _ROUTER_METADATA,
+            },
+        ),
+    ],
+    ids=["native_messages_without_api_base", "bridged_responses_with_request_metadata"],
+)
+def test_router_metadata_under_litellm_metadata_names_the_deployment(
+    provider_error: Exception, custom_llm_provider: str, extra_kwargs: dict[str, object]
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=provider_error,
+            custom_llm_provider=custom_llm_provider,
+            extra_kwargs=extra_kwargs,
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+
+
+_KEY_METADATA: Final = {"user_api_key_alias": "alias-key", "user_api_key_team_alias": "team-a"}
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [
+        {"metadata": _ROUTER_METADATA, "litellm_metadata": _KEY_METADATA},
+        {"metadata": _KEY_METADATA, "litellm_metadata": _ROUTER_METADATA},
+    ],
+    ids=["chat_with_guardrail_litellm_metadata", "generic_route_with_key_fields_in_metadata"],
+)
+def test_debug_info_reads_lines_from_both_metadata_buckets(extra_kwargs: dict[str, object]) -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=AnthropicError(status_code=529, message="Overloaded"),
+            custom_llm_provider="anthropic",
+            extra_kwargs=extra_kwargs,
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "Key Name: `alias-key`" in debug_info
+    assert "Team: `team-a`" in debug_info
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+
+
+def test_litellm_metadata_wins_over_caller_metadata_for_the_same_key() -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=AnthropicError(status_code=529, message="Overloaded"),
+            custom_llm_provider="anthropic",
+            extra_kwargs={
+                "metadata": {"deployment": "set by the caller", "api_base": "https://caller.example"},
+                "litellm_metadata": _ROUTER_METADATA,
+            },
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "caller" not in debug_info
+
+
+def test_mapper_that_passes_its_debug_info_keeps_the_prompt_line() -> None:
+    request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
+    )
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={"messages": [{"role": "user", "content": "hello there"}]},
+            extra_kwargs={"metadata": {"deployment": "openai/gpt-5.4-mini"}},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "Messages: `[{'role': 'user', 'content': 'hello there'}]`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
+
+
+def test_debug_info_has_no_messages_line_when_the_request_has_no_messages() -> None:
+    assert "Messages" not in _debug_info_for_api_base("https://gateway.example/v1")
+
+
+@pytest.mark.parametrize(
+    "already_mapped",
+    [
+        litellm.InternalServerError(
+            message="Upstream generation aborted (finish_reason=abort)", model="gpt-5.4-mini", llm_provider="openai"
+        ),
+        litellm.Timeout(
+            message="Stream exceeded max streaming duration of 10s", model="gpt-5.4-mini", llm_provider="openai"
+        ),
+    ],
+    ids=["finish_reason_abort", "max_streaming_duration"],
+)
+def test_already_mapped_error_gains_the_deployment_debug_info(already_mapped: Exception) -> None:
+    returned: Final = exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        completion_kwargs={"messages": [{"role": "user", "content": "CONFIDENTIAL patient record"}]},
+        extra_kwargs={
+            "api_base": "https://relay.example/v1",
+            "metadata": {"model_group": "gpt-alias", "deployment": "openai/gpt-5.4-mini"},
+        },
+    )
+    assert returned is already_mapped
+    debug_info: Final = returned.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
+    assert "CONFIDENTIAL" not in debug_info
+
+
+def test_error_instance_raised_by_several_requests_names_none_of_them() -> None:
+    shared: Final = litellm.RateLimitError(message="mock rate limit", llm_provider="openai", model="gpt-5.4-mini")
+
+    def debug_info_for(alias: str) -> object:
+        with pytest.raises(litellm.RateLimitError) as caught:
+            completion(
+                model="openai/gpt-5.4-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response=shared,
+                metadata={"user_api_key_alias": alias, "model_group": f"group-{alias}"},
+            )
+        assert caught.value is shared
+        return caught.value.litellm_debug_info
+
+    first: Final = debug_info_for("alias-a")
+    assert isinstance(first, str) and "Key Name: `alias-a`" in first
+    assert debug_info_for("alias-b") is None
+    assert debug_info_for("alias-c") is None
+
+
+_RELAY_DEPLOYMENT_KWARGS: Final = {
+    "api_base": "https://relay.example/v1",
+    "metadata": {"deployment": "openai/gpt-5.4-mini"},
+}
+
+
+@pytest.mark.parametrize(
+    ("first_kwargs", "second_kwargs"),
+    [
+        ({"litellm_call_id": "call-1", **_RELAY_DEPLOYMENT_KWARGS}, {}),
+        (_RELAY_DEPLOYMENT_KWARGS, {"litellm_call_id": "call-1"}),
+    ],
+    ids=["second-mapping-has-no-request", "first-mapping-had-no-call-id"],
+)
+def test_mapping_again_for_the_same_request_keeps_the_deployment_already_named(
+    first_kwargs: dict[str, object], second_kwargs: dict[str, object]
+) -> None:
+    already_mapped: Final = litellm.InternalServerError(
+        message="Upstream generation aborted (finish_reason=abort)", model="gpt-5.4-mini", llm_provider="openai"
+    )
+    exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        extra_kwargs=first_kwargs,
+    )
+    exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        completion_kwargs={},
+        extra_kwargs=second_kwargs,
+    )
+    debug_info: Final = already_mapped.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
+
+
+class _ErrorWhoseMessageCannotBeRead(Exception):
+    @property
+    def message(self) -> str:
+        raise RuntimeError("message unavailable")
+
+
+def test_error_that_breaks_the_mapping_still_names_the_deployment() -> None:
+    with pytest.raises(litellm.APIConnectionError) as caught:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_ErrorWhoseMessageCannotBeRead("upstream failed"),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={"api_base": "https://relay.example", "metadata": {"deployment": "anthropic/claude-opus-5-5"}},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
 
 
 # Test cases for is_error_str_context_window_exceeded
@@ -601,6 +861,26 @@ def test_anthropic_context_window_error_mapping(error_message):
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "anthropic"
+
+
+@pytest.mark.parametrize("upstream_status_code", [400, 500])
+def test_vertex_ai_anthropic_prompt_too_long_maps_to_context_window_exceeded(upstream_status_code: int) -> None:
+    original_exception: Final = VertexAIError(
+        status_code=upstream_status_code,
+        message='{"type":"error","error":{"type":"invalid_request_error",'
+        '"message":"prompt is too long: 210123 tokens > 200000 maximum"}}',
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "vertex_ai"
+    assert excinfo.value.model == "claude-opus-5-5"
 
 
 # Test cases for Vertex AI RateLimitError mapping
@@ -1210,12 +1490,12 @@ def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() ->
 
 
 class _UpstreamHTTPError(Exception):
-    def __init__(self, status_code: int) -> None:
-        super().__init__("upstream failure")
-        self.message = "upstream failure"
+    def __init__(self, status_code: int, message: str = "upstream failure") -> None:
+        super().__init__(message)
+        self.message = message
         self.status_code = status_code
         self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
+        self.response = httpx.Response(status_code=status_code, request=self.request, text=message)
 
 
 UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
@@ -1413,6 +1693,48 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, 
     assert returned is already_mapped
 
 
+@pytest.mark.parametrize(
+    "message",
+    ['{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}', "upstream failure"],
+)
+def test_an_anthropic_529_stays_an_internal_server_error_that_carries_the_529(message, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=529, message=message),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (type(raised.value), raised.value.status_code, raised.value.provider_status_code) == (
+        litellm.InternalServerError,
+        500,
+        529,
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 404])
+def test_an_anthropic_client_error_naming_overloaded_carries_no_overload_status(status_code, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=status_code, message="model: claude-Overloaded"),
+            custom_llm_provider="anthropic",
+        )
+
+    assert raised.value.provider_status_code is None
+
+
+def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=500),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (raised.value.status_code, raised.value.provider_status_code) == (500, 500)
+
+
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
 def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, status_code, quiet_exception_mapping):
@@ -1540,6 +1862,34 @@ def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback
         )
 
     assert "Traceback (most recent call last)" in raised.value.message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["azure", "azure_text"])
+def test_an_azure_stream_cut_maps_to_the_error_line_without_a_traceback(
+    custom_llm_provider: str, quiet_exception_mapping
+) -> None:
+    stream_cut: Final = httpx.ReadError(
+        "Response payload is not completed: <TransferEncodingError: 400, "
+        "message='Not enough data to satisfy transfer length header.'>"
+    )
+
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(model="gpt-5.4-mini", original_exception=stream_cut, custom_llm_provider=custom_llm_provider)
+
+    assert raised.value.message.endswith(f"APIConnectionError - {stream_cut}")
+    assert "test_exception_mapping_utils.py" not in str(raised.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["azure", "azure_text"])
+def test_an_azure_connection_reset_with_no_message_names_the_error_type(
+    custom_llm_provider: str, quiet_exception_mapping
+) -> None:
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model="gpt-5.4-mini", original_exception=httpx.ReadError(""), custom_llm_provider=custom_llm_provider
+        )
+
+    assert raised.value.message.endswith("APIConnectionError - ReadError")
 
 
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
