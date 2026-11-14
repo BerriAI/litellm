@@ -6790,10 +6790,9 @@ def _governance_server() -> "LiteLLM_MCPServerTable":
     )
 
 
-def test_is_restricted_virtual_key_request_exempts_admin_view_roles():
-    """Admin-tier callers (PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY) with scoped
-    allowed_routes are administrative service accounts/integrations, not untrusted
-    tenant keys needing discovery-only metadata stripping (Issue #51618)."""
+def test_is_restricted_virtual_key_request_detects_allowed_routes():
+    """Any key with a non-empty allowed_routes list is detected as a restricted
+    virtual key, matching RouteChecks."""
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         _is_restricted_virtual_key_request,
     )
@@ -6813,15 +6812,68 @@ def test_is_restricted_virtual_key_request_exempts_admin_view_roles():
     anonymous_scoped = UserAPIKeyAuth(
         allowed_routes=["/v1/mcp/server"],
     )
+    unscoped_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
     unscoped_viewer = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
 
-    assert _is_restricted_virtual_key_request(admin_scoped) is False
-    assert _is_restricted_virtual_key_request(viewer_scoped) is False
+    assert _is_restricted_virtual_key_request(admin_scoped) is True
+    assert _is_restricted_virtual_key_request(viewer_scoped) is True
     assert _is_restricted_virtual_key_request(tenant_scoped) is True
     assert _is_restricted_virtual_key_request(anonymous_scoped) is True
+    assert _is_restricted_virtual_key_request(unscoped_admin) is False
     assert _is_restricted_virtual_key_request(unscoped_viewer) is False
+
+
+@pytest.mark.asyncio
+async def test_route_restricted_admin_virtual_key_strips_credentials():
+    """An admin-owned key restricted to inference (allowed_routes=['llm_api_routes'])
+    is admitted to GET discovery via RouteChecks carve-outs, but must receive the
+    minimal virtual-key discovery view with secrets stripped."""
+    server = _governance_server()
+
+    async def _fetch(auth: UserAPIKeyAuth):
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_allowed_mcp_servers",
+                AsyncMock(return_value=[server]),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                None,
+            ),
+        ):
+            return await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=auth,
+            )
+
+    admin_inference_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["llm_api_routes"],
+    )
+    result = await _fetch(admin_inference_auth)
+    assert len(result) == 1
+    sanitized = result[0]
+
+    # Secrets MUST be stripped even though key owner is PROXY_ADMIN
+    assert sanitized.credentials is None
+    assert sanitized.url is None
+    assert sanitized.static_headers is None
+    assert sanitized.env == {}
+    # Governance metadata stripped for inference-only keys
+    assert sanitized.created_at is None
+    assert sanitized.created_by is None
+    assert sanitized.mcp_info == {"is_public": False, "is_public_explicit": False}
 
 
 @pytest.mark.asyncio

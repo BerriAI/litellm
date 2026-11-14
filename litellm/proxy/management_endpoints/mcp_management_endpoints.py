@@ -783,16 +783,29 @@ if MCP_AVAILABLE:
         """Best-effort detection for route-restricted virtual keys.
 
         We treat a requestor as a "restricted" virtual key if `allowed_routes`
-        is a non-empty list and the caller does not hold admin-view privileges.
-        Admin-tier callers (PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY) with route
-        restrictions are scoped service accounts/integrations, not untrusted
-        tenant keys needing discovery-only metadata stripping.
+        is a non-empty list. This matches the auth gate that blocks routes with
+        the error: "Virtual key is not allowed to call this route...".
         """
-        if user_api_key_has_admin_view(user_api_key_dict):
-            return False
-
         allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
+
+    def _is_mcp_management_route_allowed(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """True if the key's allowed_routes includes MCP management endpoints.
+
+        Inference-only virtual keys (e.g. allowed_routes=["llm_api_routes"]) are
+        admitted to GET discovery via RouteChecks carve-outs, but must receive
+        the minimal virtual-key discovery view. Keys with explicit MCP routes
+        belonging to admin-tier callers are scoped administrative integrations
+        that should receive governance metadata while keeping credentials stripped.
+        """
+        allowed_routes: Final = getattr(user_api_key_dict, "allowed_routes", None)
+        if not allowed_routes:
+            return True
+        return any(
+            r in ("all", "/v1/mcp", "/v1/mcp/server", "/v1/mcp/*", "mcp_routes")
+            or r.startswith("/v1/mcp/server")
+            for r in allowed_routes
+        )
 
     def _sanitize_mcp_server_for_non_admin(
         mcp_server: LiteLLM_MCPServerTable,
@@ -1507,6 +1520,8 @@ if MCP_AVAILABLE:
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
+            if user_api_key_has_admin_view(user_api_key_dict) and _is_mcp_management_route_allowed(user_api_key_dict):
+                return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
         # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
@@ -1983,7 +1998,13 @@ if MCP_AVAILABLE:
             non_admin_missing="not_found",
             allow_catalog_view=(
                 _get_user_mcp_management_mode() == "view_all"
-                and not is_restricted_virtual_key
+                and (
+                    not is_restricted_virtual_key
+                    or (
+                        user_api_key_has_admin_view(user_api_key_dict)
+                        and _is_mcp_management_route_allowed(user_api_key_dict)
+                    )
+                )
                 and resolved is not None
                 and resolved.table.approval_status in (None, MCPApprovalStatus.active, "approved")
                 and global_mcp_server_manager.get_mcp_server_by_id(resolved.table.server_id) is not None
@@ -2011,6 +2032,8 @@ if MCP_AVAILABLE:
 
         redacted: Final = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
+            if user_api_key_has_admin_view(user_api_key_dict) and _is_mcp_management_route_allowed(user_api_key_dict):
+                return _sanitize_mcp_server_for_non_admin(redacted)
             return _sanitize_mcp_server_for_virtual_key(redacted)
         # only a full PROXY_ADMIN sees credential-bearing fields; everyone else
         # goes through the non-admin sanitizer
