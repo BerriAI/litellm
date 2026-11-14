@@ -67,6 +67,7 @@ from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, Valida
 from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic.main import IncEx
 from pydantic_core import PydanticSerializationError, to_jsonable_python
+from redis.exceptions import RedisError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -82,6 +83,7 @@ from litellm.constants import (
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
@@ -371,6 +373,7 @@ from litellm.constants import (
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     SCHEDULED_JOB_POLL_INTERVAL_SECONDS,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+    SPEND_COUNTER_REDIS_TTL_SECONDS,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -530,6 +533,7 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
     publish_auth_cache_invalidation,
+    publish_auth_cache_invalidations,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
@@ -3213,7 +3217,24 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
-spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
+_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
+
+
+def spend_counter_redis_ttl() -> int:
+    """Redis TTL for spend counters. A counter that expires before its spend is flushed to the DB reseeds from a
+    stale-low row and re-admits a key that is over budget, so it must outlive many batch-write intervals."""
+    batch_write_at: Final = (
+        proxy_batch_write_at if isinstance(proxy_batch_write_at, (int, float)) else PROXY_BATCH_WRITE_AT
+    )
+    configured_redis_ttl: Final = int(litellm.default_redis_ttl) if litellm.default_redis_ttl is not None else 0
+    return max(
+        SPEND_COUNTER_REDIS_TTL_SECONDS,
+        int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at),
+        configured_redis_ttl,
+    )
+
+
+spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters(), spend_counter_redis_ttl)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
@@ -3412,6 +3433,8 @@ async def _drain_spend_event_producer_on_shutdown() -> None:
 # Bounds authoritative DB re-reads when enforcing a budget against a
 # stale-low spend counter: at most one DB read per counter per window.
 SPEND_DB_FLOOR_CACHE_TTL_SECONDS: Final = 5
+SPEND_RESET_FENCE_TTL_SECONDS: Final = 2 * SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+SPEND_DB_FLOOR_MARKER_PREFIX: Final = "spend_db_floor:"
 
 
 def _fail_closed_budget_enforcement() -> bool:
@@ -4633,6 +4656,125 @@ async def invalidate_spend_counter(counter_key: str) -> None:
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
 
+_IN_MEMORY_COUNTER_KEYS: Final = TypeAdapter(tuple[str, ...])
+
+
+_SPEND_COUNTER_STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, ValidationError)
+
+
+def _spend_counter_keys_in_memory(prefix: str) -> frozenset[str]:
+    floor_prefix: Final = f"{SPEND_DB_FLOOR_MARKER_PREFIX}{prefix}"
+    cached_keys: Final = _IN_MEMORY_COUNTER_KEYS.validate_python(tuple(spend_counter_cache.in_memory_cache.cache_dict))
+    counters: Final = (key for key in spend_counter_store.snapshot() if key.startswith(prefix))
+    floors: Final = (
+        key.removeprefix(SPEND_DB_FLOOR_MARKER_PREFIX) for key in cached_keys if key.startswith(floor_prefix)
+    )
+    return frozenset((*counters, *floors))
+
+
+async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> frozenset[str] | Exception:
+    namespace_prefix: Final = f"{redis_cache.namespace}:" if redis_cache.namespace else ""
+    try:
+        scanned: Final = await redis_cache.async_scan_iter(pattern=prefix, count=500, unbounded=True)
+    except _SPEND_COUNTER_STORE_FAILURES as e:
+        return e
+    return frozenset(key.removeprefix(namespace_prefix) for key in scanned)
+
+
+def _keys_per_reset_pipeline(max_batch_size: int) -> int:
+    return max(1, max_batch_size // 2)
+
+
+_KEYS_PER_RESET_PIPELINE: Final = _keys_per_reset_pipeline(DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE)
+
+
+async def _write_reset_batch(redis_cache: RedisCache, batch: Sequence[str], value: float) -> Exception | None:
+    """The fences go first, so a repair that lands between a fence and its counter already finds the fence. The
+    counters go through ``spend_counter_store``, the client every request increments them with, so a reset reads as
+    written only once that client accepts writes again."""
+    fences: Final = tuple((redis_cache.reset_fence_key(key), 1, SPEND_RESET_FENCE_TTL_SECONDS) for key in batch)
+    try:
+        fenced: Final = await redis_cache.async_set_cache_pipeline_with_ttls(fences)
+    except RedisCircuitBreakerOpenError as e:
+        return e
+    if fenced is not None:
+        return fenced
+    written: Final = await asyncio.gather(
+        *(spend_counter_store.set(key, value, memory_ttl=60) for key in batch), return_exceptions=True
+    )
+    return next((outcome for outcome in written if isinstance(outcome, Exception)), None)
+
+
+async def _write_spend_counters_to_redis(
+    redis_cache: RedisCache, keys: Sequence[str], value: float
+) -> Exception | None:
+    for start in range(0, len(keys), _KEYS_PER_RESET_PIPELINE):
+        if (
+            lost := await _write_reset_batch(redis_cache, keys[start : start + _KEYS_PER_RESET_PIPELINE], value)
+        ) is not None:
+            return lost
+    return None
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def set_spend_counters_with_floor_and_broadcast(counter_keys: Collection[str], value: float) -> Exception | None:
+    """A spend reset SETs each counter and its spend_db_floor marker on every pod, never
+    deletes them: a pod that cached the pre-reset floor within SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+    would otherwise repair the reseeded counter right back to the old total. The floors are
+    broadcast before the counters so a subscriber never holds the new counter under the old
+    floor, and a reset fence in Redis holds any repair that still races the broadcast.
+
+    Returns the Redis error when the counters could not be written there: this pod and the
+    broadcast still carry the new value, but the other pods fall back to the stale Redis
+    counters once their copies expire, so the caller must not report success."""
+    keys: Final = tuple(sorted(counter_keys))
+    if len(keys) == 0:
+        return None
+    floor_keys: Final = tuple(f"{SPEND_DB_FLOOR_MARKER_PREFIX}{key}" for key in keys)
+    for key, floor_key in zip(keys, floor_keys, strict=True):
+        spend_counter_store.set_local(key, value, 60)
+        spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    redis_cache: Final = spend_counter_cache.redis_cache
+    lost: Final = None if redis_cache is None else await _write_spend_counters_to_redis(redis_cache, keys, value)
+    await publish_auth_cache_invalidations(floor_keys, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    await publish_auth_cache_invalidations(keys, new_value=value, ttl=60)
+    return lost
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def reset_spend_counters_with_prefix(prefix: str) -> Exception | None:
+    """Resets every counter under ``prefix`` this pod or Redis knows; returns the Redis error
+    when the counters there could not be listed or written, with this pod already reset."""
+    redis_cache: Final = spend_counter_cache.redis_cache
+    in_redis: Final[frozenset[str] | Exception] = (
+        frozenset() if redis_cache is None else await _spend_counter_keys_in_redis(redis_cache, prefix)
+    )
+    listed: Final[frozenset[str]] = frozenset() if isinstance(in_redis, Exception) else in_redis
+    counters: Final = frozenset(
+        key
+        for key in _spend_counter_keys_in_memory(prefix) | listed
+        if not SpendCounterReseed.is_key_or_team_window_counter(key)
+    )
+    lost: Final = await set_spend_counters_with_floor_and_broadcast(counters, value=0.0)
+    return in_redis if isinstance(in_redis, Exception) else lost
+
+
+def raise_if_spend_counters_unwritten(lost: Exception | None, saved: str) -> None:
+    """Maps a lost Redis counter write to the public error: the database write stands, so the
+    caller retries the same request once Redis accepts writes rather than undoing anything."""
+    if lost is None:
+        return
+    raise ProxyException(
+        message=(
+            f"{saved}, but the cached spend counters could not be reset in Redis ({lost}). Budget checks on other "
+            "instances keep the previous spend until those counters expire, so retry this request once Redis "
+            "accepts writes."
+        ),
+        type=ProxyErrorTypes.internal_server_error,
+        param=None,
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
@@ -4649,7 +4791,7 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
     or floor marker keeps enforcing against it until its own TTL expires.
     """
     try:
-        await spend_counter_store.set(counter_key, value, ttl=60)
+        await spend_counter_store.set(counter_key, value, memory_ttl=60)
     except Exception as redis_err:
         verbose_proxy_logger.warning(
             "Failed to update spend counter %s in Redis: %s. Budget checks may use stale value until counter expires.",
@@ -9202,6 +9344,7 @@ class ProxyConfig:
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+            counter_cache=spend_counter_cache.in_memory_cache,
             spend_counters=spend_counter_store,
         )
         self.auth_cache_invalidation_subscriber = subscriber

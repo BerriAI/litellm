@@ -3392,7 +3392,7 @@ async def invalidate_team_member_spend_state(
         spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
 
         try:
-            await spend_counter_store.set(spend_counter_key, new_spend, ttl=60)
+            await spend_counter_store.set(spend_counter_key, new_spend, memory_ttl=60)
         except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
             verbose_proxy_logger.warning(
                 "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "

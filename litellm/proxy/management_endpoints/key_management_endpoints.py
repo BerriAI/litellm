@@ -4395,7 +4395,7 @@ async def update_key_fn(
 
             counter_key: Final = key_counter(hash_token_if_needed(key))
             try:
-                await spend_counter_store.set(counter_key, data.spend, ttl=60)
+                await spend_counter_store.set(counter_key, data.spend, memory_ttl=60)
             except Exception as redis_err:
                 verbose_proxy_logger.warning(
                     "Failed to update spend counter %s in Redis after key spend update: %s. "

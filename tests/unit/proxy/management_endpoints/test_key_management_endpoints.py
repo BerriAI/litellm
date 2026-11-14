@@ -8835,7 +8835,8 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
 
     window_counter_key = f"spend:key:{hashed_key}:window:1d"
     assert spend.memory[window_counter_key] == 0.0
-    assert f"SET {window_counter_key} 0.0 60" in spend.commands
+    assert spend.memory_ttls[window_counter_key] == 60
+    assert f"SET {window_counter_key} 0.0 {spend.counter_ttl}" in spend.commands
     mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
         key=f"spend_db_floor:{window_counter_key}", value=0.0, ttl=5
     )
@@ -9049,8 +9050,9 @@ async def test_update_key_spend_updates_counter(monkeypatch):
 
         mock_delete_cache.assert_awaited_once()
         assert spend.memory == {f"spend:key:{hashed_key}": 0.0}
+        assert spend.memory_ttls == {f"spend:key:{hashed_key}": 60}
         assert spend.commands == [
-            f"SET spend:key:{hashed_key} 0.0 60",
+            f"SET spend:key:{hashed_key} 0.0 {spend.counter_ttl}",
             f"DEL spend:committed:key:{hashed_key}",
         ]
 

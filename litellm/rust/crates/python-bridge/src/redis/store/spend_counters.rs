@@ -118,78 +118,56 @@ impl NativeSpendCounters {
         Some(pending("async_batch_get_cache", kind_error, read, numbers))
     }
 
+    #[pyo3(signature = (counter, amount, ttl_seconds = None))]
     fn increment<'py>(
         &self,
         py: Python<'py>,
         counter: PyData<SpendCounter>,
         amount: PyNumber,
+        ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
+        let ttl = ttl(ttl_seconds)?;
         redis_async(py, "async_increment", kind_error, async move {
-            store.increment(&counter.0, amount.0).await.map(PyNumber)
+            store
+                .increment(&counter.0, amount.0, ttl)
+                .await
+                .map(PyNumber)
         })
     }
 
+    #[pyo3(signature = (increments, ttl_seconds = None))]
     fn increment_many<'py>(
         &self,
         py: Python<'py>,
         increments: Vec<(PyData<SpendCounter>, PyNumber)>,
+        ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let increments = self::increments(increments);
+        let ttl = ttl(ttl_seconds)?;
         redis_async(py, "async_increment_pipeline", kind_error, async move {
-            let totals = store.increment_many(&increments).await?;
+            let totals = store.increment_many(&increments, ttl).await?;
             Ok(totals.into_iter().map(PyNumber).collect::<Vec<_>>())
         })
     }
 
     /// Declares the increments on the request's post-call batch; `None` when there is no Redis.
+    #[pyo3(signature = (request, increments, ttl_seconds = None))]
     fn increment_many_post_call(
         &self,
         request: &NativeRequestRedis,
         increments: Vec<(PyData<SpendCounter>, PyNumber)>,
-    ) -> Option<PyPostCallSettlement> {
-        self.0
-            .increment_many_post_call(&request.0, &self::increments(increments))
-            .map(PyPostCallSettlement)
-    }
-
-    fn set_max<'py>(
-        &self,
-        py: Python<'py>,
-        counter: PyData<SpendCounter>,
-        spend: PyNumber,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        redis_async(py, "async_set_max", kind_error, async move {
-            store
-                .set_max(&counter.0, spend.0)
-                .await
-                .map(|stored| stored.map(PyNumber))
-        })
-    }
-
-    #[pyo3(signature = (counter, spend, *, increment_if_lost))]
-    fn seed<'py>(
-        &self,
-        py: Python<'py>,
-        counter: PyData<SpendCounter>,
-        spend: PyNumber,
-        increment_if_lost: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        let lost = if increment_if_lost {
-            LostSeed::Increment
-        } else {
-            LostSeed::Answer
-        };
-        redis_async(py, "async_set_cache", kind_error, async move {
-            store.seed(&counter.0, spend.0, lost).await.map(PyNumber)
-        })
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<Option<PyPostCallSettlement>> {
+        Ok(self
+            .0
+            .increment_many_post_call(&request.0, &self::increments(increments), ttl(ttl_seconds)?)
+            .map(PyPostCallSettlement))
     }
 
     #[pyo3(signature = (counter, spend, ttl_seconds = None))]
-    fn set<'py>(
+    fn set_max<'py>(
         &self,
         py: Python<'py>,
         counter: PyData<SpendCounter>,
@@ -198,8 +176,52 @@ impl NativeSpendCounters {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let ttl = ttl(ttl_seconds)?;
+        redis_async(py, "async_set_max", kind_error, async move {
+            store
+                .set_max(&counter.0, spend.0, ttl)
+                .await
+                .map(|stored| stored.map(PyNumber))
+        })
+    }
+
+    #[pyo3(signature = (counter, spend, *, increment_if_lost, ttl_seconds = None))]
+    fn seed<'py>(
+        &self,
+        py: Python<'py>,
+        counter: PyData<SpendCounter>,
+        spend: PyNumber,
+        increment_if_lost: bool,
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let ttl = ttl(ttl_seconds)?;
+        let lost = if increment_if_lost {
+            LostSeed::Increment
+        } else {
+            LostSeed::Answer
+        };
         redis_async(py, "async_set_cache", kind_error, async move {
-            store.set(&counter.0, spend.0, ttl).await
+            store
+                .seed(&counter.0, spend.0, lost, ttl)
+                .await
+                .map(PyNumber)
+        })
+    }
+
+    #[pyo3(signature = (counter, spend, memory_ttl_seconds = None, redis_ttl_seconds = None))]
+    fn set<'py>(
+        &self,
+        py: Python<'py>,
+        counter: PyData<SpendCounter>,
+        spend: PyNumber,
+        memory_ttl_seconds: Option<f64>,
+        redis_ttl_seconds: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let memory_ttl = ttl(memory_ttl_seconds)?;
+        let redis_ttl = ttl(redis_ttl_seconds)?;
+        redis_async(py, "async_set_cache", kind_error, async move {
+            store.set(&counter.0, spend.0, memory_ttl, redis_ttl).await
         })
     }
 
@@ -215,14 +237,17 @@ impl NativeSpendCounters {
         })
     }
 
+    #[pyo3(signature = (counter, ttl_seconds = None))]
     fn refresh_ttl<'py>(
         &self,
         py: Python<'py>,
         counter: PyData<SpendCounter>,
+        ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
+        let ttl = ttl(ttl_seconds)?;
         redis_async(py, "async_refresh_ttl", kind_error, async move {
-            store.refresh_ttl(&counter.0).await
+            store.refresh_ttl(&counter.0, ttl).await
         })
     }
 

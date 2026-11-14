@@ -22,8 +22,9 @@ use crate::{
 };
 
 /// `RedisCache.async_set_max`, byte for byte, sent as `EVAL` like it: a counter only ever rises to
-/// the authoritative spend.
+/// the authoritative spend, and a reset's fence holds a repair still carrying the pre-reset total.
 const SET_MAX: &str = concat!(
+    "if KEYS[2] ~= nil and redis.call('EXISTS', KEYS[2]) == 1 then return redis.call('GET', KEYS[1]) end ",
     "local cur = redis.call('GET', KEYS[1]) ",
     "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then ",
     "redis.call('SET', KEYS[1], ARGV[1]) ",
@@ -94,7 +95,7 @@ impl SpendCounters {
         self.cache.redis().get().is_some()
     }
 
-    /// The TTL every Redis write gives a counter, `None` without Redis.
+    /// The TTL of a Redis write whose caller names none, `None` without Redis.
     pub fn redis_ttl(&self) -> Option<Duration> {
         self.cache.redis().get().map(|remote| remote.default_ttl)
     }
@@ -156,7 +157,12 @@ impl SpendCounters {
     /// `increment_spend_counter_cache`: `INCRBYFLOAT` refreshing the TTL, mirrored into memory. A
     /// failed increment may or may not have landed, so the counter is dropped everywhere before the
     /// error returns. Without Redis it is a memory increment.
-    pub async fn increment(&self, counter: &SpendCounter, amount: Number) -> Result<Number, Error> {
+    pub async fn increment(
+        &self,
+        counter: &SpendCounter,
+        amount: Number,
+        ttl: Option<Duration>,
+    ) -> Result<Number, Error> {
         let Some(remote) = self.cache.redis().get() else {
             return self.increment_local(counter, amount);
         };
@@ -164,7 +170,9 @@ impl SpendCounters {
         let increment = commands::incr_by_float(
             &key,
             amount.into(),
-            Some(Expiry::Refresh(self.ttl(counter, remote.default_ttl))),
+            Some(Expiry::Refresh(
+                self.ttl(counter, ttl.unwrap_or(remote.default_ttl)),
+            )),
         );
         match remote.client.send(increment).await {
             Ok(total) => {
@@ -184,6 +192,7 @@ impl SpendCounters {
     pub async fn increment_many(
         &self,
         increments: &[(SpendCounter, Number)],
+        ttl: Option<Duration>,
     ) -> Result<Vec<Number>, Error> {
         let Some(remote) = self.cache.redis().get() else {
             return increments
@@ -191,12 +200,13 @@ impl SpendCounters {
                 .map(|(counter, amount)| self.increment_local(counter, *amount))
                 .collect();
         };
+        let ttl = ttl.unwrap_or(remote.default_ttl);
         let pipeline = RedisBatch::pipelined(remote.client.clone());
         let totals = increments.iter().map(|(counter, amount)| {
             pipeline.add(commands::incr_by_float(
                 &counter.key(),
                 (*amount).into(),
-                Some(Expiry::Refresh(self.ttl(counter, remote.default_ttl))),
+                Some(Expiry::Refresh(self.ttl(counter, ttl))),
             ))
         });
         let totals = Declared::all(totals.collect::<Vec<_>>()).await;
@@ -218,8 +228,10 @@ impl SpendCounters {
         self: &Arc<Self>,
         request: &RequestRedis,
         increments: &[(SpendCounter, Number)],
+        ttl: Option<Duration>,
     ) -> Option<PostCallSettlement> {
         let remote = self.cache.redis().get()?;
+        let ttl = ttl.unwrap_or(remote.default_ttl);
         let batch = Send::PostCall(request).batch(&remote.client);
         let declared = increments
             .iter()
@@ -227,7 +239,7 @@ impl SpendCounters {
                 let total = batch.add(commands::incr_by_float(
                     &counter.key(),
                     (*amount).into(),
-                    Some(self.post_call_expiry(counter, remote.default_ttl)),
+                    Some(self.post_call_expiry(counter, ttl)),
                 ));
                 (counter.clone(), total)
             })
@@ -259,11 +271,12 @@ impl SpendCounters {
     }
 
     /// `_repair_stale_spend_counter`: raise memory and Redis to `spend`, never lowering either.
-    /// `None` without Redis, else what Redis holds afterwards.
+    /// `None` without Redis, else what Redis holds afterwards, a reset's fence holding the write.
     pub async fn set_max(
         &self,
         counter: &SpendCounter,
         spend: Number,
+        ttl: Option<Duration>,
     ) -> Result<Option<Number>, Error> {
         let key = counter.key();
         self.cache
@@ -274,11 +287,14 @@ impl SpendCounters {
         };
         let args = (
             to_str(&spend.to_value()),
-            self.ttl(counter, remote.default_ttl).as_secs().to_string(),
+            self.ttl(counter, ttl.unwrap_or(remote.default_ttl))
+                .as_secs()
+                .to_string(),
         );
+        let fence = counter.reset_fence_key(remote.client.namespace());
         let stored: Option<f64> = remote
             .client
-            .send(commands::eval_source(SET_MAX, &[&key], args))
+            .send(commands::eval_source(SET_MAX, &[&key, &fence], args))
             .await?;
         Ok(stored.map(Number::Float))
     }
@@ -291,6 +307,7 @@ impl SpendCounters {
         counter: &SpendCounter,
         spend: Number,
         lost: LostSeed,
+        ttl: Option<Duration>,
     ) -> Result<Number, Error> {
         let key = counter.key();
         let Some(Remote {
@@ -307,7 +324,7 @@ impl SpendCounters {
                 })
             })?);
         };
-        let ttl = self.ttl(counter, *default_ttl);
+        let ttl = self.ttl(counter, ttl.unwrap_or(*default_ttl));
         let current = if client
             .send(commands::set_nx(&key, spend.to_json(), ttl))
             .await?
@@ -333,19 +350,20 @@ impl SpendCounters {
         Ok(current)
     }
 
-    /// A spend reset: memory, then Redis, each for `ttl` or its own default.
+    /// A spend reset: memory, then Redis, each for its own TTL or its own default.
     pub async fn set(
         &self,
         counter: &SpendCounter,
         spend: Number,
-        ttl: Option<Duration>,
+        memory_ttl: Option<Duration>,
+        redis_ttl: Option<Duration>,
     ) -> Result<(), Error> {
         let key = counter.key();
-        self.cache.memory().set(&key, spend, ttl)?;
+        self.cache.memory().set(&key, spend, memory_ttl)?;
         let Some(remote) = self.cache.redis().get() else {
             return Ok(());
         };
-        let ttl = ttl.unwrap_or_else(|| self.ttl(counter, remote.default_ttl));
+        let ttl = self.ttl(counter, redis_ttl.unwrap_or(remote.default_ttl));
         remote
             .client
             .send(commands::set(&key, spend.to_json(), ttl))
@@ -360,7 +378,11 @@ impl SpendCounters {
     }
 
     /// `refresh_spend_counter_ttl`: `false` without Redis or for a counter Redis no longer holds.
-    pub async fn refresh_ttl(&self, counter: &SpendCounter) -> Result<bool, Error> {
+    pub async fn refresh_ttl(
+        &self,
+        counter: &SpendCounter,
+        ttl: Option<Duration>,
+    ) -> Result<bool, Error> {
         let Some(remote) = self.cache.redis().get() else {
             return Ok(false);
         };
@@ -368,7 +390,7 @@ impl SpendCounters {
             .client
             .send(commands::expire(
                 &counter.key(),
-                self.ttl(counter, remote.default_ttl),
+                self.ttl(counter, ttl.unwrap_or(remote.default_ttl)),
             ))
             .await?)
     }

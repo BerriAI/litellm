@@ -9346,7 +9346,9 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
     seeds: list[tuple[str, float, bool]] = []
 
     class RecordingSeeds(FakeSpendCounters):
-        def seed(self, counter: str, spend: float, *, increment_if_lost: bool) -> asyncio.Future[float]:
+        def seed(
+            self, counter: str, spend: float, *, increment_if_lost: bool, ttl_seconds: float | None = None
+        ) -> asyncio.Future[float]:
             seeds.append((counter, spend, increment_if_lost))
             return super().seed(counter, spend, increment_if_lost=increment_if_lost)
 

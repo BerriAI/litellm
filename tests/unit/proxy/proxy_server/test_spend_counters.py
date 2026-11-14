@@ -47,6 +47,7 @@ from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 
 from .conftest import normalize
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
@@ -698,6 +699,32 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
     assert [command.split()[0] for command in spend.commands] == ["MGET", "PIPELINE"]
     assert set(spend.commands[1].split()[1:]) == expected_keys
     assert spend.memory == dict.fromkeys(expected_keys, 1.5)
+
+
+def test_spend_counter_redis_ttl_never_shortens_configured_redis_ttl(monkeypatch):
+    """Deployments that configured a longer Redis default must not see spend counters expire sooner"""
+    monkeypatch.setattr(ps.litellm, "default_redis_ttl", 86400)
+    monkeypatch.setattr(ps, "proxy_batch_write_at", 60)
+
+    assert ps.spend_counter_redis_ttl() == 86400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_write_at", [60, 900])
+async def test_spend_counter_redis_ttl_outlives_db_batch_write_interval(monkeypatch, batch_write_at):
+    """A counter that expires before its buffered spend is written to the DB reseeds from a stale-low
+    row and re-admits an over-budget key, so every counter write must outlive the batch interval"""
+    spend: Final = FakeSpendCounters(redis={"spend:key:reserved": 1.0})
+    monkeypatch.setattr(ps, "spend_counter_store", SpendCounterStore(spend, ps.spend_counter_redis_ttl))
+    monkeypatch.setattr(ps, "proxy_batch_write_at", batch_write_at)
+    max_flush_delay: Final = batch_write_at + 5
+
+    await ps.increment_spend_counter_cache(counter_key="spend:key:direct", increment=0.5)
+    await ps.run_spend_counter_pipeline((ps.PendingSpendIncrement(counter_key="spend:key:batched", increment=0.5),))
+    await ps.refresh_spend_counter_ttl(counter_key="spend:key:reserved")
+
+    assert set(spend.ttls) == {"spend:key:direct", "spend:key:batched", "spend:key:reserved"}
+    assert all(ttl is not None and ttl > max_flush_delay for ttl in spend.ttls.values())
 
 
 class _VerificationTokenTable:
@@ -1423,6 +1450,14 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize(("max_batch_size", "keys_per_pipeline"), [(1, 1), (2, 1), (3, 1), (1000, 500)])
+def test_a_reset_pipeline_takes_half_the_redis_batch_size_and_never_less_than_one_key(
+    max_batch_size: int, keys_per_pipeline: int
+) -> None:
+    """Each key rides with its fence, so half the batch size; a step of zero would make every reset raise."""
+    assert ps._keys_per_reset_pipeline(max_batch_size) == keys_per_pipeline
 
 
 async def _drain_spend_cache_writes() -> None:

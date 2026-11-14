@@ -844,9 +844,17 @@ async def update_organization(
     )
 
     if data.spend is not None:
-        from litellm.proxy.proxy_server import spend_counter_store
+        from litellm.proxy.proxy_server import (
+            raise_if_spend_counters_unwritten,
+            set_spend_counters_with_floor_and_broadcast,
+            spend_counter_store,
+        )
 
+        lost: Final = await set_spend_counters_with_floor_and_broadcast(
+            counter_keys=(f"spend:org:{data.organization_id}",), value=data.spend
+        )
         await drop_committed_spend(spend_counter_store, (org_counter(data.organization_id),))
+        raise_if_spend_counters_unwritten(lost, saved="The organization spend was saved")
 
     return response
 

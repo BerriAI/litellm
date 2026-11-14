@@ -75,7 +75,8 @@ class FakeSettlement:
 class FakeSpendCounters:
     """``redis`` is None for a worker without Redis, and ``redis_default`` answers reads of a key it lacks. ``fail``
     makes every Redis call fail with ``failure``, ``fail_pipelines`` only the increment pipelines and ``failing`` only
-    the named writes ("set", "delete")."""
+    the named writes ("set", "delete"). ``counter_ttl`` is what the store gives each Redis write, ``ttls`` the last one
+    each counter's write carried and ``memory_ttls`` the last memory TTL of a ``set``."""
 
     redis: dict[str, object] | None = field(default_factory=dict)
     memory: dict[str, float] = field(default_factory=dict)
@@ -86,6 +87,9 @@ class FakeSpendCounters:
     failure: str = "transport"
     redis_default: float | None = None
     redis_ttl: float = 60
+    counter_ttl: float = 3600
+    ttls: dict[str, float | None] = field(default_factory=dict)
+    memory_ttls: dict[str, float | None] = field(default_factory=dict)
     committed_ttl: float | None = None
     batch_reads: bool = True
     read_hook: Callable[[str], Awaitable[None]] | None = None
@@ -95,7 +99,7 @@ class FakeSpendCounters:
     declared: list[DeclaredRead] = field(default_factory=list)
 
     def store(self) -> SpendCounterStore:
-        return SpendCounterStore(self)
+        return SpendCounterStore(self, lambda: self.counter_ttl)
 
     @property
     def has_redis(self) -> bool:
@@ -143,7 +147,7 @@ class FakeSpendCounters:
             events.append("declare spend_counters")
         return declared
 
-    def increment(self, counter: str, amount: float) -> asyncio.Future[float]:
+    def increment(self, counter: str, amount: float, ttl_seconds: float | None = None) -> asyncio.Future[float]:
         _check(counter)
         if self.redis is None:
             return _done(self.increment_local(counter, amount))
@@ -151,19 +155,26 @@ class FakeSpendCounters:
             self.memory.pop(counter, None)
             return _failed(unavailable(self.failure))
         self.commands.append(f"INCRBYFLOAT {counter} {amount}")
+        self.ttls[counter] = ttl_seconds
         return _done(self._incr(counter, amount))
 
-    def increment_many(self, increments: Sequence[SpendIncrement]) -> asyncio.Future[Sequence[float]]:
+    def increment_many(
+        self, increments: Sequence[SpendIncrement], ttl_seconds: float | None = None
+    ) -> asyncio.Future[Sequence[float]]:
         if self.redis is None:
             return _done([self.increment_local(counter, amount) for counter, amount in increments])
         if self.fail or self.fail_pipelines:
             return _failed(unavailable(self.failure))
         self.commands.append(f"PIPELINE {' '.join(counter for counter, _ in increments)}")
+        self.ttls.update(dict.fromkeys((counter for counter, _ in increments), ttl_seconds))
         return _done([self._incr(counter, amount) for counter, amount in increments])
 
-    def increment_many_post_call(self, request: object, increments: Sequence[SpendIncrement]) -> FakeSettlement | None:
+    def increment_many_post_call(
+        self, request: object, increments: Sequence[SpendIncrement], ttl_seconds: float | None = None
+    ) -> FakeSettlement | None:
         if self.redis is None:
             return None
+        self.ttls.update(dict.fromkeys((counter for counter, _ in increments), ttl_seconds))
         settlement: Final = FakeSettlement()
         self.post_call.append((request, tuple(increments), settlement))
         return settlement
@@ -182,7 +193,7 @@ class FakeSpendCounters:
             for counter, amount in increments:
                 self._incr(counter, amount)
 
-    def set_max(self, counter: str, spend: float) -> asyncio.Future[float | None]:
+    def set_max(self, counter: str, spend: float, ttl_seconds: float | None = None) -> asyncio.Future[float | None]:
         _check(counter)
         if self.memory.get(counter) is None or self.memory[counter] < spend:
             self.memory[counter] = spend
@@ -192,11 +203,14 @@ class FakeSpendCounters:
             return _failed(unavailable(self.failure))
         self.commands.append(f"SETMAX {counter} {spend}")
         current: Final = self.redis.get(counter)
+        self.ttls[counter] = ttl_seconds
         if current is None or current < spend:
             self.redis[counter] = spend
         return _done(float(self.redis[counter]))
 
-    def seed(self, counter: str, spend: float, *, increment_if_lost: bool) -> asyncio.Future[float]:
+    def seed(
+        self, counter: str, spend: float, *, increment_if_lost: bool, ttl_seconds: float | None = None
+    ) -> asyncio.Future[float]:
         _check(counter)
         if self.redis is None:
             cached: Final = self.memory.get(counter)
@@ -206,18 +220,27 @@ class FakeSpendCounters:
         if self.fail:
             return _failed(unavailable(self.failure))
         self.commands.append(f"SETNX {counter} {spend}")
+        self.ttls[counter] = ttl_seconds
         current: Final = self.redis.setdefault(counter, spend)
         self.memory[counter] = float(current)
         return _done(float(current))
 
-    def set(self, counter: str, spend: float, ttl_seconds: float | None = None) -> asyncio.Future[None]:
+    def set(
+        self,
+        counter: str,
+        spend: float,
+        memory_ttl_seconds: float | None = None,
+        redis_ttl_seconds: float | None = None,
+    ) -> asyncio.Future[None]:
         _check(counter)
         self.memory[counter] = spend
+        self.memory_ttls[counter] = memory_ttl_seconds
         if self.redis is None:
             return _done(None)
         if self.fail or "set" in self.failing:
             return _failed(unavailable(self.failure))
-        self.commands.append(f"SET {counter} {spend} {ttl_seconds}")
+        self.commands.append(f"SET {counter} {spend} {redis_ttl_seconds}")
+        self.ttls[counter] = redis_ttl_seconds
         self.redis[counter] = spend
         return _done(None)
 
@@ -241,13 +264,14 @@ class FakeSpendCounters:
             self.redis.pop(counter, None)
         return _done(None)
 
-    def refresh_ttl(self, counter: str) -> asyncio.Future[bool]:
+    def refresh_ttl(self, counter: str, ttl_seconds: float | None = None) -> asyncio.Future[bool]:
         _check(counter)
         if self.redis is None:
             return _done(False)
         if self.fail:
             return _failed(unavailable(self.failure))
         self.commands.append(f"EXPIRE {counter}")
+        self.ttls[counter] = ttl_seconds
         return _done(counter in self.redis)
 
     def get_local(self, counter: str) -> float | None:

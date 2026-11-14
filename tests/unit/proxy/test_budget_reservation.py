@@ -40,6 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_model_access_group_budget_counters,
+    _lease_renewals,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -2204,7 +2205,7 @@ class _ExpiringSpendCounters(FakeSpendCounters):
         self.refresh_count = 0
         self.fail_first_refresh = fail_first_refresh
 
-    def refresh_ttl(self, counter: str) -> asyncio.Future[bool]:
+    def refresh_ttl(self, counter: str, ttl_seconds: float | None = None) -> asyncio.Future[bool]:
         self.refresh_attempts += 1
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         redis = self.redis
@@ -2257,6 +2258,26 @@ async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
     await asyncio.sleep(0.35)
     assert redis_cache.refresh_count == refreshes_after_release
     assert redis_cache.redis.get(counter_key) is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_lease_renewal_stops_promptly_with_long_spend_counter_ttl(
+    spend_counter_state,
+):
+    """A long spend-counter TTL must not stretch how often renewal checks for completion, or finished
+    requests keep their renewal tasks alive for half that TTL"""
+    counter_cache, key_cache = spend_counter_state
+    _install(_ExpiringSpendCounters(ttl=0.2))
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-long-ttl", spend=0.0, max_budget=1.0)
+
+    reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert reservation is not None
+    assert len(_lease_renewals) == 1
+
+    await release_budget_reservation(reservation)
+    await asyncio.sleep(0.3)
+    assert len(_lease_renewals) == 0
 
 
 @pytest.mark.asyncio

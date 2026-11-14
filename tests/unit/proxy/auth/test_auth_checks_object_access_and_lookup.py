@@ -10800,7 +10800,8 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
         )
 
     assert spend.memory == {"spend:team_member:user-1:team-1": 2.5}
-    assert spend.commands == ["SET spend:team_member:user-1:team-1 2.5 60"]
+    assert spend.memory_ttls == {"spend:team_member:user-1:team-1": 60}
+    assert spend.commands == [f"SET spend:team_member:user-1:team-1 2.5 {spend.counter_ttl}"]
 
 
 @pytest.mark.asyncio
@@ -10927,6 +10928,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=remote_user_api_key_cache,
         additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
+        counter_cache=remote_spend_counter_in_memory_cache,
         spend_counters=remote_spend_counter_store,
     )
     for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):

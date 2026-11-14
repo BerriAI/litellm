@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -66,10 +66,16 @@ def _by_counter(counters: Sequence[str], read: Sequence[float | None] | None) ->
 
 class SpendCounterStore:
     """The ``spend:*`` budget counters: Redis shared by every worker, and this worker's memory copy that answers
-    only when Redis cannot. Counters are named by the builders in ``types``."""
+    only when Redis cannot. Counters are named by the builders in ``types``. ``counter_ttl`` gives each Redis write
+    its TTL when it happens, since the settings it depends on load after the store is built; without it a write gets
+    the Redis client's default."""
 
-    def __init__(self, handle: SpendCountersHandle) -> None:
+    def __init__(self, handle: SpendCountersHandle, counter_ttl: Callable[[], float] | None = None) -> None:
         self._handle: Final = handle
+        self._counter_ttl: Final = counter_ttl
+
+    def _write_ttl(self) -> float | None:
+        return None if self._counter_ttl is None else self._counter_ttl()
 
     def attach_redis(self, redis: RedisStores) -> None:
         """Adds the Redis tier once, keeping the memory copies, as ``DualCache.attach_redis_cache`` does."""
@@ -78,7 +84,8 @@ class SpendCounterStore:
 
     @property
     def redis_ttl(self) -> float | None:
-        """The TTL every Redis write gives a counter, None when there is no Redis."""
+        """The Redis client's default TTL, None when there is no Redis. A write whose store has ``counter_ttl`` lasts
+        longer than this."""
         return self._handle.redis_ttl_seconds
 
     @property
@@ -106,11 +113,11 @@ class SpendCounterStore:
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def increment(self, counter: str, amount: float) -> float:
         """Raises when the increment may not have landed, after dropping the counter everywhere."""
-        return await self._handle.increment(counter, amount)
+        return await self._handle.increment(counter, amount, self._write_ttl())
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def increment_many(self, increments: Sequence[SpendIncrement]) -> tuple[float, ...]:
-        return tuple(await self._handle.increment_many(increments))
+        return tuple(await self._handle.increment_many(increments, self._write_ttl()))
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> PostCallSettlement | None:
@@ -120,22 +127,25 @@ class SpendCounterStore:
         request: Final = post_call_request() if self.has_redis and increments else None
         if request is None:
             return None
-        return self._handle.increment_many_post_call(request, increments)
+        return self._handle.increment_many_post_call(request, increments, self._write_ttl())
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def set_max(self, counter: str, spend: float) -> float | None:
-        """Raise memory and Redis to ``spend``, never lowering either; what Redis holds after, None without Redis."""
-        return await self._handle.set_max(counter, spend)
+        """Raise memory and Redis to ``spend``, never lowering either; what Redis holds after, None without Redis. A
+        spend reset's fence (``RedisCache.reset_fence_key``) holds the Redis write while it exists."""
+        return await self._handle.set_max(counter, spend, self._write_ttl())
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def seed(self, counter: str, spend: float, *, increment_if_lost: bool) -> float:
         """Seed a cold counter with SET NX so one worker wins, answering with what the counter then holds."""
-        return await self._handle.seed(counter, spend, increment_if_lost=increment_if_lost)
+        return await self._handle.seed(
+            counter, spend, increment_if_lost=increment_if_lost, ttl_seconds=self._write_ttl()
+        )
 
     @with_service_target(SPEND_COUNTERS_TARGET)
-    async def set(self, counter: str, spend: float, ttl: float | None = None) -> None:
-        """Memory, then Redis; raises when Redis failed, with memory already written."""
-        await self._handle.set(counter, spend, ttl)
+    async def set(self, counter: str, spend: float, memory_ttl: float | None = None) -> None:
+        """Memory for ``memory_ttl``, then Redis; raises when Redis failed, with memory already written."""
+        await self._handle.set(counter, spend, memory_ttl, self._write_ttl())
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def delete(self, counters: Sequence[str]) -> None:
@@ -144,7 +154,7 @@ class SpendCounterStore:
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def refresh_ttl(self, counter: str) -> bool:
-        return await self._handle.refresh_ttl(counter)
+        return await self._handle.refresh_ttl(counter, self._write_ttl())
 
     def get_local(self, counter: str) -> float | None:
         return self._handle.get_local(counter)

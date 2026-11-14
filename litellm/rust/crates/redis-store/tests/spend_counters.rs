@@ -12,7 +12,7 @@ use litellm_redis_store::{
 };
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
-use support::{COOLDOWN_POLICY, connect, connect_observed, remote, within};
+use support::{COOLDOWN_POLICY, connect, connect_namespaced, connect_observed, remote, within};
 use tokio::runtime::Handle;
 
 const TTL: Duration = Duration::from_secs(60);
@@ -211,7 +211,7 @@ async fn resets_and_repairs_write_mains_bytes_with_the_redis_ttl(
     let counter = team("t");
 
     for (spend, bytes) in SETS {
-        store.set(&counter, spend, None).await.unwrap();
+        store.set(&counter, spend, None, None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&counter.key()))
                 .await
@@ -221,7 +221,7 @@ async fn resets_and_repairs_write_mains_bytes_with_the_redis_ttl(
     }
     for (spend, bytes) in SET_MAXES {
         raw.send(commands::del(&[&counter.key()])).await.unwrap();
-        let repaired = store.set_max(&counter, spend).await.unwrap();
+        let repaired = store.set_max(&counter, spend, None).await.unwrap();
         assert_eq!(
             raw.send(commands::get::<String>(&counter.key()))
                 .await
@@ -231,7 +231,12 @@ async fn resets_and_repairs_write_mains_bytes_with_the_redis_ttl(
         assert_eq!(repaired, Some(Number::Float(spend.as_f64())));
     }
     store
-        .set(&counter, Number::Int(5), Some(Duration::from_secs(30)))
+        .set(
+            &counter,
+            Number::Int(5),
+            None,
+            Some(Duration::from_secs(30)),
+        )
         .await
         .unwrap();
     let Ttl::Expires(remaining) = raw.send(commands::ttl(&counter.key())).await.unwrap() else {
@@ -252,10 +257,19 @@ async fn set_max_only_ever_raises_a_counter(
         token: "hashed".to_owned(),
         window: None,
     };
-    store.increment(&counter, Number::Float(9.5)).await.unwrap();
+    store
+        .increment(&counter, Number::Float(9.5), None)
+        .await
+        .unwrap();
 
-    let lower = store.set_max(&counter, Number::Float(4.0)).await.unwrap();
-    let higher = store.set_max(&counter, Number::Float(12.0)).await.unwrap();
+    let lower = store
+        .set_max(&counter, Number::Float(4.0), None)
+        .await
+        .unwrap();
+    let higher = store
+        .set_max(&counter, Number::Float(12.0), None)
+        .await
+        .unwrap();
 
     assert_eq!(lower, Some(Number::Float(9.5)));
     assert_eq!(higher, Some(Number::Float(12.0)));
@@ -275,6 +289,154 @@ async fn set_max_only_ever_raises_a_counter(
     );
 }
 
+/// Mirrored by `tests/unit/redis/stores/test_spend_counters.py`, which checks the same fence keys
+/// against `RedisCache`, the writer of the fence.
+#[rstest]
+#[tokio::test]
+async fn a_reset_fence_holds_a_repair_until_it_is_gone(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[values(
+        (None, "spend:team:t", "{spend:team:t}:reset_fence"),
+        (Some("litellm"), "litellm:spend:team:t", "litellm:{litellm:spend:team:t}:reset_fence"),
+    )]
+    wire: (Option<&str>, &str, &str),
+) {
+    let (namespace, stored_as, fence) = wire;
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let client = match namespace {
+        Some(namespace) => connect_namespaced(&deployment, namespace),
+        None => connect(&deployment),
+    };
+    let store = store(Some(client));
+    let counter = team("t");
+    store
+        .set(&counter, Number::Float(0.0), None, None)
+        .await
+        .unwrap();
+    raw.send(commands::set(fence, "1", TTL)).await.unwrap();
+
+    let held = store
+        .set_max(&counter, Number::Float(12.0), None)
+        .await
+        .unwrap();
+
+    assert_eq!(held, Some(Number::Float(0.0)));
+    assert_eq!(
+        raw.send(commands::get::<String>(stored_as)).await.unwrap(),
+        Some("0.0".to_owned())
+    );
+
+    raw.send(commands::del(&[fence])).await.unwrap();
+    let repaired = store
+        .set_max(&counter, Number::Float(12.0), None)
+        .await
+        .unwrap();
+
+    assert_eq!(repaired, Some(Number::Float(12.0)));
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Write {
+    Increment,
+    IncrementMany,
+    PostCall,
+    SetMax,
+    Seed,
+    Set,
+    RefreshTtl,
+}
+
+#[rstest]
+#[case::increment(Write::Increment)]
+#[case::increment_many(Write::IncrementMany)]
+#[case::post_call(Write::PostCall)]
+#[case::set_max(Write::SetMax)]
+#[case::seed(Write::Seed)]
+#[case::set(Write::Set)]
+#[case::refresh_ttl(Write::RefreshTtl)]
+#[tokio::test]
+async fn every_write_lasts_for_the_ttl_its_caller_names(
+    #[case] write: Write,
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = store(Some(connect(&deployment)));
+    let counter = team("t");
+    let long = Some(Duration::from_secs(3600));
+    let one = Number::Int(1);
+
+    match write {
+        Write::Increment => {
+            store.increment(&counter, one, long).await.unwrap();
+        }
+        Write::IncrementMany => {
+            store
+                .increment_many(&[(counter.clone(), one)], long)
+                .await
+                .unwrap();
+        }
+        Write::PostCall => {
+            let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+            assert!(
+                store
+                    .increment_many_post_call(&request, &[(counter.clone(), one)], long)
+                    .is_some()
+            );
+            request.flush_post().await;
+            litellm_redis_testing::eventually(async || store.get_local(&counter).unwrap()).await;
+        }
+        Write::SetMax => {
+            store.set_max(&counter, one, long).await.unwrap();
+        }
+        Write::Seed => {
+            store
+                .seed(&counter, one, LostSeed::Answer, long)
+                .await
+                .unwrap();
+        }
+        Write::Set => {
+            store.set(&counter, one, None, long).await.unwrap();
+        }
+        Write::RefreshTtl => {
+            store.increment(&counter, one, None).await.unwrap();
+            assert!(store.refresh_ttl(&counter, long).await.unwrap());
+        }
+    }
+
+    let Ttl::Expires(remaining) = raw.send(commands::ttl(&counter.key())).await.unwrap() else {
+        panic!("{write:?} left the counter without a TTL");
+    };
+    assert!(within(remaining, 3600), "{write:?} {remaining:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_reset_gives_memory_and_redis_their_own_ttl() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let raw = connect(&deployment);
+    let store = store(Some(connect(&deployment)));
+    let counter = team("t");
+
+    store
+        .set(
+            &counter,
+            Number::Int(5),
+            Some(Duration::from_millis(1)),
+            Some(Duration::from_secs(3600)),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert_eq!(store.get_local(&counter).unwrap(), None);
+    let Ttl::Expires(remaining) = raw.send(commands::ttl(&counter.key())).await.unwrap() else {
+        panic!("a reset counter has no TTL");
+    };
+    assert!(within(remaining, 3600), "{remaining:?}");
+}
+
 #[rstest]
 #[tokio::test]
 async fn increments_refresh_the_ttl_and_mirror_the_shared_total_into_memory(
@@ -287,7 +449,7 @@ async fn increments_refresh_the_ttl_and_mirror_the_shared_total_into_memory(
     let store = store(Some(client));
     let [first, second] = [team("a"), team("b")];
     other_pod
-        .increment(&first, Number::Float(1.25))
+        .increment(&first, Number::Float(1.25), None)
         .await
         .unwrap();
     raw.send(commands::expire(&first.key(), Duration::from_secs(5)))
@@ -295,10 +457,13 @@ async fn increments_refresh_the_ttl_and_mirror_the_shared_total_into_memory(
         .unwrap();
 
     let totals = store
-        .increment_many(&[
-            (first.clone(), Number::Float(0.5)),
-            (second.clone(), Number::Int(2)),
-        ])
+        .increment_many(
+            &[
+                (first.clone(), Number::Float(0.5)),
+                (second.clone(), Number::Int(2)),
+            ],
+            None,
+        )
         .await
         .unwrap();
 
@@ -331,7 +496,7 @@ async fn a_post_call_increment_from_a_thread_without_a_runtime_lands_in_redis_an
 
     let declared = std::thread::spawn({
         let (store, request, counter) = (Arc::clone(&store), request.clone(), counter.clone());
-        move || store.increment_many_post_call(&request, &[(counter, Number::Float(3.5))])
+        move || store.increment_many_post_call(&request, &[(counter, Number::Float(3.5))], None)
     })
     .join()
     .expect("a Python thread has no Tokio context, and declaring there must not panic");
@@ -362,7 +527,7 @@ async fn post_call_increments_wait_for_the_post_batch_then_land_in_memory(
     let counter = team("t");
 
     let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(3.5))])
+        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(3.5))], None)
         .unwrap();
     request.flush_pre().await;
 
@@ -451,11 +616,11 @@ async fn a_seed_lets_the_first_pod_win_and_others_answer_with_its_value(
     let counter = SpendCounter::Org("org".to_owned());
 
     let won = first
-        .seed(&counter, Number::Float(10.0), LostSeed::Answer)
+        .seed(&counter, Number::Float(10.0), LostSeed::Answer, None)
         .await
         .unwrap();
     let lost = second
-        .seed(&counter, Number::Float(99.0), LostSeed::Increment)
+        .seed(&counter, Number::Float(99.0), LostSeed::Increment, None)
         .await
         .unwrap();
 
@@ -486,13 +651,16 @@ async fn delete_drops_memory_and_redis_and_refresh_ttl_reports_whether_redis_hel
     let store = store(Some(connect(&deployment)));
     let counters = [team("a"), team("b")];
     for counter in &counters {
-        store.increment(counter, Number::Int(1)).await.unwrap();
+        store
+            .increment(counter, Number::Int(1), None)
+            .await
+            .unwrap();
     }
     raw.send(commands::expire(&counters[0].key(), Duration::from_secs(5)))
         .await
         .unwrap();
 
-    assert!(store.refresh_ttl(&counters[0]).await.unwrap());
+    assert!(store.refresh_ttl(&counters[0], None).await.unwrap());
     let Ttl::Expires(remaining) = raw.send(commands::ttl(&counters[0].key())).await.unwrap() else {
         panic!("a refreshed counter has no TTL");
     };
@@ -509,7 +677,7 @@ async fn delete_drops_memory_and_redis_and_refresh_ttl_reports_whether_redis_hel
         );
         assert_eq!(store.get_local(counter).unwrap(), None);
     }
-    assert!(!store.refresh_ttl(&counters[0]).await.unwrap());
+    assert!(!store.refresh_ttl(&counters[0], None).await.unwrap());
 }
 
 // main's read_spend_counter_cache_value: RedisCache.async_get_cache swallows a failed GET and
@@ -521,12 +689,18 @@ async fn a_failed_read_serves_the_local_counter_and_a_failed_increment_drops_the
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let store = store(Some(connect(&deployment)));
     let [kept, failed] = [team("kept"), team("failed")];
-    store.increment(&kept, Number::Float(2.0)).await.unwrap();
-    store.increment(&failed, Number::Float(3.0)).await.unwrap();
+    store
+        .increment(&kept, Number::Float(2.0), None)
+        .await
+        .unwrap();
+    store
+        .increment(&failed, Number::Float(3.0), None)
+        .await
+        .unwrap();
     deployment.stop().await.unwrap();
 
     let read = store.read(&kept).await.unwrap();
-    let increment = store.increment(&failed, Number::Float(1.0)).await;
+    let increment = store.increment(&failed, Number::Float(1.0), None).await;
 
     assert_eq!(read, Reading::Memory(Some(Number::Float(2.0))));
     assert!(increment.is_err());
@@ -555,7 +729,10 @@ async fn a_read_with_an_open_breaker_serves_the_local_counter() {
     );
     let store = store(Some(support::connect_guarded(&deployment, breaker)));
     let counter = team("t");
-    store.increment(&counter, Number::Float(2.0)).await.unwrap();
+    store
+        .increment(&counter, Number::Float(2.0), None)
+        .await
+        .unwrap();
     deployment.stop().await.unwrap();
 
     let failed = store.read(&counter).await.unwrap();
@@ -590,9 +767,12 @@ async fn a_failed_post_call_increment_drops_the_counter_from_memory() {
     let store = store(Some(connect(&deployment)));
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
     let counter = team("t");
-    store.increment(&counter, Number::Float(1.0)).await.unwrap();
+    store
+        .increment(&counter, Number::Float(1.0), None)
+        .await
+        .unwrap();
     let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))])
+        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))], None)
         .unwrap();
     deployment.stop().await.unwrap();
 
@@ -615,7 +795,7 @@ async fn a_post_call_settlement_settles_when_the_deadline_sends_the_batch(
     let counter = committed(team("t"));
 
     let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(2.5))])
+        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(2.5))], None)
         .unwrap();
 
     assert!(!settlement.is_settled());
@@ -659,23 +839,26 @@ async fn every_write_gives_a_committed_twin_the_committed_ttl_and_other_counters
     .unwrap();
 
     store
-        .increment(&incremented, Number::Float(1.0))
+        .increment(&incremented, Number::Float(1.0), None)
         .await
         .unwrap();
     store
-        .increment_many(&[(pipelined.clone(), Number::Float(1.0))])
+        .increment_many(&[(pipelined.clone(), Number::Float(1.0))], None)
         .await
         .unwrap();
     let settlement = store
-        .increment_many_post_call(&request, &[(post_call.clone(), Number::Float(1.0))])
+        .increment_many_post_call(&request, &[(post_call.clone(), Number::Float(1.0))], None)
         .unwrap();
     request.flush_post().await;
     store
-        .seed(&seeded, Number::Float(1.0), LostSeed::Answer)
+        .seed(&seeded, Number::Float(1.0), LostSeed::Answer, None)
         .await
         .unwrap();
-    store.set_max(&repaired, Number::Float(1.0)).await.unwrap();
-    assert!(store.refresh_ttl(&refreshed).await.unwrap());
+    store
+        .set_max(&repaired, Number::Float(1.0), None)
+        .await
+        .unwrap();
+    assert!(store.refresh_ttl(&refreshed, None).await.unwrap());
 
     assert!(settlement.is_settled());
     let remaining =
@@ -708,7 +891,7 @@ async fn a_post_call_charge_moves_a_committed_twins_expiry_out_to_the_committed_
         .unwrap();
 
     let settlement = store
-        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))])
+        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))], None)
         .unwrap();
     request.flush_post().await;
 
@@ -726,17 +909,23 @@ async fn without_redis_counters_live_in_memory() {
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
 
     let totals = store
-        .increment_many(&[
-            (counter.clone(), Number::Int(2)),
-            (counter.clone(), Number::Float(0.5)),
-        ])
+        .increment_many(
+            &[
+                (counter.clone(), Number::Int(2)),
+                (counter.clone(), Number::Float(0.5)),
+            ],
+            None,
+        )
         .await
         .unwrap();
     let seeded = store
-        .seed(&counter, Number::Float(1.0), LostSeed::Answer)
+        .seed(&counter, Number::Float(1.0), LostSeed::Answer, None)
         .await
         .unwrap();
-    let raised = store.set_max(&counter, Number::Float(7.0)).await.unwrap();
+    let raised = store
+        .set_max(&counter, Number::Float(7.0), None)
+        .await
+        .unwrap();
 
     assert_eq!(totals, [Number::Int(2), Number::Float(2.5)]);
     assert_eq!(seeded, Number::Float(2.5));
@@ -747,7 +936,7 @@ async fn without_redis_counters_live_in_memory() {
     );
     assert!(
         store
-            .increment_many_post_call(&request, &[(counter.clone(), Number::Int(1))])
+            .increment_many_post_call(&request, &[(counter.clone(), Number::Int(1))], None)
             .is_none()
     );
     assert!(
@@ -773,7 +962,7 @@ async fn spend_counters_send_the_commands_main_sends(
         .unwrap();
 
     store
-        .increment(&counters[0], Number::Float(1.5))
+        .increment(&counters[0], Number::Float(1.5), None)
         .await
         .unwrap();
     store
@@ -783,11 +972,11 @@ async fn spend_counters_send_the_commands_main_sends(
         .unwrap()
         .unwrap();
     store
-        .set_max(&counters[0], Number::Float(9.0))
+        .set_max(&counters[0], Number::Float(9.0), None)
         .await
         .unwrap();
     store
-        .seed(&counters[1], Number::Float(2.0), LostSeed::Answer)
+        .seed(&counters[1], Number::Float(2.0), LostSeed::Answer, None)
         .await
         .unwrap();
     store.delete(&counters).await.unwrap();
