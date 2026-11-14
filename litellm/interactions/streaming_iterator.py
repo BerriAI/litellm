@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_b
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
@@ -185,14 +186,16 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
 
         logging_response: Final = copy.deepcopy(self.completed_response)
 
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             self.logging_obj.dispatch_success_handlers(
                 logging_response,
                 start_time=self.start_time,
                 end_time=datetime.now(),
                 cache_hit=None,
                 prefer_async_handlers=True,
-            )
+            ),
+            task_name="Interactions stream success logging",
         )
 
 
