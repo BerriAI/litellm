@@ -53,14 +53,12 @@ def _frozen_handler() -> PROXY_MaxParallelRequestsHandler:
     return PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
 
 
-def _key_bucket(api_key: str) -> str:
-    return f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
-
-
-async def _in_flight(handler: PROXY_MaxParallelRequestsHandler, api_key: str) -> int:
+async def _in_flight(
+    handler: PROXY_MaxParallelRequestsHandler, api_key: str, minute: str = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
+) -> int:
     await asyncio.sleep(0)
     bucket: Final = await handler.internal_usage_cache.async_get_cache(
-        key=_key_bucket(api_key), litellm_parent_otel_span=None
+        key=f"{api_key}::{minute}::request_count", litellm_parent_otel_span=None
     )
     return bucket["current_requests"]
 
@@ -523,6 +521,7 @@ async def test_an_ended_request_frees_its_slot_exactly_once_however_often_cleanu
                 )
         await proxy_logging_obj.arelease_max_parallel_requests(auth)
         await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+        assert await _in_flight(handler, api_key) == 1
         await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
         await handler.async_log_success_event(
             kwargs=_completed(api_key), response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
@@ -532,6 +531,62 @@ async def test_an_ended_request_frees_its_slot_exactly_once_however_often_cleanu
     assert await _in_flight(handler, api_key) == 1
     await _as_its_own_request(ended_request())
     assert await _in_flight(handler, api_key) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_request_dropped_after_the_minute_rolled_over_frees_the_slot_it_took_in_its_own_minute():
+    api_key = hash_token("sk-straddles-the-minute")
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_clock_rolling_over_after_first_read()
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    auth = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+
+    first_admitted = asyncio.Event()
+    second_admitted = asyncio.Event()
+
+    async def admitted_in_january_dropped_in_february() -> None:
+        await _admit(handler, auth)
+        first_admitted.set()
+        await second_admitted.wait()
+        await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+
+    january = _as_its_own_request(admitted_in_january_dropped_in_february())
+    await first_admitted.wait()
+    await _as_its_own_request(_admit(handler, auth))
+    second_admitted.set()
+    await january
+    assert await _in_flight(handler, api_key, LAST_MINUTE_OF_JANUARY) == 0
+    assert await _in_flight(handler, api_key, FIRST_MINUTE_OF_FEBRUARY) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_straddles_a_minute_frees_its_slot_in_its_own_minute_and_counts_tokens_in_the_new_one():
+    api_key = hash_token("sk-tokens-straddle")
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_clock_rolling_over_after_first_read()
+    )
+    auth = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+
+    async def admitted_in_january_finished_in_february() -> None:
+        await _admit(handler, auth)
+        await handler.async_log_success_event(
+            kwargs=_completed(api_key),
+            response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7)),
+            start_time=LAST_MICROSECOND_OF_JANUARY,
+            end_time=FIRST_MICROSECOND_OF_FEBRUARY,
+        )
+
+    await _as_its_own_request(admitted_in_january_finished_in_february())
+    january = await handler.internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
+    )
+    february = await handler.internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{FIRST_MINUTE_OF_FEBRUARY}::request_count", litellm_parent_otel_span=None
+    )
+    assert january["current_requests"] == 0 and january["current_tpm"] == 0, january
+    assert february["current_requests"] == 0 and february["current_tpm"] == 7, february
 
 
 @pytest.mark.asyncio
