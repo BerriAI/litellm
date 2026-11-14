@@ -3119,8 +3119,8 @@ async def get_user_object(
                 from litellm.proxy.management_endpoints.internal_user_endpoints import (
                     add_new_user_to_default_team,
                     check_if_default_team_set,
-                    initial_budget_windows_json,
                 )
+                from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
                 default_params: Final[Mapping[str, object]] = litellm.default_internal_user_params or {}
                 scalar_default_params: Final = {

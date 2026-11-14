@@ -1540,3 +1540,49 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_member",
+    (Member(user_id="windows-user", role="user"), Member(user_email="windows@example.com", role="user")),
+    ids=("by_user_id", "by_email"),
+)
+async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_member: Member, monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"budget_limits": [{"budget_duration": "1h", "max_budget": 5.0}, {"budget_duration": "30d", "max_budget": 100.0}]},
+    )
+    created_row: Final = MagicMock()
+    created_row.model_dump.return_value = {"user_id": "windows-user", "user_role": "internal_user"}
+    membership_row: Final = MagicMock()
+    membership_row.model_dump.return_value = {"team_id": "team-w", "user_id": "windows-user", "budget_id": None}
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=created_row)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=created_row)
+    prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
+    prisma_client.get_data = AsyncMock(return_value=[])
+    prisma_client.insert_data = AsyncMock(return_value=created_row)
+    before_call: Final = datetime.now(timezone.utc)
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=prisma_client,
+        team_id="team-w",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="test_admin",
+    )
+
+    written_rows: Final = (
+        *(call.kwargs["data"]["create"] for call in prisma_client.db.litellm_usertable.upsert.call_args_list),
+        *(call.kwargs["data"] for call in prisma_client.insert_data.call_args_list),
+    )
+    assert len(written_rows) == 1
+    windows: Final = json.loads(written_rows[0]["budget_limits"])
+    assert [(window["budget_duration"], window["max_budget"]) for window in windows] == [("1h", 5.0), ("30d", 100.0)]
+    hourly_reset, monthly_reset = (datetime.fromisoformat(window["reset_at"]) for window in windows)
+    assert before_call < hourly_reset < monthly_reset

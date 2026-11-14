@@ -2676,12 +2676,12 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
 
     saved_users: Final = MappingProxyType(
-        {user_id: _user_with_windows(user_id) for user_id in ("user-spruce", "user-fir")}
+        {user_id: _user_with_windows(user_id) for user_id in ("user-spruce", "user-fir", "user-larch")}
     )
     transaction_writes: Final = mocker.AsyncMock(return_value=len(saved_users))
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
-        return_value=[LiteLLM_UserTable(user_id=user_id) for user_id in saved_users]
+        return_value=[LiteLLM_UserTable(user_id=user_id) for user_id in ("user-spruce", "user-fir")]
     )
     transaction_db: Final = SimpleNamespace(
         litellm_usertable=SimpleNamespace(
@@ -2714,7 +2714,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
         litellm_changed_by=None,
     )
 
-    assert response.successful_updates == len(saved_users)
+    assert sorted(result.user_id for result in response.results) == sorted(saved_users)
     writes: Final = tuple(call.kwargs for call in transaction_writes.call_args_list)
     assert {"where": {}, "data": {"max_budget": 50.0}} in writes
     window_writes: Final = tuple(write for write in writes if "budget_limits" in write["data"])

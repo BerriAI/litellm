@@ -94,7 +94,11 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
-from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.management_helpers.utils import (
+    BUDGET_WINDOWS_ADAPTER,
+    budget_windows_json,
+    management_endpoint_wrapper,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.spend_counters import (
     user_counter,
@@ -136,7 +140,6 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
-_BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
@@ -1374,44 +1377,16 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _budget_windows_json(
-    requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None
-) -> str:
-    if not requested:
-        return json.dumps(None)
-    stored_reset_at: Final = MappingProxyType(
-        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
-    )
-    return json.dumps(
-        [
-            {
-                **window.model_dump(),
-                "reset_at": (
-                    stored_reset_at.get(window.budget_duration)
-                    or get_budget_reset_time(budget_duration=window.budget_duration)
-                ).isoformat(),
-            }
-            for window in requested
-        ]
-    )
-
-
-def initial_budget_windows_json(raw_windows: object) -> str:
-    return _budget_windows_json(
-        None if raw_windows is None else _BUDGET_WINDOWS_ADAPTER.validate_python(raw_windows), stored=None
-    )
-
-
 def _windows_by_user(
     users: Sequence["prisma_models.LiteLLM_UserTable"], requested: Sequence[BudgetLimitEntry] | None
 ) -> MappingProxyType[str, str]:
     return MappingProxyType(
         {
-            user.user_id: _budget_windows_json(
+            user.user_id: budget_windows_json(
                 requested,
                 stored=None
                 if user.budget_limits is None
-                else _BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
+                else BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
             )
             for user in users
         }
@@ -1445,7 +1420,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
             non_default_values[k] = v
 
     if "budget_limits" in non_default_values:
-        non_default_values["budget_limits"] = _budget_windows_json(data.budget_limits, stored=None)
+        non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
 
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
@@ -1648,7 +1623,7 @@ async def _update_single_user_helper(
         ):
             del non_default_values["budget_reset_at"]
         if "budget_limits" in non_default_values:
-            non_default_values["budget_limits"] = _budget_windows_json(
+            non_default_values["budget_limits"] = budget_windows_json(
                 user_request.budget_limits, stored=existing_user_row.budget_limits
             )
 
@@ -2122,8 +2097,9 @@ async def bulk_user_update(
             # Perform bulk database update
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
+                locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
                 windows_by_user: Final[Mapping[str, str]] = (
-                    _windows_by_user(await user_tx_db(transaction).find_many(), data.user_updates.budget_limits)
+                    _windows_by_user(locked_users, data.user_updates.budget_limits)
                     if "budget_limits" in non_default_values
                     else MappingProxyType({})
                 )
@@ -2148,11 +2124,11 @@ async def bulk_user_update(
                         data={"budget_limits": windows_json},
                     )
 
-            for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
+            for start in range(0, len(locked_users), _USER_CACHE_INVALIDATION_BATCH_SIZE):
                 await asyncio.gather(
                     *(
                         evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
-                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                     ),
                     *(
                         evict_budget_windows_absent_marker(
@@ -2160,17 +2136,17 @@ async def bulk_user_update(
                             entity_id=user.user_id,
                             user_api_key_cache=user_api_key_cache,
                         )
-                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user
                     ),
                     *(
                         _invalidate_user_spend_counter_if_changed({**non_default_values, "user_id": user.user_id})
-                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                        for user in locked_users[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                     ),
                 )
 
             # Create individual success results
-            for user in all_users_in_db:
+            for user in locked_users:
                 results.append(
                     UserUpdateResult(
                         user_id=user.user_id,
@@ -2198,7 +2174,7 @@ async def bulk_user_update(
                         litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
                         user_api_key_dict=user_api_key_dict,
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=f"Updated {len(all_users_in_db)} users",
+                        before_value=f"Updated {len(results)} users",
                         after_value=json.dumps(non_default_values),
                     )
                 )
@@ -2216,7 +2192,7 @@ async def bulk_user_update(
         if successful_updates > 0:
             return BulkUpdateUserResponse(
                 results=results,
-                total_requested=len(all_users_in_db),
+                total_requested=len(results),
                 successful_updates=successful_updates,
                 failed_updates=failed_updates,
             )
