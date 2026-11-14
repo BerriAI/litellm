@@ -1479,6 +1479,13 @@ async def test_register_client_persists_dcr_client_identity():
         "dcr_server_url": None,
         "dcr_redirect_uris": ["https://proxy.litellm.example/callback"],
     }
+    assert mock_async_client.post.call_args.kwargs["json"] == {
+        "client_name": "Litellm Proxy",
+        "redirect_uris": ["https://proxy.litellm.example/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_basic",
+    }
 
     mock_update.assert_called_once()
     update_data = mock_update.call_args.kwargs["data"]
@@ -6058,13 +6065,12 @@ _LAPTOP_LOOPBACK_REDIRECT: Final = "http://127.0.0.1:33418/"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
-async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_laptop_loopback(
-    monkeypatch: pytest.MonkeyPatch, auth_type_value: Literal["oauth_delegate", "true_passthrough"]
+@pytest.mark.parametrize("replace_stale_client", [False, True])
+async def test_register_bridge_with_proxy_base_url_uses_gateway_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+    replace_stale_client: bool,
 ) -> None:
-    """A laptop MCP client (VS Code) registers with its own loopback redirect. With PROXY_BASE_URL set
-    the gateway must not relay that registration upstream: it registers its one shared client bound
-    to the gateway /callback, keeps it, and hands the caller a client bound to the caller's loopback.
-    Relaying the loopback is the customer failure on upstreams that restrict redirect domains."""
     import json
 
     from litellm.types.mcp import MCPAuth
@@ -6072,16 +6078,53 @@ async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     response, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(auth_type=MCPAuth(auth_type_value)),
-        {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
+        {
+            "client_name": "" if replace_stale_client else "Visual Studio Code",
+            "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT],
+        },
+        replace_stale_client=replace_stale_client,
     )
 
     posted: Final = mock_async_client.post.call_args.kwargs["json"]
-    assert posted["redirect_uris"] == ["https://litellm.example.com/callback"], posted
-    assert posted["client_name"] == "LiteLLM Proxy", posted
+    assert posted == {
+        "client_name": "LiteLLM Proxy",
+        "redirect_uris": ["https://litellm.example.com/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }, posted
     mock_persist.assert_awaited_once()
 
     payload: Final = json.loads(response.body.decode("utf-8"))
     assert payload["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT], payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
+@pytest.mark.parametrize("auth_method", ["client_secret_basic", "client_secret_post"])
+async def test_admin_register_bridge_preserves_explicit_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+    auth_method: str,
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    metadata: Final[_BridgeRegistrationPayload] = {
+        "client_name": "Custom gateway",
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": auth_method,
+    }
+    _, mock_async_client, mock_persist = await _bridge_register_response(
+        _bridge_server(auth_type=MCPAuth(auth_type_value)),
+        metadata,
+        replace_stale_client=True,
+    )
+
+    assert mock_async_client.post.call_args.kwargs["json"] == {
+        **metadata,
+        "redirect_uris": ["https://litellm.example.com/callback"],
+    }
+    mock_persist.assert_awaited_once()
 
 
 @pytest.mark.asyncio
