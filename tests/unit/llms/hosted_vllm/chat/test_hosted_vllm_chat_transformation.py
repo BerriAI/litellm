@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponse
 
@@ -395,6 +397,72 @@ def test_hosted_vllm_assistant_tool_use_does_not_duplicate_existing_tool_calls()
             },
         }
     ]
+
+
+def _transform_request_sync(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
+    return config.transform_request(
+        model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+
+def _transform_request_async(config: HostedVLLMChatConfig, messages: list[AllMessageValues]) -> dict[str, object]:
+    return asyncio.run(
+        config.async_transform_request(
+            model="hosted_vllm/qwen3-vl", messages=messages, optional_params={}, litellm_params={}, headers={}
+        )
+    )
+
+
+@pytest.mark.parametrize("transform_request", [_transform_request_sync, _transform_request_async], ids=["sync", "async"])
+def test_hosted_vllm_transform_request_leaves_the_caller_messages_untouched(
+    transform_request: Callable[[HostedVLLMChatConfig, list[AllMessageValues]], dict[str, object]],
+) -> None:
+    video_url: Final = "https://example.com/clip.mp4"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "file", "file": {"file_id": video_url, "format": "video/mp4"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "It was filmed in Boston. Checking the weather."},
+                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Boston"}},
+            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "The skyline is Boston.", "signature": "sig1"}],
+            "reasoning_content": [{"type": "text", "text": "The skyline is Boston."}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    snapshot: Final = copy.deepcopy(messages)
+
+    transformed: Final = transform_request(HostedVLLMChatConfig(), messages)
+
+    assert transformed["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Where was this clip filmed, and what is the weather there?"},
+                {"type": "video_url", "video_url": {"url": video_url}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "It was filmed in Boston. Checking the weather.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": json.dumps({"city": "Boston"})},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Sunny, 21C"},
+    ]
+    assert messages == snapshot
 
 
 def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
