@@ -249,7 +249,7 @@ class SpendCounterReseed:
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:
-        for prefix in ("spend:key:", "spend:team:", "spend:user:"):
+        for prefix in ("spend:key:", "spend:team:"):
             if not counter_key.startswith(prefix):
                 continue
             _, separator, duration = counter_key.rpartition(":window:")

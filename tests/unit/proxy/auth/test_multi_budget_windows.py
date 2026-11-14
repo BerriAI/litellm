@@ -2,6 +2,7 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 from typing import Final
 
@@ -13,15 +14,25 @@ from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
 from litellm.proxy.auth import auth_checks
 from litellm.proxy import proxy_server
 from litellm.models.user import LiteLLM_UserTable
+from litellm.redis.stores.spend_counters import user_counter, user_window_counter
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hour, month, exhausted", [(4.0, 99.0, False), (5.0, 1.0, True), (1.0, 100.0, True)])
+@pytest.mark.parametrize(
+    "spend, exhausted",
+    [
+        ({user_window_counter("u", "1h"): 4.0, user_window_counter("u", "30d"): 99.0}, False),
+        ({user_window_counter("u", "1h"): 5.0, user_window_counter("u", "30d"): 1.0}, True),
+        ({user_window_counter("u", "1h"): 1.0, user_window_counter("u", "30d"): 100.0}, True),
+        ({user_counter("u:window:1h"): 50.0, user_counter("u:window:30d"): 500.0}, False),
+    ],
+    ids=["both_open", "hour_full", "month_full", "lookalike_user_spend"],
+)
 async def test_user_is_blocked_by_either_window(
-    monkeypatch: pytest.MonkeyPatch, hour: float, month: float, exhausted: bool
+    monkeypatch: pytest.MonkeyPatch, spend: Mapping[str, float], exhausted: bool
 ) -> None:
-    counters: Final = FakeSpendCounters(redis={"spend:user:u:window:1h": hour, "spend:user:u:window:30d": month})
+    counters: Final = FakeSpendCounters(redis=dict(spend))
     monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     user: Final = LiteLLM_UserTable(
@@ -36,7 +47,7 @@ async def test_user_is_blocked_by_either_window(
             await auth_checks._user_multi_budget_check(user)
         return
     await auth_checks._user_multi_budget_check(user)
-    assert counters.redis == {"spend:user:u:window:1h": hour, "spend:user:u:window:30d": month}
+    assert {key: counters.redis[key] for key in spend} == spend
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:

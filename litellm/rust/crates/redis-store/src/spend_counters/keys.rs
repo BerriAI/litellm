@@ -34,6 +34,10 @@ pub enum SpendCounter {
         window: String,
     },
     User(String),
+    UserWindow {
+        user_id: String,
+        window: String,
+    },
     EndUser(String),
     Org(String),
     Tag(String),
@@ -72,6 +76,7 @@ impl SpendCounter {
                 format!("spend:{scope}:{entity_id}:window:{window}")
             }
             Self::User(id) => format!("spend:user:{id}"),
+            Self::UserWindow { user_id, window } => format!("spend:user_window:{user_id}:{window}"),
             Self::EndUser(id) => format!("spend:end_user:{id}"),
             Self::Org(id) => format!("spend:org:{id}"),
             Self::Tag(name) => format!("spend:tag:{name}"),
@@ -136,6 +141,15 @@ impl SpendCounter {
                 }
             }
             "user" => Self::User(id.to_owned()),
+            "user_window" => match id.rsplit_once(':') {
+                Some((user_id, window)) if !user_id.is_empty() && !window.is_empty() => {
+                    Self::UserWindow {
+                        user_id: user_id.to_owned(),
+                        window: window.to_owned(),
+                    }
+                }
+                _ => return Err(invalid()),
+            },
             "end_user" => Self::EndUser(id.to_owned()),
             "org" => Self::Org(id.to_owned()),
             "tag" => Self::Tag(id.to_owned()),

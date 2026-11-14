@@ -5,7 +5,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -21,6 +21,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
+    Litellm_EntityType,
     LitellmUserRoles,
     NewUserRequest,
     NewUserResponse,
@@ -57,7 +58,7 @@ client = TestClient(app)
 def test_user_update_clears_budget_windows(windows: list[object] | None) -> None:
     request: Final = UpdateUserRequest.model_validate({"user_id": "u", "budget_limits": windows})
     updated: Final = _update_internal_user_params(request.model_dump(exclude_unset=True), request)
-    assert json.loads(updated["budget_limits"]) == []
+    assert json.loads(updated["budget_limits"]) is None
 
 
 @pytest.mark.parametrize("duration, amount", [("0s", 1.0), ("bogus", 1.0), ("1h", -1.0), ("1h", float("inf"))])
@@ -2594,6 +2595,109 @@ async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
     assert ("budget_reset_at" in written) is moves_reset
 
 
+_OWED_RESET: Final = datetime(2020, 1, 1, tzinfo=timezone.utc)
+_RUNNING_RESET: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+_RESENT_WINDOWS: Final = (
+    {"budget_duration": "1h", "max_budget": 5.0},
+    {"budget_duration": "1mo", "max_budget": 100.0},
+    {"budget_duration": "1d", "max_budget": 10.0},
+)
+
+
+def _user_with_windows(user_id: str) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable.model_validate(
+        {
+            "user_id": user_id,
+            "budget_limits": [
+                {"budget_duration": "1h", "max_budget": 1.0, "reset_at": _OWED_RESET},
+                {"budget_duration": "1mo", "max_budget": 100.0, "reset_at": _RUNNING_RESET},
+            ],
+        }
+    )
+
+
+def _assert_resent_windows_keep_their_resets(written: object) -> None:
+    resets: Final = {
+        window["budget_duration"]: datetime.fromisoformat(window["reset_at"])
+        for window in json.loads(TypeAdapter(str).validate_python(written))
+    }
+    assert resets["1h"] == _OWED_RESET
+    assert resets["1mo"] == _RUNNING_RESET
+    assert datetime.now(timezone.utc) < resets["1d"] < _RUNNING_RESET
+
+
+@pytest.mark.asyncio
+async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixture) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    saved_user: Final = _user_with_windows("user-spruce")
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest.model_validate(
+            {"user_id": saved_user.user_id, "budget_limits": list(_RESENT_WINDOWS)}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    _assert_resent_windows_keep_their_resets(prisma_client.update_data.call_args.kwargs["data"]["budget_limits"])
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_windows_count_spend_and_keep_each_users_resets(mocker: MockerFixture) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_users: Final = MappingProxyType(
+        {user_id: _user_with_windows(user_id) for user_id in ("user-spruce", "user-fir")}
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=list(saved_users.values()))
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        side_effect=lambda where: saved_users[where["user_id"]]
+    )
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=len(saved_users))
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
+    prisma_client.update_data = mocker.AsyncMock(
+        side_effect=lambda user_id, data, table_name: {"user_id": user_id, "data": saved_users[user_id]}
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    markers: Final = tuple(
+        budget_windows_absent_cache_key(Litellm_EntityType.USER.value, user_id) for user_id in saved_users
+    )
+    for marker in markers:
+        cache.budget_windows_absent_cache.set_cache(key=marker, value=True)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    response: Final = await bulk_user_update(
+        data=BulkUpdateUserRequest(all_users=True, user_updates={"budget_limits": list(_RESENT_WINDOWS)}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_changed_by=None,
+    )
+
+    assert response.successful_updates == len(saved_users)
+    written: Final = {
+        call.kwargs["user_id"]: call.kwargs["data"]["budget_limits"] for call in prisma_client.update_data.call_args_list
+    }
+    assert written.keys() == saved_users.keys()
+    for windows in written.values():
+        _assert_resent_windows_keep_their_resets(windows)
+    assert all(cache.budget_windows_absent_cache.get_cache(key=marker) is None for marker in markers)
+
+
 @pytest.mark.asyncio
 async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
@@ -5078,6 +5182,44 @@ async def test_user_new_persists_model_max_budget(monkeypatch, model_max_budget,
     )
 
     assert captured["user_data"].get("model_max_budget") == expected_written
+
+
+class _RecordingPrisma:
+    def __init__(self) -> None:
+        self.rows: tuple[tuple[str, Mapping[str, object]], ...] = ()
+
+    async def insert_data(
+        self, data: Mapping[str, object], table_name: str, *, allow_existing_user: bool = True
+    ) -> SimpleNamespace:
+        self.rows = (*self.rows, (table_name, MappingProxyType(dict(data))))
+        return SimpleNamespace(
+            token=data.get("token"), litellm_budget_table=None, created_at=None, updated_at=None, models=[]
+        )
+
+    async def get_data(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_user_new_puts_budget_windows_on_the_user_and_not_on_its_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    prisma: Final = _RecordingPrisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma, raising=False)
+
+    await key_management_endpoints.generate_key_helper_fn(
+        request_type="user",
+        user_id="u-1",
+        budget_limits=[{"budget_duration": "1h", "max_budget": 5.0}, {"budget_duration": "30d", "max_budget": 100.0}],
+    )
+
+    written: Final = dict(prisma.rows)
+    user_windows: Final = json.loads(str(written["user"]["budget_limits"]))
+    assert [(window["budget_duration"], window["max_budget"]) for window in user_windows] == [
+        ("1h", 5.0),
+        ("30d", 100.0),
+    ]
+    assert written["key"]["budget_limits"] is None
 
 
 @pytest.fixture

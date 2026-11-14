@@ -39,7 +39,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -86,7 +86,7 @@ async def test_user_reservation_includes_each_window_only_when_user_budget_appli
     )
     assert len(counters) == expected
     assert {counter.counter_key for counter in counters} == (
-        {"spend:user:u:window:1h", "spend:user:u:window:30d"} if expected else set()
+        {user_window_counter("u", "1h"), user_window_counter("u", "30d")} if expected else set()
     )
 
 

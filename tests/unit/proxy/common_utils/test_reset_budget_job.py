@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.reset_budget_job import (
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.spend_counters import user_window_counter
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -1425,11 +1426,11 @@ def test_reset_budget_windows_resets_expired_user_window(
             },
         ],
     )
-    counters.memory["spend:user:u:window:1h"] = 5.0
-    counters.memory["spend:user:u:window:30d"] = 10.0
+    counters.memory[user_window_counter("u", "1h")] = 5.0
+    counters.memory[user_window_counter("u", "30d")] = 10.0
     asyncio.run(job.reset_budget_windows())
-    assert counters.memory["spend:user:u:window:1h"] == 0.0
-    assert counters.memory["spend:user:u:window:30d"] == 10.0
+    assert counters.memory[user_window_counter("u", "1h")] == 0.0
+    assert counters.memory[user_window_counter("u", "30d")] == 10.0
     written: Final = json.loads(prisma.db.litellm_usertable.update.await_args.kwargs["data"]["budget_limits"])
     assert written[0]["reset_at"] != "2000-01-01T01:00:00Z"
     assert written[1]["reset_at"] == "2099-01-01T00:00:00Z"

@@ -110,6 +110,13 @@ fn a_reading_names_where_it_was_answered(
     "spend:team_member:user:with:colons:team-a"
 )]
 #[case(SpendCounter::User("user@example.com".to_owned()), "spend:user:user@example.com")]
+#[case(
+    SpendCounter::UserWindow {
+        user_id: "user:window:1h".to_owned(),
+        window: "1mo".to_owned(),
+    },
+    "spend:user_window:user:window:1h:1mo"
+)]
 #[case(SpendCounter::EndUser("customer é 1".to_owned()), "spend:end_user:customer é 1")]
 #[case(SpendCounter::Org("org-1".to_owned()), "spend:org:org-1")]
 #[case(SpendCounter::Tag("prod:eu".to_owned()), "spend:tag:prod:eu")]
@@ -152,6 +159,9 @@ fn every_counter_formats_and_parses_back_to_mains_key(
 #[case("virtual_key_spend:abc:gpt:1d")]
 #[case("spend:unknown:abc")]
 #[case("spend:team_member:no-team")]
+#[case::user_window_without_duration("spend:user_window:no-duration")]
+#[case::user_window_without_user("spend:user_window::1h")]
+#[case::committed_user_window("spend:committed:user_window:u:1h")]
 #[case("spend:")]
 #[case::committed_window("spend:committed:key:abc:window:1d")]
 #[case::committed_tag("spend:committed:tag:prod")]

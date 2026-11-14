@@ -31,6 +31,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
@@ -543,7 +544,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
-    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
     Returns:
     - key: (str) The generated api key for the user
@@ -1372,6 +1373,28 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _budget_windows_json(
+    requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None
+) -> str:
+    if not requested:
+        return json.dumps(None)
+    stored_reset_at: Final = MappingProxyType(
+        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
+    )
+    return json.dumps(
+        [
+            {
+                **window.model_dump(),
+                "reset_at": (
+                    stored_reset_at.get(window.budget_duration)
+                    or get_budget_reset_time(budget_duration=window.budget_duration)
+                ).isoformat(),
+            }
+            for window in requested
+        ]
+    )
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1399,15 +1422,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
             non_default_values[k] = v
 
     if "budget_limits" in non_default_values:
-        non_default_values["budget_limits"] = json.dumps(
-            [
-                {
-                    **window.model_dump(),
-                    "reset_at": get_budget_reset_time(budget_duration=window.budget_duration).isoformat(),
-                }
-                for window in (data.budget_limits or ())
-            ]
-        )
+        non_default_values["budget_limits"] = _budget_windows_json(data.budget_limits, stored=None)
 
     is_internal_user = False
     if data.user_role == LitellmUserRoles.INTERNAL_USER:
@@ -1609,6 +1624,10 @@ async def _update_single_user_helper(
             )
         ):
             del non_default_values["budget_reset_at"]
+        if "budget_limits" in non_default_values:
+            non_default_values["budget_limits"] = _budget_windows_json(
+                user_request.budget_limits, stored=existing_user_row.budget_limits
+            )
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1841,7 +1860,7 @@ async def user_update(
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+        - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
 
     """
     try:
@@ -2069,6 +2088,15 @@ async def bulk_user_update(
         # Remove user identification fields since we're updating by user_id
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
+
+        if "budget_limits" in non_default_values:
+            return await bulk_update_processed_users(
+                users_to_update=[
+                    UpdateUserRequest.model_validate({**data_json, "user_id": user.user_id}) for user in all_users_in_db
+                ],
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
 
         successful_updates = 0
         failed_updates: Final = 0

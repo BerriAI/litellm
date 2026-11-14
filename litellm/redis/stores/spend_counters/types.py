@@ -61,7 +61,7 @@ def team_counter(team_id: str) -> str:
 
 
 def user_window_counter(user_id: str, budget_duration: str) -> str:
-    return f"spend:user:{user_id}:window:{budget_duration}"
+    return f"spend:user_window:{user_id}:{budget_duration}"
 
 
 def team_window_counter(team_id: str, budget_duration: str) -> str:

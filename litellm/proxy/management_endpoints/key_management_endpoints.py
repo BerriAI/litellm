@@ -5561,7 +5561,7 @@ async def generate_key_helper_fn(
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
-            "budget_limits": budget_limits_json,
+            "budget_limits": None if request_type == "user" else budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
