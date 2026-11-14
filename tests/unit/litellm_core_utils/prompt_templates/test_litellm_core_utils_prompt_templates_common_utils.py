@@ -1214,6 +1214,24 @@ def test_defs_unpacked_keeps_memory_flat_for_a_schema_with_many_unused_defs() ->
     assert peak_bytes < 10_000_000
 
 
+def test_defs_unpacked_keeps_memory_flat_when_every_property_adds_its_own_defs() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            f"p{i}": {"type": "array", "items": {"$ref": f"#/$defs/D{i}"}, "$defs": {"Local": {}}} for i in range(2000)
+        },
+        "$defs": {f"D{i}": {"type": "string"} for i in range(2000)},
+    }
+    tracemalloc.start()
+    try:
+        unpacked: Final = defs_unpacked(schema)
+        peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak_bytes < 10_000_000
+    assert unpacked["properties"]["p1999"]["items"] == {"type": "string"}
+
+
 def test_defs_unpacked_resolves_each_ref_against_its_nearest_defs() -> None:
     nested: Final = {
         "$defs": {"Leaf": {"type": "integer"}},
@@ -1262,6 +1280,16 @@ def test_defs_unpacked_resolves_a_ref_target_that_is_itself_a_ref_into_its_own_d
     outer: Final = {"$ref": f"#/{block}/Inner", block: {"Inner": {"type": "string"}}}
     schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/Outer"}}, "$defs": {"Outer": outer}}
     assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "string"}}}
+
+
+def test_defs_unpacked_prefers_a_ref_targets_own_def_over_an_outer_def_of_the_same_name() -> None:
+    outer: Final = {"$ref": "#/$defs/Id", "$defs": {"Id": {"type": "integer"}}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/Outer"}},
+        "$defs": {"Outer": outer, "Id": {"type": "string"}},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "integer"}}}
 
 
 @pytest.mark.parametrize("target", [True, 1, "string", ["a"]])
