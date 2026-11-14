@@ -1,11 +1,12 @@
 import json
 import os
 import traceback
-from typing import Callable, Final, Literal, Optional, assert_never
+from typing import Callable, Final, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.azure.common_utils import (
