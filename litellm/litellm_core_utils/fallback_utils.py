@@ -1,4 +1,6 @@
-from collections.abc import Mapping
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -28,13 +30,25 @@ _NO_OVERRIDES: Final[Mapping[str, object]] = MappingProxyType({})
 _RUNNER_PARAMS: Final = frozenset({"kwargs", "fallbacks", "acompletion", "model", "litellm_logging_obj"})
 _PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {"custom_llm_provider", "client"}
 _MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+_GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
+
+
+@contextmanager
+def without_global_fallbacks() -> Generator[None]:
+    token: Final = _GLOBAL_FALLBACKS_OFF.set(True)
+    try:
+        yield
+    finally:
+        _GLOBAL_FALLBACKS_OFF.reset(token)
 
 
 def _configured_fallbacks(request_kwargs: Mapping[str, object]) -> object:
     if request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is True:
         return None
     per_call: Final = request_kwargs.get("fallbacks")
-    return litellm.model_fallbacks if per_call is None else per_call
+    if per_call is not None:
+        return per_call
+    return None if _GLOBAL_FALLBACKS_OFF.get() else litellm.model_fallbacks
 
 
 def uses_fallbacks(request_kwargs: Mapping[str, object]) -> bool:
@@ -52,10 +66,20 @@ class _FallbackAttempt:
     kwargs: Mapping[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class _FallbackPlan:
+    original_model: str
+    base_kwargs: Mapping[str, object]
+    fallbacks: FallbackChain
+    logging_obj: object
+
+
 def _provider_of(model: str, custom_llm_provider: object) -> str | None:
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
     try:
-        return litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        return resolve_model_and_provider_for_metadata(
+            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
         )[1]
     except litellm.exceptions.BadRequestError:
         return None
@@ -73,43 +97,47 @@ def _inherited_kwargs(
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
 
 
-def _fallback_attempt(
-    base_kwargs: Mapping[str, object], original_model: str, fallback: str | Mapping[str, object], logging_obj: object
-) -> _FallbackAttempt:
+def _fallback_attempt(plan: _FallbackPlan, fallback: str | Mapping[str, object]) -> _FallbackAttempt:
     overrides: Final = _NO_OVERRIDES if isinstance(fallback, str) else fallback
-    model: Final = fallback if isinstance(fallback, str) else str(overrides.get("model", original_model))
-    inherited: Final = _inherited_kwargs(base_kwargs, original_model, model, overrides.get("custom_llm_provider"))
+    model: Final = fallback if isinstance(fallback, str) else str(overrides.get("model", plan.original_model))
+    inherited: Final = _inherited_kwargs(
+        plan.base_kwargs, plan.original_model, model, overrides.get("custom_llm_provider")
+    )
     request: Final = filter_internal_params(safe_deep_copy({**inherited, **overrides}))
     return _FallbackAttempt(
         model=model,
-        kwargs={**request, "model": model, "litellm_logging_obj": logging_obj, FALLBACK_ATTEMPT_KWARG: True},
+        kwargs={**request, "model": model, "litellm_logging_obj": plan.logging_obj, FALLBACK_ATTEMPT_KWARG: True},
     )
 
 
-def _fallback_attempts(runner_kwargs: Mapping[str, object]) -> tuple[_FallbackAttempt, ...]:
+def _fallback_plan(runner_kwargs: Mapping[str, object]) -> _FallbackPlan:
     nested_kwargs: Final = _REQUEST_KWARGS.validate_python(runner_kwargs.get("kwargs") or {})
     merged: Final = {**runner_kwargs, **nested_kwargs}
-    original_model: Final = str(runner_kwargs["model"])
-    base_kwargs: Final = {
-        **{key: value for key, value in merged.items() if key not in _RUNNER_PARAMS},
-        "litellm_call_id": merged.get("litellm_call_id") or str(uuid.uuid4()),
-    }
-    chain: Final = (original_model, *_FALLBACK_CHAIN.validate_python(nested_kwargs.get("fallbacks") or ()))
-    return tuple(
-        _fallback_attempt(base_kwargs, original_model, fallback, merged.get("litellm_logging_obj"))
-        for fallback in chain
+    return _FallbackPlan(
+        original_model=str(runner_kwargs["model"]),
+        base_kwargs={
+            **{key: value for key, value in merged.items() if key not in _RUNNER_PARAMS},
+            "litellm_call_id": merged.get("litellm_call_id") or str(uuid.uuid4()),
+        },
+        fallbacks=_FALLBACK_CHAIN.validate_python(nested_kwargs.get("fallbacks") or ()),
+        logging_obj=merged.get("litellm_logging_obj"),
     )
+
+
+def _fallback_attempts(plan: _FallbackPlan) -> Iterator[_FallbackAttempt]:
+    return (_fallback_attempt(plan, fallback) for fallback in plan.fallbacks)
 
 
 async def async_completion_with_fallbacks(**kwargs: object) -> object:
-    primary, *fallbacks = _fallback_attempts(kwargs)
+    plan: Final = _fallback_plan(kwargs)
+    primary: Final = _fallback_attempt(plan, plan.original_model)
     try:
         return add_fallback_headers_to_response(
             response=await litellm.acompletion(**primary.kwargs), attempted_fallbacks=0
         )
     except Exception as primary_error:
         verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
-        for attempted_fallbacks, attempt in enumerate(fallbacks, start=1):
+        for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
                     response=await litellm.acompletion(**attempt.kwargs), attempted_fallbacks=attempted_fallbacks
@@ -120,12 +148,13 @@ async def async_completion_with_fallbacks(**kwargs: object) -> object:
 
 
 def completion_with_fallbacks(**kwargs: object) -> object:
-    primary, *fallbacks = _fallback_attempts(kwargs)
+    plan: Final = _fallback_plan(kwargs)
+    primary: Final = _fallback_attempt(plan, plan.original_model)
     try:
         return add_fallback_headers_to_response(response=litellm.completion(**primary.kwargs), attempted_fallbacks=0)
     except Exception as primary_error:
         verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
-        for attempted_fallbacks, attempt in enumerate(fallbacks, start=1):
+        for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
             try:
                 return add_fallback_headers_to_response(
                     response=litellm.completion(**attempt.kwargs), attempted_fallbacks=attempted_fallbacks

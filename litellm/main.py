@@ -244,6 +244,7 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
     resolve_fallbacks,
+    without_global_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
@@ -9606,12 +9607,13 @@ async def ahealth_check(
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
-            return await HealthCheckHelpers.ahealth_check_wildcard_models(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                model_params=model_params,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+            with without_global_fallbacks():
+                return await HealthCheckHelpers.ahealth_check_wildcard_models(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    model_params=model_params,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
@@ -9623,7 +9625,8 @@ async def ahealth_check(
 
         handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
         if handler_mode in mode_handlers:
-            _response: Final = await mode_handlers[handler_mode]()
+            with without_global_fallbacks():
+                _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )

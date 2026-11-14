@@ -439,7 +439,7 @@ async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
             filtered_model_params=filtered_model_params,
         )
         mock_alist.assert_not_called()
-        mock_acompletion.assert_called_once_with(**model_params, fallbacks=())
+        mock_acompletion.assert_called_once_with(**model_params)
 
 
 class _FakeWebsocketConnect:
@@ -1996,24 +1996,18 @@ HEALTH_CHECK_ROUTES: Final = (
         "https://deployment.example/v1/chat/completions",
         id="chat",
     ),
+    pytest.param(
+        "responses",
+        {"model": "anthropic/missing-model", "api_base": "https://deployment.example"},
+        "https://deployment.example/v1/messages",
+        id="responses-bridged-to-chat",
+    ),
 )
 
 
-@pytest.mark.timeout(30, method="thread")
-@pytest.mark.parametrize(("mode", "deployment_params", "deployment_url"), HEALTH_CHECK_ROUTES)
-@pytest.mark.asyncio
-async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_model_fallbacks(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-    mode: Literal["chat", "batch"],
-    deployment_params: dict[str, str],
-    deployment_url: str,
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
-    deployment: Final = respx_mock.post(deployment_url).mock(
-        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
-    )
+def _mock_failing_deployment_with_a_healthy_openai_fallback(
+    respx_mock: respx.MockRouter, deployment_url: str
+) -> respx.Route:
     _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
@@ -2027,8 +2021,43 @@ async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_mo
             },
         )
     )
+    return respx_mock.post(deployment_url).mock(
+        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
+    )
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("mode", "deployment_params", "deployment_url"), HEALTH_CHECK_ROUTES)
+@pytest.mark.asyncio
+async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["chat", "responses"],
+    deployment_params: dict[str, str],
+    deployment_url: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    deployment: Final = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, deployment_url)
 
     result: Final = await ahealth_check({**deployment_params, "api_key": "sk-test"}, mode=mode)
 
     assert "error" in result
     assert len(deployment.calls) == 1
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_calls_after_a_health_check_still_use_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+    deployment: Final = {"model": "anthropic/missing-model", "api_base": "https://deployment.example", "api_key": "sk-test"}
+    _ = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, "https://deployment.example/v1/messages")
+
+    _ = await ahealth_check(deployment, mode="chat")
+    response: Final = await litellm.acompletion(**deployment, messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "ok"

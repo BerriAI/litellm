@@ -1,10 +1,11 @@
 """Tests for litellm.litellm_core_utils.fallback_utils."""
 
 import asyncio
+import contextlib
 import json
 import pathlib
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import httpx
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_CODE_URL
 from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
 from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
@@ -913,25 +915,30 @@ def test_completion_streams_through_the_global_model_fallbacks(
     assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "streamed answer"
 
 
-class _SlowSyncSuccessRecorder(CustomLogger):
+class _ConcurrentSyncSuccessRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.models: list[object] = []
-        self.first_log: Final = threading.Event()
+        self._pair_concurrent_logs: Final = threading.Barrier(2, timeout=0.5)
+
+    def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict[str, object], object]:
+        with contextlib.suppress(threading.BrokenBarrierError):
+            _ = self._pair_concurrent_logs.wait()
+        return kwargs, result
 
     def log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        time.sleep(0.2)
         self.models.append(kwargs.get("model"))
-        self.first_log.set()
 
 
 @pytest.mark.timeout(30, method="thread")
 def test_completion_through_the_global_model_fallbacks_logs_one_success(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recorder: Final = _SlowSyncSuccessRecorder()
+    recorder: Final = _ConcurrentSyncSuccessRecorder()
+    logging_executor: Final = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(litellm.utils, "executor", logging_executor)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
     monkeypatch.setattr(litellm, "callbacks", [recorder])
@@ -940,9 +947,8 @@ def test_completion_through_the_global_model_fallbacks_logs_one_success(
     )
 
     python_completion(model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key")
+    logging_executor.shutdown(wait=True)
 
-    assert recorder.first_log.wait(timeout=10)
-    time.sleep(1)
     assert recorder.models == ["second"]
 
 
@@ -973,3 +979,42 @@ async def test_acompletion_fallback_to_another_model_is_priced_like_a_direct_cal
     )
 
     assert through_fallback._hidden_params["response_cost"] == direct._hidden_params["response_cost"]
+
+
+@pytest.mark.timeout(30, method="thread")
+def test_completion_never_signs_in_to_a_chatgpt_fallback_the_call_does_not_use(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["chatgpt/gpt-5.4"])
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    device_login: Final = respx_mock.post(CHATGPT_DEVICE_CODE_URL).mock(return_value=httpx.Response(503))
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_replies(("first answer",)))
+
+    response: Final = python_completion(
+        model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key"
+    )
+
+    assert response.choices[0].message.content == "first answer"
+    assert not device_login.called
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_acompletion_falls_back_from_a_chatgpt_model_that_is_not_signed_in(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies(("fallback answer",))
+    )
+
+    response: Final = await python_acompletion(
+        model="gpt-5.4", custom_llm_provider="chatgpt", messages=[{"role": "user", "content": "hello"}]
+    )
+
+    assert response.choices[0].message.content == "fallback answer"
+    assert _requested_models(route) == ("second",)
