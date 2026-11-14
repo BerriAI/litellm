@@ -19,7 +19,7 @@ def use_local_model_cost_map():
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     import litellm
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     original_model_cost = litellm.model_cost
     litellm.model_cost = json.loads(
@@ -28,13 +28,13 @@ def use_local_model_cost_map():
         .read_text(encoding="utf-8")
     )
     litellm.get_model_info.cache_clear()
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     try:
         yield litellm
     finally:
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         monkeypatch.undo()
 
 

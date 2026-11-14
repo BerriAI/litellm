@@ -134,10 +134,13 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
-import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.model_cost_table import publish  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import (
     reload_beta_headers_config,  # noqa: E402  # same import-time dependency
+)
+from litellm.litellm_core_utils.get_model_cost_map import (  # noqa: E402  # same import-time dependency
+    model_cost_inputs,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (
@@ -430,22 +433,21 @@ def isolate_litellm_globals() -> Iterator[None]:
     tool_registry_writer_module._tool_policy_registry = original_tool_policy_registry
 
 
+_IMPORTED_MODEL_COST_INPUTS: Final = model_cost_inputs.snapshot()
+
+
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
     original_live_registries: Final = frozenset(live_router_registries)
-    original_runtime_registered_model_cost: Final = {
-        model_key: dict(model_value)
-        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
-    }
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    original_model_cost_inputs: Final = model_cost_inputs.snapshot()
+    model_cost_inputs.restore(_IMPORTED_MODEL_COST_INPUTS)
+    publish(litellm.model_cost)
     live_router_registries.clear()
-    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     live_router_registries.clear()
     live_router_registries.update(original_live_registries)
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    model_cost_inputs.restore(original_model_cost_inputs)
+    publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 
 
@@ -469,7 +471,7 @@ def isolate_model_catalog() -> Iterator[None]:
     for models, entries in provider_model_sets:
         models.clear()
         models.update(entries)
-    litellm_utils_module._invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 
 

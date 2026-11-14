@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -9,8 +10,13 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+    model_cost_inputs,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from tests.unit import conftest as unit_harness
@@ -80,11 +86,11 @@ class _CanaryRouterHolder:
 
 def test_register_model_ledger_entry_is_scoped_to_this_test():
     litellm.register_model({CANARY_MODEL: {"litellm_provider": "openai", "input_cost_per_token": 0.001}})
-    assert CANARY_MODEL in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL in model_cost_inputs.registered_keys()
 
 
 def test_register_model_ledger_entry_was_rolled_back():
-    assert CANARY_MODEL not in litellm_utils_module._runtime_registered_model_cost
+    assert CANARY_MODEL not in model_cost_inputs.registered_keys()
 
 
 def test_register_model_catalog_writes_are_scoped_to_this_test():
@@ -158,7 +164,7 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture(scope="module", autouse=True)
 def registered_collection_models() -> Iterator[None]:
-    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    original_inputs: Final = model_cost_inputs.snapshot()
     original_routers: Final = frozenset(unit_harness.live_router_registries)
     litellm.register_model(
         {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
@@ -172,17 +178,18 @@ def registered_collection_models() -> Iterator[None]:
         ]
     )
     yield
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    model_cost_inputs.restore(original_inputs)
     unit_harness.live_router_registries.discard(collection_router._core._hosted)
     unit_harness.live_router_registries.update(original_routers)
 
 
-def test_collection_model_metadata_is_not_replayed_into_a_test_catalog() -> None:
-    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
-
-    catalog: Final = {"unit-test-catalog-model": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
-    adopt_model_cost_map(catalog)
+def test_collection_model_metadata_is_not_replayed_into_a_test_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        "unit-test-catalog-model": {"litellm_provider": "openai", "input_cost_per_token": 0.001},
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
     assert "collection-isolation-ledger" not in litellm.model_cost
     assert "collection-isolation-router" not in litellm.model_cost
     assert "unit-test-catalog-model" in litellm.model_cost

@@ -1113,7 +1113,7 @@ class TestClearCache:
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
-        clear_cache resets DB-backed auto-router entries and delegates every deployment
+        clear_cache preserves DB-backed auto-router entries and delegates every deployment
         change to the reload, leaving config models untouched. It must not wipe
         deployments itself -- see the delete_deployment assertion below.
         """
@@ -1122,8 +1122,7 @@ class TestClearCache:
         )
 
         # Create mock router with mixed DB and config router deployments. The two DB
-        # entries are auto_router/* deployments (so their router-map entries should be
-        # cleared for reload); the config-defined router is preserved.
+        # entries and the config-defined router must remain available during reload.
         mock_router = MagicMock()
         plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
@@ -1165,20 +1164,9 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            # clear_cache must wipe ONLY the db auto-router deployments -- the ones whose
-            # strategy entries are popped below and can only be rebuilt via the add path.
-            # Ordinary db models are left alone: wiping them un-served every db model for
-            # the width of the reload, and the reconcile converges without it.
-            assert mock_router.apply.call_count == 2
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-1"]))
-            mock_router.apply.assert_any_call(ChangeSet(delete=["db-model-2"]))
-
-            # DB-backed router entries are cleared so they can be re-populated by the
-            # reload below; the config-backed router must survive, since add_deployment()
-            # only reloads DB models and would otherwise leave it permanently unroutable
-            # (see TestClearCachePreservesConfigRouters).
-            assert "db-auto-router" not in plugins["auto"]
-            assert "db-complexity-router" not in plugins["complexity"]
+            mock_router.apply.assert_not_called()
+            assert "db-auto-router" in plugins["auto"]
+            assert "db-complexity-router" in plugins["complexity"]
             assert "config-router" in plugins["auto"]
             assert "config-router" in plugins["complexity"]
 
@@ -1188,22 +1176,8 @@ class TestClearCache:
             )
 
     @pytest.mark.asyncio
-    async def test_clear_cache_wipes_auto_routers_but_leaves_ordinary_db_models(self):
-        """An ordinary db model must survive clear_cache; a db auto-router must not.
-
-        Two separate hazards meet here, and fixing one naively breaks the other:
-
-        - Wiping ordinary db models un-serves EVERY db model for the width of the
-          reload. The reconcile converges without that, so the wipe is a pure
-          data-plane hole.
-        - NOT wiping a db auto-router strands it. Its strategy registries are keyed by
-          model_name and are popped here, but Router.upsert_deployment returns early
-          for an unchanged deployment and never reaches the add path that rebuilds
-          them. Any unrelated model write would then leave every db-backed auto,
-          complexity, adaptive and quality router unroutable until a restart.
-
-        So the wipe is scoped to exactly the auto-router deployments.
-        """
+    async def test_clear_cache_preserves_auto_routers_and_ordinary_db_models(self):
+        """Deployments and their strategies remain available while the reload runs."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             clear_cache,
         )
@@ -1242,10 +1216,8 @@ class TestClearCache:
         ):
             await clear_cache()
 
-        # The auto-router deployment is wiped so the reload takes the add path and
-        # rebuilds its strategy entry; the ordinary db model is never touched.
-        mock_router.apply.assert_called_once_with(ChangeSet(delete=["db-auto-1"]))
-        assert "db-auto-router" not in plugins["auto"]
+        mock_router.apply.assert_not_called()
+        assert "db-auto-router" in plugins["auto"]
 
 
 class TestClearCachePreservesConfigRouters:
@@ -1299,9 +1271,7 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        # The DB-backed router for the model that was actually updated is cleared
-        # so the reload below can re-populate it.
-        assert "team-a-db-router" not in plugins["complexity"]
+        assert "team-a-db-router" in plugins["complexity"]
         # Config-defined routers for unrelated tenants must survive untouched.
         assert "config-defined-complexity-router" in plugins["complexity"]
         assert "config-semantic-router" in plugins["auto"]
@@ -1346,11 +1316,8 @@ class TestClearCachePreservesConfigRouters:
         assert "shared-name" in plugins["complexity"]
 
     @pytest.mark.asyncio
-    async def test_db_quality_adaptive_and_switchyard_routers_are_evicted(self):
-        """The auto_router/ prefix also covers quality_router/, adaptive_router/ and switchyard. Their
-        registry entries must be popped too, or reload's init raises 'already exists'
-        (quality) or leaves a stale entry (adaptive).
-        """
+    async def test_db_quality_adaptive_and_switchyard_routers_are_preserved(self):
+        """Every strategy remains available until the deployment reconcile replaces it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
@@ -1393,9 +1360,9 @@ class TestClearCachePreservesConfigRouters:
         ):
             await clear_cache()
 
-        assert "q1" not in plugins["quality"]
-        assert "a1" not in plugins["adaptive"]
-        assert "s1" not in plugins["switchyard"]
+        assert "q1" in plugins["quality"]
+        assert "a1" in plugins["adaptive"]
+        assert "s1" in plugins["switchyard"]
 
 
 class TestDeleteModelClearsRouterRegistry:
@@ -4869,6 +4836,146 @@ class TestModelInfoCostMapEchoFilter:
             "cost-map metadata must not be persisted from an unchanged /model/info echo"
         )
 
+    def test_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-echo-wildcard", "db_model": True, "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_name="my-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+            llm_router=router,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_echo_saved_on_a_worker_that_has_not_loaded_the_wildcard_is_not_persisted(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router_without_the_wildcard: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "x"},
+                    "model_info": {"id": "dep-other"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_name="my-openai/gpt-5.6",
+                model_info=ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            ),
+            llm_router=router_without_the_wildcard,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_legacy_update_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _ListedRow,
+            legacy_update_model_info_changes,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        changes: Final = legacy_update_model_info_changes(
+            db_model,
+            ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            loaded_catalog=lambda: {},
+            listed_row=_ListedRow("my-openai/gpt-5.6", router),
+        )
+
+        assert dict(changes) == {"access_groups": ["prod"]}
+
+    @pytest.mark.asyncio
+    async def test_echo_of_a_team_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import _update_team_model_in_db
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-team-wildcard", "team_id": "team-a"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-team-wildcard", "team_id": "team-a", "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="team-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-team-wildcard", team_id="team-a"),
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"),
+        ):
+            result: Final = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=updateDeployment(model_name="team-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+                prisma_client=MockPrismaClient(team_exists=True),
+                write_row=_passthrough_row,
+                llm_router=router,
+            )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto a team's wildcard"
+
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
@@ -5996,8 +6103,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
     @pytest.mark.asyncio
     async def test_clear_cache_reloads_under_the_lock_without_deadlocking(self, monkeypatch):
-        """clear_cache un-serves every db model before reloading, so it has to hold the
-        lock across the pair -- and therefore must call the already-locked reload.
+        """clear_cache holds the reconcile lock and must call the already-locked reload.
 
         asyncio.Lock is not reentrant: routing this back through the public
         add_deployment would block forever on a lock this coroutine already owns, taking

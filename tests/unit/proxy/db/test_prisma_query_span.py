@@ -468,7 +468,7 @@ def test_every_prisma_call_site_in_the_proxy_renders_a_bounded_postgres_span_nam
 
 
 def test_every_model_in_the_prisma_schema_is_a_renderable_span_table() -> None:
-    schema: Final = (_REPO / "schema.prisma").read_text()
+    schema: Final = (_REPO / "litellm/schema.prisma").read_text()
     declared: Final = frozenset(re.findall(r"^model (\w+) \{", schema, re.MULTILINE))
 
     assert declared == spans_mod._PRISMA_MODELS

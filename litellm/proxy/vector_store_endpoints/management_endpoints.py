@@ -10,6 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -54,8 +55,16 @@ def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorS
     return ManagedVectorStoresRepository(prisma_client).table
 
 
+class _VectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_row(row: "_VectorStoreRow") -> Mapping[str, object]:
+    return row.model_dump()
+
+
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
-    return LiteLLM_ManagedVectorStore(**row.model_dump())
+    return LiteLLM_ManagedVectorStore(**_VectorStoreRowFields(**_dumped_row(row)))
 
 
 class _ConfigOwnedDetail(TypedDict):

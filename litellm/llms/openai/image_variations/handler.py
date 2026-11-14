@@ -7,6 +7,8 @@ from typing import Final
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.types.utils import FileTypes, ImageResponse, LlmProviders
@@ -16,6 +18,14 @@ from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
 from ..common_utils import OpenAIError, upstream_error_response
 from ..workload_identity import build_async_openai_client, build_openai_client
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_fields(model: BaseModel) -> Mapping[str, object]:
+    return model.model_dump()
 
 
 class OpenAIImageVariationsHandler:
@@ -94,7 +104,7 @@ class OpenAIImageVariationsHandler:
 
             raw_response: Final = await client.images.with_raw_response.create_variation(**data)
             response: Final = raw_response.parse()
-            response_json: Final = response.model_dump()
+            response_json: Final = _dumped_fields(response)
 
             ## LOGGING
             logging_obj.post_call(
@@ -109,7 +119,7 @@ class OpenAIImageVariationsHandler:
             ## RESPONSE OBJECT
             return provider_config.transform_response_image_variation(
                 model=model,
-                model_response=ImageResponse(**response_json),
+                model_response=ImageResponse(**_ImageResponseFields(**response_json)),
                 raw_response=httpx.Response(
                     status_code=200,
                     request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
@@ -215,7 +225,7 @@ class OpenAIImageVariationsHandler:
 
             raw_response: Final = client.images.with_raw_response.create_variation(**json_data)
             response: Final = raw_response.parse()
-            response_json: Final = response.model_dump()
+            response_json: Final = _dumped_fields(response)
 
             ## LOGGING
             logging_obj.post_call(
@@ -230,7 +240,7 @@ class OpenAIImageVariationsHandler:
             ## RESPONSE OBJECT
             return provider_config.transform_response_image_variation(
                 model=model,
-                model_response=ImageResponse(**response_json),
+                model_response=ImageResponse(**_ImageResponseFields(**response_json)),
                 raw_response=httpx.Response(
                     status_code=200,
                     request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object

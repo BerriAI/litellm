@@ -1,16 +1,20 @@
 #### Rerank Endpoints #####
 
 import asyncio
+from datetime import datetime
 from typing import Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
+import litellm
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    await_llm_call_cancelling_on_disconnect,
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
@@ -23,6 +27,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @router.post(
@@ -78,6 +83,16 @@ async def rerank(
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="rerank")
 
+        cancel_on_disconnect: Final = bool(general_settings.get("cancel_on_disconnect", False))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped general_settings
+        if cancel_on_disconnect:
+            logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the except block logs this request data
+                original_function=CallTypes.arerank.value,
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                **data,  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook returns an untyped dict
+            )
+            data["litellm_logging_obj"] = logging_obj
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
@@ -85,7 +100,11 @@ async def rerank(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _DECODED_JSON.validate_python(
+            await await_llm_call_cancelling_on_disconnect(request, asyncio.ensure_future(llm_call))
+            if cancel_on_disconnect
+            else await llm_call
+        )
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))

@@ -6,7 +6,9 @@ Regression tests for:
 - litellm/llms/vertex_ai/gemini/transformation.py
 - litellm/llms/gemini/chat/transformation.py
 - litellm/litellm_core_utils/prompt_templates/common_utils.py
-  (migrate_file_to_image_url raises on missing `file`; file-id helpers skip non-OpenAI shapes)
+  (migrate_file_to_image_url raises on missing `file`)
+- litellm/litellm_core_utils/prompt_templates/file_id_utils.py
+  (file-id helpers skip non-OpenAI shapes)
 - litellm/litellm_core_utils/prompt_templates/factory.py (Bedrock + Anthropic)
 - litellm/llms/openai/chat/gpt_transformation.py
 """

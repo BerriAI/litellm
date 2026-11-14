@@ -1637,7 +1637,7 @@ def test_chat_pre_call_denial_streams_content_filter(gateway: Gateway, tmp_path:
         assert lines[-1] == "data: [DONE]", response.text
         chunks: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
         assert chunks[0]["choices"][0]["delta"]["content"] == _RESPONSES_DENIAL, chunks
-        assert chunks[-1]["choices"][0]["finish_reason"] == "stop", chunks
+        assert chunks[-1]["choices"][0]["finish_reason"] == "content_filter", chunks
 
 
 @pytest.mark.covers("other.observability.guardrails.chat_pre_call_denial_returns_content_filter")

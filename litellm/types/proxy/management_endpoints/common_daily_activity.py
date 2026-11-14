@@ -31,6 +31,11 @@ class SpendMetrics(LiteLLMBaseModel):
     prompt_caching_savings_spend: float = Field(default=0.0)
     gateway_injected_caching_savings_spend: float = Field(default=0.0)
     autorouter_savings_spend: float = Field(default=0.0)
+    guardrail_spend: float = Field(
+        default=0.0,
+        description="Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. "
+        "Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
+    )
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
@@ -108,6 +113,12 @@ class BreakdownMetrics(LiteLLMBaseModel):
     endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
     api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
+    teams: Mapping[str, MetricWithMetadata] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Customer spend by the key's current team, or last team for deleted keys. "
+        "Keys without a known team are grouped under Unassigned",
+    )
     guardrails: Mapping[str, GuardrailMetric] = Field(
         default_factory=dict,
         description="Spend by guardrail ID, already included in key and model spend. "
@@ -253,6 +264,7 @@ class LiteLLM_DailyUserSpend(LiteLLMBaseModel):
     prompt_caching_savings_spend: float = 0.0
     gateway_injected_caching_savings_spend: float = 0.0
     autorouter_savings_spend: float = 0.0
+    guardrail_spend: float = 0.0
     spend: float = 0.0
     api_requests: int = 0
     successful_requests: int = 0

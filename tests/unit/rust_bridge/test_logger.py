@@ -18,7 +18,8 @@ from litellm.litellm_core_utils.secret_redaction import (
     python_redact_string,
     python_redact_structured_value,
 )
-from litellm.rust_bridge import diagnostics, logger
+from litellm.rust_bridge import diagnostics
+from litellm.rust_bridge.host import logger
 
 
 def test_native_records_preserve_metadata_and_redact_before_custom_handlers(

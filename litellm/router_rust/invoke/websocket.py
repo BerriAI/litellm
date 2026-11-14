@@ -8,15 +8,25 @@ Which strategy and selector apply is the Rust core's routing context (``routing_
 selectors, limiters and checks are the live Python objects the host keeps.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from litellm.litellm_core_utils.core_helpers import without
+from litellm._internal_context import request_parent_otel_span
+from litellm._logging import verbose_router_logger
+from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, without
 from litellm.router_rust.invoke.shaping import as_dict
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    count_before_callbacks,
+    find_deployment_metadata,
+)
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from litellm.router_rust.invoke.endpoints import EndpointCore
 
 
@@ -25,6 +35,100 @@ def turn_admission(
 ) -> Callable[[], object]:
     """The ``turn_admission`` the handler calls before each later turn."""
     return partial(admit_deployment_turn, core, model_group, deployment, kwargs)
+
+
+@dataclass(slots=True)
+class TurnUsageRecorder:
+    core: "EndpointCore"
+    model_group: str
+    request_kwargs: Mapping[str, object]
+    counted_a_turn: bool = field(default=False, init=False)
+
+    async def __call__(self, turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+        if await record_deployment_turn_usage(
+            self.core, self.model_group, self.request_kwargs, turn_litellm_params, total_tokens
+        ):
+            self.counted_a_turn = True
+
+
+def turn_usage_recorder(core: "EndpointCore", model_group: str, kwargs: Mapping[str, object]) -> TurnUsageRecorder:
+    return TurnUsageRecorder(core, model_group, kwargs)
+
+
+def turns_counted_their_requests(kwargs: Mapping[str, object]) -> bool:
+    recorder: Final = kwargs.get("turn_usage_recorder")
+    return isinstance(recorder, TurnUsageRecorder) and recorder.counted_a_turn
+
+
+async def record_deployment_turn_usage(
+    core: "EndpointCore",
+    model_group: str,
+    request_kwargs: Mapping[str, object],
+    turn_litellm_params: Mapping[str, object],
+    total_tokens: int,
+) -> bool:
+    """Count a finished turn early. Returns whether the router's own usage counted its request."""
+    deployment_metadata: Final = find_deployment_metadata(turn_litellm_params)
+    if deployment_metadata is None:
+        return False
+    parent_otel_span: Final = get_parent_otel_span_from_kwargs(dict(request_kwargs))
+    counted_request: Final = await _counted_early(
+        core.router.increment_deployment_usage_before_callbacks(
+            deployment_metadata, model_group, total_tokens, parent_otel_span
+        )
+    )
+    _ = await _counted_early(
+        _count_usage_based_routing_tokens(
+            core, model_group, request_kwargs, deployment_metadata, total_tokens, parent_otel_span
+        )
+    )
+    return counted_request
+
+
+async def _counted_early(count: Awaitable[bool]) -> bool:
+    try:
+        return await count
+    except Exception as e:  # noqa: BLE001  # a failed early count must not break the turn; its logging counts it
+        verbose_router_logger.debug("record_deployment_turn_usage: not counted early. Got - %s", e)
+        return False
+
+
+async def _count_usage_based_routing_tokens(
+    core: "EndpointCore",
+    model_group: str,
+    request_kwargs: Mapping[str, object],
+    deployment_metadata: dict[str, object],  # mutable-ok: the success callbacks read the counted tokens off it
+    total_tokens: int,
+    parent_otel_span: "Span | None",
+) -> bool:
+    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+
+    routing_kwargs: Final = without(request_kwargs, "litellm_logging_obj")
+    override: Final = routing_kwargs.get("routing_strategy")
+    strategy, scope, group = core.handle.routing_context(model_group, override if isinstance(override, str) else None)
+    selector: Final = core.selectors.selector_for(strategy, scope, group, routing_kwargs)
+    model_info: Final = deployment_metadata.get("model_info")
+    deployment_id: Final = as_dict(model_info).get("id") if isinstance(model_info, dict) else None  # pyright: ignore[reportUnknownArgumentType]  # the routed model_info dict
+    deployment_name: Final = deployment_metadata.get("deployment")
+    if (
+        not isinstance(selector, LowestTPMLoggingHandler_v2)
+        or deployment_id is None
+        or not isinstance(deployment_name, str)
+    ):
+        return False
+    with request_parent_otel_span(parent_otel_span):
+        await count_before_callbacks(
+            deployment_metadata,
+            USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+            total_tokens,
+            partial(
+                selector.async_increment_tpm,
+                deployment_id=str(deployment_id),
+                deployment_name=deployment_name,
+                tokens=total_tokens,
+            ),
+        )
+    return True
 
 
 def _deployment_as_configured_now(core: "EndpointCore", deployment: Mapping[str, object]) -> Mapping[str, object]:
@@ -64,7 +168,7 @@ async def admit_deployment_turn(
     io_token_admission: Final[Mapping[str, object]] = (
         MappingProxyType({})
         if rate_limit_check is None
-        else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
+        else await async_admit_io_token_turn(rate_limit_check.usage, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
     )
     budget_limiter: Final[object] = _budget_limiter(core)
     if budget_limiter is not None:
@@ -124,4 +228,11 @@ async def _admit_turn_through_routing_strategy(
         await selector.async_pre_call_check(dict(deployment), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
 
 
-__all__ = ["admit_deployment_turn", "turn_admission"]
+__all__ = [
+    "TurnUsageRecorder",
+    "admit_deployment_turn",
+    "record_deployment_turn_usage",
+    "turn_admission",
+    "turn_usage_recorder",
+    "turns_counted_their_requests",
+]

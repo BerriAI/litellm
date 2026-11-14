@@ -100,6 +100,24 @@ class RateLimitStore:
         return await self._handle.get(entry, backfill_ttl_seconds=backfill_ttl)
 
     @with_service_target(RATE_LIMITS_TARGET)
+    async def get_from_redis(self, counter: RateLimitCounter, backfill_ttl: float | None = None) -> LocalValue | None:
+        """Redis, never memory, for a count every worker must agree on: ``DualCache.async_get_cache`` answers from
+        memory first, and a worker's own copy carries just the usage it served itself. The count read is written
+        back to a memory that holds nothing for ``backfill_ttl``, as ``DualCache`` backfilled a miss; a copy the limiter
+        keeps for the whole window is left alone, so a Redis outage still falls back to it. Without Redis memory is
+        all there is."""
+        if not self.has_redis:
+            return self._handle.get_local(counter)
+        _window, count = await self.read_counters([counter], batch=Batch.NONE)
+        if count is None:
+            return None
+        number: Final = float(count)
+        value: Final[LocalValue] = int(number) if number.is_integer() else number
+        if self._handle.get_local(counter) is None:
+            self._handle.set_local(counter, value, backfill_ttl)
+        return value
+
+    @with_service_target(RATE_LIMITS_TARGET)
     def sliding_window(
         self, counters: Sequence[RateLimitCounter], now: int, window_size: int, *, batch: Batch
     ) -> Awaitable[tuple[WindowCount, ...]]:

@@ -253,6 +253,7 @@ def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(cli_runner,
     result = cli_runner.invoke(cli, [], obj={"secret_vault": no_keychain}, input="quit\n")
 
     assert "Connected to LiteLLM server: http://localhost:4000" in result.output
+    assert "keychain" not in result.output
 
 
 def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):

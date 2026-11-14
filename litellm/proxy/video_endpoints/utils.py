@@ -1,8 +1,12 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import orjson
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import video_access_group
+from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -60,7 +64,11 @@ def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     return None
 
 
-def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> object:
+class _CarriesId(Protocol):
+    id: object
+
+
+def encode_character_id_in_response(response: object, custom_llm_provider: str, model_id: str | None) -> object:
     if isinstance(response, dict) and response.get("id"):
         response["id"] = encode_character_id_with_provider(
             character_id=response["id"],
@@ -69,7 +77,9 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
         )
         return response
 
-    character_id: Final = getattr(response, "id", None)
+    if not has_attributes(response, _CarriesId, "id"):
+        return response
+    character_id: Final = response.id
     if isinstance(character_id, str) and character_id:
         response.id = encode_character_id_with_provider(
             character_id=character_id,
@@ -120,6 +130,20 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
     ):
         return resolved
     return creating_group
+
+
+async def authorized_video_model(
+    decoded: DecodedVideoId, llm_router: "Router | None", user_api_key_dict: UserAPIKeyAuth
+) -> str | None:
+    model: Final = video_model_group(decoded, llm_router)
+    if model is None:
+        return None
+    await authorize_model_for_key(
+        model_id=video_access_group(decoded, llm_router, resolved_model=model) or model,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+    return model
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

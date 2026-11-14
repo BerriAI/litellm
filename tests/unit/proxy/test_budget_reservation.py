@@ -3304,7 +3304,7 @@ class _ModelAccessGroupBudgetPrisma:
             group: SimpleNamespace(
                 access_group_name=group,
                 spend=7.0,
-                litellm_budget_table=None if max_budget is None else SimpleNamespace(max_budget=max_budget),
+                litellm_budget_table=None if max_budget is None else SimpleNamespace(max_budget=max_budget, budget_limits=None),
             )
             for group, max_budget in max_budget_by_group.items()
         }

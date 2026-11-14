@@ -1,5 +1,6 @@
 import base64
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Final
 
 import httpx
@@ -7,6 +8,9 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
+    AmazonAnthropicClaudeConfig,
+)
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CountContextManagement
@@ -72,6 +76,59 @@ async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() 
     mantle_body: Final = _JSON_BODY.validate_json(bedrock.requests[1].content)
     assert mantle_body["model"] == "anthropic.claude-opus-4-8"
     assert mantle_body["system"] == "You are a terse assistant."
+
+
+@pytest.mark.asyncio
+async def test_claude_model_message_without_content_is_rejected_without_calling_runtime_or_mantle() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        "Message 0 must have a 'content' field",
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "problem"),
+    [
+        ({"role": "user"}, "Message 0 must have a 'content' field"),
+        ({"content": "hi"}, "Message 0 must have a 'role' field"),
+    ],
+)
+async def test_mantle_counted_model_rejects_a_malformed_message_without_calling_mantle(
+    message: dict[str, str], problem: str
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[message],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        problem,
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
 
 
 @pytest.mark.asyncio
@@ -329,6 +386,35 @@ async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_para
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_to_use", "runtime", "posted_hosts"),
+    (
+        ("bedrock_mantle/anthropic.claude-opus-5-5", (200, {"inputTokens": 1}), (MANTLE_HOST,)),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST)),
+    ),
+)
+async def test_messages_count_options_reach_the_mantle_count(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]], posted_hosts: tuple[str, ...]
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 433}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 433)
+    assert bedrock.posted_hosts() == posted_hosts
+    assert _JSON_BODY.validate_json(bedrock.requests[-1].content)["tool_choice"] == {"type": "any"}
+
+
+@pytest.mark.asyncio
 async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sends() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
     schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
@@ -391,6 +477,153 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
 
+
+
+def _deployment(model: str) -> dict[str, JsonValue]:
+    return {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": model}}
+
+
+_CONTENTLESS_TURN: Final = ({"role": "user"}, {"role": "user", "content": None})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment", (DEPLOYMENT, _deployment("bedrock/us.anthropic.claude-opus-5-5")))
+async def test_claude_converse_count_rejects_a_chat_message_without_a_content_key_without_calling_bedrock(
+    deployment: dict[str, JsonValue],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, {"role": "user"}],
+        contents=None,
+        deployment=deployment,
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert result.error_message == "Message 2 must have a 'content' field"
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", _CONTENTLESS_TURN)
+async def test_claude_invoke_count_sends_a_chat_message_without_content_as_chat_inference_sends_it(
+    message: dict[str, JsonValue],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message]
+    inference: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="us.anthropic.claude-opus-5-5",
+        messages=deepcopy(messages),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=messages,
+        contents=None,
+        deployment=_deployment("bedrock/invoke/us.anthropic.claude-opus-5-5"),
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _invoke_body(bedrock.requests[0])["messages"] == inference["messages"]
+
+
+_TOOL_CALL: Final = {
+    "role": "assistant",
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+}
+
+
+_WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    (
+        (
+            [
+                {"role": "user", "content": "Weather in SF?"},
+                _TOOL_CALL,
+                {"role": "tool", "tool_call_id": "call_1", "content": None},
+            ],
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": "user", "name": "bob", "content": None},
+            ],
+            None,
+        ),
+        ([{"role": "system", "content": None}, {"role": "user", "content": "Hi"}], None),
+        ([{"role": "user", "content": None}, {"role": "user", "content": "Hi"}], None),
+        ([{"role": "user"}, {"role": "user", "content": "Weather in SF?"}], [_WEATHER_TOOL]),
+    ),
+    ids=(
+        "null-content-tool-result",
+        "null-content-named-user-turn",
+        "null-content-system-turn",
+        "null-content-user-turn",
+        "contentless-user-turn-with-chat-tools",
+    ),
+)
+async def test_claude_converse_count_sends_a_null_content_message_converse_inference_serves(
+    messages: list[dict[str, JsonValue]], tools: list[dict[str, JsonValue]] | None
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=messages,
+        contents=None,
+        deployment=_deployment("bedrock/us.anthropic.claude-opus-5-5"),
+        request_model="claude-opus-5-5",
+        tools=tools,
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
+
+@pytest.mark.asyncio
+async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_key() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "Weather in SF?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        contents=None,
+        deployment=_deployment("bedrock/us.anthropic.claude-opus-5-5"),
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
 
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",

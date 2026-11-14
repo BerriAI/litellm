@@ -3,7 +3,7 @@ import ctypes
 import os
 import re
 from collections.abc import Mapping
-from typing import Final, Literal, cast
+from typing import Final, Literal, TypeVar, cast, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -201,7 +201,18 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
         return None
 
 
-def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
+_Passthrough: Final = TypeVar("_Passthrough")
+
+
+@overload
+def encrypt_value_helper(value: str, new_encryption_key: str | None = None) -> str: ...
+
+
+@overload
+def encrypt_value_helper(value: _Passthrough, new_encryption_key: str | None = None) -> _Passthrough: ...
+
+
+def encrypt_value_helper(value: object, new_encryption_key: str | None = None) -> object:
     signing_key: Final = new_encryption_key or get_salt_key()
 
     try:

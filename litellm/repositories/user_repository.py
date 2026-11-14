@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from prisma import Prisma
     from prisma import models as prisma_models
 
-_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
+_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget", "budget_limits"})
 
 _SHADOWING_PLACEHOLDERS_SQL: Final = """
 SELECT p.user_id AS placeholder_user_id,

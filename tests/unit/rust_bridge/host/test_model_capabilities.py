@@ -86,3 +86,72 @@ def test_capability_source_observes_runtime_registration_changes(monkeypatch: py
 def test_default_thinking_capability_is_projected(model: str, expected: bool) -> None:
     capabilities: Final = anthropic_model_capabilities(model, "anthropic")
     assert capabilities["thinking_on_by_default"] is expected
+
+
+def test_capabilities_are_probed_once_per_model_map_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model: Final = "claude-test-probe-count"
+    _flag_model(monkeypatch, model, supports_reasoning=True)
+    probes: list[str] = []
+    probe: Final = AnthropicModelInfo._supports_model_capability
+
+    def counted(name: str, key: str, provider: str) -> bool:
+        probes.append(key)
+        return probe(name, key, provider)
+
+    monkeypatch.setattr(AnthropicModelInfo, "_supports_model_capability", staticmethod(counted))
+
+    first: Final = anthropic_model_capabilities(model, "anthropic")
+    probed: Final = len(probes)
+    second: Final = anthropic_model_capabilities(model, "anthropic")
+
+    assert probed > 0
+    assert len(probes) == probed
+    assert second == first
+
+
+def test_a_cached_answer_is_a_fresh_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "claude-test-fresh-copy"
+    _flag_model(monkeypatch, model, supports_xhigh_reasoning_effort=True)
+    first: Final = anthropic_model_capabilities(model, "anthropic")
+    tiers: Final = first["effort_tiers"]
+    assert isinstance(tiers, dict)
+    first["supports_reasoning"] = "changed"
+    tiers["xhigh"] = "changed"
+
+    second: Final = anthropic_model_capabilities(model, "anthropic")
+
+    assert second["supports_reasoning"] is False
+    assert second["effort_tiers"] == {
+        **dict.fromkeys(("minimal", "low", "medium", "high", "max"), False),
+        "xhigh": True,
+    }
+
+
+def test_register_model_is_observed_after_a_cached_answer() -> None:
+    model: Final = "claude-test-registered-later"
+    try:
+        litellm.register_model({model: {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": False}})
+        before: Final = anthropic_model_capabilities(model, "anthropic")
+        litellm.register_model({model: {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": True}})
+        after: Final = anthropic_model_capabilities(model, "anthropic")
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    assert before["supports_reasoning"] is False
+    assert after["supports_reasoning"] is True
+
+
+def test_the_cache_key_holds_the_entries_it_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge.host.model_capabilities import _fingerprint  # pyright: ignore[reportPrivateUsage]
+
+    model: Final = "claude-test-held-entry"
+    _flag_model(monkeypatch, model, supports_reasoning=True)
+    entry: Final = litellm.model_cost[model]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the model map is an untyped dict of rows
+    held: Final = _fingerprint(model, "anthropic", model, "anthropic")
+    _flag_model(monkeypatch, model, supports_reasoning=True)
+    same_content: Final = _fingerprint(model, "anthropic", model, "anthropic")
+
+    assert any(h.value is entry for h in held[5])
+    assert held != same_content

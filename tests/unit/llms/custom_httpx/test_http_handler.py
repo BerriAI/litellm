@@ -1,16 +1,19 @@
-import asyncio, importlib, json, time
+import asyncio
 import gc
-import io
+import importlib
+import json
 import logging
 import os
 import pathlib
 import ssl
 import threading
+import time
 import weakref
 from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextvars import Context
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -25,13 +28,17 @@ from yarl import URL
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
 from litellm.llms.base_llm.auth.types import MintedToken, TokenExchangeSpec
+from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
     HTTPHandler,
+    HTTPResponseLimitError,
     MaskedHTTPStatusError,
     get_httpx_client,
     get_shared_realtime_ssl_context,
@@ -39,10 +46,6 @@ from litellm.llms.custom_httpx.http_handler import (
     realtime_ssl_for_url,
 )
 from litellm.types.llms.custom_http import VerifyTypes
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from litellm.exceptions import Timeout as LitellmTimeout
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -339,6 +342,114 @@ def test_get_ssl_configuration_integration():
     assert ssl_context.verify_mode is not None
 
 
+def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, str, str, str | None], ...]:
+    assert isinstance(context, ssl.SSLContext)
+    return tuple(
+        (cipher["name"], cipher["protocol"], cipher["kea"], cipher["symmetric"]) for cipher in context.get_ciphers()
+    )
+
+
+def _kept_in_fips_mode(cipher: tuple[str, str, str, str | None]) -> bool:
+    _, protocol, kea, symmetric = cipher
+    return kea != "kx-rsa" and (protocol, symmetric) != ("TLSv1.2", "chacha20-poly1305")
+
+
+def _use_ssl_security_level(monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None) -> None:
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+
+    _ssl_context_cache.clear()
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "SSL_CERT_FILE", "SSL_VERIFY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", ssl_security_level)
+
+
+def _fake_fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    import _hashlib
+
+    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(
+        _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
+    )
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+
+
+@pytest.mark.parametrize(
+    "ssl_security_level",
+    [None, "AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384"],
+    ids=["default-cipher-list", "ssl-security-level"],
+)
+def test_fips_mode_drops_rsa_key_exchange_and_tls_1_2_chacha20_from_the_outbound_cipher_list(
+    monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None
+) -> None:
+    from litellm.constants import DEFAULT_SSL_CIPHERS
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    from litellm.proxy.common_utils.fips import enforce_fips_mode
+
+    _use_ssl_security_level(monkeypatch, ssl_security_level)
+    configured: Final = ssl.create_default_context()
+    configured.set_ciphers(ssl_security_level or DEFAULT_SSL_CIPHERS)
+
+    # A client built while the config loads holds its context from before FIPS mode is enforced
+    held: Final = get_ssl_configuration()
+    standard: Final = _offered_ciphers(held)
+    _fake_fips_openssl(monkeypatch)
+    enforce_fips_mode({"fips_mode": True})
+    try:
+        held_in_fips: Final = _offered_ciphers(held)
+        new_in_fips: Final = _offered_ciphers(get_ssl_configuration(http2=True))
+    finally:
+        enforce_fips_mode({})
+    held_after_fips: Final = _offered_ciphers(held)
+    _ssl_context_cache.clear()
+
+    assert standard == _offered_ciphers(configured)
+    kept_in_fips: Final = tuple(filter(_kept_in_fips_mode, standard))
+    assert held_in_fips == kept_in_fips
+    assert new_in_fips == kept_in_fips
+    assert held_after_fips == standard
+
+
+@pytest.mark.parametrize("excluded_suites", ["kRSA", "CHACHA20"])
+def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_excluded_tls_1_2_suites(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    excluded_suites: str,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
+
+    excluded: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    try:
+        excluded.set_ciphers(excluded_suites)
+    except ssl.SSLError:
+        pytest.skip(f"this OpenSSL has no {excluded_suites} suites")
+    _use_ssl_security_level(
+        monkeypatch,
+        ":".join(cipher["name"] for cipher in excluded.get_ciphers() if cipher["protocol"] != "TLSv1.3"),
+    )
+    held: Final = get_ssl_configuration()
+    assert isinstance(held, ssl.SSLContext)
+    _fake_fips_openssl(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    enforce_fips_mode({"fips_mode": True})
+    try:
+        started_in_fips: Final = fips_mode_active()
+        new: Final = get_ssl_configuration(http2=True)
+        assert isinstance(new, ssl.SSLContext)
+        in_fips: Final = (held.minimum_version, new.minimum_version)
+    finally:
+        enforce_fips_mode({})
+    after_fips: Final = held.minimum_version
+    _ssl_context_cache.clear()
+
+    assert started_in_fips is True
+    assert in_fips == (ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_3)
+    assert after_fips == ssl.TLSVersion.TLSv1_2
+    assert any("offers only TLS 1.3" in record.getMessage() for record in caplog.records)
+
+
 # Session Reuse Tests
 class MockClientSession:
     """Mock ClientSession that is not callable"""
@@ -385,8 +496,10 @@ async def test_async_handler_with_shared_session():
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -409,8 +522,10 @@ async def test_get_async_httpx_client_with_shared_session():
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -447,6 +562,7 @@ async def test_session_reuse_chain():
 def test_shared_session_parameter_in_acompletion():
     """Test that acompletion function accepts shared_session parameter"""
     import inspect
+
     from litellm.main import acompletion
 
     # Get the function signature
@@ -464,6 +580,7 @@ def test_shared_session_parameter_in_acompletion():
 def test_shared_session_parameter_in_completion():
     """Test that completion function accepts shared_session parameter"""
     import inspect
+
     from litellm.main import completion
 
     # Get the function signature
@@ -482,8 +599,10 @@ def test_shared_session_parameter_in_completion():
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -2183,7 +2302,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -2287,7 +2406,9 @@ def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints() -> No
     assert realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws") is shared
 
 
-def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
     selected: Final = realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws")
     assert isinstance(selected, ssl.SSLContext)
@@ -2303,7 +2424,10 @@ def _ollama_generate_route(respx_mock: respx.MockRouter, stream: bool) -> respx.
     final: Final = {"model": "llama3.1", "response": "", "done": True, "prompt_eval_count": 2, "eval_count": 1}
     if stream:
         return respx_mock.post("http://ollama.test:11434/api/generate").respond(
-            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False}) + "\n" + json.dumps(final) + "\n",
+            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False})
+            + "\n"
+            + json.dumps(final)
+            + "\n",
             headers={"content-type": "application/x-ndjson"},
         )
     return respx_mock.post("http://ollama.test:11434/api/generate").respond(json={**final, "response": "Sunny"})
@@ -2459,8 +2583,11 @@ class _PoolDiagnosticClock:
         return self.now
 
     def call_later(
-        self, delay: float, callback: Callable[..., object],
-        *args: object, context: Context | None = None,
+        self,
+        delay: float,
+        callback: Callable[..., object],
+        *args: object,
+        context: Context | None = None,
     ) -> asyncio.TimerHandle:
         timer: Final = self.schedule(delay, callback, *args, context=context)
         self.timers.append(timer)
@@ -2523,7 +2650,9 @@ def _pool_diagnostic_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ..
 @pytest.mark.parametrize("source", ["sdk", "proxy", "native-connector", "rebuilt"])
 @pytest.mark.parametrize("error", [TimeoutError("private timeout"), asyncio.CancelledError("private cancellation")])
 async def test_aiohttp_pool_failure_identifies_queue_wait_and_cleans_up_timer(
-    source: str, error: BaseException, monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    error: BaseException,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
@@ -2555,7 +2684,8 @@ async def test_aiohttp_pool_failure_identifies_queue_wait_and_cleans_up_timer(
 
 @pytest.mark.parametrize("queued", [False, True])
 async def test_aiohttp_pool_diagnostics_do_not_label_slow_upstream_as_pool_saturation(
-    queued: bool, monkeypatch: pytest.MonkeyPatch,
+    queued: bool,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
@@ -2577,7 +2707,8 @@ async def test_aiohttp_pool_diagnostics_do_not_label_slow_upstream_as_pool_satur
 
 
 async def test_aiohttp_pool_warns_while_queued_once_per_request_with_isolated_concurrent_waits(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
     caplog.set_level(logging.WARNING, logger="LiteLLM")
@@ -2613,15 +2744,22 @@ async def test_aiohttp_pool_warns_while_queued_once_per_request_with_isolated_co
         assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
 
 
-@pytest.mark.parametrize(("header", "location", "host", "port"), [
-    ("Location", "https://redirected.test:9443/private-path?token=private-query", "redirected.test", 9443),
-    ("Location", "/private-path?token=private-query", "initial.test", 8443),
-    ("URI", "https://redirected.test/private-path", "redirected.test", 443),
-    ("Location", "http://[invalid", None, None),
-])
+@pytest.mark.parametrize(
+    ("header", "location", "host", "port"),
+    [
+        ("Location", "https://redirected.test:9443/private-path?token=private-query", "redirected.test", 9443),
+        ("Location", "/private-path?token=private-query", "initial.test", 8443),
+        ("URI", "https://redirected.test/private-path", "redirected.test", 443),
+        ("Location", "http://[invalid", None, None),
+    ],
+)
 async def test_aiohttp_pool_warning_tracks_redirect_destination_without_masking_invalid_redirects(
-    header: str, location: str, host: str | None, port: int | None,
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    header: str,
+    location: str,
+    host: str | None,
+    port: int | None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from aiohttp.client_proto import ResponseHandler
     from aiohttp.helpers import TimerNoop
@@ -2634,9 +2772,15 @@ async def test_aiohttp_pool_warning_tracks_redirect_destination_without_masking_
         traces: Final = await _pool_diagnostic_request(session, url)
         loop: Final = asyncio.get_running_loop()
         response: Final = ClientResponse(
-            "POST", url, writer=None, continue100=None, timer=TimerNoop(),
+            "POST",
+            url,
+            writer=None,
+            continue100=None,
+            timer=TimerNoop(),
             request_info=RequestInfo(url, "POST", CIMultiDictProxy(CIMultiDict()), url),
-            traces=[], loop=loop, session=session,
+            traces=[],
+            loop=loop,
+            session=session,
             stream_writer=StreamWriter(ResponseHandler(loop), loop),
         )
         response._headers = CIMultiDictProxy(CIMultiDict({header: location}))
@@ -2660,3 +2804,48 @@ async def test_aiohttp_pool_warning_tracks_redirect_destination_without_masking_
             assert "private" not in messages[0]
         finally:
             response.close()
+
+
+def test_sync_bounded_get_returns_a_body_within_the_limit(respx_mock: respx.MockRouter):
+    respx_mock.get("https://example.com/small.bin").respond(200, content=b"x" * 50)
+    handler = HTTPHandler()
+    try:
+        response = handler.get("https://example.com/small.bin", max_response_bytes=100)
+    finally:
+        handler.close()
+    assert response.status_code == 200
+    assert response.content == b"x" * 50
+
+
+@pytest.mark.parametrize("headers", [{"content-length": "101"}, {}])
+def test_sync_bounded_get_refuses_a_body_over_the_limit(respx_mock: respx.MockRouter, headers: dict[str, str]):
+    respx_mock.get("https://example.com/big.bin").respond(200, content=b"x" * 101, headers=headers)
+    handler = HTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError):
+            handler.get("https://example.com/big.bin", max_response_bytes=100)
+    finally:
+        handler.close()
+
+
+def test_sync_bounded_get_follows_a_redirect_with_the_limit(respx_mock: respx.MockRouter):
+    respx_mock.get("https://example.com/first.bin").respond(302, headers={"location": "/final.bin"})
+    final = respx_mock.get("https://example.com/final.bin").respond(200, content=b"ok")
+    handler = HTTPHandler()
+    try:
+        response = handler.get("https://example.com/first.bin", max_response_bytes=100, follow_redirects=True)
+    finally:
+        handler.close()
+    assert response.content == b"ok"
+    assert final.calls[0].request.headers["accept-encoding"] == "identity"
+
+
+def test_sync_bounded_get_stops_redirect_loops(respx_mock: respx.MockRouter):
+    route = respx_mock.get("https://example.com/loop.bin").respond(302, headers={"location": "/loop.bin"})
+    handler = HTTPHandler()
+    try:
+        with pytest.raises(ValueError, match="Too many redirects"):
+            handler.get("https://example.com/loop.bin", max_response_bytes=100, follow_redirects=True)
+    finally:
+        handler.close()
+    assert route.call_count == 11

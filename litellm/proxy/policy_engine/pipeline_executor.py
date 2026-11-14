@@ -20,7 +20,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -699,7 +699,10 @@ class PipelineExecutor:
     @staticmethod
     def supports_unified_execution(callback: CustomGuardrail) -> bool:
         """Whether this guardrail runs through the unified apply_guardrail path."""
-        return "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+        return (
+            subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail)
+            and not callback.use_native_lifecycle_hooks
+        )
 
     @staticmethod
     def supports_streaming_execution(callback: CustomGuardrail) -> bool:

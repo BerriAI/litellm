@@ -246,7 +246,7 @@ async def test_responses_replace_kubernetes_pod_routing_in_the_request_metadata(
     """On the Responses path the routing goes to ``litellm_metadata``; a pod routing key the caller put
     in ``metadata`` is overwritten with the serving deployment's (none here)."""
     core: Final = make_core(model_list=[deployment("g", "d1")])
-    await core.aresponses(  # pyright: ignore[reportAttributeAccessIssue]
+    await core.aresponses(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
         model="g", input="hi", metadata={KUBERNETES_POD_ROUTING_KEY: {"pod": "stale"}, "keep": 1}
     )
     sent: Final = host.calls[0].kwargs
@@ -332,7 +332,7 @@ async def test_the_process_request_timeout_outranks_the_router_timeout_once_a_ro
     process settings), and only when the router has a ``timeout`` of its own."""
     monkeypatch.setattr(litellm, "request_timeout", 33.0)
     core: Final = make_core(model_list=[deployment("g", "d1")], timeout=42)
-    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     assert host.calls[0].kwargs["timeout"] == 33.0
 
 
@@ -353,7 +353,7 @@ async def test_default_litellm_params_timeout_applies_when_no_router_or_process_
 ) -> None:
     host.set_dynamic(request_timeout=None)
     core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params={"timeout": 9})
-    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     assert host.calls[0].kwargs["timeout"] == 9
 
 
@@ -366,6 +366,257 @@ async def test_default_litellm_params_stream_timeout_is_the_last_stream_timeout_
     core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params={"stream_timeout": 4})
     await collect_texts(await core.acompletion(model="g", messages=MESSAGES, stream=True))  # pyright: ignore[reportAttributeAccessIssue]
     assert host.calls[0].kwargs["stream_timeout"] == 4
+
+
+_PROXY_REQUESTER_METADATA: Final = {"metadata": {"requester_metadata": {"env": "prod"}}}
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_requester_metadata"),
+    [
+        ({"requester_metadata": {"team": "t1"}}, {"env": "prod", "team": "t1"}),
+        ({"requester_metadata": {"env": "dev", "team": "t1"}}, {"env": "dev", "team": "t1"}),
+        ({"requester_metadata": None}, {"env": "prod"}),
+        ({"requester_metadata": {}}, {"env": "prod"}),
+        ({"requester_metadata": "x"}, {"env": "prod"}),
+        ({}, {"env": "prod"}),
+    ],
+)
+async def test_default_requester_metadata_merges_under_the_request_requester_metadata(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    request_metadata: Mapping[str, object],
+    sent_requester_metadata: Mapping[str, str],
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_REQUESTER_METADATA)
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["requester_metadata"] == sent_requester_metadata
+
+
+async def test_responses_default_requester_metadata_merges_under_the_request_litellm_metadata(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_REQUESTER_METADATA)
+    await core.aresponses(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="g", input="hi", litellm_metadata={"requester_metadata": {"team": "t1"}}
+    )
+    sent: Final = _metadata(host.calls[0].kwargs, "litellm_metadata")
+    assert sent["requester_metadata"] == {"env": "prod", "team": "t1"}
+
+
+async def test_default_requester_metadata_does_not_carry_one_request_labels_into_the_next(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_REQUESTER_METADATA)
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"requester_metadata": {"team": "t1"}})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[1].kwargs)["requester_metadata"] == {"env": "prod"}
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_regions"),
+    [({"regions": ["eu"]}, ["eu"]), ({"regions": None}, ["us"]), ({}, ["us"])],
+)
+async def test_a_default_metadata_list_applies_only_when_the_request_sets_none(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_regions: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"regions": ["us"]}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["regions"] == sent_regions
+
+
+@pytest.mark.parametrize("mask_key", ["mask_input", "mask_output"])
+@pytest.mark.parametrize(
+    ("default_mask", "request_mask", "sent_mask"),
+    [
+        (True, False, True),
+        (True, None, True),
+        ("true", False, "true"),
+        (False, True, True),
+        (False, None, False),
+        ("false", True, True),
+    ],
+)
+async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    mask_key: str,
+    default_mask: object,
+    request_mask: object,
+    sent_mask: object,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {mask_key: default_mask}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={mask_key: request_mask})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)[mask_key] == sent_mask
+
+
+@pytest.mark.parametrize(
+    ("default_public", "request_public", "sent_public"),
+    [
+        (False, True, False),
+        ("false", True, "false"),
+        (False, None, False),
+        (True, False, False),
+        (True, None, True),
+        ("true", True, True),
+    ],
+)
+async def test_a_private_default_trace_stays_private_whatever_the_request_sends(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    default_public: object,
+    request_public: object,
+    sent_public: object,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"trace_public": default_public}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"trace_public": request_public})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["trace_public"] == sent_public
+
+
+async def test_a_default_redis_namespace_beats_the_request_redis_namespace(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"redis_namespace": "tenant-a"}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"redis_namespace": "tenant-b"})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["redis_namespace"] == "tenant-a"
+
+
+def _redact(_value: object) -> str:
+    return "redacted"
+
+
+@pytest.mark.parametrize("request_value", ["", {"caller": "value"}])
+async def test_a_default_masking_function_beats_whatever_the_request_sends(
+    make_core: MakeCore, host: ScriptedHost, request_value: object
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"langfuse_masking_function": _redact}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"langfuse_masking_function": request_value})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["langfuse_masking_function"] is _redact
+
+
+_PROXY_DEFAULT_TAGS: Final = {"metadata": {"tags": ["proxy-default"]}}
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({"tags": ["caller"]}, ["caller", "proxy-default"]),
+        ({"tags": ["proxy-default", "caller"]}, ["proxy-default", "caller"]),
+        ({"tags": None}, ["proxy-default"]),
+        ({}, ["proxy-default"]),
+        ({"tags": "caller"}, ["proxy-default"]),
+    ],
+)
+async def test_default_metadata_tags_follow_the_request_tags(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: object
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_DEFAULT_TAGS)
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({"tags": ["caller"]}, ["caller"]),
+        ({}, "proxy-default"),
+    ],
+)
+async def test_a_default_tags_that_is_not_a_list_yields_to_the_request_tags(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: object
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"tags": "proxy-default"}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({}, ["t1", "Credential: cred", "proxy-default"]),
+        ({"tags": ["caller"]}, ["caller", "t1", "Credential: cred", "proxy-default"]),
+    ],
+)
+async def test_default_metadata_tags_join_the_deployment_and_credential_tags(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1", tags=["t1"], litellm_credential_name="cred")],
+        default_litellm_params=_PROXY_DEFAULT_TAGS,
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+async def test_default_metadata_tags_do_not_carry_one_request_tags_into_the_next(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_DEFAULT_TAGS)
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"tags": ["caller"]})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[1].kwargs)["tags"] == ["proxy-default"]
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_guardrails"),
+    [
+        ({"guardrails": []}, ["admin-guard"]),
+        ({"guardrails": ["caller-guard"]}, ["caller-guard", "admin-guard"]),
+        ({"guardrails": "caller-guard"}, ["admin-guard"]),
+        ({}, ["admin-guard"]),
+        ({"guardrails": [{"admin-guard": {"extra_body": {"threshold": 1}}}]}, ["admin-guard"]),
+        (
+            {
+                "guardrails": [
+                    {"admin-guard": {"extra_body": {"threshold": 1}}, "caller-guard": {"extra_body": {"k": 2}}}
+                ]
+            },
+            [{"caller-guard": {"extra_body": {"k": 2}}}, "admin-guard"],
+        ),
+    ],
+)
+async def test_a_default_guardrail_stays_on_with_its_own_settings_whatever_the_request_lists(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_guardrails: list[object]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"guardrails": ["admin-guard"]}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["guardrails"] == sent_guardrails
+
+
+async def test_a_default_guardrail_entry_keeps_the_admins_settings_over_the_callers(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    admin_entry: Final = {"admin-guard": {"extra_body": {"threshold": 0.9}}}
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"guardrails": [admin_entry]}}
+    )
+    await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="g", messages=MESSAGES, metadata={"guardrails": [{"admin-guard": {"extra_body": {"threshold": 0}}}]}
+    )
+    assert _metadata(host.calls[0].kwargs)["guardrails"] == [admin_entry]
+
+
+@pytest.mark.parametrize("router_caching_groups", [[("g", "other")], None])
+async def test_the_router_caching_groups_replace_the_request_caching_groups(
+    make_core: MakeCore, host: ScriptedHost, router_caching_groups: list[tuple[str, str]] | None
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], caching_groups=router_caching_groups)
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"caching_groups": [("g", "premium")]})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["caching_groups"] == router_caching_groups
 
 
 # --- sync completion runs the routing pre-call checks for a model group only -------------------
@@ -412,7 +663,7 @@ async def test_acompletion_counts_total_success_and_failed_calls_per_deployment_
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=0)
-    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     host.answer("openai/d1", rate_limit())
     with pytest.raises(litellm.RateLimitError):
         await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]

@@ -180,6 +180,9 @@ class TeamMemberPermissionChecks:
 
         caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
+        if not set(access_group_ids).issubset(team_table.access_group_ids or []):
+            raise HTTPException(status_code=403, detail="Access groups must be assigned to the key's team first")
+
         # Team admins always bypass (consistent with other member-permission checks).
         if caller_team_role == "admin":
             return

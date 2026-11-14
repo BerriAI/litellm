@@ -19,7 +19,7 @@ from psycopg import sql
 from pydantic import JsonValue, TypeAdapter
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+PRISMA_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras"
 GIN_MIGRATION: Final = "20261003000000_add_managed_file_flat_ids_gin_index"
 INDEX_NAME: Final = "LiteLLM_ManagedFileTable_flat_model_file_ids_idx"
 SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
@@ -57,8 +57,8 @@ def _leg_python_path() -> str:
     return os.pathsep.join(
         (
             str(REPO_ROOT),
-            str(REPO_ROOT / "litellm-proxy-extras"),
-            str(REPO_ROOT / "enterprise"),
+            str(REPO_ROOT / "litellm" / "proxy-extras"),
+            str(REPO_ROOT / "litellm" / "enterprise"),
             os.environ.get("PYTHONPATH", ""),
         )
     )

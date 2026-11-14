@@ -169,6 +169,43 @@ async def test_select_without_messages_or_input_runs_no_context_window_check(mak
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("title", "snippet"),
+    [("release notes " * 100, ""), ("Release", "release notes " * 100)],
+    ids=["title", "snippet"],
+)
+async def test_server_tool_history_does_not_bypass_the_context_window_check(
+    make_core: MakeCore, title: str, snippet: str
+) -> None:
+    core: Final = make_core(model_list=[windowed("g", "server-tools", 50)], enable_pre_call_checks=True)
+    messages: Final = [
+        {"role": "user", "content": "Search release notes"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "release notes"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srv_1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.invalid",
+                            "title": title,
+                            "snippet": snippet,
+                            "encrypted_content": "opaque",
+                        }
+                    ],
+                },
+            ],
+        },
+        {"role": "user", "content": "Summarize"},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError, match="Context Window exceeded"):
+        await core.select("g", messages=messages)
+
+
+@pytest.mark.asyncio
 async def test_when_no_context_window_fits_select_raises_context_window_exceeded(make_core: MakeCore) -> None:
     core: Final = make_core(model_list=[windowed("g", "small", 5)], enable_pre_call_checks=True)
     with pytest.raises(litellm.ContextWindowExceededError) as error:
@@ -544,13 +581,14 @@ def test_when_no_deployment_supports_the_param_sync_completion_raises_without_ca
 
 REQUEST_ESCAPES: Final = [
     {"allowed_openai_params": ["response_format"]},
+    {"allowed_openai_params": "response_format"},
     {"drop_params": True},
     {"additional_drop_params": ["response_format"]},
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "drop", "additional-drop"])
+@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "allowlist-string", "drop", "additional-drop"])
 async def test_a_request_that_allows_or_drops_the_param_keeps_the_only_deployment(
     make_core: MakeCore, host: ScriptedHost, escape: dict[str, object]
 ) -> None:
@@ -560,7 +598,7 @@ async def test_a_request_that_allows_or_drops_the_param_keeps_the_only_deploymen
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "drop", "additional-drop"])
+@pytest.mark.parametrize("escape", REQUEST_ESCAPES, ids=["allowlist", "allowlist-string", "drop", "additional-drop"])
 async def test_a_deployment_that_takes_the_param_is_preferred_over_dropping_it(
     make_core: MakeCore, host: ScriptedHost, escape: dict[str, object]
 ) -> None:
@@ -572,8 +610,12 @@ async def test_a_deployment_that_takes_the_param_is_preferred_over_dropping_it(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_escape",
-    [{"drop_params": True}, {"allowed_openai_params": ["response_format"]}],
-    ids=["drop", "allowlist"],
+    [
+        {"drop_params": True},
+        {"allowed_openai_params": ["response_format"]},
+        {"allowed_openai_params": "response_format"},
+    ],
+    ids=["drop", "allowlist", "allowlist-string"],
 )
 async def test_a_deployment_that_allows_or_drops_the_param_is_kept(
     make_core: MakeCore, host: ScriptedHost, deployment_escape: dict[str, object]

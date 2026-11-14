@@ -420,6 +420,7 @@ async def test_redis_buffer_requeues_access_group_transactions_as_queue_items():
         daily_org_spend_update_transactions=None,
         daily_end_user_spend_update_transactions=None,
         daily_agent_spend_update_transactions=None,
+        daily_customer_member_spend_update_transactions=None,
         window_spend_update_transactions=None,
         spend_update_queue=queue,
         daily_spend_update_queue=daily_queue,
@@ -427,6 +428,7 @@ async def test_redis_buffer_requeues_access_group_transactions_as_queue_items():
         daily_org_spend_update_queue=daily_queue,
         daily_end_user_spend_update_queue=daily_queue,
         daily_agent_spend_update_queue=daily_queue,
+        daily_customer_member_spend_update_queue=daily_queue,
         window_spend_update_queue=None,
     )
 

@@ -112,6 +112,7 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "DeepinfraRerankConfig": (".llms.deepinfra.rerank.transformation", "DeepinfraRerankConfig"),
         "HostedVLLMRerankConfig": (".llms.hosted_vllm.rerank.transformation", "HostedVLLMRerankConfig"),
         "PerplexityDecisionsConfig": (".llms.perplexity.decisions.transformation", "PerplexityDecisionsConfig"),
+        "GeminiDecisionsConfig": (".llms.gemini.decisions.transformation", "GeminiDecisionsConfig"),
         "NaceDecisionsConfig": (".llms.nace.decisions.transformation", "NaceDecisionsConfig"),
         "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
         "ParallelAIDecisionsConfig": (".llms.parallel_ai.decisions.transformation", "ParallelAIDecisionsConfig"),

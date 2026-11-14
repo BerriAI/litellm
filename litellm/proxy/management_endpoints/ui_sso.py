@@ -3176,7 +3176,7 @@ def set_session_token_cookie(response: Response, request: Request, jwt_token: st
 
     Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
     populate its own Authorization headers (see
-    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    ``litellm/ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
     HttpOnly would break login. Secure is still required whenever the public
     origin is HTTPS, resolved the same trust-aware way as every other
     litellm cookie."""
@@ -3330,7 +3330,6 @@ class SSOAuthenticationHandler:
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
         """
-        asks_for_refresh_token: Final = await login_asks_for_refresh_token(retention_enabled)
         # Google SSO Auth
         if google_client_id is not None:
             google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
@@ -3351,11 +3350,11 @@ class SSOAuthenticationHandler:
                 redirect_url,
                 google_client_id,
             )
+            google_params: Final = (
+                dict(GOOGLE_REFRESH_TOKEN_PARAMS) if await login_asks_for_refresh_token(retention_enabled) else None
+            )
             with google_sso:
-                return await google_sso.get_login_redirect(
-                    state=state,
-                    params=dict(GOOGLE_REFRESH_TOKEN_PARAMS) if asks_for_refresh_token else None,
-                )
+                return await google_sso.get_login_redirect(state=state, params=google_params)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
             microsoft_client_secret: Final = os.getenv("MICROSOFT_CLIENT_SECRET", None)
@@ -3373,7 +3372,11 @@ class SSOAuthenticationHandler:
                 tenant=microsoft_tenant,
                 redirect_uri=redirect_url,
                 allow_insecure_http=True,
-                scope=[*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE] if asks_for_refresh_token else None,
+                scope=(
+                    [*CustomMicrosoftSSO.scope, MICROSOFT_REFRESH_TOKEN_SCOPE]
+                    if await login_asks_for_refresh_token(retention_enabled)
+                    else None
+                ),
             )
             with microsoft_sso:
                 return await microsoft_sso.get_login_redirect(state=state)

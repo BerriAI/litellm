@@ -15,6 +15,7 @@ from httpx import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -3794,7 +3795,9 @@ def _tool_search_turn(tool_references: list[str], last_block: dict[str, object])
     ]
 
 
-def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choices:
+def _parsed_choice(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Choices:
     anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
@@ -3817,6 +3820,7 @@ def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choice
             model_response=ModelResponse(),
             json_mode=False,
             prefix_prompt=None,
+            tool_name_reverse_map=tool_name_reverse_map,
         )
         .choices[0]
     )
@@ -3824,8 +3828,10 @@ def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choice
     return choice
 
 
-def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str) -> Message:
-    return _parsed_choice(content, stop_reason).message
+def _parsed_assistant_message(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Message:
+    return _parsed_choice(content, stop_reason, tool_name_reverse_map).message
 
 
 _WEATHER_TOOL_USE: Final = {
@@ -4090,6 +4096,110 @@ def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a
     assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
     assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
     assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {"name": name, "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        "defer_loading": True,
+    }
+
+
+def _anthropic_request_after(
+    assistant_content: list[dict[str, object]], stop_reason: str, tool_names: tuple[str, ...] | None
+) -> dict[str, object]:
+    config: Final = AnthropicConfig()
+    message: Final = _parsed_assistant_message(assistant_content, stop_reason)
+    answers: Final = [
+        {"role": "tool", "tool_call_id": block["id"], "content": "18C"}
+        for block in assistant_content
+        if block["type"] == "tool_use"
+    ]
+    optional_params: Final = (
+        {}
+        if tool_names is None
+        else config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *map(_function_tool, tool_names),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        )
+    )
+    return config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_names", "search_replayed"),
+    [
+        pytest.param(("get_weather", "get_local_time"), True, id="every_loaded_tool_is_still_sent"),
+        pytest.param(("get_local_time",), False, id="a_loaded_tool_is_no_longer_sent"),
+        pytest.param(None, False, id="no_tools_so_litellm_sends_a_dummy_tool"),
+    ],
+)
+def test_replayed_tool_search_is_sent_only_while_every_tool_it_loaded_is_still_sent(
+    tool_names: tuple[str, ...] | None, search_replayed: bool
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)
+
+    request: Final = _anthropic_request_after(search_turn, "tool_use", tool_names)
+
+    assert request["messages"][1]["content"] == (search_turn if search_replayed else [_WEATHER_TOOL_USE])
+    assert [block["type"] for block in request["messages"][2]["content"]] == ["tool_result", "text"]
+
+
+def test_replayed_tool_search_turn_that_held_only_the_search_is_dropped_once_its_tool_is_no_longer_sent():
+    request: Final = _anthropic_request_after(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)[:2], "end_turn", ())
+
+    assert [message["role"] for message in request["messages"]] == ["user", "user"]
+    assert "srvtoolu_01Search" not in json.dumps(request["messages"])
+
+
+def test_replayed_tool_search_result_litellm_cannot_read_is_sent_as_the_client_replayed_it():
+    unreadable_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"tool_references": "get_weather"},
+    }
+    message: Final = _parsed_assistant_message(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE), "tool_use")
+    provider_fields: Final = {**(message.provider_specific_fields or {}), "tool_results": [unreadable_result]}
+    replayed: Final = message.model_copy(update={"provider_specific_fields": provider_fields})
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            replayed.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={"tools": [_function_tool("get_local_time")]},
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert unreadable_result in request["messages"][1]["content"]
 
 
 def test_replayed_search_that_found_nothing_keeps_its_result_when_the_call_never_reached_the_client(
@@ -4400,7 +4510,7 @@ async def test_native_compaction_wire_roundtrip(
         return httpx.Response(200, json=body)
 
     route.mock(side_effect=respond)
-    call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+    call: Final = python_messages.anthropic_messages if messages_api else litellm.acompletion
     params: Final = dict(
         model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5",
         api_key="test",
@@ -5656,10 +5766,10 @@ def test_basic_sanitize_anthropic_tool_name_replaces_invalid_chars():
 def test_build_anthropic_tool_name_maps_no_collisions():
     """Names that need rewriting go in the maps; valid names stay out."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(
+    forward, reverse = build_anthropic_tool_name_maps(
         [
             "fine_name",
             "actions/download-job-logs-for-workflow-run",
@@ -5681,10 +5791,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_collision_with_existing_va
     the rewritten one must get a unique suffix and only THAT one shows up in
     the reverse map. The legitimately-named `foo_bar` round-trips identically."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
     # The original valid name keeps its slot.
     assert "foo_bar" not in forward  # untouched
     # The rewritten one gets a disambiguating suffix.
@@ -5700,10 +5810,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
     """Two different invalid names that collapse to the same candidate must
     both end up with unique sanitized forms."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
     # First wins the canonical slot, second gets a suffix.
     assert forward["foo/bar"] == "foo_bar"
     assert forward["foo.bar"] == "foo_bar_2"
@@ -5715,10 +5825,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
 def test_build_anthropic_tool_name_maps_three_way_collision():
     """`foo/bar`, `foo.bar`, and an existing `foo_bar` must all coexist."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
     assert "foo_bar" not in forward  # untouched
     assert forward["foo/bar"] == "foo_bar_2"
     assert forward["foo.bar"] == "foo_bar_3"
@@ -5733,10 +5843,10 @@ def test_build_anthropic_tool_name_maps_reverse_order_collision():
     its sanitized form collides with, both must still end up with distinct
     names on the wire."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
     # The valid name keeps its slot untouched.
     assert "foo_bar" not in forward
     # The rewritten one gets a disambiguating suffix.
@@ -5756,10 +5866,10 @@ def test_build_anthropic_tool_name_maps_duplicate_originals():
     on duplicates.
     """
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
     # Same original sanitizes to the same target — no spurious suffix.
     assert forward == {"foo/bar": "foo_bar"}
     assert reverse == {"foo_bar": "foo/bar"}
@@ -10705,6 +10815,136 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():
+    errored_search: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
+    }
+    results: Final = [_CODE_EXECUTION_BLOCKS[1], errored_search]
+    message: Final = _parsed_assistant_message(
+        [
+            *_CODE_EXECUTION_BLOCKS,
+            _tool_search_turn([], _WEATHER_TOOL_USE)[0],
+            errored_search,
+            {**_WEATHER_TOOL_USE, "name": "weather_get"},
+        ],
+        "tool_use",
+        {"weather_get": "weather.get"},
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert message.provider_specific_fields["tool_results"] == results
+    assert message.tool_calls[-1].function.name == "weather.get"
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"].endswith("_tool_result")] == results
+    assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+
+
+@pytest.mark.parametrize(
+    ("last_block", "stop_reason"),
+    [
+        pytest.param(dict(_PARIS_ANSWER), "end_turn", id="search_then_answer"),
+        pytest.param({**_WEATHER_TOOL_USE, "name": "weather_get"}, "tool_use", id="search_then_tool"),
+    ],
+)
+def test_a_renamed_tool_keeps_the_replayed_search_that_loaded_it(last_block: dict[str, object], stop_reason: str):
+    search_turn: Final = _tool_search_turn(["weather_get"], last_block)
+    message: Final = _parsed_assistant_message(search_turn, stop_reason, {"weather_get": "weather.get"})
+    answers: Final = (
+        [{"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}] if stop_reason == "tool_use" else []
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"] == "tool_search_tool_result"] == [search_turn[1]]
+    assert [block["id"] for block in sent if block["type"] == "server_tool_use"] == ["srvtoolu_01Search"]
+
+
+def _parsed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    message: Final = _parsed_assistant_message(content, "tool_use", tool_name_reverse_map)
+    return message.provider_specific_fields["tool_results"], [call.function.name for call in message.tool_calls]
+
+
+def _streamed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    iterator: Final = ModelResponseIterator(None, sync_stream=True, tool_name_reverse_map=tool_name_reverse_map)
+    events: Final = chain.from_iterable(
+        (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+        for index, block in enumerate(content)
+    )
+    deltas: Final = [iterator.chunk_parser(event).choices[0].delta for event in events]
+    fields: Final = [delta.provider_specific_fields for delta in deltas if delta.provider_specific_fields]
+    calls: Final = chain.from_iterable(delta.tool_calls or () for delta in deltas)
+    return fields[-1]["tool_results"], [call.function.name for call in calls]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_renamed_tool_search_result_keeps_claudes_names_so_an_older_proxy_accepts_the_replay(stream: bool):
+    search_turn: Final = _tool_search_turn(["weather_get"], {**_WEATHER_TOOL_USE, "name": "weather_get", "input": {}})
+    reverse_map: Final = {"weather_get": "weather.get"}
+
+    tool_results, tool_names = (
+        _streamed_tool_search_fields(search_turn, reverse_map)
+        if stream
+        else _parsed_tool_search_fields(search_turn, reverse_map)
+    )
+
+    assert tool_results == [search_turn[1]]
+    assert tool_names == ["weather.get"]
 
 
 _INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]

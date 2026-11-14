@@ -18,6 +18,8 @@ from typing import Final
 
 from integration._support.wire import Reply, Request
 
+from tests.integration._support.ports import allocate_port
+
 MARKER: Final = re.compile(rb"idle-[0-9a-f]{16}")
 _LOOPBACK: Final = "127.0.0.1"
 
@@ -193,7 +195,7 @@ def idle_gateway(
     port: int = 0,
 ) -> Generator[IdleGateway]:
     arrivals: Final[SimpleQueue[Arrival]] = SimpleQueue()
-    with _Server(port, respond, drop_after, drop, arrivals) as server:
+    with _Server(port or allocate_port(), respond, drop_after, drop, arrivals) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:

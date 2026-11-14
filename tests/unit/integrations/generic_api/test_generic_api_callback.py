@@ -20,6 +20,8 @@ from litellm.integrations.gcs_pubsub.pub_sub import *
 from litellm.integrations.generic_api.generic_api_callback import LOG_FORMAT_TYPES, GenericAPILogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -795,3 +797,27 @@ async def test_generic_api_concurrent_flushes_deliver_each_event_once(log_format
             task.cancel()
         await asyncio.gather(*owned_tasks, return_exceptions=True)
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_v1_payload_of_a_chat_row_never_shows_the_committed_spend_auth_read() -> None:
+    counter_keys: Final = EntitySpendCounterKeys.of(
+        token="hashed-token", team_id="t1", user_id=None, org_id=None, end_user_id=None
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-token",
+        team_id="t1",
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456, team=0.654321),
+    )
+    generic_logger: Final = GenericAPILogger(endpoint="https://example.com/api/logs", flush_interval=3600)
+
+    payload: Final = generic_logger._get_v1_logging_payload(
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": auth}}},
+        response_obj={"usage": {}},
+        start_time=None,
+        end_time=None,
+    )
+
+    assert "team_id='t1'" in payload["metadata"]
+    assert "0.123456" not in payload["metadata"]
+    assert str(counter_keys.team) not in payload["metadata"]

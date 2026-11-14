@@ -37,6 +37,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 T = TypeVar("T")
 
 CLIENT_VERSION: Final = "0.166.0"
+BYTE_LIMITED_CODEX_PARAMS: Final = {"client_version": "0.165.0"}
 CONSISTENT_READS: Final = 6
 CONVERGENCE_SECONDS: Final = 60
 RELOAD_MARGIN_SECONDS: Final = 5.0
@@ -513,10 +514,10 @@ def test_wildcard_deployment_never_listed(gateway: Gateway) -> None:
 
 
 def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> None:
-    """Codex 0.159.3 rejects a `model_catalog_url` body over `MAX_MODEL_CATALOG_BYTES` (1 MiB,
-    `codex-rs/model-provider/src/models_endpoint.rs`, read on 2026-10-03), so the proxy keeps the
+    """Codex up to 0.165.0 rejects a `model_catalog_url` body over `MAX_MODEL_CATALOG_BYTES` (1 MiB,
+    `codex-rs/model-provider/src/models_endpoint.rs`, removed by openai/codex#56525), so for it the proxy keeps the
     entries offering a tier first and then listing order; fallback entries carry Codex's base
-    prompt, so some fifty of them overrun the limit."""
+    prompt, so some fifty of them overrun the limit. A newer Codex gets every entry."""
     with gateway.scenario() as scenario:
         plain: Final = tuple(scenario.model() for _ in range(52))
         tiered: Final = scenario.model(model_info={"service_tiers": ["ultrafast"]})
@@ -526,7 +527,7 @@ def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> N
         )
         assert listing.index(tiered) == len(plain), listing
         response: Final = eventually(
-            lambda: _catalog_response(gateway, key=key),
+            lambda: _catalog_response(gateway, key=key, params=BYTE_LIMITED_CODEX_PARAMS),
             lambda value: value.status_code == 200 and tiered in {entry["slug"] for entry in _entries(value)},
             seconds=CONVERGENCE_SECONDS,
         )
@@ -538,6 +539,9 @@ def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> N
         assert slugs[-1] == tiered and _tier_ids(entries[-1]) == ("ultrafast",), entries[-1]
         assert slugs[:-1] == list(plain[: len(slugs) - 1]), slugs
         assert [entry["priority"] for entry in entries] == [listing.index(slug) for slug in slugs], slugs
+        whole: Final = _catalog_response(gateway, key=key)
+        assert len(whole.content) > 1024 * 1024, len(whole.content)
+        assert [string_value(entry["slug"]) for entry in _entries(whole)] == listing
 
 
 def test_an_oversized_tiered_model_is_left_out_alone(gateway: Gateway) -> None:
@@ -557,7 +561,7 @@ def test_an_oversized_tiered_model_is_left_out_alone(gateway: Gateway) -> None:
         assert listing == [plain, oversized, tiered], listing
 
         def kept() -> tuple[int, tuple[tuple[JsonValue, JsonValue, tuple[str, ...]], ...]]:
-            response: Final = _catalog_response(gateway, key=key)
+            response: Final = _catalog_response(gateway, key=key, params=BYTE_LIMITED_CODEX_PARAMS)
             return len(response.content), tuple(
                 (entry["slug"], entry["priority"], _tier_ids(entry)) for entry in _entries(response)
             )
