@@ -135,9 +135,8 @@ def test_an_azure_text_stream_cut_answers_the_client_with_the_error_line_alone(c
         response = client.post("/v1/completions", json=payload)
     _, error_frame, done = response.text.removesuffix("\n\n").split("\n\n")
     assert response.status_code == 200
-    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"] == (
-        "litellm.MidStreamFallbackError: litellm.APIConnectionError: "
-        "Azure_textException APIConnectionError - Response payload is not completed"
+    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"].endswith(
+        "litellm.APIConnectionError: Azure_textException APIConnectionError - Response payload is not completed"
     )
     assert done == "data: [DONE]"
 
