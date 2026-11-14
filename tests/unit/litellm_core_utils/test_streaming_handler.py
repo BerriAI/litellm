@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
 from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
@@ -3037,19 +3037,23 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("iteration", ["sync", "async"])
-@pytest.mark.parametrize("stream_options", [{"include_usage": True}, None])
+@pytest.mark.parametrize(
+    ("iteration", "stream_options"),
+    [
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("sync", None),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async", None),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+    ],
+)
 async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
-    logging_obj: Logging, iteration: str, stream_options: dict | None
+    logging_obj: Logging,
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
 ):
-    """
-    OpenRouter repeats an empty assistant delta and the finish reason on its usage
-    trailer. Nothing but usage may reach the caller after the finish chunk (#50156).
-    """
-    from litellm.utils import ModelResponseListIterator
-
-    model = "openrouter/openai/gpt-4.1-mini"
-    chunks = [
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    chunks: Final = (
         ModelResponseStream(
             id="chatcmpl-or",
             model=model,
@@ -3066,22 +3070,26 @@ async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
             choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
             usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
         ),
-    ]
-    response = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(model_responses=chunks),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
         model=model,
         custom_llm_provider="openrouter",
         logging_obj=logging_obj,
         stream_options=stream_options,
     )
 
-    collected_chunks = list(response) if iteration == "sync" else [chunk async for chunk in response]
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
 
-    finish_index = next(
+    finish_index: Final = next(
         i for i, chunk in enumerate(collected_chunks) if chunk.choices and chunk.choices[0].finish_reason == "stop"
     )
-    post_finish_chunks = collected_chunks[finish_index + 1 :]
-    assert all(chunk.usage is not None for chunk in post_finish_chunks), post_finish_chunks
+    post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
+    assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
     assert [chunk.usage.cost for chunk in post_finish_chunks] == ([0.0000088] if stream_options else [])
 
 
