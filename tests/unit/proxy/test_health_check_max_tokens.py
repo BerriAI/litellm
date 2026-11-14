@@ -9,8 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY
 
 import litellm
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1767,3 +1769,78 @@ async def test_run_model_health_check_reports_why_a_string_configurable_clientsi
 
     assert "configurable_clientside_auth_params" in result["error"]
     invoke_endpoint.assert_not_called()
+
+
+def _deployment_states(logger: PrometheusLogger) -> dict[str, float]:
+    return {
+        sample.labels["model_id"]: sample.value
+        for metric in logger.litellm_deployment_state.collect()
+        for sample in metric.samples
+    }
+
+
+async def _settled_states(logger: PrometheusLogger, model_id: str) -> dict[str, float]:
+    for _ in range(300):
+        await GLOBAL_LOGGING_WORKER.flush()
+        if model_id in _deployment_states(logger):
+            return _deployment_states(logger)
+        await asyncio.sleep(0.01)
+    return _deployment_states(logger)
+
+
+_PROBE_UPSTREAM_OK: Final = {
+    "id": "chatcmpl-probe",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "provider-b-pay",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _routed_call(router: litellm.Router) -> None:
+    try:
+        await router.acompletion(model="plain", messages=[{"role": "user", "content": "hi"}], max_retries=0)
+    except litellm.ServiceUnavailableError:
+        return
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("user_status", "probe_status", "routed_state"), [(503, 200, 1.0), (200, 503, 0.0)])
+async def test_a_probe_leaves_the_deployment_state_routed_traffic_set(
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    user_status: int,
+    probe_status: int,
+    routed_state: float,
+) -> None:
+    for collector in tuple(REGISTRY._collector_to_names):
+        REGISTRY.unregister(collector)
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [logger])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
+    deployment: Final = {
+        "model_name": "plain",
+        "litellm_params": {
+            "model": "openai/provider-b-pay",
+            "api_base": "https://probe-upstream.invalid/v1",
+            "api_key": "sk-fake",
+        },
+        "model_info": {"id": "standby-deployment", "mode": "chat"},
+    }
+    replies: Final = [
+        httpx.Response(status, json=_PROBE_UPSTREAM_OK if status == 200 else {"error": {"message": "overloaded"}})
+        for status in (user_status, probe_status)
+    ]
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://probe-upstream.invalid/v1/chat/completions").mock(side_effect=replies)
+        router: Final = litellm.Router(model_list=[copy.deepcopy(deployment)], num_retries=0, disable_cooldowns=True)
+        await _routed_call(router)
+        after_routed_call: Final = await _settled_states(logger, "standby-deployment")
+        probe: Final = await hc_module._run_model_health_check(deployment)
+        await GLOBAL_LOGGING_WORKER.flush()
+        await asyncio.sleep(0.2)
+
+    assert ("error" in probe) == (probe_status != 200), probe
+    assert after_routed_call == {"standby-deployment": routed_state}
+    assert _deployment_states(logger) == {"standby-deployment": routed_state}

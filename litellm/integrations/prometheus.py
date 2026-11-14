@@ -91,6 +91,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingZeroCostDiagnostic,
 )
+from litellm.utils import is_health_check_probe
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -3516,7 +3517,7 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
             # Only mark a deployment outage when one was actually picked.
-            if deployment_selected:
+            if deployment_selected and not is_health_check_probe(_metadata):
                 self.set_deployment_partial_outage(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
@@ -3763,12 +3764,13 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
-            self.set_deployment_healthy(
-                litellm_model_name=litellm_model_name or "",
-                model_id=model_id or "",
-                api_base=api_base or "",
-                api_provider=llm_provider or "",
-            )
+            if not is_health_check_probe(standard_logging_payload.get("metadata")):
+                self.set_deployment_healthy(
+                    litellm_model_name=litellm_model_name or "",
+                    model_id=model_id or "",
+                    api_base=api_base or "",
+                    api_provider=llm_provider or "",
+                )
 
             PrometheusLogger._inc_labeled_counter(
                 self,
