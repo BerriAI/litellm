@@ -1257,6 +1257,20 @@ def test_defs_unpacked_resolves_a_name_both_blocks_define_to_its_defs_schema() -
     assert defs_unpacked(schema) == {"type": "object", "properties": {"a": {"type": "string"}}}
 
 
+@pytest.mark.parametrize("block", ["$defs", "definitions"])
+def test_defs_unpacked_resolves_a_ref_target_that_is_itself_a_ref_into_its_own_defs(block: str) -> None:
+    outer: Final = {"$ref": f"#/{block}/Inner", block: {"Inner": {"type": "string"}}}
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/Outer"}}, "$defs": {"Outer": outer}}
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "string"}}}
+
+
+@pytest.mark.parametrize("target", [True, 1, "string", ["a"]])
+def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_an_object(target: object) -> None:
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
+    with pytest.raises(AttributeError):
+        defs_unpacked(schema)
+
+
 def test_defs_unpacked_inlines_a_ref_target_alone_unless_asked_to_keep_its_siblings() -> None:
     city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
     schema: Final = {

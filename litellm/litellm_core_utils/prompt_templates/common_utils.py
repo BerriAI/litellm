@@ -1046,9 +1046,11 @@ def unpack_defs(
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = (
-                    {**active_defs, **target_schema.get("$defs", {}), **target_schema.get("definitions", {})}
-                    if "$defs" in target_schema or "definitions" in target_schema
-                    else active_defs
+                    active_defs
+                    if isinstance(target_schema, dict)
+                    and "$defs" not in target_schema
+                    and "definitions" not in target_schema
+                    else {**active_defs, **target_schema.get("$defs", {}), **target_schema.get("definitions", {})}
                 )
 
                 # Replace the reference with resolved copy
