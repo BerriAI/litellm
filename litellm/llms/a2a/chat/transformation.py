@@ -32,6 +32,11 @@ _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
     frozenset({"api_key", "api_base", "headers", "model"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
 )
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_ANSWERABLE_TASK_STATES: Final = frozenset({"completed"})
+"""Task states a non-streaming chat completion can read an answer out of.
+
+Everything else is rejected before the status message is read: `failed`/`canceled`/`rejected` have
+no answer, and `submitted`/`working`/`input-required`/`auth-required` have not got one yet."""
 
 
 def _card_declares_no_streaming(agent_card_params: Mapping[str, object]) -> bool:
@@ -60,6 +65,38 @@ def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, o
         for name, value in stored_headers.items()
         if not (entra_owns_authorization and str(name).lower() == "authorization")
     }
+
+
+def _task_state_of(result: Mapping[str, object]) -> str | None:
+    """The lifecycle state of a `Task` result, or None when the result is not a task."""
+    if result.get("kind") not in (None, "task"):
+        return None
+    status: Final = result.get("status")
+    if not isinstance(status, Mapping):
+        return None
+    state: Final = status.get("state")
+    return state if isinstance(state, str) else None
+
+
+def _non_terminal_task_error(state: str, result: Mapping[str, object], headers: dict[str, str]) -> A2AError:
+    """A chat completion has no way to carry a task that is still running.
+
+    Returning the status text as a `stop` completion hands the caller a progress note as if it
+    were the agent's answer -- an agent restarting mid-run answers the blocking send with
+    "your request keeps running", and the real answer that arrives later is never seen.
+    """
+    task_id: Final = result.get("id")
+    if state in ("submitted", "working"):
+        hint: Final = f"Poll tasks/get for task {task_id!r} to collect the result."
+    elif state in ("input-required", "auth-required"):
+        hint = f"Task {task_id!r} is waiting for {'input' if state == 'input-required' else 'authentication'}."
+    else:
+        hint = f"Task {task_id!r} is {state} and will never produce an answer."
+    return A2AError(
+        status_code=502,
+        message=f"A2A task {task_id!r} is not complete (state={state!r}). {hint}",
+        headers=headers,
+    )
 
 
 class A2AConfig(BaseConfig):
@@ -334,8 +371,18 @@ class A2AConfig(BaseConfig):
                 headers=dict(raw_response.headers),
             )
 
+        validated: Final = _JSON_OBJECT.validate_python(response_json)
+
+        # A task that is not finished has no answer to return yet; its status message is progress,
+        # not content.
+        result: Final = validated.get("result")
+        if isinstance(result, Mapping):
+            state: Final = _task_state_of(result)
+            if state is not None and state not in _ANSWERABLE_TASK_STATES:
+                raise _non_terminal_task_error(state, result, dict(raw_response.headers))
+
         # Extract text from A2A response
-        text: Final = extract_text_from_a2a_response(_JSON_OBJECT.validate_python(response_json))
+        text: Final = extract_text_from_a2a_response(validated)
 
         # Populate model response
         model_response.choices = [

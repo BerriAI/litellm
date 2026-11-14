@@ -148,7 +148,6 @@ def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelR
         ({"message": {"parts": [{"kind": "text", "text": "nested"}]}}, "nested"),
         ({"kind": "task", "status": {"message": {"parts": [{"kind": "text", "text": "status"}]}}}, "status"),
         ({"kind": "task", "artifacts": [{"parts": [{"kind": "text", "text": "artifact"}]}]}, "artifact"),
-        ({"kind": "task", "status": {"state": "submitted"}}, ""),
         (None, ""),
         ("plain text", ""),
         ([{"kind": "text", "text": "not a result object"}], ""),
@@ -161,6 +160,78 @@ def test_transform_response_extracts_the_text_of_each_result_shape(result: objec
     assert response.choices[0].finish_reason == "stop"
     assert response.id == "resp-1"
     assert response.model == "a2a/test-agent"
+
+
+@pytest.mark.parametrize("state", ["submitted", "working", "input-required", "auth-required"])
+def test_transform_response_rejects_a_task_that_has_not_finished(state: str):
+    """The status message of a running task is progress, not an answer.
+
+    Returning it with `finish_reason="stop"` made an agent that restarted mid-run look like it
+    answered "your request keeps running"; the real answer, which the task reaches later, was
+    never surfaced. A chat completion cannot carry a pending task, so this is an error.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "resp-1",
+        "result": {
+            "kind": "task",
+            "id": "t1",
+            "status": {"state": state, "message": {"parts": [{"kind": "text", "text": "still going"}]}},
+        },
+    }
+
+    with pytest.raises(A2AError) as exc_info:
+        _transform(payload, headers={"x-agent": "billing"})
+
+    prefix = f"A2A task 't1' is not complete (state={state!r}). "
+    if state in ("submitted", "working"):
+        assert exc_info.value.message == prefix + "Poll tasks/get for task 't1' to collect the result."
+    else:
+        assert (
+            exc_info.value.message
+            == prefix + f"Task 't1' is waiting for {'input' if state == 'input-required' else 'authentication'}."
+        )
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.headers["x-agent"] == "billing"
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled", "rejected"])
+def test_transform_response_rejects_a_task_that_ended_without_an_answer(state: str):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "resp-1",
+        "result": {
+            "kind": "task",
+            "id": "t1",
+            "status": {"state": state, "message": {"parts": [{"kind": "text", "text": "gave up"}]}},
+        },
+    }
+
+    with pytest.raises(A2AError) as exc_info:
+        _transform(payload)
+
+    assert (
+        exc_info.value.message
+        == f"A2A task 't1' is not complete (state={state!r}). Task 't1' is {state} and will never produce an answer."
+    )
+
+
+def test_transform_response_reads_the_answer_of_a_completed_task():
+    """A finished task is the normal path and still answers from its status message."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "resp-1",
+        "result": {
+            "kind": "task",
+            "id": "t1",
+            "status": {"state": "completed", "message": {"parts": [{"kind": "text", "text": "42"}]}},
+        },
+    }
+
+    response = _transform(payload)
+
+    assert response.choices[0].message.content == "42"
+    assert response.choices[0].finish_reason == "stop"
 
 
 @pytest.mark.parametrize("payload", [{}, {"jsonrpc": "2.0", "result": {"parts": [{"kind": "text", "text": "4"}]}}])
