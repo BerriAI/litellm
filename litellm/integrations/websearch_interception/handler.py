@@ -45,6 +45,11 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.responses.bridge_check import (
+    bridge_reasoning_effort,
+    chat_completion_ends_in_responses_api,
+    str_keyed_mapping,
+)
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
@@ -300,6 +305,38 @@ def _kept_on_the_responses_agentic_loop(
     return {key: value for key, value in kwargs.items() if key != "_agentic_loop_api_surface"}
 
 
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _searches_through_web_search_options_on_the_responses_api(
+    kwargs: Mapping[str, object], tools: Sequence[Mapping[str, object]], custom_llm_provider: str
+) -> bool:
+    if kwargs.get("web_search_options") is None:
+        return False
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    return chat_completion_ends_in_responses_api(
+        _optional_str(kwargs.get("model")),
+        custom_llm_provider,
+        str_keyed_mapping(kwargs.get("model_info")),
+        tools=tools,
+        reasoning_effort=bridge_reasoning_effort(
+            _optional_str(reasoning_effort) or str_keyed_mapping(reasoning_effort), kwargs.get("extra_body")
+        ),
+        api_base=_optional_str(kwargs.get("api_base")),
+    )
+
+
+def _with_web_search_options_as_a_web_search_tool(
+    kwargs: Mapping[str, object], tools: Sequence[Mapping[str, object]]
+) -> Mapping[str, object]:
+    already_searches: Final = any(is_chat_completion_request_web_search_tool(tool) for tool in tools)
+    return {
+        **{key: value for key, value in kwargs.items() if key != "web_search_options"},
+        "tools": [*tools] if already_searches else [*tools, {"type": "web_search"}],
+    }
+
+
 class WebSearchInterceptionLogger(CustomLogger):
     """
     CustomLogger that intercepts WebSearch tool calls for models that don't
@@ -510,8 +547,15 @@ class WebSearchInterceptionLogger(CustomLogger):
         if custom_llm_provider not in self.enabled_providers:
             return None
 
-        # Check if request has tools with native web_search
         tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")
+        if call_type == CallTypes.acompletion and _searches_through_web_search_options_on_the_responses_api(
+            kwargs, tools or (), custom_llm_provider
+        ):
+            return await self.async_pre_call_deployment_hook(
+                dict(_with_web_search_options_as_a_web_search_tool(kwargs, tools or ())), call_type
+            )
+
+        # Check if request has tools with native web_search
         if not tools:
             return None
 

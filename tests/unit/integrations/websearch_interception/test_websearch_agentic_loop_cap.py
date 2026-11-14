@@ -1933,3 +1933,68 @@ async def test_responses_pinned_openai_chat_completion_runs_the_search_its_web_s
 
     assert perplexity_search.call_count == 1
     assert await _answer_text(response) == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streamed", "streamed"])
+@pytest.mark.parametrize(
+    ("request_cap", "loops_allowed"),
+    [({"max_agentic_loops": 1}, 1), ({}, DEFAULT_MAX_AGENTIC_LOOPS)],
+    ids=["max_agentic_loops=1", "default cap"],
+)
+async def test_responses_pinned_openai_chat_completion_stops_web_search_options_searches_at_the_agentic_loop_cap(
+    request_cap: dict[str, int],
+    loops_allowed: int,
+    stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        web_search_options={},
+        allowed_openai_params=["web_search_options"],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        stream=stream,
+        **request_cap,
+    )
+    await _answer_text(response)
+
+    assert perplexity_search.call_count == loops_allowed
+    assert responses_route.call_count == loops_allowed + 1
+
+
+@pytest.mark.asyncio
+async def test_responses_pinned_chat_completion_with_web_search_options_and_a_web_search_tool_sends_one_search_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_searches_until(1)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        web_search_options={},
+        allowed_openai_params=["web_search_options"],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+    )
+
+    first_round_tools: Final = json.loads(responses_route.calls[0].request.content)["tools"]
+    assert [tool.get("name", tool.get("type")) for tool in first_round_tools] == [INTERNAL_TOOL_NAME]
+    assert perplexity_search.call_count == 1
+    assert await _answer_text(response) == "Argentina won the 2022 World Cup."
