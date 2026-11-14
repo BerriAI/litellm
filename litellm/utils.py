@@ -4643,7 +4643,7 @@ def pre_process_non_default_params(
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
     provider_config: BaseConfig | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Pre-process non-default params to a standardized format
     """
@@ -5377,11 +5377,21 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                base_model=base_model,
+            )
+            if isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -9454,6 +9464,8 @@ class ProviderConfigManager:
             return configs[provider]()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
+        if provider == LlmProviders.VERCEL_AI_GATEWAY:
+            return litellm.VercelAIGatewayDecisionsConfig()
         return None
 
     @staticmethod

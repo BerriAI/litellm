@@ -12520,6 +12520,30 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_general_settings_stores_a_client_side_s3_bucket_the_gate_admits(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.auth.auth_utils import ClientSideStorageAllowlist
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake: Final = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="allowed_client_side_s3_buckets",
+            field_value=["media-bucket"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    stored: Final = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert ClientSideStorageAllowlist.model_validate(stored).admits_s3_bucket("media-bucket")
+
+
+@pytest.mark.asyncio
 async def test_delete_config_general_settings_is_visible_to_the_next_read(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
