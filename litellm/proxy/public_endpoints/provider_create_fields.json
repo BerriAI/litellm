@@ -1912,6 +1912,46 @@
         "field_type": "text",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "github_copilot_app_id",
+        "label": "App client ID",
+        "placeholder": "Iv23...",
+        "tooltip": "The public client ID shown in GitHub Settings > Developer settings > GitHub Apps > your App. It usually starts with Iv. A numeric App ID also works as text. This is not the client secret.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_installation_id",
+        "label": "Installation ID",
+        "placeholder": "12345678",
+        "tooltip": "The numeric ID in the URL when you open organization Settings > GitHub Apps > Installed GitHub Apps > Configure. It identifies this App installation, not the organization or App itself. The App needs Copilot Requests read permission.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key",
+        "label": "Private key (PEM)",
+        "placeholder": null,
+        "tooltip": "Upload the PEM downloaded from your GitHub App Credentials > Key pairs. LiteLLM encrypts it in its credential database. The saved key is never returned to this form. Upload a replacement here to rotate it. Use HTTPS for your dashboard.",
+        "required": false,
+        "field_type": "upload",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "github_copilot_app_private_key_ref",
+        "label": "Private key secret reference",
+        "placeholder": "oidc/file//run/secrets/copilot-app.pem",
+        "tooltip": "Generate a PEM in your GitHub App Credentials > Key pairs. Store it securely on the server, then enter a reference such as oidc/file//run/secrets/copilot-app.pem or a secret name in your configured LiteLLM secret manager. os.environ/VARIABLE_NAME is also supported. Never paste PEM contents or a path on your laptop.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
@@ -3846,7 +3886,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v5"
+    "default_model_placeholder": "soniox/stt-async-v6"
   },
   {
     "provider": "StrandsDecider",

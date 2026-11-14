@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     map_finish_reason,
     normalize_drop_params,
+    only,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
     provider_reported_usage_cost,
@@ -934,3 +935,14 @@ def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
 
     assert source == {"a": 1, "b": 2}
     assert result == {"b": 2, "c": 3}
+
+
+def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    result: Final = only(source, "d", "b", "missing")
+    result["e"] = 5
+
+    assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
+    assert only(source) == {}
+    assert source == {"a": 1, "b": 2, "c": 3, "d": 4}

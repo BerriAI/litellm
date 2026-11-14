@@ -1,18 +1,12 @@
 use bytes::Bytes;
 use futures_util::{future::BoxFuture, stream::BoxStream};
-use serde_json::Value;
 
 use crate::Error;
-
-pub enum TransportBody {
-    Json(Value),
-    Signed(Bytes),
-}
 
 pub struct TransportRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
-    pub body: TransportBody,
+    pub body: Bytes,
     pub stream: bool,
 }
 

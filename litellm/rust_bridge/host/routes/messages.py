@@ -6,7 +6,6 @@ import errno
 import functools
 import inspect
 import ipaddress
-import json
 import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -25,9 +24,11 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
+    only,
     proxy_request_headers,
     stream_cost_injection_requested,
 )
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -173,8 +174,17 @@ def modify_max_tokens(
         cache.remember_unclamped(kwargs.get("litellm_logging_obj"), unclamped)
 
 
+def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    if metadata is None:
+        return params
+    return {**params, "metadata": only(metadata, "user_id")}
+
+
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+    params: Final = _anthropic_metadata(
+        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+    )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
@@ -768,6 +778,20 @@ def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> 
     )
 
 
+def _with_deployment_debug_info(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+    logger: Final = request.get("litellm_logging_obj")
+    if not isinstance(logger, LiteLLMLoggingObj):
+        return error
+    details: Final = logger.model_call_details
+    provider: Final = details.get("custom_llm_provider")
+    return with_deployment_debug_info(
+        error,
+        logger.model,
+        provider if isinstance(provider, str) and provider else request_provider,
+        details.get("litellm_params"),
+    )
+
+
 def map_failure(
     error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool = False
 ) -> Exception:
@@ -775,12 +799,16 @@ def map_failure(
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
-        return httpx.ReadTimeout(_BODY_READ_TIMEOUT if http_transport.uses_aiohttp_transport() else "")
+        return _with_deployment_debug_info(
+            httpx.ReadTimeout(_BODY_READ_TIMEOUT if http_transport.uses_aiohttp_transport() else ""),
+            request,
+            request_provider,
+        )
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None and request.get("stream") is True:
         # Python reads a stream's body outside its HTTP client's error mapping, so a body the
         # connection cut short reaches the caller as its transport raised it.
-        return _body_cut(*_BODY_CUT.validate_python(body_cut))
+        return _with_deployment_debug_info(_body_cut(*_BODY_CUT.validate_python(body_cut)), request, request_provider)
     transport_timeout: Final = _TRANSPORT_TIMEOUTS.get(getattr(error, "messages_timeout", None))
     if transport_timeout is not None:
         # Python's `litellm.Timeout` is raised while handling httpx's own timeout, which the proxy's
@@ -1234,14 +1262,14 @@ async def transport_send(
     request: Mapping[str, object],
     url: str,
     headers: Sequence[tuple[str, str]],
-    body: object,
+    body: bytes,
     stream: bool,
 ) -> Sent:
     try:
         response: Final = await handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped dict params
             url=_sent_url(request, url),
             headers=dict(headers),
-            data=body if isinstance(body, bytes) else json.dumps(body),
+            data=body,
             stream=stream,
             logging_obj=cast(  # cast-ok: the call's logger, handed on as Python's handler hands it
                 "LiteLLMLoggingObj | None", request.get("litellm_logging_obj")

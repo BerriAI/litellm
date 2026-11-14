@@ -14,7 +14,8 @@ import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import { StorePromptsMetadataToggle } from "../common_components/StorePromptsToggle";
 import NumericalInput from "../shared/numerical_input";
 import SkillSelector from "../skills/SkillSelector";
-import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
+import type { BudgetAlertRow } from "../key_team_helpers/budgetAlertEmails";
+import { moveBudgetAlertEmailsOutOfMetadataJson, moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
 import { AgentsAndGroups, KeyEditFormValues } from "./keyEditFormValues";
 
 export const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
@@ -186,8 +187,42 @@ export const moveMetadataTagsToTagsField = (form: KeyEditForm, t: TFunction): vo
   }
 };
 
-export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => {
+export const moveMetadataBudgetAlertsToRows = (
+  metadata: string | undefined,
+  rows: readonly BudgetAlertRow[] | undefined,
+  write: (metadata: string, rows: BudgetAlertRow[]) => void,
+  t: TFunction,
+): void => {
+  const moved = moveBudgetAlertEmailsOutOfMetadataJson(metadata, rows);
+  if (moved === null) return;
+  write(moved.metadata, [...moved.rows]);
+  const thresholds = moved.movedThresholds.map((threshold) => `${threshold}%`).join(", ");
+  toast.info(t("keyDetail.maxBudgetAlertEmails.movedThresholds", { thresholds }));
+};
+
+export const moveMetadataBudgetAlertsToKeyRows = (form: KeyEditForm, t: TFunction): void =>
+  moveMetadataBudgetAlertsToRows(
+    form.getValues("metadata"),
+    form.getValues("max_budget_alert_emails"),
+    (metadata, rows) => {
+      form.setValue("metadata", metadata, { shouldDirty: true });
+      form.setValue("max_budget_alert_emails", rows, { shouldDirty: true });
+    },
+    t,
+  );
+
+export const KeyMetadataField = ({
+  form,
+  budgetAlertRowsShown,
+}: {
+  form: KeyEditForm;
+  budgetAlertRowsShown: boolean;
+}) => {
   const { t } = useTranslation();
+  const moveTypedFieldsOutOfMetadata = () => {
+    moveMetadataTagsToTagsField(form, t);
+    if (budgetAlertRowsShown) moveMetadataBudgetAlertsToKeyRows(form, t);
+  };
   return (
     <FormField
       control={form.control}
@@ -204,7 +239,7 @@ export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => {
             rows={10}
             onBlur={() => {
               field.onBlur();
-              moveMetadataTagsToTagsField(form, t);
+              moveTypedFieldsOutOfMetadata();
             }}
           />
         </>

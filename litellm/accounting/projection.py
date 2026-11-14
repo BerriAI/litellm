@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -14,9 +14,10 @@ from litellm.constants import (
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
+from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
-from litellm.proxy.db.model_usage_rollup import date_from_start_time
+from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
@@ -70,9 +71,32 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
     return Contribution(table, key, (("spend", spend),))
 
 
+_CUSTOMER_ID_KEYS: Final = ("customer_org_id", "customer_team_id", "customer_member_id")
+
+
+def _customer_ids(metadata: Mapping[str, object]) -> Mapping[str, str | None]:
+    """The customer hierarchy a request is charged to: the member the request named, else the key's attribution."""
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    if isinstance(entities.get("customer_org_id"), str):
+        return {key: value if isinstance(value := entities.get(key), str) else None for key in _CUSTOMER_ID_KEYS}
+    serialized: Final = metadata.get(CUSTOMER_USAGE_METADATA_KEY)
+    if not isinstance(serialized, str):
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    try:
+        attribution: Final = CustomerUsageAttribution.model_validate_json(serialized)
+    except ValidationError:
+        return dict.fromkeys(_CUSTOMER_ID_KEYS)
+    return {
+        "customer_org_id": attribution.customer_org_id,
+        "customer_team_id": attribution.customer_team_id,
+        "customer_member_id": attribution.customer_member_id,
+    }
+
+
 def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
     spend: Final = _number(row.get("spend"))
     entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
     identities: Final = (
         ("LiteLLM_VerificationToken", "token", entities.get("api_key")),
         ("LiteLLM_UserTable", "user_id", entities.get("user")),
@@ -80,6 +104,9 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
         ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
+        ("LiteLLM_CustomerOrganizationTable", "customer_org_id", customer["customer_org_id"]),
+        ("LiteLLM_CustomerTeamTable", "customer_team_id", customer["customer_team_id"]),
+        ("LiteLLM_CustomerMemberTable", "customer_member_id", customer["customer_member_id"]),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
@@ -159,7 +186,14 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     )
     # The legacy daily organization writer uses the charged org argument, not
     # SpendLogs' normalized empty-string identity for a request with no org.
-    daily_row: Final = {**row, "organization_id": _fields(metadata.get("accounting_entities")).get("organization_id")}
+    entities: Final = _fields(metadata.get("accounting_entities"))
+    customer: Final = _customer_ids(metadata)
+    daily_row: Final = {
+        **row,
+        "organization_id": entities.get("organization_id"),
+        "customer_org_id": customer["customer_org_id"],
+        **{key: customer[key] or "" for key in ("customer_team_id", "customer_member_id")},
+    }
     return tuple(_daily_rows(daily_row, shared_key, counters))
 
 
@@ -169,13 +203,26 @@ def _daily_rows(
     counters: tuple[tuple[str, int | float], ...],
 ) -> Iterator[Contribution]:
     for entity, table in DAILY_SPEND_TABLES.items():
+        customer_date = _utc_date(row) if entity == "customer_member" else None
+        if entity == "customer_member" and customer_date is None:
+            continue
+        daily_key = tuple(
+            (column, customer_date if column == "date" and customer_date is not None else value)
+            for column, value in shared_key
+        )
+        model_group = (("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),)
         for identity in daily_spend_entity_ids(row, entity):
             yield Contribution(
                 table.name,
-                ((table.entity_id_column, _text(identity)), *shared_key),
+                (
+                    (table.entity_id_column, _text(identity)),
+                    *((column, _text(row.get(column))) for column in table.parent_id_columns),
+                    *daily_key,
+                    *((("model_group", _text(row.get("model_group"))),) if table.hashed_identity else ()),
+                ),
                 counters,
                 (
-                    ("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),
+                    *(() if table.hashed_identity else model_group),
                     *((("request_id", _text(row.get("request_id"))),) if table.carries_request_id else ()),
                 ),
             )
@@ -259,18 +306,7 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
 
 def _utc_date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
-    try:
-        parsed: Final = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
-    except ValueError:
-        return None
-    if not isinstance(parsed, datetime):
-        return None
-    return (
-        (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed)
-        .astimezone(timezone.utc)
-        .date()
-        .isoformat()
-    )
+    return utc_date_from_start_time(start) if isinstance(start, (datetime, str)) else None
 
 
 def _guardrail_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:

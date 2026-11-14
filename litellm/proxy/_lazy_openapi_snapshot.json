@@ -939,6 +939,20 @@
               ],
               "title": "Access Skill Names"
             },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -1128,6 +1142,21 @@
               "title": "Access Skill Names",
               "type": "array"
             },
+            "access_vector_store_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Vector Store Ids",
+              "type": "array"
+            },
+            "access_vector_stores": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Vector Stores",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -1227,6 +1256,7 @@
             "assigned_key_ids",
             "access_mcp_servers",
             "access_agents",
+            "access_vector_stores",
             "assigned_teams",
             "assigned_keys",
             "created_at",
@@ -1303,6 +1333,20 @@
                 }
               ],
               "title": "Access Skill Names"
+            },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
             },
             "assigned_key_ids": {
               "anyOf": [
@@ -40472,6 +40516,14 @@
               "title": "Flow",
               "type": "string"
             },
+            "server": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Server",
+              "type": "array"
+            },
             "team_id": {
               "anyOf": [
                 {
@@ -43047,7 +43099,7 @@
       },
       "/authorize/complete": {
         "post": {
-          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.",
+          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.\nEach ``server`` field is the id of a server the connect page shows as on.",
           "operationId": "authorize_complete_authorize_complete_post",
           "requestBody": {
             "content": {
@@ -60556,6 +60608,38 @@
   "skill_hub": {
     "components": {
       "schemas": {
+        "Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put": {
+          "properties": {
+            "expected_revision": {
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Replacement Agent Skills ZIP with the same declared skill name",
+              "title": "File",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "file",
+            "expected_revision"
+          ],
+          "title": "Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put",
+          "type": "object"
+        },
         "Body_replace_skill_archive_skill_hub_skills__name__upload_put": {
           "properties": {
             "expected_updated_at": {
@@ -61113,6 +61197,18 @@
         "SkillHubRejection": {
           "additionalProperties": false,
           "properties": {
+            "expected_revision": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Revision"
+            },
             "reason": {
               "anyOf": [
                 {
@@ -61422,6 +61518,12 @@
               ],
               "title": "Base Updated At"
             },
+            "can_edit": {
+              "default": false,
+              "description": "Whether the caller may edit or withdraw this pending submission",
+              "title": "Can Edit",
+              "type": "boolean"
+            },
             "created_at": {
               "format": "date-time",
               "title": "Created At",
@@ -61480,6 +61582,13 @@
               ],
               "title": "Reviewed By"
             },
+            "revision": {
+              "default": 0,
+              "description": "Proposal revision used to prevent stale edits and reviews",
+              "minimum": 0.0,
+              "title": "Revision",
+              "type": "integer"
+            },
             "skill_name": {
               "title": "Skill Name",
               "type": "string"
@@ -61488,7 +61597,8 @@
               "enum": [
                 "pending_review",
                 "approved",
-                "rejected"
+                "rejected",
+                "withdrawn"
               ],
               "title": "Status",
               "type": "string"
@@ -61539,6 +61649,95 @@
           "title": "SkillHubSubmissionDetail",
           "type": "object"
         },
+        "SkillHubSubmissionEdit": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            },
+            "expected_revision": {
+              "description": "Revision read from the submission detail",
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published updated_at read by the editor. A stale value returns 409",
+              "title": "Expected Updated At"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "expected_revision"
+          ],
+          "title": "SkillHubSubmissionEdit",
+          "type": "object"
+        },
         "SkillHubSubmissionList": {
           "properties": {
             "count": {
@@ -61563,6 +61762,22 @@
             "has_more"
           ],
           "title": "SkillHubSubmissionList",
+          "type": "object"
+        },
+        "SkillHubSubmissionRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "description": "Revision read from the submission detail",
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "expected_revision"
+          ],
+          "title": "SkillHubSubmissionRevision",
           "type": "object"
         },
         "SkillHubVersion": {
@@ -63004,7 +63219,8 @@
                     "enum": [
                       "pending_review",
                       "approved",
-                      "rejected"
+                      "rejected",
+                      "withdrawn"
                     ],
                     "type": "string"
                   },
@@ -63074,7 +63290,7 @@
       },
       "/skill-hub/submissions/{submission_id}": {
         "get": {
-          "description": "Read an immutable proposal and its currently visible published skill.",
+          "description": "Read a proposal revision and its currently visible published skill.",
           "operationId": "get_submission_skill_hub_submissions__submission_id__get",
           "parameters": [
             {
@@ -63118,6 +63334,62 @@
           "tags": [
             "skill_hub"
           ]
+        },
+        "put": {
+          "description": "Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.",
+          "operationId": "edit_submission_skill_hub_submissions__submission_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubSubmissionEdit"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Edit Submission",
+          "tags": [
+            "skill_hub"
+          ]
         }
       },
       "/skill-hub/submissions/{submission_id}/approve": {
@@ -63135,6 +63407,23 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillHubSubmissionRevision"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -63388,6 +63677,122 @@
             }
           ],
           "summary": "Start Skill Scan",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/submissions/{submission_id}/upload": {
+        "put": {
+          "description": "Replace a pending proposal's files using the upload limits. Only its original submitting user may edit.",
+          "operationId": "edit_submission_archive_skill_hub_submissions__submission_id__upload_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Edit Submission Archive",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/submissions/{submission_id}/withdraw": {
+        "put": {
+          "description": "Withdraw a pending proposal without publishing it. Only its original submitting user may withdraw.",
+          "operationId": "withdraw_submission_skill_hub_submissions__submission_id__withdraw_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubSubmissionRevision"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Withdraw Submission",
           "tags": [
             "skill_hub"
           ]

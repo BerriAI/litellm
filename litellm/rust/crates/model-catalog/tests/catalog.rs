@@ -26,6 +26,12 @@ fn catalog(document: Value) -> Catalog {
     loaded(document).value
 }
 
+fn utf16(text: &[u8], mark: [u8; 2], bytes: fn(u16) -> [u8; 2]) -> Vec<u8> {
+    mark.into_iter()
+        .chain(text.iter().flat_map(|byte| bytes(u16::from(*byte))))
+        .collect()
+}
+
 fn written(catalog: &Catalog) -> String {
     let document: Map<String, Value> = catalog
         .written()
@@ -64,6 +70,36 @@ fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
             .mode,
         Some(expected)
     );
+}
+
+#[rstest]
+fn a_minimum_billed_input_token_count_is_read_and_mergeable() {
+    let document = json!({
+        "fallback_generalizations": {"rules": [{"name": "family", "pattern": "^new-", "model_info": {}}]},
+        "Test": {"litellm_provider": "test", "min_billed_input_tokens": 600}
+    });
+    let problems: Vec<String> = Catalog::problems(document.to_string().as_bytes())
+        .iter()
+        .map(report)
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let attributes = catalog(document)
+        .lookup("Test")
+        .unwrap()
+        .entry
+        .model()
+        .unwrap()
+        .attributes
+        .clone();
+    assert_eq!(attributes.min_billed_input_tokens, Some(600));
+}
+
+#[rstest]
+fn a_negative_minimum_billed_input_token_count_is_reported_on_its_row() {
+    let problems =
+        error_text(json!({"Test": {"litellm_provider": "test", "min_billed_input_tokens": -1}}));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("Test.min_billed_input_tokens: invalid value"));
 }
 
 #[rstest]
@@ -452,16 +488,39 @@ fn a_dangling_alias_of_row_is_rejected_and_dropped_from_the_written_document() {
 }
 
 #[rstest]
-fn an_alias_of_row_with_other_fields_is_never_served() {
+fn an_alias_of_row_with_other_fields_is_served_as_its_target_until_its_row_is_rejected() {
     let parsed = loaded(json!({
-        "Real": {"litellm_provider": "t"},
-        "real-latest": {"alias_of": "Real", "mode": "chat"}
+        "Real": {"litellm_provider": "t", "input_cost_per_token": 1e-6},
+        "real-latest": {"alias_of": "Real", "input_cost_per_token": 9e-6}
     }));
-    assert!(parsed.value.lookup("real-latest").is_none());
+    let found = parsed.value.lookup("real-latest").unwrap();
+    assert_eq!(found.canonical_key, "Real");
+    assert_eq!(
+        found.entry.field("input_cost_per_token"),
+        Some(&json!(1e-6))
+    );
     let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
     assert_eq!(removed.len(), 1);
     assert!(catalog.lookup("real-latest").is_none());
-    assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+    assert_eq!(
+        written(&catalog),
+        r#"{"Real":{"litellm_provider":"t","input_cost_per_token":1e-6}}"#
+    );
+}
+
+#[rstest]
+#[case::utf8_with_a_byte_order_mark([b"\xEF\xBB\xBF".as_slice(), br#"{"m":{"litellm_provider":"p"}}"#].concat())]
+#[case::utf16_little_endian(utf16(br#"{"m":{"litellm_provider":"p"}}"#, [0xFF, 0xFE], u16::to_le_bytes))]
+#[case::utf16_big_endian(utf16(br#"{"m":{"litellm_provider":"p"}}"#, [0xFE, 0xFF], u16::to_be_bytes))]
+fn a_document_that_starts_with_a_byte_order_mark_parses_as_its_text(#[case] body: Vec<u8>) {
+    let catalog = Catalog::parse(&body).unwrap().value;
+    assert_eq!(catalog.model_names().collect::<Vec<_>>(), ["m"]);
+}
+
+#[rstest]
+fn a_byte_order_mark_before_bytes_that_are_not_its_encoding_is_invalid_json() {
+    let error = Catalog::parse(&[0xFF, 0xFE, b'{', b'}', b'x']).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Json);
 }
 
 #[rstest]

@@ -85,6 +85,7 @@ class AlertMonitoring(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(description="Whether performance monitoring is enabled. Defaults to true.")
+    model_deprecations_enabled: bool = Field(default=True, description="Whether model deprecation alerts are enabled.")
     alerts_used: int = Field(ge=0, le=FREE_ALERT_LIMIT, description="Lifetime free allowance consumed, capped at five.")
     alert_limit: int | None = Field(description="Free allowance, or null for Enterprise.")
     disabled_by_config: bool = Field(description="Whether performance_alerts_enabled is false in proxy settings.")
@@ -100,9 +101,16 @@ class AlertMonitoringUpdate(BaseModel):
     enabled: bool = Field(strict=True, description="Enable or disable performance monitoring for this gateway.")
 
 
+class ModelDeprecationMonitoringUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_deprecations_enabled: bool = Field(strict=True, description="Enable or disable model deprecation alerts.")
+
+
 class AlertMonitoringStore(Protocol):
     async def monitoring(self) -> AlertMonitoring: ...
     async def set_enabled(self, enabled: bool) -> AlertMonitoring: ...
+    async def set_model_deprecations_enabled(self, enabled: bool) -> AlertMonitoring: ...
 
 
 class PerformanceAlertStore(Protocol):

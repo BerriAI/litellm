@@ -7,11 +7,13 @@ import { useUISettings } from "./useUISettings";
 
 // Mock the networking function
 vi.mock("@/components/networking", () => ({
+  getProxyBaseUrl: () => "http://localhost",
   getUiSettings: vi.fn(),
 }));
 
 // Mock data
 const mockUISettings: Record<string, any> = {
+  values: { aria_internal_user_access: "own_and_team_usage" },
   theme: "dark",
   language: "en",
   notifications: true,
@@ -56,7 +58,7 @@ describe("useUISettings", () => {
 
     expect(result.current.data).toEqual(mockUISettings);
     expect(result.current.error).toBeNull();
-    expect(getUiSettings).toHaveBeenCalledWith();
+    expect(getUiSettings).toHaveBeenCalledWith("http://localhost");
     expect(getUiSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -80,7 +82,7 @@ describe("useUISettings", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(getUiSettings).toHaveBeenCalledWith();
+    expect(getUiSettings).toHaveBeenCalledWith("http://localhost");
     expect(getUiSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -97,7 +99,7 @@ describe("useUISettings", () => {
     });
 
     expect(result.current.data).toEqual({});
-    expect(getUiSettings).toHaveBeenCalledWith();
+    expect(getUiSettings).toHaveBeenCalledWith("http://localhost");
   });
 
   it("should handle network timeout error", async () => {

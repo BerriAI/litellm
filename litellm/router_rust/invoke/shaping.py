@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
@@ -52,7 +52,7 @@ from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Param
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 if TYPE_CHECKING:
-    from litellm.caching.dual_cache import DualCache
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.router_python_host import PythonHost
 
 # The SDK-client and max_parallel_requests reads of the routing cache: process-local, so the family
@@ -242,11 +242,7 @@ def _is_classifier_internal_call(kwargs: Mapping[str, object]) -> bool:
 
 
 def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    if not isinstance(declared, (list, tuple, set, frozenset)):
-        return frozenset()
-    entries: Final[Sequence[object]] = list(declared)  # pyright: ignore[reportUnknownArgumentType]  # the deployment's untyped allowlist
-    return frozenset(entry for entry in entries if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
@@ -404,7 +400,7 @@ def update_kwargs_with_deployment(
     deployment: Mapping[str, object],
     kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     *,
-    cache: "DualCache | None",
+    usage: "RouterUsage | None",
     function_name: str | None = None,
     splits_stream_timeout: bool = False,
     opens_responses_socket: bool = False,
@@ -467,8 +463,8 @@ def update_kwargs_with_deployment(
     if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
         kwargs[other_bucket] = {**as_dict(other_bucket_metadata), KUBERNETES_POD_ROUTING_KEY: routing}  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
 
-    if cache is not None:
-        refund_stale_reservation_before_retry(cache, kwargs)  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
+    if usage is not None:
+        refund_stale_reservation_before_retry(usage, kwargs)  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
     set_io_token_rate_limit_request_kwargs(
         kwargs,  # pyright: ignore[reportArgumentType]  # the request's kwargs dict
         store_in_context=deployment_has_io_token_limits(deployment),  # pyright: ignore[reportArgumentType]  # a deployment record
@@ -495,7 +491,19 @@ def update_kwargs_with_deployment(
             existing_tags.append(credential_tag)  # pyright: ignore[reportUnknownMemberType]  # the request's own tags list
         metadata["tags"] = existing_tags
 
+    from litellm.llms.github_copilot.app_auth import app_config
     from litellm.llms.github_copilot.per_user_auth import github_copilot_per_user_credential_name
+
+    if (
+        app_config(deployment_params) is not None
+        and "litellm_credential_name" in kwargs
+        and kwargs["litellm_credential_name"] != credential_name
+    ):
+        raise litellm_exceptions.BadRequestError(
+            message="litellm_credential_name cannot be overridden on a GitHub App deployment",
+            model=str(deployment_model_name),
+            llm_provider="github_copilot",
+        )
 
     configured_per_user_name: Final = github_copilot_per_user_credential_name(deployment_params)
     caller_credential_name: Final = kwargs.get("litellm_credential_name")

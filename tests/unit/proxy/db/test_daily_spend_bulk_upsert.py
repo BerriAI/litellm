@@ -127,9 +127,7 @@ def test_counters_increment_rather_than_overwrite(column):
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
-    sql, params = build_bulk_upsert(
-        TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),))
-    )
+    sql, params = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),)))
 
     assert '"request_id" = COALESCE(EXCLUDED."request_id", "LiteLLM_DailyTagSpend"."request_id")' in sql
     assert None in params
@@ -209,3 +207,46 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
+
+
+def test_customer_daily_rows_keep_historical_parent_attribution_when_member_id_is_reused():
+    table = DAILY_SPEND_TABLES["customer_member"]
+    first = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team-before",
+        "customer_org_id": "org-before",
+    }
+    second = {**first, "customer_team_id": "team-after", "customer_org_id": "org-after", "spend": 0.75}
+    merged = merge_by_conflict_key(table, (first, first, second))
+    assert len(merged) == 2
+    assert {(row["customer_team_id"], row["customer_org_id"], row["spend"]) for _, row in merged} == {
+        ("team-before", "org-before", 0.5),
+        ("team-after", "org-after", 0.75),
+    }
+    sql, params = build_bulk_upsert(table, merged)
+    assert 'ON CONFLICT ("id")' in sql
+    assert all(identity in params for identity in ("member", "team-before", "org-before", "team-after", "org-after"))
+    row_ids = {params[index] for index in range(0, len(params), len(params) // 2)}
+    assert len(row_ids) == 2
+    assert row_ids == {params[0] for _, _ in (build_bulk_upsert(table, merged[:1]),)} | {
+        build_bulk_upsert(table, merged[1:])[1][0]
+    }
+
+
+def test_customer_daily_aliases_of_one_model_keep_separate_rows_under_a_stable_id():
+    table = DAILY_SPEND_TABLES["customer_member"]
+    base = {**tag_txn(), "customer_member_id": "member", "customer_team_id": "team", "customer_org_id": "org"}
+    merged = merge_by_conflict_key(
+        table,
+        (
+            {**base, "model_group": "alias-a"},
+            {**base, "model_group": "alias-a", "spend": 0.25},
+            {**base, "model_group": "alias-b"},
+        ),
+    )
+    assert sorted((row["model_group"], row["spend"]) for _, row in merged) == [("alias-a", 0.5), ("alias-b", 0.25)]
+    _, params = build_bulk_upsert(table, merged)
+    first_id, second_id = params[0], params[len(params) // 2]
+    assert first_id != second_id
+    assert build_bulk_upsert(table, merged[:1])[1][0] == first_id

@@ -344,6 +344,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -436,6 +437,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -528,6 +530,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -10663,6 +10666,20 @@ class TestFalAIPassthroughRoute:
             assert sent.headers["authorization"] == "Key fal-test-key"
             assert json.loads(sent.content or b"{}") == body
 
+    def test_flat_video_submit_is_accepted(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/fal-ai/test-flat-video",
+            {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post("https://queue.fal.run/fal-ai/test-flat-video").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-flat", "status": "IN_QUEUE"})
+            )
+            response: Final = client.post("/fal_ai/fal-ai/test-flat-video", json={"prompt": "A lake"})
+            assert response.status_code == 200, response.text
+            assert response.json() == {"request_id": "req-flat", "status": "IN_QUEUE"}
+
     def test_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
@@ -10730,6 +10747,29 @@ class TestFalAIPassthroughRoute:
                 return_value=httpx.Response(200, json={"request_id": "req-1"})
             )
             response = client.post("/fal_ai/fal-ai/priceless-model", json={"image_url": "https://example.com/in.png"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_to_endpoint_billed_by_reported_units_returns_400_without_upstream_call(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {
+                "litellm_provider": "fal_ai",
+                "mode": "image_generation",
+                "output_cost_per_billable_unit": 1.0,
+                "output_cost_per_image": 0.04,
+            },
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response = client.post("/fal_ai/acme/unit-billed-model", json={"prompt": "a red boat"})
 
             assert response.status_code == 400, response.text
             assert "no pricing entry" in response.text

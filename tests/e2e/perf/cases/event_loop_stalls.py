@@ -40,7 +40,6 @@ CASE: Final = replace(
             KnownStall("prisma/actions.py", max_count=2),
             KnownStall("SpendCounterReseed", max_count=2),
             KnownStall("Subscriber._run", max_count=2),
-            KnownStall("RedisBatch.flush", max_count=2),
             KnownStall("run_coroutine_job", max_count=2),
             KnownStall("user_api_key_auth.py", max_count=2),
             KnownStall("route_streaming_logging_to_handler", max_count=2),

@@ -21,8 +21,10 @@ from litellm.models.alert import (
     AlertFilter,
     AlertHistoryPoint,
     AlertPage,
+    AlertRecipient,
     AlertResourceType,
     AlertStatus,
+    AlertSummary,
     AlertView,
 )
 from litellm.repositories.prisma_protocols import PrismaRecord, TableActions
@@ -64,6 +66,17 @@ class _HistoryRow(BaseModel):
 
 
 _HISTORY_ROWS: Final = TypeAdapter(tuple[_HistoryRow, ...])
+_SUMMARIES: Final = TypeAdapter(tuple[AlertSummary, ...])
+_RECIPIENTS: Final = TypeAdapter(tuple[AlertRecipient, ...])
+
+
+class _LatestAlert(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+
+
+_LATEST_ALERT: Final = TypeAdapter(tuple[_LatestAlert, ...])
 _HISTORY_SOURCES: Final[
     Mapping[AlertResourceType, tuple[LiteralString, LiteralString, LiteralString, LiteralString, LiteralString]]
 ] = {
@@ -157,6 +170,45 @@ class AlertRepository:
         self._table = cast(  # cast-ok: the generated Prisma client delegates typed table actions dynamically
             TableActions[PrismaRecord], prisma_client.writer_db.litellm_alert
         )
+
+    async def latest_id(self) -> int:
+        async with self._database.tx(timeout=timedelta(seconds=5)) as transaction:
+            await transaction.query_raw("SELECT set_config('statement_timeout', '2s', true)")
+            rows: Final = _LATEST_ALERT.validate_python(
+                await transaction.query_raw('SELECT COALESCE(MAX(id), 0) AS id FROM "LiteLLM_Alert"')
+            )
+        return rows[0].id
+
+    async def recipients(self, after: str) -> tuple[AlertRecipient, ...]:
+        async with self._database.tx(timeout=timedelta(seconds=5)) as transaction:
+            await transaction.query_raw("SELECT set_config('statement_timeout', '2s', true)")
+            rows: Final = await transaction.query_raw(
+                """SELECT user_id, LOWER(TRIM(user_email)) AS email FROM "LiteLLM_UserTable"
+                WHERE user_role = 'proxy_admin' AND user_id > $1 AND LENGTH(TRIM(user_email)) BETWEEN 3 AND 320
+                ORDER BY user_id LIMIT 100""",
+                after,
+            )
+        return _RECIPIENTS.validate_python(rows)
+
+    async def summaries(self, after: int, through: int) -> tuple[AlertSummary, ...]:
+        async with self._database.tx(timeout=timedelta(seconds=5)) as transaction:
+            await transaction.query_raw("SELECT set_config('statement_timeout', '2s', true)")
+            rows: Final = await transaction.query_raw(
+                """SELECT a.id::text, a.type, a.resource_type, a.created_at AT TIME ZONE 'UTC' AS created_at,
+                    LEFT(COALESCE(k.key_alias, t.team_alias, u.user_alias,
+                        CASE WHEN a.resource_type = 'model' THEN a.resource_id ELSE a.resource_type END), 120) AS resource_name,
+                    jsonb_build_object('value', a.evidence->'value', 'baseline', a.evidence->'baseline',
+                        'unit', a.evidence->'unit', 'sample_size', a.evidence->'sample_size') AS evidence
+                FROM "LiteLLM_Alert" a
+                LEFT JOIN "LiteLLM_VerificationToken" k ON a.resource_type = 'key' AND k.token = a.resource_id
+                LEFT JOIN "LiteLLM_TeamTable" t ON a.resource_type = 'team' AND t.team_id = a.resource_id
+                LEFT JOIN "LiteLLM_UserTable" u ON a.resource_type = 'user' AND u.user_id = a.resource_id
+                WHERE a.id > $1 AND a.id <= $2 AND a.status = 'open' AND a.type != 'model_deprecation'
+                ORDER BY a.id DESC LIMIT 5""",
+                after,
+                through,
+            )
+        return _SUMMARIES.validate_python(rows)
 
     async def record(self, detection: AlertDetection) -> Alert:
         from prisma import Json

@@ -24,16 +24,52 @@ impl EventLoop {
     }
 }
 
+/// The Python context a Redis event is reported in. Each constructor names whose context it is,
+/// so no event is reported in the context of whoever happened to build the thing reporting it.
+#[derive(Clone)]
+pub(crate) struct ReportContext(PythonContext);
+
+impl ReportContext {
+    /// The caller of a store op, on the stack now: its `with_service_target` and the span its
+    /// request parents service events under.
+    pub(crate) fn of_caller(py: Python<'_>) -> PyResult<Self> {
+        Ok(Self(PythonContext::capture(py)?))
+    }
+
+    /// The request whose post-call batch its deadline sends, with no caller awaiting the flush.
+    fn of_deadline_flush(py: Python<'_>) -> PyResult<Self> {
+        let context = py
+            .import(ServiceLoggingEvents::MODULE)?
+            .call_method0("deadline_flush_context")?;
+        Ok(Self(PythonContext::built(context)))
+    }
+
+    /// Nobody's, for breaker transitions and calls no store op scoped.
+    fn background(py: Python<'_>) -> PyResult<Self> {
+        Ok(Self(PythonContext::empty(py)?))
+    }
+}
+
 /// The Python caller of one store operation. Its context carries `with_service_target` and the
 /// ambient OTel span, and its `call_type` is the label `RedisCache` reports, so dashboards keep
 /// their series.
 pub(crate) struct RedisCall {
-    pub(crate) context: PythonContext,
+    pub(crate) context: ReportContext,
     pub(crate) event_loop: Option<EventLoop>,
     pub(crate) call_type: &'static str,
 }
 
 impl RedisCall {
+    /// The deadline's flush of a request's post-call batch. Built when a post-call declaration
+    /// arms the deadline, so it is the declaring caller's request the flush is reported under.
+    pub(crate) fn deadline_flush(py: Python<'_>) -> PyResult<Self> {
+        Ok(Self {
+            context: ReportContext::of_deadline_flush(py)?,
+            event_loop: EventLoop::running(py),
+            call_type: "post_call_redis_batch",
+        })
+    }
+
     pub(crate) fn tag(self) -> CallTag {
         Arc::new(self)
     }
@@ -47,7 +83,7 @@ impl RedisCall {
 pub(crate) struct ServiceLoggingEvents {
     record_call: Arc<Py<PyAny>>,
     record_breaker: Arc<Py<PyAny>>,
-    context: PythonContext,
+    context: ReportContext,
     /// The loop the client was built on, for calls whose caller had none running.
     event_loop: Option<EventLoop>,
     runtime: Handle,
@@ -79,15 +115,15 @@ impl ServiceLoggingEvents {
         Ok(Self {
             record_call: Arc::new(module.getattr("record_redis_call")?.unbind()),
             record_breaker: Arc::new(module.getattr("record_redis_breaker")?.unbind()),
-            context: PythonContext::capture(py)?,
+            context: ReportContext::background(py)?,
             event_loop,
             runtime,
         })
     }
 
-    fn report(&self, context: PythonContext, record: Arc<Py<PyAny>>, args: ReportArgs) {
+    fn report(&self, context: ReportContext, record: Arc<Py<PyAny>>, args: ReportArgs) {
         self.runtime.spawn(async move {
-            let reported = attach_blocking(context, move |py| match args {
+            let reported = attach_blocking(context.0, move |py| match args {
                 ReportArgs::Call(call) => record
                     .bind(py)
                     .call1((
@@ -205,7 +241,6 @@ impl RedisEvents for ServiceLoggingEvents {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use litellm_host_python::PythonContext;
     use litellm_redis_client::{CallEvent, FailureKind, Operation, Outcome, RedisEvents};
     use pyo3::{
         prelude::*,
@@ -214,7 +249,7 @@ mod tests {
     use rstest::rstest;
     use tokio::runtime::Handle;
 
-    use super::{EventLoop, RedisCall, ServiceLoggingEvents};
+    use super::{EventLoop, RedisCall, ReportContext, ServiceLoggingEvents};
 
     const RECORDER: &str = "
 import contextvars, time
@@ -272,7 +307,7 @@ def record_redis_breaker(state):
                 .call_method1("set", ("spend_counter",))
                 .unwrap();
             RedisCall {
-                context: PythonContext::capture(py).unwrap(),
+                context: ReportContext::of_caller(py).unwrap(),
                 event_loop: caller_loop.map(|caller_loop| stand_in_loop(py, caller_loop)),
                 call_type: "async_increment",
             }
@@ -305,6 +340,41 @@ def record_redis_breaker(state):
             format!(
                 "[('{expected_loop}', 'async_increment', 0.25, True, 'timeout', 'spend_counter')]"
             )
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_call_nobody_scoped_is_reported_outside_the_context_the_client_was_built_in() {
+        Python::initialize();
+        let (events, namespace) = Python::attach(|py| {
+            let name = c"redis_events_recorder_built_inside_a_request";
+            let module =
+                PyModule::from_code(py, &std::ffi::CString::new(RECORDER).unwrap(), name, name)
+                    .unwrap();
+            module
+                .getattr("target")
+                .unwrap()
+                .call_method1("set", ("the request that connected",))
+                .unwrap();
+            let events = ServiceLoggingEvents::from_module(
+                py,
+                &module,
+                Handle::current(),
+                Some(stand_in_loop(py, "client loop")),
+            )
+            .unwrap();
+            (events, module.unbind())
+        });
+
+        events.call(&CallEvent {
+            operation: Operation::Command("INCRBYFLOAT"),
+            duration: Duration::from_millis(250),
+            outcome: Outcome::Succeeded,
+        });
+
+        assert_eq!(
+            seen(&namespace, 1).await,
+            "[('client loop', 'INCRBYFLOAT', 0.25, True, None, None)]"
         );
     }
 

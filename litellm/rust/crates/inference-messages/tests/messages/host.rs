@@ -1,10 +1,8 @@
 use litellm_core_utils::decline::Decline;
-use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
-use litellm_host::{
-    interceptors::{ExecutionFacts, RawResponse, RequestContext, ResultSource, WireRequest},
-    lifecycle::CallEvent,
+use litellm_host::interceptors::{
+    ExecutionFacts, RawResponse, RequestContext, ResultSource, WireRequest,
 };
 use litellm_inference_messages::{MessagesBody, MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
@@ -47,17 +45,7 @@ impl RecordingHost {
     }
 
     fn raw_heads(&self) -> Vec<RawResponse> {
-        self.events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|event| match event {
-                CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                    Some(raw.clone())
-                }
-                _ => None,
-            })
-            .collect()
+        self.events.raw_heads()
     }
 
     fn raw_responses(&self) -> Vec<String> {
@@ -442,6 +430,38 @@ async fn a_stream_emits_its_head_without_a_body_before_any_chunk(call: MessagesC
             .iter()
             .any(|(name, value)| name == "request-id" && value == "req_stream")
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_raw_head_carries_the_exact_bytes_the_provider_received(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let response = if stream {
+        ResponseTemplate::new(200).set_body_raw(
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        message_response()
+    };
+    let upstream = upstream([response]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        with_fields(
+            call,
+            json!({"stream": stream, "temperature": 1e-7, "system": "caf\u{e9} \u{1f600}"}),
+        ),
+        upstream.uri(),
+    ));
+
+    let _ = run_through(&host).await.expect("messages call succeeds");
+
+    let [raw] = <[RawResponse; 1]>::try_from(host.raw_heads())
+        .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
+    let head = raw.head.expect("the head is forwarded");
+    assert_eq!(head.sent_body, only_request(&upstream).await.body);
+    assert_eq!(head.streamed, stream);
 }
 
 /// Python logs `optional_params` after its requested-param gate, so a dropped param must

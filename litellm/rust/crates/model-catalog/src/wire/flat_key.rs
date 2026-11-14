@@ -210,6 +210,8 @@ fn output_unit(unit: &str) -> Option<OutputUnit> {
         "pixel" => Some(OutputUnit::Pixel),
         "second" => Some(OutputUnit::Second(None)),
         "video_per_second" => Some(OutputUnit::VideoSecond),
+        "video" => Some(OutputUnit::Video),
+        "billable_unit" => Some(OutputUnit::BillableUnit),
         _ => None,
     }
 }
@@ -285,6 +287,10 @@ mod tests {
             None
         )
     )]
+    #[case::billable_unit(
+        "output_cost_per_billable_unit",
+        key(Meter::Output(OutputUnit::BillableUnit), Band::Base, None)
+    )]
     #[case::image_token_is_a_token(
         "output_cost_per_image_token",
         key(Meter::Output(OutputUnit::Token(TokenKind::Image)), Band::Base, None)
@@ -308,6 +314,10 @@ mod tests {
             Band::Base,
             Some(TierSuffix::Batches)
         )
+    )]
+    #[case::video(
+        "output_cost_per_video",
+        key(Meter::Output(OutputUnit::Video), Band::Base, None)
     )]
     #[case::wall_clock("cost_per_second", key(Meter::WallClockSecond, Band::Base, None))]
     #[case::browser_open(

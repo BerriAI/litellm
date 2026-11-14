@@ -392,6 +392,10 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(grou
     [
         ("/model/update", "POST"),
         ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+        ("/management/v1/customer_organizations", "POST"),
+        ("/management/v1/customer_organizations/org-1/default_budgets/budget-1", "DELETE"),
+        ("/management/v1/customer_teams/team-1", "PATCH"),
+        ("/management/v1/customer_members/member-1", "GET"),
     ],
 )
 def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:

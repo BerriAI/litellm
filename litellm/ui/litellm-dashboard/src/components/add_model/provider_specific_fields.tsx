@@ -101,6 +101,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   const { t } = useTranslation();
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
+  const hasAppKeyReference = Boolean(form.watch("github_copilot_app_private_key_ref"));
   const authTypes = authTypesFor(selectedProvider);
   const availableAuthTypes = React.useMemo(
     () =>
@@ -124,11 +125,28 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       onAuthTypeChange?.(selectedAuthType.id);
     }
   }, [onAuthTypeChange, selectedAuthType]);
+  React.useEffect(() => {
+    if (!credentialOnlySelected) {
+      Object.entries(selectedAuthType?.fixedValues ?? {}).forEach(([key, value]) => form.setValue(key, value));
+    }
+  }, [credentialOnlySelected, selectedAuthType, form]);
+
   const pickCredentialsFile =
-    (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    (field: ProviderCredentialField, onLoaded: (contents: string) => void) =>
+    (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       event.target.value = "";
-      if (file?.type === "application/json") {
+      if (!file) return;
+      if (field.key === "github_copilot_app_private_key") {
+        if (!file.name.toLowerCase().endsWith(".pem") || file.size > 16384) {
+          form.setError(field.key, { message: t("addModel.providerAuthTypes.githubApp.invalidFile") });
+          return;
+        }
+        readTextFile(file, (contents) => {
+          form.clearErrors(field.key);
+          onLoaded(contents);
+        });
+      } else if (file.type === "application/json") {
         readTextFile(file, onLoaded);
       }
     };
@@ -219,11 +237,17 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       return hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields;
     }
 
-    const fieldsToHide = [...(hiddenFieldKeys ?? []), ...authTypeHiddenFieldKeys];
+    const fieldsToHide = [...(hiddenFieldKeys ?? []), ...authTypeHiddenFieldKeys, "github_copilot_app_private_key_ref"];
+    const requiresAppKey = selectedAuthType?.id === "github_app" && !hasAppKeyReference;
 
     return providerFields
       .filter((field) => !fieldsToHide.includes(field.key))
-      .map((field) => (selectedAuthType?.requiredFieldKeys.includes(field.key) ? { ...field, required: true } : field));
+      .map((field) =>
+        selectedAuthType?.requiredFieldKeys.includes(field.key) ||
+        (requiresAppKey && field.key === "github_copilot_app_private_key")
+          ? { ...field, required: true }
+          : field,
+      );
   }, [
     providerFields,
     hiddenFieldKeys,
@@ -231,6 +255,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     authTypeHiddenFieldKeys,
     selectedAuthType,
     credentialOnlySelected,
+    hasAppKeyReference,
   ]);
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
@@ -280,6 +305,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     }
 
     if (field.type === "upload") {
+      const hasAppKey = Boolean(control.value) || hasAppKeyReference;
       return (
         <>
           <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
@@ -290,11 +316,15 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             ref={credentialsFileRef}
             id={control.id}
             type="file"
-            accept=".json"
+            aria-label={field.label}
+            accept={field.key === "github_copilot_app_private_key" ? ".pem" : ".json"}
             className="sr-only"
             onBlur={control.onBlur}
-            onChange={pickCredentialsFile(control.onChange)}
+            onChange={pickCredentialsFile(field, control.onChange)}
           />
+          {field.key === "github_copilot_app_private_key" && hasAppKey && (
+            <p className="text-sm text-muted-foreground">{t("addModel.providerAuthTypes.githubApp.keyProvided")}</p>
+          )}
         </>
       );
     }
@@ -328,6 +358,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
     return (
       <Input
         id={control.id}
+        aria-label={field.label}
         value={(control.value as string | undefined) ?? field.defaultValue ?? ""}
         onBlur={control.onBlur}
         placeholder={field.placeholder}
@@ -396,7 +427,11 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
       {allFields.map((field) => (
         <React.Fragment key={`${selectedProvider}:${field.key}`}>
           <MountedFormField
-            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+            label={
+              field.tooltip
+                ? labelWithHint(field.label, field.tooltip, selectedAuthType?.id === "github_app" ? "info" : "help")
+                : field.label
+            }
             name={field.key}
             required={field.required}
             rules={{
@@ -409,6 +444,10 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
           >
             {(control) => renderFieldControl(field, control)}
           </MountedFormField>
+
+          {field.key === "github_copilot_app_private_key" && (
+            <p className="mb-4 text-sm text-muted-foreground">{t("addModel.providerAuthTypes.githubApp.uploadHelp")}</p>
+          )}
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (

@@ -18,16 +18,8 @@ tests:
                 name: RELEASE-NAME-litellm-ui
                 port:
                   number: 3000
-      - contains:
-          path: spec.rules[0].http.paths
-          content:
-            path: /eu.assemblyai
-            pathType: Prefix
-            backend:
-              service:
-                name: RELEASE-NAME-litellm-gateway
-                port:
-                  number: 4000
+      - notExists:
+          path: spec.rules[0].http.paths[?(@.backend.service.port.name == "use-annotation" && @.pathType != "Prefix")]
       - contains:
           path: spec.rules[0].http.paths
           content:
@@ -45,19 +37,48 @@ tests:
             pathType: Prefix
             backend:
               service:
-                name: RELEASE-NAME-litellm-gateway
+                name: litellm-gateway-51
                 port:
-                  number: 4000
-      - contains:
-          path: spec.rules[0].http.paths
-          content:
-            path: /cn.tripo
-            pathType: Prefix
-            backend:
-              service:
-                name: RELEASE-NAME-litellm-gateway
-                port:
-                  number: 4000
+                  name: use-annotation
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/actions.litellm-gateway-51"]
+          value: '{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"RELEASE-NAME-litellm-gateway","servicePort":"http"}]}}'
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-51"]
+          value: '[{"field":"path-pattern","pathPatternConfig":{"values":["/cn.tripo","/cn.tripo/*"]}}]'
+
+  - it: fits the AWS Load Balancer Controller's one rule per path under the default 100 rules per ALB
+    set:
+      ingress.enabled: true
+    asserts:
+      - notExists:
+          path: spec.rules[0].http.paths[100]
+
+  - it: routes each grouped gateway prefix to the gateway Service through a use-annotation action on alb
+    set:
+      ingress.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/actions.litellm-gateway-0"]
+          value: '{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"RELEASE-NAME-litellm-gateway","servicePort":"http"}]}}'
+      - matchRegex:
+          path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-0"]
+          pattern: '^\[\{"field":"path-pattern","pathPatternConfig":\{"values":\["(/[^"*]+)","/[^"*]+/\*"\]\}\}\]$'
+      - notExists:
+          path: spec.rules[0].http.paths[?(@.pathType == "Prefix" && @.backend.service.name == "RELEASE-NAME-litellm-gateway")]
+
+  - it: keeps an operator's conditions for the gateway Service on every grouped alb rule
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        alb.ingress.kubernetes.io/conditions.RELEASE-NAME-litellm-gateway: '[{"field":"source-ip","sourceIpConfig":{"values":["10.0.0.0/8"]}}]'
+    asserts:
+      - matchRegex:
+          path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-0"]
+          pattern: '^\[\{"field":"source-ip","sourceIpConfig":\{"values":\["10\.0\.0\.0/8"\]\}\},\{"field":"path-pattern",'
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-50"]
+          value: '[{"field":"source-ip","sourceIpConfig":{"values":["10.0.0.0/8"]}}]'
 
   - it: renders no dotted Exact or Prefix path for ingress-nginx, whose admission webhook rejects them
     set:
@@ -142,6 +163,26 @@ tests:
           content:
             path: /debug/memory/summary
             pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu_jev/v1/systemone
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /openrouter
+            pathType: Prefix
             backend:
               service:
                 name: RELEASE-NAME-litellm-gateway

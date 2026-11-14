@@ -14,6 +14,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import request_parent_otel_span
 from litellm._logging import verbose_router_logger
 from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, without
@@ -115,18 +116,18 @@ async def _count_usage_based_routing_tokens(
         or not isinstance(deployment_name, str)
     ):
         return False
-    await count_before_callbacks(
-        deployment_metadata,
-        USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
-        total_tokens,
-        partial(
-            selector.async_increment_tpm,
-            deployment_id=str(deployment_id),
-            deployment_name=deployment_name,
-            tokens=total_tokens,
-            parent_otel_span=parent_otel_span,
-        ),
-    )
+    with request_parent_otel_span(parent_otel_span):
+        await count_before_callbacks(
+            deployment_metadata,
+            USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+            total_tokens,
+            partial(
+                selector.async_increment_tpm,
+                deployment_id=str(deployment_id),
+                deployment_name=deployment_name,
+                tokens=total_tokens,
+            ),
+        )
     return True
 
 
@@ -167,7 +168,7 @@ async def admit_deployment_turn(
     io_token_admission: Final[Mapping[str, object]] = (
         MappingProxyType({})
         if rate_limit_check is None
-        else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
+        else await async_admit_io_token_turn(rate_limit_check.usage, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
     )
     budget_limiter: Final[object] = _budget_limiter(core)
     if budget_limiter is not None:

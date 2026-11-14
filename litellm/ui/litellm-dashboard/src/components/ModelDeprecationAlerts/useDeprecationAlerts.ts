@@ -17,6 +17,9 @@ export function useDeprecationAlerts(accessToken: string | null) {
     queryKey: ["deprecationAlerts", scope, range],
     enabled,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
+      const { data: monitoring } = await backgroundFetchClient.GET("/alerts/monitoring", { signal });
+      if (!monitoring) throw new Error("Alert settings are unavailable");
+      if (monitoring.model_deprecations_enabled === false) return [];
       const { data: schedule } = await backgroundFetchClient.GET("/model/deprecations", {
         params: { query: { warn_within_days: 30 } },
         signal,

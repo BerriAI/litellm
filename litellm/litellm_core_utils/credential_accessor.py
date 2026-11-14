@@ -30,7 +30,13 @@ class CredentialAccessor:
         credential: Final = CredentialAccessor.find_credential(credential_name)
         if credential is None:
             return {}
-        return deepcopy(dict(credential_api_key_secret_reference(credential.credential_values)))
+        return deepcopy(
+            {
+                key: value
+                for key, value in credential_api_key_secret_reference(credential.credential_values).items()
+                if key != "github_copilot_app_private_key"
+            }
+        )
 
     @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]):

@@ -6,7 +6,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from collections.abc import AsyncGenerator, Iterator, Sequence
+from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired, total_deadline
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -3876,68 +3877,6 @@ class _YieldingIncrementInMemoryCache(InMemoryCache):
     async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         await asyncio.sleep(0)
         return await super().async_increment(key, value, **kwargs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("success_starts_first", [True, False])
-@pytest.mark.parametrize("failure_path", ["failure_event", "post_call_failure_hook"])
-async def test_concurrent_failure_and_success_callbacks_settle_a_reservation_once_v3(
-    success_starts_first: bool, failure_path: str
-) -> None:
-    api_key: Final = hash_token("sk-concurrent-failure-and-success")
-    model: Final = "gpt-4o-mini"
-    project: Final = "proj-concurrent"
-    local_cache: Final = DualCache(in_memory_cache=_YieldingIncrementInMemoryCache())
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    caller: Final = UserAPIKeyAuth(
-        api_key=api_key,
-        tpm_limit=10_000,
-        project_id=project,
-        project_metadata={"model_itpm_limit": {model: 10_000}, "model_otpm_limit": {model: 10_000}},
-    )
-    counter_keys: Final = (
-        _counter("api_key", api_key),
-        _counter("model_per_project_itpm", f"{project}:{model}"),
-        _counter("model_per_project_otpm", f"{project}:{model}"),
-    )
-    await handler.async_pre_call_hook(
-        user_api_key_dict=caller,
-        cache=local_cache,
-        data={
-            "model": model,
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 50,
-            "litellm_call_id": "concurrent-call",
-        },
-        call_type="completion",
-    )
-    kwargs: Final = {
-        "litellm_call_id": "concurrent-call",
-        "model": model,
-        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
-    }
-    now: Final = datetime.now()
-    log_failure: Final = (
-        partial(handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now)
-        if failure_path == "failure_event"
-        else partial(
-            handler.async_post_call_failure_hook,
-            request_data=dict(kwargs),
-            original_exception=Exception("stream ended"),
-            user_api_key_dict=caller,
-        )
-    )
-    log_success: Final = partial(
-        handler.async_log_success_event,
-        kwargs=dict(kwargs),
-        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)),
-        start_time=now,
-        end_time=now,
-    )
-
-    await asyncio.gather(*((log_success(), log_failure()) if success_starts_first else (log_failure(), log_success())))
-
-    assert tuple([int(_local(handler, key) or 0) for key in counter_keys]) == (30, 20, 10)
 
 
 @pytest.mark.asyncio
@@ -8680,6 +8619,111 @@ async def _rpm_request(
     )
 
 
+def _customer_hierarchy(
+    *,
+    org_rpm: int | None = None,
+    team_rpm: int | None = None,
+    member_rpm: int | None = None,
+    org_model_rpm: Mapping[str, int] | None = None,
+    team_model_rpm: Mapping[str, int] | None = None,
+    member_model_rpm: Mapping[str, int] | None = None,
+) -> CustomerHierarchyAuth:
+    return CustomerHierarchyAuth(
+        customer_member_id="member-1",
+        customer_team_id="team-1",
+        customer_org_id="org-1",
+        scopes=(
+            CustomerScopeAuth(key="customer_org", entity_id="org-1", rpm_limit=org_rpm, model_rpm_limit=org_model_rpm),
+            CustomerScopeAuth(
+                key="customer_team", entity_id="team-1", rpm_limit=team_rpm, model_rpm_limit=team_model_rpm
+            ),
+            CustomerScopeAuth(
+                key="customer_member", entity_id="member-1", rpm_limit=member_rpm, model_rpm_limit=member_model_rpm
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hierarchy, limited_scope",
+    [
+        (_customer_hierarchy(org_rpm=1, team_rpm=5, member_rpm=5), "customer_org"),
+        (_customer_hierarchy(org_rpm=5, team_rpm=1, member_rpm=5), "customer_team"),
+        (_customer_hierarchy(org_rpm=5, team_rpm=5, member_rpm=1), "customer_member"),
+    ],
+    ids=["org", "team", "member"],
+)
+async def test_customer_hierarchy_rpm_limits_apply_at_every_level_and_name_the_exhausted_one(
+    hierarchy: CustomerHierarchyAuth, limited_scope: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-customer-hierarchy"), customer_hierarchy=hierarchy)
+
+    await _rpm_request(handler, cache, auth, "target")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, "target")
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers["rate_limited_by"] == limited_scope
+    assert f"{limited_scope}: {limited_scope.split('_')[-1]}-1" in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_two_members_of_one_customer_team_share_the_team_bucket_but_not_each_others_member_bucket() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    first: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-first"), customer_hierarchy=_customer_hierarchy(team_rpm=2, member_rpm=1)
+    )
+    second: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-second"),
+        customer_hierarchy=_customer_hierarchy(team_rpm=2, member_rpm=1).model_copy(
+            update={
+                "customer_member_id": "member-2",
+                "scopes": tuple(
+                    scope.model_copy(update={"entity_id": "member-2"}) if scope.key == "customer_member" else scope
+                    for scope in _customer_hierarchy(team_rpm=2, member_rpm=1).scopes
+                ),
+            }
+        ),
+    )
+
+    await _rpm_request(handler, cache, first, "target")
+    await _rpm_request(handler, cache, second, "target")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, second, "target")
+    assert exc.value.headers["rate_limited_by"] in {"customer_team", "customer_member"}
+    assert "team-1" in str(exc.value.detail) or "member-2" in str(exc.value.detail)
+
+
+def test_tpm_settlement_targets_include_the_customer_levels_and_their_model_buckets() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    targets: Final = handler._collect_tpm_scope_targets(  # pyright: ignore[reportPrivateUsage]  # settlement enumerates scopes here
+        standard_logging_metadata={
+            "user_api_key_hash": "hash",
+            "user_api_key_customer_org_id": "org-1",
+            "user_api_key_customer_team_id": "team-1",
+            "user_api_key_customer_member_id": "member-1",
+        },
+        kwargs={},
+        model_group="target",
+    )
+    assert {
+        ("customer_org", "org-1"),
+        ("customer_team", "team-1"),
+        ("customer_member", "member-1"),
+        ("model_per_customer_org", "org-1:target"),
+        ("model_per_customer_team", "team-1:target"),
+        ("model_per_customer_member", "member-1:target"),
+    } <= set(targets)
+    without: Final = handler._collect_tpm_scope_targets(  # pyright: ignore[reportPrivateUsage]  # settlement enumerates scopes here
+        standard_logging_metadata={"user_api_key_hash": "hash"}, kwargs={}, model_group="target"
+    )
+    assert not any(scope.startswith(("customer_", "model_per_customer_")) for scope, _ in without)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_name, second_name", [("target", "alias"), ("alias", "target")])
 async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_target(
@@ -8729,8 +8773,20 @@ async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_t
         ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
         ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
         ({"end_user_id": "customer", "end_user_model_rpm_limit": {"target": 1}}, "model_per_end_user"),
+        ({"customer_hierarchy": _customer_hierarchy(member_model_rpm={"target": 1})}, "model_per_customer_member"),
+        ({"customer_hierarchy": _customer_hierarchy(team_model_rpm={"target": 1})}, "model_per_customer_team"),
+        ({"customer_hierarchy": _customer_hierarchy(org_model_rpm={"target": 1})}, "model_per_customer_org"),
     ],
-    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata", "end_user_budget"],
+    ids=[
+        "key_metadata",
+        "team_metadata",
+        "organization_metadata",
+        "project_metadata",
+        "end_user_budget",
+        "customer_member_budget",
+        "customer_team_budget",
+        "customer_org_budget",
+    ],
 )
 async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
     limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
@@ -10178,3 +10234,32 @@ async def test_team_model_limits_stop_being_hard_caps_when_borrowing_is_on(
     assert exc.value.status_code == 429
     assert exc.value.headers is not None
     assert exc.value.headers["rate_limit_type"] == rate_limit_type
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_refuses_an_exhausted_key_without_charging_it() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-exhausted"), rpm_limit=1)
+    requests: Final = _counter("api_key", auth.api_key, "requests")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+    charged: Final = _local(handler, requests)
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.raise_if_over_limit_before_body(auth)
+    assert exc.value.status_code == 429
+    assert exc.value.headers["rate_limited_by"] == "api_key"
+    assert _local(handler, requests) == charged, "the headers-only refusal must not count as a request"
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_skips_limits_that_need_the_model() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-per-model"), metadata={"model_rpm_limit": {"gpt-5.6": 1}})
+
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None

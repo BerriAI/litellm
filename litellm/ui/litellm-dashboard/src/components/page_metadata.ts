@@ -24,7 +24,6 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   new_usage: "shell.pageDescriptions.newUsage",
   alerts: "shell.pageDescriptions.alerts",
   "cost-optimization": "shell.pageDescriptions.costOptimization",
-  "model-insights": "shell.pageDescriptions.modelInsights",
   logs: "shell.pageDescriptions.logs",
   lens: "shell.pageDescriptions.lens",
   "guardrails-monitor": "shell.pageDescriptions.guardrailsMonitor",

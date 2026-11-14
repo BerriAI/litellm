@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
+    BudgetWriteRequest,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LitellmUserRoles,
@@ -95,6 +96,8 @@ def test_should_update_field(
 @pytest.fixture
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
+        mock.writer_db = mock.db
+        mock.db.litellm_budgettable.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="existing"))
         yield mock
 
 
@@ -108,6 +111,17 @@ def mock_user_api_key_auth():
         yield
     finally:
         app.dependency_overrides = original_overrides
+
+
+@pytest.mark.parametrize("path", ("/customer/new", "/customer/update"))
+def test_customer_rejects_an_attached_budget_with_windows(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, path: str,
+) -> None:
+    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate({
+        "budget_id": "combined", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
+    })
+    response: Final = client.post(path, json={"user_id": "customer", "budget_id": "combined"})
+    assert response.status_code == 400, response.text
 
 
 def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):

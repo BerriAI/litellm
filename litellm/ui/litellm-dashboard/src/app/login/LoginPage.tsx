@@ -7,7 +7,6 @@ import {
   exchangeLoginCode,
   getProxyBaseUrl,
   getRuntimeBackendBaseUrl,
-  getUiPageUrl,
   switchToWorkerUrl,
 } from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -24,6 +23,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { navigateToUiPage } from "@/utils/uiNavigation";
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
@@ -122,7 +122,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        window.location.replace("/ui/?login=success");
       });
       return;
     }
@@ -138,12 +138,7 @@ function LoginPageContent() {
     const rawToken = getCookieFromDocument("token");
     if (rawToken && !isJwtExpired(rawToken)) {
       // User already logged in - redirect to return URL or default
-      const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-      if (returnUrl) {
-        router.replace(getUiPageUrl(returnUrl, true));
-      } else {
-        router.replace("/ui");
-      }
+      navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? "/ui", true);
       return;
     }
 
@@ -176,15 +171,10 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            navigateToUiPage("/ui/?login=success");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
-            const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-            if (returnUrl) {
-              router.push(getUiPageUrl(returnUrl, true));
-            } else {
-              router.push(getUiPageUrl(data.redirect_url, true));
-            }
+            navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? data.redirect_url);
           }
         },
         onError: () => {

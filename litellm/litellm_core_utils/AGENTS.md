@@ -1,3 +1,11 @@
+## Compat names
+
+- A change here that removes a name outside code can import keeps the name only when one of these holds
+  - It has no leading underscore and shipped in a stable release
+  - It is private, code outside this repo calls it, and the compat keeps that code doing what it did
+- A private name whose old behavior cannot be kept stays removed. An `ImportError` names what changed, while a no-op that answers wrongly hides it
+- A vendored copy of litellm in another repo is not a caller
+
 ## get_model_cost_map.py
 
 - This module decides when to fetch and install. Fetching, parsing, integrity checks and alias expansion run in Rust
@@ -9,6 +17,8 @@
 - `utils._register_on_current_map` reruns the whole pass on the new table after `NativeTableSwapped`, and its last attempt passes `rows=None`, so no entry is lost
 - Compat names exist only so code written against main keeps working. New code never calls them, and they never gain behavior of their own
   - `_finalize_model_cost_map`, use `model_cost_inputs.install`
+  - `git_blob_id`, which Rust computes for `source_revision`
+  - `FALLBACK_GENERALIZATIONS_KEY`, `RESERVED_TOP_LEVEL_KEYS` and `RETRYABLE_FETCH_STATUS_CODES`, public constants. Rust owns the retry rule
   - `GetModelCostMap.validate_model_cost_map` and `_check_*`, since Rust checks fetched documents
   - `ModelCostMapReloaded.model_cost_map`, use `GetModelCostMap.loaded_model_cost_map()`
   - the `sleep`, `rng` and `client` parameters, which are ignored with a `DeprecationWarning`
@@ -25,3 +35,4 @@
   - `utils._invalidate_model_cost_lowercase_map` forwards to `changed_in_place`
   - `utils.get_model_cost_mutation_generation` forwards to `model_cost_version().writes`
   - `utils._model_cost_lowercase_map` is always `None`
+  - `utils._runtime_registered_model_cost` is always empty, since kept registrations live in `model_cost_inputs`

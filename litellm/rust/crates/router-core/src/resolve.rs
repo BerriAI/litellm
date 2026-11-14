@@ -326,7 +326,17 @@ pub fn resolve_request(
     {
         let group = deployment.model_name.clone();
         let litellm_model = deployment.params.model.clone();
-        let kept = reserved(&litellm_model, vec![deployment], caller, now)?;
+        let accessible = if caller.allowed_models.iter().any(|m| m == name) {
+            vec![deployment]
+        } else {
+            filter_by_access_groups(&group, vec![deployment], caller.allowed_models, || {
+                model_access_groups(registry, &group, team_id)
+            })
+        };
+        if accessible.is_empty() {
+            return Ok(None);
+        }
+        let kept = reserved(&litellm_model, accessible, caller, now)?;
         return resolved(ResolveKind::Id, &group, kept);
     }
     let aliased = registry.alias_of(name);
@@ -440,7 +450,7 @@ pub fn resolve_request(
 mod tests {
     use std::collections::BTreeMap;
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
     use super::*;
@@ -481,6 +491,47 @@ mod tests {
             Timestamp::now(),
         );
         assert_eq!(ids(by_model.unwrap()), ["b"]);
+    }
+
+    #[fixture]
+    fn shared_group() -> Registry {
+        registry(json!([
+            {"model_name": "shared", "litellm_params": {"model": "openai/pub"}, "model_info": {"id": "pub", "access_groups": ["public"]}},
+            {"model_name": "shared", "litellm_params": {"model": "openai/priv"}, "model_info": {"id": "priv", "access_groups": ["private"]}},
+        ]))
+    }
+
+    #[rstest]
+    #[case::access_group_pins_its_own_deployment(&["public"], "pub", &["pub"])]
+    #[case::access_group_cannot_pin_another_groups_deployment(&["public"], "priv", &[])]
+    #[case::the_other_access_group_pins_its_deployment(&["private"], "priv", &["priv"])]
+    #[case::the_owning_group_pins_any_of_its_deployments(&["shared"], "priv", &["priv"])]
+    #[case::an_exact_id_grant_beside_another_access_group(&["public", "priv"], "priv", &["priv"])]
+    #[case::an_unrestricted_caller_pins_any_deployment(&[], "priv", &["priv"])]
+    #[case::every_model_pins_any_deployment(&["*"], "priv", &["priv"])]
+    #[case::every_proxy_model_pins_any_deployment(&["all-proxy-models"], "priv", &["priv"])]
+    #[case::the_group_name_stays_kept_to_the_callers_access_group(&["public"], "shared", &["pub"])]
+    fn pinned_deployment_respects_caller_access_groups(
+        shared_group: Registry,
+        #[case] allowed: &[&str],
+        #[case] name: &str,
+        #[case] expected: &[&str],
+    ) {
+        let allowed_models: Vec<String> = allowed.iter().map(|m| (*m).to_owned()).collect();
+        let caller = Caller {
+            allowed_models: &allowed_models,
+            ..Caller::default()
+        };
+        let resolved = resolve_request(
+            &shared_group,
+            name,
+            false,
+            caller,
+            None,
+            None,
+            Timestamp::UNIX_EPOCH,
+        );
+        assert_eq!(ids(resolved.unwrap()), expected);
     }
 
     #[test]

@@ -7,6 +7,36 @@ pub fn int(text: &str) -> Option<BigInt> {
     parse(text)
 }
 
+/// `int(text, 16)`, or `None` where Python raises `ValueError`.
+pub fn hex_int(text: &str) -> Option<BigInt> {
+    let text = text.trim();
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let digits = match unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))
+    {
+        Some(rest) => rest.strip_prefix('_').unwrap_or(rest),
+        None => unsigned,
+    };
+    let hex_at = |index: Option<usize>| {
+        index
+            .and_then(|index| digits.as_bytes().get(index))
+            .is_some_and(u8::is_ascii_hexdigit)
+    };
+    let well_formed = digits.char_indices().all(|(index, c)| {
+        c.is_ascii_hexdigit()
+            || (c == '_' && hex_at(index.checked_sub(1)) && hex_at(Some(index + 1)))
+    });
+    if digits.is_empty() || !well_formed {
+        return None;
+    }
+    let magnitude = BigInt::parse_bytes(digits.replace('_', "").as_bytes(), 16)?;
+    Some(if negative { -magnitude } else { magnitude })
+}
+
 /// `float(text)`, or `None` where Python raises `ValueError`.
 pub fn float(text: &str) -> Option<f64> {
     parse(text)
@@ -55,7 +85,7 @@ mod tests {
 
     use std::time::Duration;
 
-    use super::{SecondsError, float, int, seconds};
+    use super::{SecondsError, float, hex_int, int, seconds};
 
     // Expected values are CPython 3.14 int(text)
     #[rstest]
@@ -76,6 +106,33 @@ mod tests {
     #[case::non_ascii_digit_is_a_known_limit("\u{667}", None)]
     fn int_parses_like_python(#[case] text: &str, #[case] expected: Option<i128>) {
         assert_eq!(int(text), expected.map(BigInt::from));
+    }
+
+    // Expected values are CPython 3.14 int(text, 16)
+    #[rstest]
+    #[case::lower("ff", Some(255))]
+    #[case::upper("FF", Some(255))]
+    #[case::surrounding_whitespace(" ff\n", Some(255))]
+    #[case::unicode_spaces("\u{a0}ff\u{2003}", Some(255))]
+    #[case::plus_sign("+ff", Some(255))]
+    #[case::minus_sign("-ff", Some(-255))]
+    #[case::prefix("0xff", Some(255))]
+    #[case::upper_prefix("0XFF", Some(255))]
+    #[case::underscore_after_prefix("0x_ff", Some(255))]
+    #[case::underscore_between_digits("f_f", Some(255))]
+    #[case::binary_looking("0b1", Some(177))]
+    #[case::double_underscore("f__f", None)]
+    #[case::leading_underscore("_ff", None)]
+    #[case::trailing_underscore("ff_", None)]
+    #[case::bare_prefix("0x", None)]
+    #[case::prefix_and_underscore("0x_", None)]
+    #[case::empty("", None)]
+    #[case::not_hex("g", None)]
+    #[case::information_separator("\x1cff", None)]
+    #[case::decimal_point("1.5", None)]
+    #[case::non_ascii_digit_is_a_known_limit("\u{667}", None)]
+    fn hex_int_parses_like_python(#[case] text: &str, #[case] expected: Option<i128>) {
+        assert_eq!(hex_int(text), expected.map(BigInt::from));
     }
 
     // Expected values are CPython 3.14 float(text)

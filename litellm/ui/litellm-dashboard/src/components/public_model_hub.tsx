@@ -1,6 +1,7 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
 import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -26,12 +27,14 @@ import { MultiSelect } from "./shared/MultiSelect";
 import { featureLabel } from "./publicModelHub/publicModelHubFilters";
 import { usePublicModelHubFacets } from "./publicModelHub/usePublicModelHubFacets";
 import { usePublicModelHubList } from "./publicModelHub/usePublicModelHubList";
+import { passThroughSnippet } from "./publicModelHub/hubSnippets";
 import { DataTable } from "./shared/DataTable";
 import { toast } from "@/lib/toast";
 import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
   skillHubPublicCall,
+  getClaudeCodePluginsList,
   getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getPublicModelHubInfo,
@@ -123,8 +126,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [activeTab, setActiveTab] = useState<string>("models");
-  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
-  const [skillLoading, setSkillLoading] = useState<boolean>(false);
+  const skillsToken = isEmbedded ? accessToken : null;
+  const skillsQuery = useQuery({
+    queryKey: ["ai-hub-skills", skillsToken],
+    queryFn: () => (skillsToken ? getClaudeCodePluginsList(skillsToken) : skillHubPublicCall()),
+    enabled: !isChat,
+  });
+  const skillHubData: Plugin[] = skillsQuery.data?.plugins ?? [];
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -170,23 +178,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
-      const fetchSkillData = async () => {
-        try {
-          setSkillLoading(true);
-          const response = await skillHubPublicCall();
-          setSkillHubData(response.plugins ?? []);
-        } catch (error) {
-          console.error("There was an error fetching the public skill data", error);
-        } finally {
-          setSkillLoading(false);
-        }
-      };
-
       fetchPublicModelHubInfo();
 
       fetchAgentData();
       fetchMcpData();
-      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -298,6 +293,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const formatCost = (cost: number) => {
     return `$${(cost * 1_000_000).toFixed(4)}`;
   };
+
+  const usageSnippet = (model: ModelGroupInfo): string => passThroughSnippet(model) ?? usageExample(model);
 
   const models = usePublicModelHubList(proxyConfigured);
   const modelFacets = usePublicModelHubFacets(proxyConfigured);
@@ -611,7 +608,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     <DataTable
                       data={models.rows}
                       columns={modelColumns}
-                      getRowId={(model, index) => model.model_group || String(index)}
+                      getRowId={(model, index) =>
+                        model.pass_through_path
+                          ? `passthrough:${model.pass_through_path}:${index}`
+                          : model.model_group || String(index)
+                      }
                       sortingMode="server"
                       sorting={models.sorting}
                       onSortingChange={models.onSortingChange}
@@ -797,7 +798,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 {/* Skill Hub Tab */}
                 {!isChat && (
                   <TabsContent value="skills">
-                    <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+                    <SkillHubDashboard
+                      key={skillsToken}
+                      skills={skillHubData}
+                      isLoading={skillsQuery.isLoading}
+                      accessToken={skillsToken}
+                      publicPage={!skillsToken}
+                    />
                   </TabsContent>
                 )}
               </Tabs>
@@ -845,6 +852,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.mode")}</p>
                         <p>{displayMode(selectedModel.mode) ?? t("aiHub.publicModelHub.modelDialog.notSpecified")}</p>
                       </div>
+                      {selectedModel.pass_through_path && (
+                        <div>
+                          <p className="font-medium">{t("passThroughModelHub.endpoint")}</p>
+                          <p className="font-mono text-sm">{selectedModel.pass_through_path}</p>
+                        </div>
+                      )}
                       <div>
                         <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.providers")}</p>
                         <div className="flex flex-wrap gap-1 mt-1">
@@ -920,49 +933,50 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     )}
                   </div>
 
-                  {/* Token and Cost Information */}
-                  <div>
-                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.tokenCost")}</p>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxInputTokens")}</p>
-                        <p>
-                          {selectedModel.max_input_tokens?.toLocaleString() ||
-                            t("aiHub.publicModelHub.modelDialog.notSpecified")}
-                        </p>
+                  {!selectedModel.pass_through_path && (
+                    <div>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.tokenCost")}</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxInputTokens")}</p>
+                          <p>
+                            {selectedModel.max_input_tokens?.toLocaleString() ||
+                              t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxOutputTokens")}</p>
+                          <p>
+                            {selectedModel.max_output_tokens?.toLocaleString() ||
+                              t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.inputCost")}</p>
+                          <p>
+                            {selectedModel.input_cost_per_token
+                              ? formatCost(selectedModel.input_cost_per_token)
+                              : t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.outputCost")}</p>
+                          <p>
+                            {selectedModel.output_cost_per_token
+                              ? formatCost(selectedModel.output_cost_per_token)
+                              : t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxOutputTokens")}</p>
-                        <p>
-                          {selectedModel.max_output_tokens?.toLocaleString() ||
-                            t("aiHub.publicModelHub.modelDialog.notSpecified")}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.inputCost")}</p>
-                        <p>
-                          {selectedModel.input_cost_per_token
-                            ? formatCost(selectedModel.input_cost_per_token)
-                            : t("aiHub.publicModelHub.modelDialog.notSpecified")}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.outputCost")}</p>
-                        <p>
-                          {selectedModel.output_cost_per_token
-                            ? formatCost(selectedModel.output_cost_per_token)
-                            : t("aiHub.publicModelHub.modelDialog.notSpecified")}
-                        </p>
-                      </div>
+                      <DeploymentPricingBreakdown
+                        className="mt-4"
+                        deployments={selectedModel.deployment_pricing}
+                        heading={
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.pricingByDeployment")}</p>
+                        }
+                      />
                     </div>
-                    <DeploymentPricingBreakdown
-                      className="mt-4"
-                      deployments={selectedModel.deployment_pricing}
-                      heading={
-                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.pricingByDeployment")}</p>
-                      }
-                    />
-                  </div>
+                  )}
 
                   {/* Capabilities */}
                   <div>
@@ -1027,11 +1041,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.usageExample")}</p>
                     <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                      <pre className="text-sm">{usageExample(selectedModel)}</pre>
+                      <pre className="text-sm">{usageSnippet(selectedModel)}</pre>
                     </div>
                     <div className="mt-2 text-right">
                       <button
-                        onClick={() => copyToClipboard(usageExample(selectedModel))}
+                        onClick={() => copyToClipboard(usageSnippet(selectedModel))}
                         className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
                         {t("aiHub.publicModelHub.modelDialog.copyToClipboard")}

@@ -31,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import (
     CallerCredentialAuthenticationError,
+    DeploymentCredentialAuthenticationError,
     MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -56,7 +57,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
-from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
+from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
@@ -544,7 +545,7 @@ def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
         or _sent_a_provider_credential_or_endpoint(_logged_fields(proxy_server_request.get("body")))
         or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True
-        or github_copilot_user_session_from(litellm_params) is not None
+        or is_github_copilot_per_user_request(litellm_params)
     )
 
 
@@ -555,7 +556,11 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
+        or (
+            logged_call.get("api_call_start_time") is None
+            and not isinstance(exception, DeploymentCredentialAuthenticationError)
+            and not caused_by_entra_rejection(exception)
+        )
         or _used_a_caller_credential(logged_call)
     )
 
@@ -1061,16 +1066,37 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_latency_per_output_token"),
             )
 
-            self.litellm_deployment_successful_fallbacks = self._counter_factory(
+            self.litellm_deployment_successful_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
-            self.litellm_deployment_failed_fallbacks = self._counter_factory(
+            self.litellm_deployment_failed_fallbacks: _MetricLike = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                 labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
+            )
+
+            self.litellm_dynamic_limiter_share_tokens: _MetricLike = self._gauge_factory(
+                "litellm_dynamic_limiter_share_tokens",
+                "Dynamic rate limiter: the team's share of the model's TPM, as of the team's last settled request",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_share_tokens"),
+                multiprocess_mode="livemostrecent",
+            )
+
+            self.litellm_dynamic_limiter_borrowed_tokens: _MetricLike = self._gauge_factory(
+                "litellm_dynamic_limiter_borrowed_tokens",
+                "Dynamic rate limiter: tokens the team has used above its share this window, 0 while under its share",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_borrowed_tokens"),
+                multiprocess_mode="livemostrecent",
+            )
+
+            self.litellm_dynamic_limiter_throttled_total: _MetricLike = self._counter_factory(
+                "litellm_dynamic_limiter_throttled_total",
+                "Dynamic rate limiter: requests refused per team, model and reason, "
+                "the reason being the value of the response's rate_limited_by header",
+                labelnames=self.get_labels_for_metric("litellm_dynamic_limiter_throttled_total"),
             )
 
             # Callback Logging Failure Metrics
@@ -4172,6 +4198,66 @@ class PrometheusLogger(CustomLogger):
             sanitize_prometheus_label_value(exception_status),
         ).inc()
 
+    def set_dynamic_limiter_share(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        share_tokens: int,
+        borrowed_tokens: int,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            model_group=model_group, team=team, team_alias=team_alias, priority=priority
+        )
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_share_tokens, "litellm_dynamic_limiter_share_tokens", enum_values, share_tokens
+        )
+        self._set_labeled_gauge(
+            self.litellm_dynamic_limiter_borrowed_tokens,
+            "litellm_dynamic_limiter_borrowed_tokens",
+            enum_values,
+            borrowed_tokens,
+        )
+
+    def _set_labeled_gauge(
+        self,
+        gauge: _MetricLike,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        enum_values: UserAPIKeyLabelValues,
+        value: float,
+    ) -> None:
+        from prometheus_client import Gauge
+
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name), enum_values=enum_values
+        )
+        series: Final = gauge.labels(**labels)
+        if isinstance(series, Gauge):
+            series.set(value)
+
+    def increment_dynamic_limiter_throttled(
+        self,
+        model_group: str,
+        team: str,
+        team_alias: str | None,
+        priority: str,
+        rate_limit_type: str,
+        reason: str,
+    ) -> None:
+        self._inc_labeled_counter(
+            self.litellm_dynamic_limiter_throttled_total,
+            "litellm_dynamic_limiter_throttled_total",
+            UserAPIKeyLabelValues(
+                model_group=model_group,
+                team=team,
+                team_alias=team_alias,
+                priority=priority,
+                rate_limit_type=rate_limit_type,
+                reason=reason,
+            ),
+        )
+
     def increment_callback_logging_failure(
         self,
         callback_name: str,
@@ -5221,7 +5307,7 @@ def prometheus_label_factory(
     tag: str | None = None,
     *,
     label_context: PrometheusLabelFactoryContext | None = None,
-) -> dict:
+) -> dict[str, str | None]:
     """
     Returns a dictionary of label + values for prometheus.
 

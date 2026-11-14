@@ -12,7 +12,28 @@ import { gatewayUrl, wildcardExample } from "./hubFormat";
 
 const GREETING = "Hello, how are you?";
 
+const passThroughExampleMethod = (methods: string[] | null | undefined): string =>
+  !methods?.length || methods.includes("POST") ? "POST" : methods[0];
+
+const shellDoubleQuoted = (value: string): string => value.replace(/[\\"$`]/g, "\\$&");
+
+export const passThroughSnippet = (model: ModelGroupInfo): string | null => {
+  if (!model.pass_through_path) return null;
+  const method = passThroughExampleMethod(model.pass_through_methods);
+  const quotedMethod = shellDoubleQuoted(method);
+  const url = shellDoubleQuoted(`${gatewayUrl()}${model.pass_through_path}`);
+  return method === "POST"
+    ? [
+        `curl -X "${quotedMethod}" "${url}" \\`,
+        `  -H "Authorization: Bearer your_api_key" \\`,
+        `  -H "Content-Type: application/json" \\`,
+        `  -d '{"input": "Hello, how are you?"}'`,
+      ].join("\n")
+    : [`curl -X "${quotedMethod}" "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
+};
+
 export const modelSnippet = (model: ModelGroupInfo): string => {
+  if (model.mode === "passthrough" || model.pass_through_path) return passThroughSnippet(model) ?? "";
   const name = wildcardExample(model.model_group);
   if (isDecisionMode(model.mode)) {
     return modelUsageExample(model.mode, gatewayUrl(), name, getGlobalLitellmHeaderName());
@@ -37,6 +58,7 @@ export const modelSnippet = (model: ModelGroupInfo): string => {
 };
 
 export const curlSnippet = (model: ModelGroupInfo): string | null => {
+  if (model.pass_through_path) return passThroughSnippet(model);
   if (model.mode && model.mode !== "chat") return null;
   return `curl ${gatewayUrl()}/v1/chat/completions \\
   -H "Authorization: Bearer $LITELLM_API_KEY" \\

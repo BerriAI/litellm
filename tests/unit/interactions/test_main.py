@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from collections.abc import Mapping
@@ -6,7 +7,8 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import JsonValue, TypeAdapter
+import responses
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from respx import MockRouter
 
 import litellm
@@ -94,6 +96,45 @@ def _responses_stream_body() -> str:
 @pytest.fixture
 def api_key():
     return "test-api-key"
+
+
+_GEMINI_INTERACTIONS_URL: Final = "https://generativelanguage.googleapis.com/v1beta/interactions"
+_AGENT: Final = "antigravity-preview-09-2026"
+_OTHER_AGENT: Final = "deep-research-preview-04-2026"
+
+_EXTRA_BODY_SELECTOR_OVERRIDES: Final = (
+    pytest.param(
+        {"model": f"gemini/{_AGENT}", "agent": _AGENT}, {"agent": _OTHER_AGENT}, id="matching-agent-nested-other-agent"
+    ),
+    pytest.param({"agent": _AGENT}, {"agent": None}, id="agent-nested-null-agent"),
+    pytest.param({"model": "gemini/gemini-4-argon"}, {"agent": _AGENT}, id="model-nested-agent"),
+    pytest.param({"agent": _AGENT}, {"model": "gemini-4-argon"}, id="agent-nested-model"),
+    pytest.param({"agent": _AGENT}, {"model": _AGENT}, id="agent-nested-model-named-like-the-agent"),
+)
+
+_EXTRA_BODY_PASS_THROUGH: Final = (
+    pytest.param(
+        {"agent": _AGENT},
+        {"agent": _AGENT, "store": False},
+        {"agent": _AGENT, "store": False},
+        id="same-agent-repeated",
+    ),
+    pytest.param(
+        {"agent": _AGENT}, {"custom_flag": 1}, {"agent": _AGENT, "custom_flag": 1}, id="agent-unrelated-extra"
+    ),
+    pytest.param(
+        {"model": "gemini/gemini-4-argon"},
+        {"custom_flag": 1},
+        {"model": "gemini-4-argon", "custom_flag": 1},
+        id="model-unrelated-extra",
+    ),
+    pytest.param(
+        {"model": "gemini/gemini-4-argon"},
+        {"model": "gemini-4-carbon"},
+        {"model": "gemini-4-carbon"},
+        id="model-only-nested-model",
+    ),
+)
 
 
 class TestGoogleInteractionsCreate:
@@ -306,6 +347,15 @@ class TestGoogleInteractionsCreate:
                 id="agent-keeps-an-object",
             ),
             pytest.param(
+                {"model": "gemini/antigravity-preview-09-2026", "agent": "antigravity-preview-09-2026"},
+                {"type": "antigravity", "model": "gemini-3.8-flash"},
+                {
+                    "agent": "antigravity-preview-09-2026",
+                    "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+                },
+                id="matching-model-and-agent-sends-the-agent-with-its-config",
+            ),
+            pytest.param(
                 {"agent": "antigravity-preview-09-2026"},
                 "antigravity",
                 {"agent": "antigravity-preview-09-2026"},
@@ -344,6 +394,45 @@ class TestGoogleInteractionsCreate:
             drop_params=True,
             api_key="gemini-offline",
         )
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_refuses_an_agent_with_another_model_before_any_http_call(self, respx_mock: MockRouter) -> None:
+        with pytest.raises(litellm.BadRequestError, match="antigravity-preview-09-2026"):
+            interactions.create(
+                model="gemini/gemini-2.5-flash",
+                agent="antigravity-preview-09-2026",
+                input="Say hi in one word.",
+                api_key="gemini-offline",
+            )
+
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize(("target", "extra_body"), _EXTRA_BODY_SELECTOR_OVERRIDES)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_refuses_extra_body_that_changes_the_agent_or_model_before_any_http_call(
+        self, respx_mock: MockRouter, target: Mapping[str, str], extra_body: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match="extra_body"):
+            interactions.create(**target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline")
+
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize(("target", "extra_body", "expected_target"), _EXTRA_BODY_PASS_THROUGH)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_create_sends_extra_body_that_keeps_the_agent_and_model(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        extra_body: Mapping[str, object],
+        expected_target: Mapping[str, object],
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_INTERACTIONS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "interaction-extra", "status": "completed"})
+        )
+
+        interactions.create(**target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline")
 
         assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
 
@@ -493,6 +582,39 @@ class TestInteractionsAcreateOffline:
     @pytest.fixture(autouse=True)
     def _httpx_only_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    @pytest.mark.parametrize(("target", "extra_body"), _EXTRA_BODY_SELECTOR_OVERRIDES)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
+    async def test_acreate_refuses_extra_body_that_changes_the_agent_or_model_before_any_http_call(
+        self, respx_mock: MockRouter, target: Mapping[str, str], extra_body: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match="extra_body"):
+            await interactions.acreate(
+                **target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline"
+            )
+
+        assert not respx_mock.calls
+
+    @pytest.mark.parametrize(("target", "extra_body", "expected_target"), _EXTRA_BODY_PASS_THROUGH)
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
+    async def test_acreate_sends_extra_body_that_keeps_the_agent_and_model(
+        self,
+        respx_mock: MockRouter,
+        target: Mapping[str, str],
+        extra_body: Mapping[str, object],
+        expected_target: Mapping[str, object],
+    ) -> None:
+        route: Final = respx_mock.post(_GEMINI_INTERACTIONS_URL).mock(
+            return_value=httpx.Response(200, json={"id": "interaction-extra", "status": "completed"})
+        )
+
+        await interactions.acreate(
+            **target, input="Say hi in one word.", extra_body=extra_body, api_key="gemini-offline"
+        )
+
+        assert json.loads(route.calls.last.request.content) == {**expected_target, "input": "Say hi in one word."}
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
@@ -922,3 +1044,134 @@ def test_create_sends_a_caller_continuation_token_to_resume_a_long_decode(respx_
     }, sent
     assert response.status == "completed"
     assert response.continuation_token is None
+
+
+_DEEP_RESEARCH_AGENT: Final = "deep-research-preview-04-2026"
+_DEEP_RESEARCH_USAGE: Final = {
+    "total_input_tokens": 1000,
+    "total_cached_tokens": 200,
+    "total_output_tokens": 300,
+    "total_thought_tokens": 100,
+    "total_tokens": 1400,
+    "input_tokens_by_modality": [{"modality": "text", "tokens": 1000}],
+    "output_tokens_by_modality": [{"modality": "text", "tokens": 300}],
+    "grounding_tool_count": [{"type": "google_search", "count": 3}],
+}
+
+
+def _deep_research_cost_from_the_vertex_row() -> float:
+    row: Final = litellm.model_cost[f"vertex_ai/{_DEEP_RESEARCH_AGENT}"]
+    return (
+        (1000 - 200) * row["input_cost_per_token"]
+        + 200 * row["cache_read_input_token_cost"]
+        + (300 + 100) * row["output_cost_per_token"]
+        + 3 * row["search_context_cost_per_query"]["search_context_size_medium"]
+    )
+
+
+class _LoggedModelMapValue(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    key: str
+
+
+class _LoggedModelMap(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model_map_value: _LoggedModelMapValue
+
+
+class _LoggedModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model: str
+    model_map_information: _LoggedModelMap
+
+
+class _LoggedCost(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    response_cost: float
+    standard_logging_object: _LoggedModel
+
+
+class _CostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.cost: _LoggedCost | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.cost = _LoggedCost.model_validate(kwargs)
+        self.logged.set()
+
+
+_DEEP_RESEARCH_INTERACTION: Final = {
+    "id": "interaction-dr",
+    "object": "interaction",
+    "agent": _DEEP_RESEARCH_AGENT,
+    "status": "completed",
+    "usage": _DEEP_RESEARCH_USAGE,
+}
+_DEEP_RESEARCH_URL: Final = (
+    "https://aiplatform.googleapis.com/v1beta1/projects/dr-project/locations/global/interactions"
+)
+
+
+def _deep_research_reply(stream: bool) -> httpx.Response:
+    if not stream:
+        return httpx.Response(200, json=_DEEP_RESEARCH_INTERACTION)
+    completed: Final = json.dumps({"event_type": "interaction.completed", "interaction": _DEEP_RESEARCH_INTERACTION})
+    return httpx.Response(200, text=f"data: {completed}\n\n", headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["background-or-foreground", "streamed"])
+@pytest.mark.asyncio
+async def test_an_agent_only_vertex_deep_research_interaction_is_billed_under_the_agent_row(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    recorder: Final = _CostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(f"{_DEEP_RESEARCH_URL}?alt=sse" if stream else _DEEP_RESEARCH_URL).mock(
+        return_value=_deep_research_reply(stream)
+    )
+    credentials: Final = {
+        "type": "authorized_user",
+        "client_id": "dr-client",
+        "client_secret": "dr-secret",
+        "refresh_token": "dr-refresh-token",
+    }
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as google_oauth:
+        google_oauth.post(
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "dr-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        response: Final = await interactions.acreate(
+            agent=_DEEP_RESEARCH_AGENT,
+            input="Compare grid-scale storage options.",
+            custom_llm_provider="vertex_ai",
+            vertex_project="dr-project",
+            vertex_location="global",
+            vertex_credentials=json.dumps(credentials),
+            stream=stream,
+        )
+        if stream:
+            async for _ in response:
+                pass
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "agent": _DEEP_RESEARCH_AGENT,
+        "input": "Compare grid-scale storage options.",
+        "stream": stream,
+    }
+    assert recorder.cost is not None
+    assert recorder.cost.standard_logging_object.model == _DEEP_RESEARCH_AGENT
+    assert recorder.cost.standard_logging_object.model_map_information.model_map_value.key == (
+        f"vertex_ai/{_DEEP_RESEARCH_AGENT}"
+    )
+    assert recorder.cost.response_cost == pytest.approx(_deep_research_cost_from_the_vertex_row())

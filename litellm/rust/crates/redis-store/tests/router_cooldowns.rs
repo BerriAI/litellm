@@ -258,6 +258,87 @@ async fn a_router_without_redis_keeps_its_cooldowns_and_counts_in_memory() {
 }
 
 #[rstest]
+#[case::past_the_end_of_duration(1e300)]
+#[case::infinite(f64::INFINITY)]
+#[tokio::test]
+async fn a_cooldown_too_long_to_measure_stays_active(#[case] cooldown_time: f64) {
+    let store = std::sync::Arc::new(RouterCooldowns::with_clock(None, POLICY, fixture_clock()));
+    let [case, _] = cooldowns();
+    let cooldown = Cooldown {
+        cooldown_time: Number::Float(cooldown_time),
+        ..case.cooldown
+    };
+    store
+        .put(case.model_id, &cooldown, Duration::from_secs(90))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        read_active(&store, &[case.model_id.to_owned()]).await,
+        vec![(case.model_id.to_owned(), cooldown)]
+    );
+}
+
+#[rstest]
+#[case::outlasting_the_cooldown_is_shortened_to_its_end(60, 90.0, &[])]
+#[case::within_the_slack_of_its_end_is_left_alone(60, 64.5, &["deployment:dep-a:cooldown"])]
+#[case::of_a_long_cooldown_is_shortened_to_a_minute(600, 900.0, &[])]
+#[tokio::test]
+async fn reading_an_active_cooldown_corrects_a_memory_entry(
+    #[case] cooldown_time: i64,
+    #[case] memory_ttl: f64,
+    #[case] held_61_seconds_later: &[&str],
+) {
+    let clock = StepClock::at(1_730_000_000.75);
+    let store = std::sync::Arc::new(RouterCooldowns::with_clock(None, POLICY, clock.clock()));
+    let [case, _] = cooldowns();
+    let cooldown = Cooldown {
+        cooldown_time: Number::Int(cooldown_time),
+        ..case.cooldown
+    };
+    store
+        .put(
+            case.model_id,
+            &cooldown,
+            Duration::from_secs_f64(memory_ttl),
+        )
+        .await
+        .unwrap();
+
+    let active = read_active(&store, &[case.model_id.to_owned()]).await;
+    clock.advance(Duration::from_secs(61));
+    let held = store
+        .snapshot()
+        .unwrap()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+
+    assert_eq!(active, vec![(case.model_id.to_owned(), cooldown)]);
+    assert_eq!(held, held_61_seconds_later);
+}
+
+#[rstest]
+#[tokio::test]
+async fn reading_an_ended_cooldown_drops_it_from_memory() {
+    let clock = StepClock::at(1_730_000_000.75);
+    let store = std::sync::Arc::new(RouterCooldowns::with_clock(None, POLICY, clock.clock()));
+    let [case, _] = cooldowns();
+    store
+        .put(case.model_id, &case.cooldown, Duration::from_secs(90))
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(61));
+    let held = store.snapshot().unwrap().len();
+
+    let active = read_active(&store, &[case.model_id.to_owned()]).await;
+
+    assert_eq!(held, 1);
+    assert_eq!(active, vec![]);
+    assert_eq!(store.snapshot().unwrap(), vec![]);
+}
+
+#[rstest]
 #[tokio::test]
 async fn a_redis_outage_serves_memory_and_counts_fails_locally() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();

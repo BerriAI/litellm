@@ -30,6 +30,7 @@ from litellm.redis.stores.spend_counters.types import (
     team_member_counter,
     team_window_counter,
     user_counter,
+    user_window_counter,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ __all__ = [
     "team_member_counter",
     "team_window_counter",
     "user_counter",
+    "user_window_counter",
 ]
 
 

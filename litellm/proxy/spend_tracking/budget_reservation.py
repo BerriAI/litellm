@@ -4,12 +4,13 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
@@ -18,8 +19,16 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    get_annual_budget_window_start,
+    is_annual_budget_duration,
+)
+from litellm.litellm_core_utils.duration_parser import (
+    get_budget_window_start as calendar_budget_window_start,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -30,6 +39,11 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.timezone_utils import (
+    BudgetResetSettings,
+    compute_budget_reset_at,
+    get_budget_reset_settings,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
@@ -51,22 +65,27 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
     key_counter,
+    key_window_counter,
     model_access_group_counter,
     org_counter,
     project_counter,
     tag_counter,
     team_counter,
     team_member_counter,
+    team_window_counter,
     user_counter,
+    user_window_counter,
 )
+from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
+from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import CallTypes
 
 
 @dataclass
-class _BudgetCounter:
+class BudgetCounter:
     counter_key: str
     max_budget: float
     fallback_spend: float
@@ -76,6 +95,54 @@ class _BudgetCounter:
     spend_log_entity_id: str | None = None
     window_duration: str | None = None
     window_start: datetime | None = None
+    reset_at: datetime | None = None
+
+
+_BudgetCounter: TypeAlias = BudgetCounter
+
+
+def customer_window_counters(
+    scope_key: CustomerScopeKey,
+    entity_id: str,
+    budget_limits: Sequence[BudgetLimit],
+    *,
+    now: datetime | None = None,
+    reset_settings: BudgetResetSettings | None = None,
+) -> tuple[BudgetCounter, ...]:
+    """Use the existing reset calendar with balances owned by the entity, not its shared budget row."""
+    current: Final = now if now is not None else datetime.now(timezone.utc)
+    settings: Final = reset_settings or get_budget_reset_settings()
+    return tuple(_customer_window_counter(scope_key, entity_id, limit, current, settings) for limit in budget_limits)
+
+
+def _customer_window_counter(
+    scope_key: CustomerScopeKey,
+    entity_id: str,
+    limit: BudgetLimit,
+    now: datetime,
+    settings: BudgetResetSettings,
+) -> _BudgetCounter:
+    configured_reset: Final = (
+        limit.reset_at.replace(tzinfo=timezone.utc)
+        if limit.reset_at is not None and limit.reset_at.tzinfo is None
+        else limit.reset_at
+    )
+    standard_reset: Final = compute_budget_reset_at(limit.budget_duration, settings, now)
+    reset_at: Final = configured_reset if configured_reset is not None and configured_reset > now else standard_reset
+    start: Final = calendar_budget_window_start(
+        limit.budget_duration, reset_at.astimezone(standard_reset.tzinfo)
+    ).astimezone(timezone.utc)
+    return _BudgetCounter(
+        counter_key=customer_window_counter(scope_key, entity_id, limit.budget_duration, start),
+        max_budget=limit.max_budget,
+        fallback_spend=0.0,
+        entity_type=scope_key,
+        entity_id=entity_id,
+        spend_log_entity_id=entity_id,
+        window_duration=limit.budget_duration,
+        window_start=start,
+        reset_at=reset_at.astimezone(timezone.utc),
+    )
 
 
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
@@ -88,6 +155,9 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
     "Project": Litellm_EntityType.PROJECT.value,
+    "customer_org": Litellm_EntityType.CUSTOMER_ORG.value,
+    "customer_team": Litellm_EntityType.CUSTOMER_TEAM.value,
+    "customer_member": Litellm_EntityType.CUSTOMER_MEMBER.value,
 }
 
 _CACHED_VALUE: Final = TypeAdapter(object)
@@ -264,7 +334,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> dict | None:
-    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+    if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
@@ -386,11 +456,12 @@ def stamp_budget_reservation_actual_cost(budget_reservation: dict | None, actual
         return
     reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
     actual: Final = float(actual_cost or 0.0)
+    settlement_time: Final = datetime.now(timezone.utc)
     for entry in budget_reservation.get("entries") or []:
         if "counter_key" in entry:
-            entry["applied_adjustment"] = actual - _get_entry_reserved_cost(
-                entry=entry, default_reserved_cost=reserved_cost
-            )
+            entry["applied_adjustment"] = _entry_settled_cost(
+                _WINDOW_OBJECT.validate_python(entry), actual, settlement_time
+            ) - _get_entry_reserved_cost(entry=entry, default_reserved_cost=reserved_cost)
 
 
 async def release_budget_reservation(budget_reservation: dict | None) -> None:
@@ -401,7 +472,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -424,7 +495,8 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    input_cost: Final = budget_reservation.get("input_cost")
+    incurred_cost: Final = float(input_cost) if isinstance(input_cost, (int, float)) else 0.0
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -472,6 +544,15 @@ async def release_or_invalidate_budget_reservation(
             budget_reservation["finalized"] = True
 
 
+async def release_cancelled_budget_reservation(
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
+) -> None:
+    if budget_reservation is not None and budget_reservation.get("callback_bound") is True:
+        await release_budget_reservation_on_cancel(budget_reservation)
+        return
+    await asyncio.shield(release_or_invalidate_budget_reservation(budget_reservation))
+
+
 async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
     """Release a reservation no logging callback took ownership of, once the request ended.
 
@@ -499,6 +580,10 @@ async def _get_budget_counters(
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
+    if valid_token.customer_hierarchy is not None:
+        for scope in valid_token.customer_hierarchy.scopes:
+            counters.extend(customer_window_counters(scope.key, scope.entity_id, scope.budget_limits))
+
     if valid_token.token is not None:
         if valid_token.max_budget is not None and valid_token.max_budget > 0:
             counters.append(
@@ -513,7 +598,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=key_counter(valid_token.token),
+                window_counter=partial(key_window_counter, valid_token.token),
                 entity_type="Key",
                 entity_id=valid_token.token,
                 budget_limits=valid_token.budget_limits,
@@ -536,7 +621,7 @@ async def _get_budget_counters(
             )
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=team_counter(team_id),
+                window_counter=partial(team_window_counter, team_id),
                 entity_type="Team",
                 entity_id=team_id,
                 budget_limits=team_object.budget_limits,
@@ -545,6 +630,16 @@ async def _get_budget_counters(
         )
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
+    if (not is_team_key or apply_user_budget_to_team_keys) and user_object is not None:
+        counters.extend(
+            _get_budget_limit_counters(
+                window_counter=partial(user_window_counter, user_object.user_id),
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=0.0,
+            )
+        )
     if (
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
@@ -865,7 +960,7 @@ async def _get_project_budget_counter(
 
 
 def _get_budget_limit_counters(
-    entity_prefix: str,
+    window_counter: Callable[[str], str],
     entity_type: str,
     entity_id: str,
     budget_limits: Sequence[object] | None,
@@ -892,7 +987,7 @@ def _get_budget_limit_counters(
             continue
         counters.append(
             _BudgetCounter(
-                counter_key=f"{entity_prefix}:window:{budget_duration}",
+                counter_key=window_counter(str(budget_duration)),
                 max_budget=float(max_budget),
                 fallback_spend=0.0,
                 entity_type=entity_type,
@@ -1121,22 +1216,36 @@ class _EntryAdjustment:
     counter_key: str
     target_adjustment: float
     adjustment: float
+    actual_cost: float
+
+
+def _entry_settled_cost(entry: Mapping[str, object], actual_cost: float, settlement_time: datetime | None) -> float:
+    reset_at: Final = _coerce_datetime(entry.get("window_reset_at"))
+    return 0.0 if settlement_time is not None and reset_at is not None and reset_at <= settlement_time else actual_cost
 
 
 def _entry_adjustment(
-    entry: dict[str, float | str], actual_cost: float, default_reserved_cost: float
+    entry: dict[str, float | str],
+    actual_cost: float,
+    default_reserved_cost: float,
+    settlement_time: datetime | None = None,
 ) -> _EntryAdjustment | None:
     counter_key: Final = entry.get("counter_key")
     if counter_key is None:
         return None
-    target_adjustment: Final = actual_cost - _get_entry_reserved_cost(
+    settled_cost: Final = _entry_settled_cost(entry, actual_cost, settlement_time)
+    target_adjustment: Final = settled_cost - _get_entry_reserved_cost(
         entry=entry, default_reserved_cost=default_reserved_cost
     )
     adjustment: Final = target_adjustment - float(entry.get("applied_adjustment") or 0.0)
     if adjustment == 0:
         return None
     return _EntryAdjustment(
-        entry=entry, counter_key=str(counter_key), target_adjustment=target_adjustment, adjustment=adjustment
+        entry=entry,
+        counter_key=str(counter_key),
+        target_adjustment=target_adjustment,
+        adjustment=adjustment,
+        actual_cost=settled_cost,
     )
 
 
@@ -1152,11 +1261,12 @@ async def _set_reserved_entries_actual_cost(
     is settled on its own after the pipeline."""
     from litellm.proxy.proxy_server import increment_spend_counters_pipeline
 
+    settlement_time: Final = datetime.now(timezone.utc) if reseed_on_inconsistent else None
     with _counters_batch_scope(frozenset(str(entry["counter_key"]) for entry in entries if "counter_key" in entry)):
         adjustments: Final = tuple(
             adjustment
             for entry in entries
-            if (adjustment := _entry_adjustment(entry, actual_cost, default_reserved_cost)) is not None
+            if (adjustment := _entry_adjustment(entry, actual_cost, default_reserved_cost, settlement_time)) is not None
         )
         consistent: Final = tuple(
             await asyncio.gather(
@@ -1182,7 +1292,7 @@ async def _set_reserved_entries_actual_cost(
         if apply_consistent:
             await increment_spend_counters_pipeline(pending=applicable_pending)
         for item in inconsistent:
-            await _reseed_reserved_entry(item=item, actual_cost=actual_cost)
+            await _reseed_reserved_entry(item=item, actual_cost=item.actual_cost)
         for item in adjustments if apply_consistent else inconsistent:
             item.entry["applied_adjustment"] = item.target_adjustment
         return () if apply_consistent else applicable_pending
@@ -1268,6 +1378,7 @@ def _counter_to_reservation_entry(
         "entity_id": counter.entity_id,
         "reserved_cost": reserved_cost,
         "applied_adjustment": 0.0,
+        **({"window_reset_at": counter.reset_at.isoformat()} if counter.reset_at is not None else {}),
     }
 
 
@@ -1287,12 +1398,18 @@ def fixed_budget_window(window: object) -> tuple[str, datetime] | None:
     return duration, start
 
 
-def get_budget_window_start(window: object) -> datetime | None:
+def get_budget_window_start(window: object, reset_settings: BudgetResetSettings | None = None) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
         return None
     try:
+        if is_annual_budget_duration(str(budget_duration)):
+            annual_reset_at: Final = _coerce_datetime(window_dict.get("reset_at"))
+            if annual_reset_at is not None:
+                return get_annual_budget_window_start(
+                    annual_reset_at, (reset_settings or get_budget_reset_settings()).timezone
+                )
         duration_seconds: Final = duration_in_seconds(str(budget_duration))
     except Exception:
         return None

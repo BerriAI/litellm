@@ -88,7 +88,7 @@ const modelFacts = (model: ModelGroupInfo): Fact[][] => {
 function CallThisModel({ model }: { model: ModelGroupInfo }) {
   const { t } = useTranslation();
   const curl = curlSnippet(model);
-  if (!curl) {
+  if (!curl || model.mode === "passthrough") {
     return (
       <PaneSection title={t("publicModelHub.modelInspector.callThisModel.title")}>
         <CodeBlock code={modelSnippet(model)} />

@@ -303,6 +303,18 @@ describe("returnUrlUtils", () => {
   });
 
   describe("isValidReturnUrl", () => {
+    it.each([
+      "/\\attacker.example/ui/",
+      "/\t/attacker.example/ui/",
+      "/\n/attacker.example/ui/",
+      "/\r/attacker.example/ui/",
+      "javascript://localhost/%0Aalert(1)",
+      "data://localhost/text/html,test",
+      "ftp://localhost/ui/",
+    ])("rejects unsafe navigation target %j", (url) => {
+      expect(isValidReturnUrl(url)).toBe(false);
+    });
+
     it("should validate relative URLs starting with /", () => {
       expect(isValidReturnUrl("/ui?page=api-keys")).toBe(true);
       expect(isValidReturnUrl("/ui/teams")).toBe(true);
@@ -398,6 +410,18 @@ describe("returnUrlUtils", () => {
   });
 
   describe("consumeReturnUrl", () => {
+    it.each(["params", "cookie"])("rejects a backslash redirect from %s", (source) => {
+      const unsafeUrl = "/\\attacker.example/ui/";
+      if (source === "params") {
+        window.location.search = `?redirect_to=${encodeURIComponent(unsafeUrl)}`;
+      } else {
+        window.location.search = "";
+        document.cookie = `litellm_return_url=${encodeURIComponent(unsafeUrl)}; Path=/`;
+      }
+
+      expect(consumeReturnUrl()).toBeNull();
+    });
+
     it("should return and clear the stored return URL", () => {
       Object.defineProperty(window, "location", {
         value: {

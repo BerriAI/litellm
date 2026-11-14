@@ -704,6 +704,15 @@ async def test_member_updates_preserve_manifest_and_original_editor_base(pending
     assert detail["submission"]["proposal"]["domain"] == "Tools"
     assert detail["submission"]["proposal"]["keywords"] == ["notes"]
     assert detail["current_skill"]["namespace"] == "research"
+    for version in ("1.0.0", original.version):
+        invalid: Final = await hub.client.put(
+            path + ("/upload" if replacement else ""), headers=_headers(MEMBER_KEY),
+            **({"data": {"expected_revision": "0", "version": version},
+                "files": {"file": ("new.zip", _zip(updated_files), "application/zip")}}
+               if replacement else {"json": {"expected_revision": 0, "version": version}}),
+        )
+        assert invalid.status_code == 400, invalid.text
+        assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json() == detail
     assert hub.database.litellm_claudecodepluginversion.create.await_count == before
     hub.plugins.update.assert_not_awaited()
     approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
@@ -1044,4 +1053,116 @@ async def test_restore_checks_the_snapshot_again_under_the_publication_lock(hub:
         f"{HUB}/{NAME}/versions/retained/restore", headers=_headers(MASTER_KEY), json=_restore_body(),
     )
     assert response.status_code == 409, response.text
+    hub.plugins.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("key,expected", [(OTHER_KEY, 404), (MASTER_KEY, 404), (VIEWER_KEY, 403), (PLAIN_KEY, 403)])
+async def test_only_original_submitter_can_edit_or_withdraw(pending_hub: HubClient, key: str, expected: int) -> None:
+    hub: Final = pending_hub
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    for suffix in ("", "/upload", "/withdraw"):
+        response: Final = await hub.client.put(
+            path + suffix, headers=_headers(key),
+            **({"data": {"expected_revision": "0"}, "files": {"file": ("edit.zip", _zip(FILES))}}
+               if suffix == "/upload" else {"json": {"expected_revision": 0}}),
+        )
+        assert response.status_code == expected, response.text
+    own: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()["submission"]
+    assert (own["revision"], own["status"], own["can_edit"]) == (0, "pending_review", True)
+    admin: Final = (await hub.client.get(path, headers=_headers(MASTER_KEY))).json()["submission"]
+    assert admin["can_edit"] is False
+    hub.plugins.create.assert_not_awaited()
+
+
+async def test_pending_edits_preserve_owner_and_files_until_fresh_review(pending_hub: HubClient) -> None:
+    hub: Final = pending_hub
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    before: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()["submission"]
+    edited: Final = await hub.client.put(path, headers=_headers(MEMBER_KEY), json={
+        "expected_revision": 0, "description": "Revised metadata", "version": "3.0.0", "keywords": ["review"],
+    })
+    assert edited.status_code == 200, edited.text
+    result: Final = edited.json()
+    assert (result["revision"], result["submitted_by"], result["created_at"], result["base_updated_at"]) == (
+        1, before["submitted_by"], before["created_at"], before["base_updated_at"],
+    )
+    assert result["proposal"]["description"] == "Revised metadata"
+    _assert_portable(await hub.client.get(path + "/archive", headers=_headers(MEMBER_KEY)))
+    for body in ({}, {"expected_revision": 0}):
+        stale: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY), json=body or None)
+        assert stale.status_code == 409, stale.text
+    assert (await hub.client.put(path, headers=_headers(MEMBER_KEY), json={"expected_revision": 0})).status_code == 409
+    hub.plugins.create.assert_not_awaited()
+    approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY), json={"expected_revision": 1})
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["skill"]["description"] == "Revised metadata"
+    assert approved.json()["skill"]["version"] == "3.0.0"
+    for suffix in ("", "/withdraw"):
+        assert (await hub.client.put(path + suffix, headers=_headers(MEMBER_KEY), json={"expected_revision": 1})).status_code == 409
+
+
+async def test_withdrawn_submission_cannot_be_edited_reviewed_or_published(pending_hub: HubClient) -> None:
+    hub: Final = pending_hub
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    withdrawn: Final = await hub.client.put(path + "/withdraw", headers=_headers(MEMBER_KEY), json={"expected_revision": 0})
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert (withdrawn.json()["status"], withdrawn.json()["can_edit"], withdrawn.json()["reviewed_by"]) == ("withdrawn", False, None)
+    assert withdrawn.json()["has_archive"] is False
+    assert (await hub.client.get(path + "/archive", headers=_headers(MEMBER_KEY))).status_code == 404
+    for suffix, key in (("", MEMBER_KEY), ("/withdraw", MEMBER_KEY), ("/approve", MASTER_KEY), ("/reject", MASTER_KEY)):
+        response: Final = await hub.client.put(path + suffix, headers=_headers(key), json={"expected_revision": 0})
+        assert response.status_code == 409, response.text
+    listed: Final = await hub.client.get("/skill-hub/submissions?status=withdrawn", headers=_headers(MEMBER_KEY))
+    assert listed.json()["count"] == 1
+    hub.plugins.create.assert_not_awaited()
+
+
+async def test_pending_archive_edit_revalidates_and_clears_scan(pending_hub: HubClient) -> None:
+    hub: Final = pending_hub
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
+    identifier: Final = created.json()["submission_id"]
+    path: Final = f"/skill-hub/submissions/{identifier}"
+    await hub.database.litellm_skillsubmission.update(where={"id": identifier}, data={"scan_json": "old scan"})
+    invalid: Final = await hub.client.put(path + "/upload", headers=_headers(MEMBER_KEY),
+        data={"expected_revision": "0"}, files={"file": ("invalid.zip", b"invalid")})
+    assert invalid.status_code == 422, invalid.text
+    updated_files: Final = {**FILES, "references/guide.md": b"Revised pending instructions.\n"}
+    edited: Final = await hub.client.put(path + "/upload", headers=_headers(MEMBER_KEY),
+        data={"expected_revision": "0", "version": "2.1.0"}, files={"file": ("edit.zip", _zip(updated_files))})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["revision"] == 1
+    stored: Final = await hub.database.litellm_skillsubmission.find_unique(where={"id": identifier})
+    assert stored.scan_json is None
+    archive: Final = await hub.client.get(path + "/archive", headers=_headers(MEMBER_KEY))
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as content:
+        assert content.read("references/guide.md") == updated_files["references/guide.md"]
+    hub.plugins.create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("published_version", (None, "legacy"))
+@pytest.mark.parametrize("replacement", (False, True), ids=("metadata", "archive"))
+async def test_pending_legacy_update_keeps_explicit_version_requirement(
+    pending_hub: HubClient, published_version: str | None, replacement: bool,
+) -> None:
+    hub: Final = pending_hub
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    original: Final = _stored_upload(hub)
+    hub.plugins.find_unique.return_value = original.model_copy(update={"version": published_version})
+    created: Final = await hub.client.put(
+        f"{HUB}/{NAME}", headers=_headers(MEMBER_KEY), json={"version": "3.0.0"},
+    )
+    assert created.status_code == 200, created.text
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    before: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()
+    edited: Final = await hub.client.put(
+        path + ("/upload" if replacement else ""), headers=_headers(MEMBER_KEY),
+        **({"data": {"expected_revision": "0"}, "files": {"file": ("new.zip", _zip(FILES))}}
+           if replacement else {"json": {"expected_revision": 0}}),
+    )
+    assert edited.status_code == 409, edited.text
+    assert "explicit semantic version" in edited.json()["detail"]
+    assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json() == before
     hub.plugins.update.assert_not_awaited()

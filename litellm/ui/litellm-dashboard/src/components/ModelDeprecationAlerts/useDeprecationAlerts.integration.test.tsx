@@ -19,6 +19,15 @@ describe("deprecation alert API wiring", () => {
     vi.clearAllMocks();
     testQueryClient.clear();
   });
+  it("stops loading usage and acknowledgements when model deprecations are disabled", async () => {
+    vi.mocked(useCurrentUser).mockReturnValue({ data: { user_id: "admin", user_role: "proxy_admin" } } as ReturnType<
+      typeof useCurrentUser
+    >);
+    vi.mocked(backgroundFetchClient.GET).mockResolvedValue({ data: { model_deprecations_enabled: false } } as never);
+    renderWithProviders(<AlertsHost />);
+    expect(await screen.findByText("0 alerts")).toBeInTheDocument();
+    expect(backgroundFetchClient.GET).toHaveBeenCalledExactlyOnceWith("/alerts/monitoring", expect.anything());
+  });
   it("should avoid querying gateway-wide usage for non-admins", () => {
     vi.mocked(useCurrentUser).mockReturnValue({
       data: { user_id: "internal", user_role: "internal_user" },
@@ -36,7 +45,7 @@ describe("deprecation alert API wiring", () => {
     } as never);
     renderWithProviders(<AlertsHost />);
     expect(await screen.findByText("0 alerts")).toBeInTheDocument();
-    expect(backgroundFetchClient.GET).toHaveBeenCalledTimes(1);
+    expect(backgroundFetchClient.GET).toHaveBeenCalledTimes(2);
     expect(backgroundFetchClient.GET).toHaveBeenCalledWith(
       "/model/deprecations",
       expect.objectContaining({ params: { query: { warn_within_days: 30 } } }),
@@ -59,6 +68,7 @@ describe("deprecation alert API wiring", () => {
       ],
     };
     vi.mocked(backgroundFetchClient.GET)
+      .mockResolvedValueOnce({ data: { model_deprecations_enabled: true } } as never)
       .mockResolvedValueOnce({ data: schedule } as never)
       .mockResolvedValueOnce({ data: activity } as never)
       .mockResolvedValueOnce({ data: { status: "open" } } as never);

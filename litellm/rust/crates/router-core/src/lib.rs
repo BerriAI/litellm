@@ -118,7 +118,7 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 pub use crate::{
-    cache::{InMemoryRouterCache, RouterCache},
+    cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
     call::RouterResponse,
     config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
     error::{AttemptError, ConfigError, Error, FailureKind, Payload, Unsupported},
@@ -436,14 +436,14 @@ impl Router {
 
     /// A success a logging callback saw (`deployment_callback_on_success`): counted for a
     /// configured deployment, with its tokens and requests when it tracks usage. Returns the
-    /// tokens counter's key when it added usage (`_increment_deployment_usage`), else `None`.
+    /// window it added usage to (`_increment_deployment_usage`), else `None`.
     pub async fn report_success(
         &self,
         id: &str,
         total_tokens: f64,
         requests: f64,
         report: SuccessReport,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<Option<UsageWindow>, Error> {
         report
             .callbacks
             .record(
@@ -459,7 +459,7 @@ impl Router {
         total_tokens: f64,
         requests: f64,
         report: &SuccessReport,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<Option<UsageWindow>, Error> {
         let snapshot = self.core.snapshot.load_full();
         let Some(deployment) = snapshot.registry.deployment(id) else {
             return Ok(None);
@@ -482,16 +482,16 @@ impl Router {
             .await
     }
 
-    /// `sync_deployment_callback_on_success`: count a success against `id`, configured or not,
-    /// and return the counter's key.
+    /// `sync_deployment_callback_on_success`: count a success against `id`, configured or not.
+    /// Returns whether it counted one.
     pub async fn count_success(
         &self,
         id: &str,
         callbacks: OutcomeCallbacks,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<bool, Error> {
         callbacks
             .record(OutcomeWrite::Success, async {
-                self.core.health.count_success(id).await.map(Some)
+                self.core.health.count_success(id).await.map(|()| true)
             })
             .await
     }

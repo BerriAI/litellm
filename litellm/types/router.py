@@ -76,6 +76,9 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
+    github_copilot_oauth_litellm_params as _github_copilot_oauth_litellm_params,
+)
+from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
@@ -237,6 +240,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
     fallback_on_unsupported_params: bool | None = None
+    fallback_on_saturation: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -495,6 +499,10 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
 
 
 def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
@@ -869,12 +877,14 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_text_message: ReadOnly[float | None]
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
@@ -1313,13 +1323,6 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
-
-
 class GenericBudgetWindowDetails(LiteLLMBaseModel):
     """Details about a provider's budget window"""
 
@@ -1592,8 +1595,13 @@ def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
     for param in _server_owned_wif_litellm_params:
         if param in submitted_names:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
-                "parameter "
+                f"Rejected Request: {param} is a server-owned {server_owned_param_kind(param)} parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
+
+
+def server_owned_param_kind(param: str) -> str:
+    if param in _github_copilot_oauth_litellm_params:
+        return "GitHub Copilot authentication"
+    return "workload identity federation or OAuth token exchange"

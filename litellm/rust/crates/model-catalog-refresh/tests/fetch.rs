@@ -1,13 +1,19 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{ProvideCredentials, future};
+use litellm_auth_gcp::{GcpAuthFuture, GcpTokenSource};
+use litellm_auth_types::{Error, ErrorDetail};
 use litellm_http::Client;
-use litellm_model_catalog_refresh::{Failed, Fetched, RetryPolicy, S3Access, Start, fetch};
+use litellm_model_catalog_refresh::{
+    Failed, Fetched, GcsAccess, RetryPolicy, S3Access, Start, fetch,
+};
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 
 const POLICY: RetryPolicy = RetryPolicy {
@@ -140,6 +146,7 @@ async fn fetched(url: &str, policy: RetryPolicy, start: Start) -> Result<Fetched
     fetch(
         &Client::for_test(),
         &S3Access::Environment { region: None },
+        &GcsAccess::Environment,
         url,
         policy,
         start,
@@ -181,6 +188,7 @@ async fn a_fetch_runs_as_a_task_on_a_multi_thread_runtime() {
         fetch(
             &Client::for_test(),
             &S3Access::Environment { region: None },
+            &GcsAccess::Environment,
             &url,
             POLICY,
             Start::Fresh,
@@ -372,6 +380,7 @@ async fn fetched_from_s3(
     fetch(
         &Client::for_test(),
         &s3(upstream, credentials),
+        &GcsAccess::Environment,
         url,
         POLICY,
         Start::Fresh,
@@ -417,6 +426,7 @@ async fn an_s3_body_that_stalls_after_the_headers_times_out() {
         fetch(
             &Client::for_test(),
             &s3(&upstream, keys()),
+            &GcsAccess::Environment,
             url,
             policy,
             Start::Fresh,
@@ -450,7 +460,15 @@ async fn a_body_that_keeps_arriving_finishes_after_the_timeout(
         ..POLICY
     };
     assert_eq!(
-        fetch(&Client::for_test(), &access, &url, policy, Start::Fresh).await,
+        fetch(
+            &Client::for_test(),
+            &access,
+            &GcsAccess::Environment,
+            &url,
+            policy,
+            Start::Fresh
+        )
+        .await,
         Ok(Fetched {
             body: SLOW_BODY.to_vec(),
             etag: Some("\"v1\"".into()),
@@ -495,6 +513,261 @@ async fn an_s3_fetch_without_credentials_fails_without_a_request() {
     );
     assert!(!failed.retryable);
     assert!(upstream.heads().is_empty());
+}
+
+const GCS_TOKEN: &str = "ya29.model-cost-token";
+
+struct Token(Result<&'static str, &'static str>);
+
+impl GcpTokenSource for Token {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async { Ok("model-cost-project".into()) })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async move {
+            self.0.map(SecretValue::new).map_err(|subject| {
+                Error::CredentialAcquisition(ErrorDetail::Unresolved { subject })
+            })
+        })
+    }
+}
+
+struct StalledToken;
+
+impl GcpTokenSource for StalledToken {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(std::future::pending())
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(std::future::pending())
+    }
+}
+
+async fn fetched_from_gcs(
+    url: &str,
+    upstream: &Upstream,
+    token: impl GcpTokenSource + 'static,
+) -> Result<Fetched, Failed> {
+    fetch(
+        &Client::for_test(),
+        &S3Access::Environment { region: None },
+        &GcsAccess::Config {
+            endpoint: format!("{}/", upstream.base),
+            token_source: Arc::new(token),
+        },
+        url,
+        POLICY,
+        Start::Fresh,
+    )
+    .await
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_fetch_sends_the_bearer_token_to_the_object_media_url() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    assert_eq!(
+        fetched_from_gcs(
+            "gs://prices/maps/cost.json",
+            &upstream,
+            Token(Ok(GCS_TOKEN))
+        )
+        .await,
+        Ok(Fetched {
+            body: b"{}".to_vec(),
+            etag: Some("\"v1\"".into()),
+        })
+    );
+    let heads = upstream.heads();
+    let [head] = heads.as_slice() else {
+        panic!("expected one request, got {heads:?}");
+    };
+    assert!(
+        head.starts_with("GET /storage/v1/b/prices/o/maps%2Fcost.json?alt=media HTTP/1.1"),
+        "{head}"
+    );
+    assert_eq!(
+        header(head, "authorization"),
+        Some(format!("Bearer {GCS_TOKEN}").as_str())
+    );
+}
+
+#[rstest]
+#[case::unavailable(UNAVAILABLE, " (after 3 attempts)", true, 3)]
+#[case::rate_limited(
+    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    " (after 3 attempts)",
+    true,
+    3
+)]
+#[case::unauthorized(
+    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    "",
+    false,
+    1
+)]
+#[case::denied(
+    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    "",
+    false,
+    1
+)]
+#[case::missing(NOT_FOUND, "", false, 1)]
+#[tokio::test]
+async fn a_gcs_status_retries_only_when_an_http_status_would(
+    #[case] response: &'static str,
+    #[case] suffix: &str,
+    #[case] retryable: bool,
+    #[case] requests: usize,
+) {
+    let upstream = Upstream::serve(vec![Answer::Raw(response)]);
+    let url = "gs://prices/cost.json";
+    let failed = fetched_from_gcs(url, &upstream, Token(Ok(GCS_TOKEN)))
+        .await
+        .unwrap_err();
+    let status = &response[9..12];
+    assert_eq!(failed.reason, format!("HTTP {status} from {url}{suffix}"));
+    assert_eq!(failed.retryable, retryable);
+    assert_eq!(upstream.heads().len(), requests);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_fetch_without_a_token_retries_without_a_request() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    let url = "gs://prices/cost.json";
+    let failed = fetched_from_gcs(url, &upstream, Token(Err("Google access token")))
+        .await
+        .unwrap_err();
+    assert!(
+        failed.reason.starts_with(&format!(
+            "error fetching {url}: Google access token unavailable"
+        )),
+        "{}",
+        failed.reason
+    );
+    assert!(failed.retryable);
+    assert!(upstream.heads().is_empty());
+}
+
+struct TokenAfterOneRefusal(AtomicU32);
+
+impl GcpTokenSource for TokenAfterOneRefusal {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async { Ok("model-cost-project".into()) })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async move {
+            match self.0.fetch_add(1, Ordering::Relaxed) {
+                0 => Err(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                    subject: "Google access token",
+                })),
+                _ => Ok(SecretValue::new(GCS_TOKEN)),
+            }
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_token_refused_once_is_retried_into_a_fetch() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    let fetched = fetched_from_gcs(
+        "gs://prices/cost.json",
+        &upstream,
+        TokenAfterOneRefusal(AtomicU32::new(0)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(fetched.body, b"{}");
+    assert_eq!(upstream.heads().len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_token_that_never_arrives_fails_within_the_attempt_timeout() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    let url = "gs://prices/cost.json";
+    let once = RetryPolicy {
+        max_attempts: 1,
+        ..POLICY
+    };
+    let failed = tokio::time::timeout(
+        once.timeout * 2,
+        fetch(
+            &Client::for_test(),
+            &S3Access::Environment { region: None },
+            &GcsAccess::Config {
+                endpoint: format!("{}/", upstream.base),
+                token_source: Arc::new(StalledToken),
+            },
+            url,
+            once,
+            Start::Fresh,
+        ),
+    )
+    .await
+    .expect("the token wait outlived the attempt timeout")
+    .unwrap_err();
+    assert!(
+        failed.reason.starts_with(&format!(
+            "error fetching {url}: Google access token timed out"
+        )),
+        "{}",
+        failed.reason
+    );
+    assert!(failed.retryable);
+    assert!(upstream.heads().is_empty());
+}
+
+struct SlowToken(Duration);
+
+impl GcpTokenSource for SlowToken {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async { Ok("model-cost-project".into()) })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async move {
+            tokio::time::sleep(self.0).await;
+            Ok(SecretValue::new(GCS_TOKEN))
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_attempt_spends_one_timeout_across_the_token_and_the_request() {
+    let upstream = Upstream::serve(vec![Answer::Stall]);
+    let once = RetryPolicy {
+        max_attempts: 1,
+        timeout: Duration::from_secs(2),
+        ..POLICY
+    };
+    let started = std::time::Instant::now();
+    let failed = fetch(
+        &Client::for_test(),
+        &S3Access::Environment { region: None },
+        &GcsAccess::Config {
+            endpoint: format!("{}/", upstream.base),
+            token_source: Arc::new(SlowToken(once.timeout / 2)),
+        },
+        "gs://prices/cost.json",
+        once,
+        Start::Fresh,
+    )
+    .await
+    .unwrap_err();
+    assert!(failed.retryable, "{}", failed.reason);
+    assert!(
+        started.elapsed() < once.timeout + once.timeout / 4,
+        "the attempt took {:?}, over its {:?} timeout",
+        started.elapsed(),
+        once.timeout
+    );
 }
 
 const DECLARED_OVERSIZED: &str =

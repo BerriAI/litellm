@@ -7,6 +7,7 @@ import { PTU_FLAG_REFRESH_MS, usePtuCostAttributionEnabled } from "./usePtuCostA
 import { useUISettings } from "./useUISettings";
 
 vi.mock("@/components/networking", () => ({
+  getProxyBaseUrl: () => "http://localhost",
   getUiSettings: vi.fn(),
 }));
 

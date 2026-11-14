@@ -52,6 +52,8 @@ const passThroughFormSchema = z.object({
   auth: z.boolean(),
   timeout: z.string().optional(),
   cost_per_request: z.string().optional(),
+  display_name: z.string().optional(),
+  show_in_model_hub: z.boolean().optional(),
 });
 
 type PassThroughFormValues = z.output<typeof passThroughFormSchema>;
@@ -66,6 +68,8 @@ const emptyFormValues = {
   auth: true,
   timeout: undefined,
   cost_per_request: undefined,
+  display_name: undefined,
+  show_in_model_hub: false,
 } as unknown as PassThroughFormValues;
 
 const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
@@ -129,6 +133,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         auth: values.auth,
         timeout: values.timeout,
         cost_per_request: values.cost_per_request,
+        display_name: optionalText(values.display_name ?? ""),
+        show_in_model_hub: values.show_in_model_hub ?? false,
         ...(Object.keys(guardrails).length > 0 ? { guardrails } : {}),
       };
 
@@ -334,6 +340,45 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                       />
                     )}
                   </FormField>
+                </Card>
+
+                <Card className="block p-6">
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">{t("passThroughModelHub.title")}</h3>
+                  <p className="mb-6 text-sm text-muted-foreground">{t("passThroughModelHub.description")}</p>
+
+                  <div className="space-y-5">
+                    <FormField
+                      control={form.control}
+                      name="display_name"
+                      label={t("passThroughModelHub.displayName")}
+                      description={t("passThroughModelHub.displayNameCreateHint")}
+                    >
+                      {({ value, ...field }) => (
+                        <Input
+                          {...field}
+                          placeholder={t("passThroughModelHub.displayNamePlaceholder")}
+                          value={value ?? ""}
+                        />
+                      )}
+                    </FormField>
+
+                    <div className="flex items-center justify-between py-3">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">{t("passThroughModelHub.show")}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">{t("passThroughModelHub.showHint")}</div>
+                      </div>
+                      <FormField control={form.control} name="show_in_model_hub">
+                        {({ value, onChange, ref: _ref, ...field }) => (
+                          <Switch
+                            {...field}
+                            aria-label={t("passThroughModelHub.show")}
+                            checked={value ?? false}
+                            onCheckedChange={onChange}
+                          />
+                        )}
+                      </FormField>
+                    </div>
+                  </div>
                 </Card>
 
                 <Card className="block p-6">

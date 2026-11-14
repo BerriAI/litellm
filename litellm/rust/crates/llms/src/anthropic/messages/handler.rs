@@ -192,6 +192,7 @@ mod tests {
         json!([
             {"role": "user", "content": "run it"},
             {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig"},
                 {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}},
                 {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "q"}},
                 {"type": "text", "text": "Web search results:\n\nURL: u"}

@@ -4,13 +4,16 @@ limits/mode/display name/service tiers/listing info, group usage this minute, re
 the rate limit headers ``set_response_headers`` attaches.
 """
 
+from typing import Final, Literal
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
-from litellm.types.router import Deployment, RouterCacheEnum
+from litellm.redis.stores.router_usage import UsageCounter
+from litellm.types.router import Deployment
 from litellm.utils import get_utc_datetime
 from tests.unit.test_router.core.registry_helpers import MakeCore, typed, unique_id
 from tests.unit.test_router.core.scripted_host import completion_response, deployment
@@ -46,9 +49,9 @@ async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens:
     )
 
 
-async def _count(core: RouterCore, kind: RouterCacheEnum, deployment_id: str, model: str, value: int) -> None:
-    key = kind.value.format(id=deployment_id, model=model, current_minute=_minute())
-    await core.health().store.async_set_cache(key, value)
+async def _count(core: RouterCore, kind: Literal["itpm", "otpm"], deployment_id: str, model: str, value: int) -> None:
+    usage: Final = core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the core counts io tokens in
+    usage.set_local(UsageCounter("global_router", deployment_id, model, _minute(), kind), value)
 
 
 # -- model group info -----------------------------------------------------------------------------
@@ -500,7 +503,7 @@ async def test_group_usage_follows_deployments_added_and_removed_after_a_read(ma
 async def test_io_token_usage_sums_input_and_output_counters(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
     assert await core.get_model_group_io_token_usage("io") == (None, None)  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
-    await _count(core, RouterCacheEnum.ITPM, "i", "openai/gpt-4o", 7)
+    await _count(core, "itpm", "i", "openai/gpt-4o", 7)
 
     assert await core.get_model_group_io_token_usage("io") == (7, None)  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
 
@@ -525,7 +528,7 @@ async def test_remaining_usage_of_an_io_limited_group_reports_input_and_output_t
     make_core: MakeCore,
 ) -> None:
     core = _usage_core(make_core)
-    await _count(core, RouterCacheEnum.ITPM, "i", "openai/gpt-4o", 7)
+    await _count(core, "itpm", "i", "openai/gpt-4o", 7)
 
     remaining = await core.health().usage("io", kind="remaining")
 
