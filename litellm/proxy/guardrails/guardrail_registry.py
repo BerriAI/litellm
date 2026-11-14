@@ -572,7 +572,7 @@ class GuardrailRegistry:
 
 
 def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
-    """Override the parallel/raw-scan flags only when ``litellm_params`` explicitly
+    """Override the parallel/raw-scan/opt-out flags only when ``litellm_params`` explicitly
     sets them, preserving whatever default the guardrail's own constructor chose
     otherwise (its constructor default may be True, so blindly copying an
     absent/None config value would silently clobber it back to False)."""
@@ -580,6 +580,8 @@ def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: 
         instance.run_in_parallel = bool(litellm_params.run_in_parallel)
     if litellm_params.scan_raw_request is not None:
         instance.scan_raw_request = bool(litellm_params.scan_raw_request)
+    if litellm_params.allow_opt_out is not None:
+        instance.allow_opt_out = bool(litellm_params.allow_opt_out)
 
 
 def _as_callback_tuple(

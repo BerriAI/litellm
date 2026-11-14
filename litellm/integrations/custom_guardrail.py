@@ -433,6 +433,7 @@ class CustomGuardrail(CustomLogger):
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         timeout: float | None = None,
+        allow_opt_out: bool = True,
         **kwargs,
     ):
         """
@@ -463,6 +464,8 @@ class CustomGuardrail(CustomLogger):
                 undo whatever later guardrails already did to the live request.
             timeout: Per-request timeout in seconds for the guardrail provider's API call. When
                 None, the guardrail keeps whatever default its HTTP handler or SDK already uses.
+            allow_opt_out: When False, keys and teams cannot skip this guardrail with
+                ``disable_global_guardrails`` or ``opted_out_global_guardrails`` in their metadata.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -480,6 +483,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.allow_opt_out: bool = allow_opt_out
         stream_scope_arg: Final[object] = cast(object, kwargs.pop("stream_scope", None))  # cast-ok: config
         self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
@@ -931,6 +935,8 @@ class CustomGuardrail(CustomLogger):
         Reads from admin-configured key/team metadata only, not from
         the request body, to prevent callers from disabling guardrails.
         """
+        if not getattr(self, "allow_opt_out", True):
+            return False
         return self._get_admin_metadata(data).get("disable_global_guardrails", False)
 
     def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> list[str]:
@@ -939,6 +945,8 @@ class CustomGuardrail(CustomLogger):
 
         Reads from admin-configured key/team metadata only.
         """
+        if not getattr(self, "allow_opt_out", True):
+            return []
         value: Final = self._get_admin_metadata(data).get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 

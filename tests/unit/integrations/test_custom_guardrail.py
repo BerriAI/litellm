@@ -3813,3 +3813,52 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
     ]
+
+
+class TestAllowOptOut:
+    """allow_opt_out=False: keys and teams cannot skip the guardrail with
+    disable_global_guardrails or opted_out_global_guardrails in their metadata."""
+
+    @staticmethod
+    def _guardrail(allow_opt_out: bool = True, name: str = "compliance-filter"):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        return CustomGuardrail(guardrail_name=name, default_on=True, event_hook="pre_call", allow_opt_out=allow_opt_out)
+
+    @staticmethod
+    def _runs(guardrail, **key_metadata) -> bool:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        data = {"metadata": {"user_api_key_metadata": key_metadata}}
+        return guardrail.should_run_guardrail(data, GuardrailEventHooks.pre_call)
+
+    def test_by_default_keys_can_opt_out(self):
+        guardrail = self._guardrail()
+        assert guardrail.allow_opt_out is True
+        assert not self._runs(guardrail, disable_global_guardrails=True)
+        assert not self._runs(guardrail, opted_out_global_guardrails=["compliance-filter"])
+
+    def test_a_guardrail_that_disallows_opt_out_still_runs(self):
+        guardrail = self._guardrail(allow_opt_out=False)
+        assert self._runs(guardrail, disable_global_guardrails=True)
+        assert self._runs(guardrail, opted_out_global_guardrails=["compliance-filter"])
+        assert self._runs(guardrail)
+
+    def test_team_metadata_cannot_opt_out_either(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(allow_opt_out=False)
+        data = {"metadata": {"user_api_key_team_metadata": {"disable_global_guardrails": True}}}
+        assert guardrail.should_run_guardrail(data, GuardrailEventHooks.pre_call)
+
+    def test_config_value_is_applied_only_when_set(self):
+        from litellm.proxy.guardrails.guardrail_registry import _apply_configured_bool_overrides
+        from litellm.types.guardrails import LitellmParams
+
+        guardrail = self._guardrail()
+        _apply_configured_bool_overrides(guardrail, LitellmParams(guardrail="custom_code", mode="pre_call"))
+        assert guardrail.allow_opt_out is True
+        _apply_configured_bool_overrides(
+            guardrail, LitellmParams(guardrail="custom_code", mode="pre_call", allow_opt_out=False)
+        )
+        assert guardrail.allow_opt_out is False

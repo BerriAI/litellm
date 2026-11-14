@@ -1326,6 +1326,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    allow_opt_out: bool | None = Field(
+        default=None,
+        description=(
+            "When False, keys and teams cannot skip this guardrail: it ignores "
+            "disable_global_guardrails and opted_out_global_guardrails in their metadata. Use it "
+            "for guardrails that are a platform control (e.g. compliance filters) and must run on "
+            "every request. Default True (opt-outs apply)."
+        ),
+    )
+
     stream_scope: GuardrailStreamScope | dict[str, GuardrailStreamScope] | None = Field(
         default=None,
         description=(
