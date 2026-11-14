@@ -45,7 +45,7 @@ from passthrough_client import PassthroughClient
 pytestmark = pytest.mark.e2e
 
 COHERE_BACKEND = "cohere/command-r-08-2024"
-GEMINI_BACKEND = "gemini/gemini-2.5-flash"
+GEMINI_BACKEND = "gemini/gemini-3.8-flash"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
 AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_OPENAI_API_VERSION: Final = "v1"
@@ -243,7 +243,7 @@ _PERSON_SCHEMA: dict[str, object] = {
 
 OPENAI_CHAT_MODEL: Final = "gpt-5.5"
 ANTHROPIC_CHAT_MODEL: Final = "claude-haiku-4-5"
-GEMINI_FLASH_MODEL: Final = "gemini-2.5-flash"
+GEMINI_FLASH_MODEL: Final = "gemini-3.8-flash"
 
 CHAT_MODELS: Final = (
     pytest.param(

@@ -1,4 +1,5 @@
 import json
+import logging
 import traceback
 from collections.abc import Callable
 from types import MappingProxyType
@@ -230,14 +231,15 @@ def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: resp
     assert [chunk.model for chunk in chunks] == ["gpt-4.1-nano-2025-04-14", "gpt-4.1-nano-2025-04-14"]
 
 
+@pytest.mark.parametrize("model", ["gpt-4.1-mini", "DeepSeek-V4.1-Flash-1017"])
 @pytest.mark.respx(assert_all_called=True)
-def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter) -> None:
+def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter, model: str) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     response_body: Final = {
         "id": "chatcmpl-azure-ai",
         "object": "chat.completion",
         "created": 1700000000,
-        "model": "gpt-4.1-mini",
+        "model": model,
         "choices": [
             {
                 "index": 0,
@@ -250,18 +252,18 @@ def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRout
     route: Final = respx_mock.post(url__startswith=api_url).mock(return_value=Response(200, json=response_body))
     messages: Final = [{"role": "user", "content": "hello"}]
     response: Final = litellm.completion(
-        model="azure_ai/gpt-4.1-mini",
+        model=f"azure_ai/{model}",
         messages=messages,
         api_base="https://example-resource.services.ai.azure.com/models",
         api_key="azure-ai-test-key",
         api_version="2024-05-01-preview",
     )
     request_body: Final = json.loads(route.calls[0].request.content)
-    model_info: Final = litellm.get_model_info(model="gpt-4.1-mini", custom_llm_provider="azure_ai")
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
     expected_cost: Final = 11 * model_info["input_cost_per_token"] + 3 * model_info["output_cost_per_token"]
 
     assert route.call_count == 1
-    assert request_body == {"model": "gpt-4.1-mini", "messages": messages}
+    assert request_body == {"model": model, "messages": messages}
     assert response.choices[0].message.content == "hello"
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost, rel=1e-9)
@@ -758,6 +760,66 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     assert result["tools"][1]["function"]["name"] == "read_file"
 
 
+def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    error_text: Final = json.dumps(
+        {
+            "error": {
+                "message": "Extra parameters ['reasoning_effort'] are not allowed when extra-parameters is not set "
+                "or set to be 'error'. Set extra-parameters to 'pass-through' to pass to the model."
+            }
+        }
+    )
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=error_text),
+    )
+    request_data: Final = {
+        "model": "Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Kimi-K2.6", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Kimi-K2.6"))
+    assert "drop_params" not in drop_warnings[0]
+
+
+def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    detail: Final = [
+        {"type": "extra_forbidden", "loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}
+    ]
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=json.dumps({"error": {"message": json.dumps({"detail": detail})}})),
+    )
+    request_data: Final = {
+        "model": "Mistral-Large-3",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Mistral-Large-3", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
+    )
+
+
 def _find_key_anywhere(obj, key: str) -> bool:
     if isinstance(obj, dict):
         if key in obj:
@@ -1210,6 +1272,12 @@ def test_azure_ai_falls_back_to_the_model_name_when_the_base_model_row_does_not_
             {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
         ),
         ({"type": "ephemeral"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        ({"mode": "implicit"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        (
+            {"mode": "explicit", "ttl": "1h"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
         (
             {"mode": "explicit", "ttl": "30m"},
             {},
@@ -1293,7 +1361,7 @@ def test_azure_ai_services_handler(api_base, expected_url):
     with patch.object(client, "post") as mock_client:
         try:
             response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                model="azure_ai/Llama-3.3-70B-Instruct",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 api_key="my-fake-api-key",
                 api_base=api_base,
@@ -1318,7 +1386,7 @@ def test_azure_ai_services_with_api_version():
     with patch.object(client, "post") as mock_client:
         try:
             response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                model="azure_ai/Llama-3.3-70B-Instruct",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 api_key="my-fake-api-key",
                 api_version="2024-05-01-preview",

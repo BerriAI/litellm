@@ -6,9 +6,9 @@ import sys
 from types import SimpleNamespace
 from typing import Final
 
-from dotenv import load_dotenv
 import httpx
 import respx
+from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 
 import litellm.litellm_core_utils
@@ -23,7 +23,6 @@ import pytest
 import litellm
 from litellm import Router, get_optional_params
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
-from litellm.types.llms.vertex_ai import BlobType
 
 
 def encode_image_to_base64(image_path):
@@ -110,7 +109,6 @@ def test_completion_pydantic_obj_2():
 
 
 def test_build_vertex_schema():
-    import json
 
     from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
@@ -1278,7 +1276,9 @@ def test_process_gemini_media():
 
 def test_get_image_mime_type_from_url():
     """Test MIME type inference for remote media URLs"""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import get_image_mime_type_from_url
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+        get_image_mime_type_from_url,
+    )
 
     # Test JPEG images
     assert (
@@ -1350,7 +1350,7 @@ def test_vertex_embedding_url(model, expected_url):
     assert endpoint == "predict"
 
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
