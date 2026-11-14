@@ -381,11 +381,13 @@ async def _forward_jsonrpc(
     agent_url: str,
     body: dict[str, object],
     extra_headers: Mapping[str, str] | None = None,
+    upstream_version: A2AVersion = "0.3",
 ) -> dict[str, object]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
-    headers: Final = {"Content-Type": "application/json", **(extra_headers or {})}
+    version_headers: Final = {"A2A-Version": upstream_version} if upstream_version == "1.0" else {}
+    headers: Final = {"Content-Type": "application/json", **version_headers, **(extra_headers or {})}
     handler: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2A,
         params={"timeout": 60.0},
@@ -407,6 +409,7 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
+    upstream_version: A2AVersion = "0.3",
 ) -> AsyncGenerator[object, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
@@ -417,9 +420,11 @@ async def _a2a_sse_event_source(
     from litellm.types.agents import normalize_a2a_jsonrpc_response
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
+    version_headers: Final = {"A2A-Version": upstream_version} if upstream_version == "1.0" else {}
     headers: Final = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
+        **version_headers,
         **(extra_headers or {}),
     }
     handler: Final = get_async_httpx_client(
@@ -490,6 +495,7 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     served_version: A2AVersion = "0.3",
+    upstream_version: A2AVersion = "0.3",
 ) -> StreamingResponse:
     event_source: Final = _a2a_sse_event_source(
         agent_url,
@@ -497,6 +503,7 @@ async def _forward_jsonrpc_sse(
         request_id=request_id,
         extra_headers=extra_headers,
         served_version=served_version,
+        upstream_version=upstream_version,
     )
 
     def _serialize_chunk(chunk: object) -> str:
@@ -868,6 +875,7 @@ async def invoke_agent_a2a(
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
         served_version: Final = _served_version(agent, request, original_method)
+        upstream_version: Final = _served_version(agent, request)
 
         is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
@@ -1106,8 +1114,27 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
-                params = normalize_request_params(params, served_version, method=method)
+            # A 1.0 upstream expects native 1.0 params. Lowering them to 0.3 would
+            # rewrite native enum states (e.g. TASK_STATE_COMPLETED -> completed)
+            # and envelope fields, so only down-convert for 0.3 upstreams.
+            normalized_params: Final[dict[str, object] | None] = (
+                (
+                    params
+                    if upstream_version == "1.0"
+                    else normalize_request_params(params, served_version, method=method)
+                )
+                if isinstance(params, dict)
+                else None
+            )
+            conversion_failed: Final = (
+                normalized_params is not None
+                and upstream_version != "1.0"
+                and served_version == "1.0"
+                and method == "tasks/pushNotificationConfig/set"
+                and normalized_params is params
+            )
+            if normalized_params is not None:
+                params = normalized_params
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
                     raise HTTPException(
@@ -1120,7 +1147,13 @@ async def invoke_agent_a2a(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
                     )
-                for callback_url in (params.get("url"), push_config.get("url")):
+                config: Final = params.get("config", {})
+                if "config" in params and not isinstance(config, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="config must be an object",
+                    )
+                for callback_url in (params.get("url"), push_config.get("url"), config.get("url")):
                     if not callback_url:
                         continue
                     if not isinstance(callback_url, str):
@@ -1129,13 +1162,23 @@ async def invoke_agent_a2a(
                             detail="Push notification URL must be a string",
                         )
                     _validate_push_notification_url(callback_url)
+                if conversion_failed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid push notification config",
+                    )
             forward_body: dict[str, object] = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": original_method if upstream_version == "1.0" and original_method else method,
                 "params": params,
             }
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
+            result = await _forward_jsonrpc(
+                agent_url,
+                forward_body,
+                extra_headers=agent_extra_headers,
+                upstream_version=upstream_version,
+            )
             if method == "agent/getAuthenticatedExtendedCard":
                 card: Final = result.get("result")
                 if isinstance(card, dict):
@@ -1173,7 +1216,7 @@ async def invoke_agent_a2a(
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": original_method if upstream_version == "1.0" and original_method else method,
                 "params": params,
             }
             return await _forward_jsonrpc_sse(
@@ -1185,6 +1228,7 @@ async def invoke_agent_a2a(
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 served_version=served_version,
+                upstream_version=upstream_version,
             )
 
         else:
