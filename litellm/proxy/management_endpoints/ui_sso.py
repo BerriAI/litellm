@@ -4034,6 +4034,9 @@ class SSOAuthenticationHandler:
 
         verbose_proxy_logger.info("user_defined_values for creating ui key: %s", user_defined_values)
 
+        from litellm.proxy.management_endpoints.session_endpoints import end_ui_sessions_on_login
+
+        await end_ui_sessions_on_login(_require_sso_user_id(user_defined_values["user_id"]))
         response: Final = await generate_key_helper_fn(
             llm_router=None,
             request_type="key",

@@ -3,6 +3,7 @@ UI session revocation.
 
 POST /session/logout — revoke the UI session key this request authenticated with.
 revoke_ui_session_keys — revoke every UI session key a user holds (password writes).
+end_ui_sessions_on_login — a login first ends the user's other sessions (LITELLM_UI_ALLOW_MULTIPLE_SESSIONS keeps them).
 
 Logging out of the dashboard was purely client-side (cookies cleared, redirect);
 the DB-backed virtual key minted at login stayed valid until
@@ -37,6 +38,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -101,7 +103,7 @@ async def revoke_ui_session_keys(
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_proxy_logger.info(
-            "Revoked %s UI session key(s) for user_id=%s after password change",
+            "Revoked %s UI session key(s) for user_id=%s",
             len(revoked_tokens),
             user_id,
         )
@@ -112,6 +114,12 @@ async def revoke_ui_session_keys(
             user_id,
         )
         return 0
+
+
+async def end_ui_sessions_on_login(user_id: str) -> None:
+    """One session per user: called just before a login creates its session key."""
+    if not get_secret_bool("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS"):
+        await revoke_ui_session_keys(user_id, UserAPIKeyAuth(user_id=user_id))
 
 
 @router.post(

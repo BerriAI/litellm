@@ -37,6 +37,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import user_upda
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
 )
+from litellm.proxy.management_endpoints.session_endpoints import end_ui_sessions_on_login
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -351,6 +352,7 @@ async def _sign_in(
         )
 
         if os.getenv("DATABASE_URL") is not None:
+            await end_ui_sessions_on_login(key_user_id)
             response = await generate_key_helper_fn(
                 llm_router=None,
                 request_type="key",
@@ -438,6 +440,7 @@ async def _sign_in(
             )
             password_reset_required: Final = breached_now or getattr(_user_row, "password_reset_required", None) is True
             if os.getenv("DATABASE_URL") is not None:
+                await end_ui_sessions_on_login(user_id)
                 response = await generate_key_helper_fn(
                     llm_router=None,
                     request_type="key",
