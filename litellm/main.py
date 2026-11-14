@@ -2824,6 +2824,20 @@ def _complete_custom_openai(
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
+    # A JSON provider with special_handling.require_own_api_key resolves its key from api_key_env in
+    # get_llm_provider; with no key, refuse instead of sending the OpenAI key to a third-party endpoint.
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    if (
+        json_provider is not None
+        and json_provider.special_handling.get("require_own_api_key")
+        and client is None
+        and not (api_key or litellm.api_key)
+    ):
+        raise litellm.AuthenticationError(
+            message=f"Missing API Key: set {json_provider.api_key_env} or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
     # set API KEY
     api_key = (
         api_key
