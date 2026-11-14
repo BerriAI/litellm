@@ -1980,7 +1980,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
 
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
@@ -2066,7 +2065,7 @@ def test_extract_file_data_with_path_object():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2105,7 +2104,7 @@ def test_extract_file_data_with_pathlib_path():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2129,7 +2128,7 @@ def test_extract_file_data_with_pathlib_path():
 
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2152,7 +2151,7 @@ def test_extract_file_data_fallback_to_octet_stream():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2961,6 +2960,30 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
         [{"function_response": {**response, "parts": [inline]}}] if nested else
         [{"function_response": response}, {**inline, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}}]
     )
+
+
+def _assistant_with_image(url: str) -> Message:
+    return Message(
+        role="assistant",
+        content="Here is the picture",
+        images=[{"type": "image_url", "image_url": {"url": url}, "index": 0}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "needs_fetch"),
+    [
+        (_assistant_with_image("gs://litellm-test-bucket/cat"), True),
+        (_assistant_with_image("gs://litellm-test-bucket/cat.png"), False),
+        ("gs://litellm-test-bucket/cat", False),
+    ],
+)
+def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
+    message: object, needs_fetch: bool
+) -> None:
+    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+
+    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
 
 
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"

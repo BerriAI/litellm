@@ -1176,7 +1176,7 @@ def test_context_stream_fallback_obeys_all_output_receipts(
     wrapped: bool, has_output: bool, generated_content: str, disqualifying: bool, recoverable: bool
 ) -> None:
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import _context_window_stream_fallback_error
+    from litellm.router_rust.invoke.streaming import _context_window_stream_fallback_error  # noqa: PLC2701
 
     original: Final = litellm.ContextWindowExceededError(message="too long", model="primary", llm_provider="openai")
     error: Final = (
@@ -1201,7 +1201,7 @@ def test_context_stream_fallback_obeys_all_output_receipts(
 
 def test_context_stream_fallback_preserves_other_errors_for_existing_continuation_policy() -> None:
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.router import _context_window_stream_fallback_error
+    from litellm.router_rust.invoke.streaming import _context_window_stream_fallback_error  # noqa: PLC2701
 
     error: Final = MidStreamFallbackError(
         message="provider unavailable", model="primary", llm_provider="openai", generated_content="already visible"

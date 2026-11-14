@@ -1,23 +1,35 @@
 import asyncio
-from collections.abc import Iterator
+import json
+from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.messages.data import (
+    BAD_REQUEST,
+    MESSAGES,
+    MESSAGES_EVENTS,
+    MESSAGES_MODEL,
+    MESSAGES_RESPONSE,
+    RATE_LIMITED,
+    REQUEST,
+    call,
+)
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
-from tests.test_litellm_rust.support.results import response_id, with_id
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.results import consume, response_id, with_id
+from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -111,6 +123,33 @@ async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pre_api_call_of_a_retried_call_keeps_the_provider_out_of_the_litellm_params(
+    server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    logging_obj: Final = Logging(
+        model=REQUEST["model"],
+        messages=[],
+        stream=False,
+        start_time=datetime.now(),
+        call_type="anthropic_messages",
+        litellm_call_id=CALL_ID,
+        function_id=CALL_ID,
+        dynamic_input_callbacks=[recorder],
+    )
+
+    await call(server, litellm_logging_obj=logging_obj)
+    await call(server, litellm_logging_obj=logging_obj)
+
+    pre_calls: Final = recorder.wait_for("log_pre_api_call", count=2)
+
+    assert_served_natively(server, count=2)
+    for pre_call in pre_calls:
+        assert isinstance(pre_call.kwargs, dict)
+        assert "custom_llm_provider" not in _OBJECT.validate_python(pre_call.kwargs["litellm_params"])
+
+
+@pytest.mark.asyncio
 async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) -> None:
     class Edit(CustomLogger):
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
@@ -138,6 +177,47 @@ async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingSer
     assert isinstance(optional_params, dict)
     assert not {"model", "messages", "temperature", "top_k"} & optional_params.keys()
     assert optional_params["max_tokens"] == sent["max_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_success_event_logs_the_requested_reasoning_effort_not_its_translation(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, reasoning_effort="low")
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["output_config"] == {"effort": "low"}
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["model_parameters"] == {"max_tokens": 64, "stream": False, "reasoning_effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_success_event_logs_the_sent_messages_and_the_callers_params(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+    tool_use: Final = {"type": "tool_use", "id": "functions.Bash:0", "name": "bash", "input": {"command": "ls"}}
+    messages: Final = [
+        {"role": "user", "content": "List /tmp"},
+        {"role": "assistant", "content": [{"type": "text", "text": " \n"}, tool_use]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "a"}]},
+    ]
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, messages=messages, temperature=1)
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["messages"][1]["content"] == [{**tool_use, "id": "functions_Bash_0"}]
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["messages"] == sent["messages"]
+    assert repr(_OBJECT.validate_python(logged["model_parameters"])["temperature"]) == "1"
 
 
 @pytest.mark.asyncio
@@ -213,6 +293,23 @@ async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(se
     assert len(failures) == 1
     assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
     assert not {"log_pre_api_call", "log_success_event", "async_log_success_event"} & set(recorder.names)
+
+
+@pytest.mark.asyncio
+async def test_non_string_header_is_a_bad_request_refused_before_the_provider_call(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        with pytest.raises(
+            litellm.BadRequestError, match=r"invalid extra_headers: header x-org must be a string, got int"
+        ) as raised:
+            await call(server, extra_headers={"x-org": 12345})
+        failures: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert raised.value.status_code == 400
+    assert not server.requests
+    assert "log_pre_api_call" not in recorder.names
+    assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
 
 
 @pytest.mark.asyncio
@@ -424,3 +521,152 @@ async def test_sync_call_raises_like_python_without_logging(server: RecordingSer
 
     assert not server.requests
     assert not recorder.names
+
+
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config={"arbitrary_types_allowed": True})
+_STREAM: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+_WIDE: Final = 2**70
+_TOOLS: Final = (
+    {
+        "name": "get_weather",
+        "input_schema": {"type": "object", "properties": {"celsius": {"type": "number", "minimum": 1e-7}}},
+    },
+)
+_INVALID_SIGNATURE: Final = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": "messages.1.content.0: Invalid `signature` in `thinking` block",
+    },
+}
+_THINKING_REPLAY: Final = (
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Look it up.", "signature": "EqQBCkYIARgCKkB"},
+            {"type": "tool_use", "id": "toolu_01Wide", "name": "get_weather", "input": {"big": _WIDE}},
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Wide", "content": "18C"}]},
+)
+
+
+def _messages_logger() -> Logging:
+    return Logging(
+        model=MESSAGES_MODEL,
+        messages=[],
+        stream=False,
+        start_time=datetime.now(),
+        call_type="anthropic_messages",
+        litellm_call_id=CALL_ID,
+        function_id=CALL_ID,
+    )
+
+
+_TOOL_TURN: Final = (
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01Wide", "name": "get_weather", "input": {"big": _WIDE}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Wide", "content": "18C"}]},
+)
+_LOGGED_INPUT: Final = TypeAdapter(tuple[dict[str, str]])
+_DECODER: Final = json.JSONDecoder()
+_DECODED_AT: Final = TypeAdapter(tuple[object, int])
+_KEY_AT: Final = TypeAdapter(tuple[str, int])
+
+
+def _members(text: str, start: int = 1) -> tuple[tuple[str, str], ...]:
+    if text[start] == "}":
+        return ()
+    key, colon = _KEY_AT.validate_python(_DECODER.raw_decode(text, start))
+    _, end = _DECODED_AT.validate_python(_DECODER.raw_decode(text, colon + 1))
+    return ((key, text[colon + 1 : end]), *_members(text, end + (text[end] == ",")))
+
+
+async def _logged_exchange(
+    server: RecordingServer,
+    stream: bool,
+    messages: Sequence[Mapping[str, object]] = MESSAGES,
+    thinking: Mapping[str, object] | None = None,
+) -> tuple[httpx.Request, str]:
+    logging_obj: Final = _messages_logger()
+    if stream:
+        server.enqueue(_STREAM)
+    response: Final = await call(
+        server,
+        litellm_logging_obj=logging_obj,
+        stream=stream,
+        messages=list(messages),
+        thinking=thinking,
+        system="café \U0001f600",
+        tools=list(_TOOLS),
+    )
+    if stream:
+        _ = await consume(response)
+    (logged,) = _LOGGED_INPUT.validate_python(logging_obj.model_call_details["input"])
+    assert logged["role"] == "user"
+    return (
+        _HTTPX_RESPONSE.validate_python(logging_obj.model_call_details["httpx_response"]).request,
+        logged["content"],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_provider_request_is_the_bytes_the_provider_received(
+    server: RecordingServer, stream: bool
+) -> None:
+    sent, _ = await _logged_exchange(server, stream)
+
+    assert_served_natively(server)
+    assert sent.content == server.requests[0].raw_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_provider_request_of_a_retried_call_is_the_retried_bytes(
+    server: RecordingServer, stream: bool
+) -> None:
+    server.responses.insert(0, ResponseSpec(body=_INVALID_SIGNATURE, status=400))
+
+    sent, _ = await _logged_exchange(server, stream, _THINKING_REPLAY, {"type": "enabled", "budget_tokens": 2048})
+
+    assert_served_natively(server, count=2)
+    assert sent.content == server.requests[1].raw_body
+    assert json.loads(sent.content)["messages"][1]["content"][-1]["input"] == {"big": _WIDE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+async def test_the_logged_input_holds_the_bytes_the_provider_received_in_the_handler_key_order(
+    server: RecordingServer, stream: bool
+) -> None:
+    sent, logged = await _logged_exchange(server, stream, _TOOL_TURN)
+
+    assert_served_natively(server)
+    members: Final = _members(logged)
+    assert dict(members) == dict(_members(server.requests[0].raw_body.decode()))
+    assert [name for name, _ in members][:3] == ["messages", "max_tokens", "model"]
+    assert sent.content == server.requests[0].raw_body
+    assert json.loads(logged)["messages"][1]["content"][0]["input"] == {"big": _WIDE}
+
+
+@pytest.mark.asyncio
+async def test_a_pre_api_call_edit_reaches_the_wire_but_not_the_logged_input(server: RecordingServer) -> None:
+    class Edit(CustomLogger):
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            request_body(kwargs)["system"] = "edited"
+
+    recorder: Final = RecordingLogger()
+
+    response: Final = await call(server, system="original", callbacks=[Edit(), recorder])
+
+    assert_served_natively(server, response)
+    assert _OBJECT.validate_python(server.requests[0].body)["system"] == "edited"
+    pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
+    assert isinstance(pre_call, dict)
+    (logged,) = _LOGGED_INPUT.validate_python(pre_call["input"])
+    assert json.loads(logged["content"])["system"] == "original"
