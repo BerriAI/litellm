@@ -4842,6 +4842,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    GITGOT = "gitgot"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     HOSTINGER_ROUTER = "hostinger_router"
