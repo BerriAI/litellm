@@ -4,9 +4,14 @@ from typing import TYPE_CHECKING, Final
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
-from litellm.llms.minimax.common_utils import image_params_without_stream, with_minimax_images
+from litellm.llms.minimax.common_utils import (
+    MinimaxImageError,
+    image_params_without_stream,
+    minimax_images_url,
+    with_minimax_images,
+)
 from litellm.llms.openai.image_generation.gpt_transformation import (
     GPTImageGenerationConfig,
 )
@@ -53,6 +58,14 @@ class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
             raise ValueError("Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key")
         return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, str] | httpx.Headers,  # mutable-ok: mirrors override contract
+    ) -> BaseLLMException:
+        return MinimaxImageError(status_code=status_code, message=error_message, headers=headers)
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -62,12 +75,7 @@ class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        base_url: Final = MinimaxChatConfig.get_api_base(api_base=api_base).rstrip("/")
-        if base_url.endswith("/images/generations"):
-            return base_url
-        if base_url.endswith("/v1"):
-            return join_api_base(base_url, "images/generations")
-        return join_api_base(base_url, "v1/images/generations")
+        return minimax_images_url(MinimaxChatConfig.get_api_base(api_base=api_base), "images/generations")
 
     def transform_image_generation_request(
         self,
