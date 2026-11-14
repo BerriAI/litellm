@@ -209,7 +209,7 @@ async def _enforce_reservation_mid_session(
     """Re-read applied counters while a long session runs; the first counter
     over budget cancels the request so the session cannot burn past its cap
     (R2-22). A metering glitch defers to the next tick."""
-    from litellm.proxy.proxy_server import read_spend_counter_store_value
+    from litellm.proxy.proxy_server import read_spend_counter_cache_value
 
     entries: Final = budget_reservation.get("entries") or []
     for entry in entries:
@@ -222,7 +222,7 @@ async def _enforce_reservation_mid_session(
         if _key_reservation_should_release_for_throttle(str(counter_key), valid_token):
             continue
         try:
-            current_spend, _authoritative = await read_spend_counter_store_value(counter_key=str(counter_key))
+            current_spend, _authoritative = await read_spend_counter_cache_value(counter_key=str(counter_key))
         except Exception:  # noqa: BLE001
             verbose_proxy_logger.debug(
                 "mid-session budget check could not read counter %s; next tick retried",
@@ -1262,21 +1262,21 @@ async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> 
     reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
     increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
     DB, so the reseeded floor excludes it."""
-    from litellm.proxy.proxy_server import increment_spend_counter_store, reseed_spend_counter_from_db
+    from litellm.proxy.proxy_server import increment_spend_counter_cache, reseed_spend_counter_from_db
 
     reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)
     if reseeded and actual_cost > 0:
-        await increment_spend_counter_store(counter_key=item.counter_key, increment=actual_cost)
+        await increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
 
 
 async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
 ) -> bool:
-    from litellm.proxy.proxy_server import read_spend_counter_store_value
+    from litellm.proxy.proxy_server import read_spend_counter_cache_value
 
     try:
-        current_value, _ = await read_spend_counter_store_value(counter_key=counter_key)
+        current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
     except (TypeError, ValueError):
         return False
     if current_value is None:
