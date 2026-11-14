@@ -272,6 +272,17 @@ def _is_tool_or_function_turn(message: object) -> bool:
     return message_field(message, "role") in ("tool", "function")
 
 
+def _rewrites_tool_results_as_guarded_text(
+    messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+) -> bool:
+    return (
+        "guardrailConfig" in optional_params
+        and litellm.bedrock_neutralize_orphaned_tool_blocks
+        and not optional_params.get("tools")
+        and any(map(_is_tool_or_function_turn, messages))
+    )
+
+
 def _becomes_a_user_turn(message: object) -> bool:
     return _is_user_turn(message) or is_system_message(message)
 
@@ -1687,18 +1698,16 @@ class AmazonConverseConfig(BaseConfig):
             return False
         if any(map(_is_guarded_user_turn, remaining)):
             return False
-        if (
-            litellm.bedrock_neutralize_orphaned_tool_blocks
-            and not optional_params.get("tools")
-            and any(map(_is_tool_or_function_turn, messages))
-        ):
+        if _rewrites_tool_results_as_guarded_text(messages, optional_params):
             return False
         return not any(map(_gets_guarded_when_trailing, self._turns_the_trailing_wrap_guards(messages)))
 
     def _wraps_the_trailing_turns(
         self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
     ) -> bool:
-        return "guardrailConfig" in optional_params and bool(self._turns_the_trailing_wrap_guards(messages))
+        return _rewrites_tool_results_as_guarded_text(messages, optional_params) or (
+            "guardrailConfig" in optional_params and bool(self._turns_the_trailing_wrap_guards(messages))
+        )
 
     def _turns_the_trailing_wrap_guards(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
         """The turns that end the request as user turns, or none when no user turn is among them.

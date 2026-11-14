@@ -4543,11 +4543,42 @@ async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_
     request: Final = (
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
     )
+    assert _sent_guarded_texts(request) == guarded_texts
+
+
+def _sent_guarded_texts(request: RequestObject) -> tuple[str, ...]:
     message_blocks: Final = chain.from_iterable(message["content"] for message in request["messages"])
-    sent_guarded_texts: Final = tuple(
-        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    return tuple(block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("neutralizes_tool_blocks", "guarded_texts"),
+    [
+        (True, ("[tool result for call_1: Sunny.]", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        (False, ()),
+    ],
+    ids=["tool_results_rewritten", "dummy_tool_added"],
+)
+async def test_trailing_system_turn_is_guarded_with_the_rewritten_tool_results_before_it(
+    use_async: bool, neutralizes_tool_blocks: bool, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in("system_after_tool_result"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
     )
-    assert sent_guarded_texts == guarded_texts
+    with (
+        patch.object(litellm, "bedrock_neutralize_orphaned_tool_blocks", neutralizes_tool_blocks),
+        patch.object(litellm, "modify_params", True),
+    ):
+        request: Final = (
+            await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+        )
+    assert _sent_guarded_texts(request) == guarded_texts
 
 
 @pytest.mark.asyncio
