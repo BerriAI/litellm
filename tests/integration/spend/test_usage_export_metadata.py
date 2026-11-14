@@ -601,23 +601,25 @@ def test_model_info_redaction_keeps_the_shared_default_masker_behaviour(gateway:
 _BURST: Final = 30
 
 
+def _burst_request(gateway: Gateway, usage: _Usage, index: int) -> tuple[str, int, str]:
+    if index % 3 == 0:
+        exported: Final = _export(gateway, usage, usage.routes()[index % 6])
+        return ("admin", exported.status_code, exported.text)
+    if index % 3 == 1:
+        scoped: Final = _export(gateway, usage, usage.routes()[0], key=usage.key)
+        return ("owner", scoped.status_code, scoped.text)
+    return (
+        "chat",
+        200,
+        _chat(gateway, usage.model, usage.key, usage.tag, usage.end_user_id, stream=index % 2 == 0),
+    )
+
+
 def _burst_call(gateway: Gateway, usage: _Usage, index: int) -> tuple[str, int, str]:
     try:
-        if index % 3 == 0:
-            exported: Final = _export(gateway, usage, usage.routes()[index % 6])
-            return ("admin", exported.status_code, exported.text)
-        if index % 3 == 1:
-            scoped: Final = _export(gateway, usage, usage.routes()[0], key=usage.key)
-            return ("owner", scoped.status_code, scoped.text)
-        return (
-            "chat",
-            200,
-            _chat(gateway, usage.model, usage.key, usage.tag, usage.end_user_id, stream=index % 2 == 0),
-        )
+        return _burst_request(gateway, usage, index)
     except httpx.TransportError as error:
         return ("transport", 0, type(error).__name__)
-    except AssertionError as error:
-        return ("chat-failed", 0, str(error)[:200])
 
 
 def test_export_burst_survives_a_worker_kill_and_each_chat_lands_once(gateway: Gateway, tmp_path: Path) -> None:
@@ -627,10 +629,15 @@ def test_export_burst_survives_a_worker_kill_and_each_chat_lands_once(gateway: G
         workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
         with ThreadPoolExecutor(max_workers=_BURST) as pool, owned.replacing_worker(min(workers)) as kill:
-            futures = tuple(pool.submit(_burst_call, proxy, usage, index) for index in range(_BURST))
+            futures: Final = tuple(pool.submit(_burst_call, proxy, usage, index) for index in range(_BURST))
             kill()
-            outcomes = tuple(future.result() for future in futures)
+            during_kill: Final = tuple(future.result() for future in futures)
 
+        dropped: Final = tuple(index for index, outcome in enumerate(during_kill) if outcome[0] == "transport")
+        assert len(dropped) < _BURST, during_kill
+        retried: Final = {index: _burst_request(proxy, usage, index) for index in dropped}
+        assert [outcome[:2] for outcome in retried.values() if outcome[1] != 200] == [], retried
+        outcomes: Final = tuple(retried.get(index, outcome) for index, outcome in enumerate(during_kill))
         assert len(outcomes) == _BURST
         admin: Final = tuple(outcome for outcome in outcomes if outcome[0] == "admin")
         owner: Final = tuple(outcome for outcome in outcomes if outcome[0] == "owner")
