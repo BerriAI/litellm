@@ -3,7 +3,7 @@ import contextvars
 import json
 from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
@@ -770,7 +770,7 @@ def _deployment_model_info_after_prompt_swap(
 class _AsyncPromptManagementOutcome:
     merged_optional_params: Mapping[str, object]
     deployment_model_info: object
-    prompt_management_marker: Mapping[str, PromptManagement] = MappingProxyType({})
+    prompt_management_marker: Mapping[str, PromptManagement] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _prompt_template_marker(
