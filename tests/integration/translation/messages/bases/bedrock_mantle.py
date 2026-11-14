@@ -550,7 +550,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_MANTLE_OPENAI_RESPONSES_MESSAGES_RESPONSE,
         "id": "resp_n4higs7hpzdjowbay2ujeesbgcxavsl4pbkzhbh7pjpimjjaciaa",
         "model": "bedrock_mantle/openai.gpt-6.1-sol",
-        "usage": {"input_tokens": 309, "output_tokens": 141},
+        "usage": {"input_tokens": 309, "output_tokens": 141, "output_tokens_details": {"thinking_tokens": 76}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -655,7 +655,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_MANTLE_OPENAI_RESPONSES_MESSAGES_RESPONSE,
         "id": "resp_di3jhnf3mehuuht6smddkuygfeo7rzxdxmwvrc52aigdygbts5ca",
         "model": "bedrock_mantle/openai.gpt-6-luna",
-        "usage": {"input_tokens": 309, "output_tokens": 119},
+        "usage": {"input_tokens": 309, "output_tokens": 119, "output_tokens_details": {"thinking_tokens": 54}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -760,7 +760,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_MANTLE_OPENAI_RESPONSES_MESSAGES_RESPONSE,
         "id": "resp_eznficwibpblmnocp4vuvti6d5bxboyxws4vqf5bk2lboyvvbx7q",
         "model": "bedrock_mantle/openai.gpt-6-astra",
-        "usage": {"input_tokens": 309, "output_tokens": 138},
+        "usage": {"input_tokens": 309, "output_tokens": 138, "output_tokens_details": {"thinking_tokens": 73}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -865,7 +865,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         **BEDROCK_MANTLE_OPENAI_RESPONSES_MESSAGES_RESPONSE,
         "id": "resp_fqwklh5v6lnfftfaq6ddfbclshh3vkgmth75hufjjxjrhn726b2a",
         "model": "bedrock_mantle/openai.gpt-5.6-terra",
-        "usage": {"input_tokens": 309, "output_tokens": 109},
+        "usage": {"input_tokens": 309, "output_tokens": 109, "output_tokens_details": {"thinking_tokens": 23}},
         "content": [
             {
                 "type": "redacted_thinking",

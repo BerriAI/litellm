@@ -55,7 +55,7 @@ GROK_4_7_TEST_CASE: Final = TranslationTestCase(
         "role": "assistant",
         "model": "bedrock/global.xai.grok-4.7",
         "stop_sequence": None,
-        "usage": {"input_tokens": 30, "output_tokens": 37},
+        "usage": {"input_tokens": 30, "output_tokens": 37, "output_tokens_details": {"thinking_tokens": 27}},
         "content": [{"type": "text", "text": "Hello."}],
         "stop_reason": "end_turn",
         "stop_details": None,

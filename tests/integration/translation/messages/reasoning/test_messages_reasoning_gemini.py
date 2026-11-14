@@ -285,7 +285,7 @@ GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
                 "provider_specific_fields": {"signature": GEMINI_3_8_FLASH_THOUGHTS_OFF_THOUGHT_SIGNATURE},
             },
         ],
-        "usage": {"input_tokens": 354, "output_tokens": 385},
+        "usage": {"input_tokens": 354, "output_tokens": 385, "output_tokens_details": {"thinking_tokens": 321}},
     },
 )
 
@@ -370,4 +370,5 @@ def test_a_streamed_turn_keeps_thinking_and_billing_reasoning_without_thought_te
     assert [object_value(event["usage"]) for event in events if event.get("type") == "message_delta"][-1] == {
         "input_tokens": 354,
         "output_tokens": 360,
+        "output_tokens_details": {"thinking_tokens": 295},
     }
