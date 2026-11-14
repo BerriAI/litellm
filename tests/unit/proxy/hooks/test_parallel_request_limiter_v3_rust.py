@@ -4101,7 +4101,7 @@ async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(mo
         metadata={"default_estimated_output_tokens": declared},
     )
 
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"), caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
         with pytest.raises(HTTPException) as exc_info:
             await handler.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
