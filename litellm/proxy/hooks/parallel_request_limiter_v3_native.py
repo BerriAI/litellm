@@ -546,13 +546,9 @@ def _scalar_setting(raw: object) -> object:
 
 
 def _general_setting(name: str, default: object = None) -> object:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings_view
 
-    return _setting_entry(general_settings, name, default)
-
-
-def _setting_entry(settings: Mapping[str, object], name: str, default: object) -> object:
-    return _scalar_setting(settings.get(name, default))
+    return _scalar_setting(general_settings_view().get(name, default))
 
 
 def _setting(resolver: Callable[[], bool], default: Callable[[], bool], raw: Callable[[], object]) -> object:
