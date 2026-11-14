@@ -1814,9 +1814,12 @@ async def open_sse_before_first_byte(
                     async for chunk in _relay_late_response(late, late_framing):
                         yield chunk
                     return
-                verbose_proxy_logger.exception(
-                    "request failed after its SSE keepalive had opened the response: %s", late
-                )
+                if _is_client_disconnect(late):
+                    verbose_proxy_logger.info("client disconnected after its SSE keepalive had opened the response")
+                else:
+                    verbose_proxy_logger.exception(
+                        "request failed after its SSE keepalive had opened the response: %s", late
+                    )
                 # The caller's own `except` never sees this, so its failure hook
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
@@ -2232,8 +2235,12 @@ def request_litellm_call_id(data: Mapping[str, object]) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
+def _is_client_disconnect(e: BaseException) -> bool:
+    return getattr(e, "status_code", None) == 499 and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL
+
+
 def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
-    if getattr(e, "status_code", None) == 499 and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL:
+    if _is_client_disconnect(e):
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, "
             "upstream LLM request cancelled - litellm_call_id=%s",
@@ -3771,7 +3778,8 @@ class ProxyBaseLLMRequestProcessing:
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
 
-        if not self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):
+        streams: Final = self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
+        if not streams:
             logging_obj.defer_async_logging = True
 
         tasks: Final = []
@@ -3809,7 +3817,8 @@ class ProxyBaseLLMRequestProcessing:
             )  # run the moderation check in parallel to the actual llm api call
 
             try:
-                if general_settings.get("cancel_on_disconnect", False):
+                # The router reads a chat stream's first chunk before create_response can watch for a disconnect (#51393).
+                if (streams and route_type == "acompletion") or general_settings.get("cancel_on_disconnect", False):
                     responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
                 else:
                     responses = await llm_responses
@@ -3846,9 +3855,7 @@ class ProxyBaseLLMRequestProcessing:
                     status="success",
                 )
             )
-            if self._is_streaming_request(
-                data=self.data, is_streaming_request=is_streaming_request
-            ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+            if streams or self._is_streaming_response(response):  # use generate_responses to stream responses
                 selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
                 stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(

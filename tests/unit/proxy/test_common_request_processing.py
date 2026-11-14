@@ -5691,52 +5691,93 @@ class TestDisconnectGatherCleanup:
 
         return Request(scope={"type": "http", "headers": []}, receive=receive)
 
-    @pytest.mark.asyncio
-    async def test_base_process_llm_request_raises_499_on_client_disconnect(self, monkeypatch):
-        """With cancel_on_disconnect enabled, base_process_llm_request returns 499."""
-        import asyncio
-
+    async def _run_for_a_client_that_hangs_up(
+        self,
+        monkeypatch,
+        *,
+        upstream: Coroutine[object, object, object],
+        data: dict,
+        general_settings: dict,
+    ) -> HTTPException:
+        """base_process_llm_request for a client that hangs up at once, returning the HTTPException it raised."""
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        async def slow_llm():
-            await asyncio.sleep(9999)
-
         async def fake_route_request(**_kwargs):
-            return slow_llm()
+            return upstream
 
-        mock_logging_obj = MagicMock()
+        mock_logging_obj: Final = MagicMock()
         mock_logging_obj.litellm_call_id = "test-call-id"
         mock_logging_obj.defer_async_logging = False
 
-        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
         mock_proxy_logging.during_call_hook = AsyncMock(return_value=None)
         mock_proxy_logging._callback_capabilities_cache = {}
 
         monkeypatch.setattr(cpr, "route_request", fake_route_request)
 
-        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "gemini-2.0-flash"})
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data=data)
         monkeypatch.setattr(
             processing_obj,
             "common_processing_pre_call_logic",
-            AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
+            AsyncMock(return_value=(data, mock_logging_obj)),
         )
         monkeypatch.setattr(processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await processing_obj.base_process_llm_request(
-                request=self._disconnect_request(),
-                fastapi_response=MagicMock(),
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-                proxy_logging_obj=mock_proxy_logging,
-                general_settings={"cancel_on_disconnect": True},
-                proxy_config=MagicMock(spec=ProxyConfig),
-                route_type="acompletion",
-                version=None,
+        try:
+            await asyncio.wait_for(
+                processing_obj.base_process_llm_request(
+                    request=self._disconnect_request(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                    proxy_logging_obj=mock_proxy_logging,
+                    general_settings=general_settings,
+                    proxy_config=MagicMock(spec=ProxyConfig),
+                    route_type="acompletion",
+                    version=None,
+                ),
+                timeout=5,
             )
+        except HTTPException as raised:
+            return raised
+        pytest.fail("base_process_llm_request answered a client that had hung up instead of raising")
 
-        assert exc_info.value.status_code == 499
-        assert "disconnected" in exc_info.value.detail.lower()
+    @pytest.mark.asyncio
+    async def test_base_process_llm_request_raises_499_on_client_disconnect(self, monkeypatch):
+        """With cancel_on_disconnect enabled, base_process_llm_request returns 499."""
+        raised: Final = await self._run_for_a_client_that_hangs_up(
+            monkeypatch,
+            upstream=asyncio.sleep(9999),
+            data={"model": "gemini-2.0-flash"},
+            general_settings={"cancel_on_disconnect": True},
+        )
+
+        assert raised.status_code == 499
+        assert "disconnected" in raised.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_streaming_request_is_cancelled_on_disconnect_before_the_first_chunk(self, monkeypatch):
+        """A stream's first chunk is read inside the router, before create_response's disconnect
+        watch starts. A client that hangs up during the time to first token cancels the upstream
+        call anyway, with cancel_on_disconnect unset (#51393)."""
+        upstream_cancelled: Final = asyncio.Event()
+
+        async def stalled_upstream():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+
+        raised: Final = await self._run_for_a_client_that_hangs_up(
+            monkeypatch,
+            upstream=stalled_upstream(),
+            data={"model": "gemini-3.5-flash-lite", "stream": True},
+            general_settings={},
+        )
+
+        assert raised.status_code == 499
+        assert upstream_cancelled.is_set()
 
     @pytest.mark.asyncio
     async def test_base_process_llm_request_reraises_cancelled_error_without_client_disconnect(self, monkeypatch):

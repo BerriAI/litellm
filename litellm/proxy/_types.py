@@ -2797,7 +2797,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     cancel_on_disconnect: bool | None = Field(
         None,
-        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
+        description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure. A streamed chat completion whose client disconnects while the proxy is still waiting for the upstream call is cancelled whatever this setting says",
     )
     infer_model_from_keys: bool | None = Field(
         None,
