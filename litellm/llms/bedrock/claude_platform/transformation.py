@@ -30,6 +30,9 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def runs_hosted_mcp(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,

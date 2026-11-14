@@ -101,7 +101,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
-from litellm.mcp_client.tools import list_tools_with_pagination
+from litellm.mcp_client.tools import list_tools_result_with_pagination, list_tools_with_pagination
 from litellm.proxy.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy.mcp_server.result_conversion import (
@@ -478,6 +478,13 @@ def _notify_cleanup(callback: Callable[[], None] | None) -> None:
         callback()
 
 
+class _UnvalidatedClientSession(ClientSession):
+    """Skips the SDK's output check, which lists the upstream's tools on a session with no schema cached."""
+
+    async def validate_tool_result(self, name: str, result: MCPCallToolResult) -> None:
+        return None
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -505,12 +512,15 @@ class MCPClient:
         elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
+        skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
         ).validate_python(protocol_version)
         validate_mcp_protocol_transport(self.protocol_version, transport_type)
+        # 2026-07-28 lists tools before every call, so its output check adds no list
+        self.skip_tool_output_validation: Final = skip_tool_output_validation and self.protocol_version != "2026-07-28"
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -546,7 +556,7 @@ class MCPClient:
             "response_hooks": _mcp_response_hooks(),
         }
 
-    def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool]:
+    def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool]:
         callbacks: Final = self.session_callbacks()
         return (
             self.transport_type,
@@ -555,6 +565,7 @@ class MCPClient:
             callbacks["sampling_callback"] is not None,
             callbacks["elicitation_callback"] is not None,
             callbacks["logging_callback"] is not None,
+            self.skip_tool_output_validation,
         )
 
     def route_session_callbacks(self, callbacks: _SessionCallbackMap) -> None:
@@ -776,7 +787,10 @@ class MCPClient:
                     )
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
-                    session_ctx: Final = ClientSession(
+                    session_type: Final = (
+                        _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
+                    )
+                    session_ctx: Final = session_type(
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self.timeout,
@@ -1057,6 +1071,9 @@ class MCPClient:
             return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
 
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
+        return (await self.list_tools_result(raise_on_error=raise_on_error)).tools
+
+    async def list_tools_result(self, raise_on_error: bool = False) -> ListToolsResult:
         """List available tools from the server.
 
         Args:
@@ -1071,16 +1088,20 @@ class MCPClient:
         try:
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            tools: Final = await self.run_with_session(
-                partial(list_tools_with_pagination, listing_deadline=listing_deadline, require_complete=raise_on_error),
+            listing: Final = await self.run_with_session(
+                partial(
+                    list_tools_result_with_pagination,
+                    listing_deadline=listing_deadline,
+                    require_complete=raise_on_error,
+                ),
                 quiet_on_error=raise_on_error,
             )
-            tool_count: Final = len(tools)
-            tool_names: Final = tuple(tool.name for tool in tools)
+            tool_count: Final = len(listing.tools)
+            tool_names: Final = tuple(tool.name for tool in listing.tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return tools
+            return listing
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
@@ -1110,7 +1131,7 @@ class MCPClient:
             if raise_on_error:
                 raise
             # Return empty list instead of raising to allow graceful degradation
-            return []
+            return ListToolsResult(tools=[])
 
     @staticmethod
     def error_tool_result(exc: Exception) -> MCPCallToolResult:

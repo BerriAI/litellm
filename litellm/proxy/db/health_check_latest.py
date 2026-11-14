@@ -13,10 +13,9 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, field_validator
-from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
@@ -78,17 +77,11 @@ class LatestHealthCheckRow(LiteLLMBaseModel):
 _ROWS_ADAPTER: Final = TypeAdapter(tuple[LatestHealthCheckRow, ...])
 
 
-class _HealthCheckRowsQuery(Protocol):
-    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
-
-
-def _health_check_rows_query(prisma_client: PrismaClient) -> _HealthCheckRowsQuery:
-    return prisma_client.db.query_raw
-
-
 async def query_latest_health_checks(prisma_client: PrismaClient) -> tuple[LatestHealthCheckRow, ...]:
+    from litellm.proxy.utils import query_raw_rows
+
     async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
-        rows: Final = await _health_check_rows_query(prisma_client)(LATEST_HEALTH_CHECKS_SQL)
+        rows: Final = await query_raw_rows(prisma_client.db, LATEST_HEALTH_CHECKS_SQL)
     return _ROWS_ADAPTER.validate_python(rows)
 
 
@@ -106,10 +99,10 @@ async def fetch_latest_health_checks_for_models(
     if not model_names:
         return ()
     try:
+        from litellm.proxy.utils import query_raw_rows
+
         async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
-            rows: Final = await _health_check_rows_query(prisma_client)(
-                LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names)
-            )
+            rows: Final = await query_raw_rows(prisma_client.db, LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names))
         return _ROWS_ADAPTER.validate_python(rows)
     except Exception as query_err:  # noqa: BLE001  # a paged model list must not fail on its health decoration
         verbose_proxy_logger.error("Error getting latest health checks for models: %s", query_err)

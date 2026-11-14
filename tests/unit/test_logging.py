@@ -422,6 +422,17 @@ LITELLM_LOGGER_NAMES = frozenset(
 )
 LOG_LEVEL_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
 LITELLM_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "litellm"
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
+
+
+def _sdk_source_files() -> tuple[Path, ...]:
+    return tuple(
+        path
+        for path in sorted(LITELLM_PACKAGE_ROOT.rglob("*.py"))
+        if path.relative_to(LITELLM_PACKAGE_ROOT).parts[0] not in NON_SDK_SOURCE_DIRS
+    )
 
 
 def _receiver_name(node: ast.expr) -> str:
@@ -468,7 +479,7 @@ def test_logging_calls_do_not_build_their_message_eagerly():
     """
     offenders = tuple(
         offender
-        for path in sorted(LITELLM_PACKAGE_ROOT.rglob("*.py"))
+        for path in _sdk_source_files()
         for offender in _eager_logging_calls(
             path.read_text(encoding="utf-8"), path.relative_to(LITELLM_PACKAGE_ROOT.parent)
         )

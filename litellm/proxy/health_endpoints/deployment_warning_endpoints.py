@@ -1,4 +1,3 @@
-import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -7,12 +6,14 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import AwareDatetime, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.models.deployment_warning import AdminIgnore, DeploymentWarningIgnoreStore
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps.repositories import DeploymentWarningIgnoreRepositoryDep
 from litellm.proxy.health_endpoints._health_endpoints import (
     DISABLE_NO_REDIS_WARNING_ENV_VAR,
     env_credential_login_enabled,
@@ -22,7 +23,6 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 )
 from litellm.repositories.deployment_warning_ignore_repository import (
     DEPLOYMENT_WARNING_IGNORES_ROW_ID,
-    DeploymentWarningIgnoreRepository,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -48,18 +48,6 @@ class WarningCondition:
     id: str
     severity: WarningSeverity
     env_var_ignore: str | None = None
-
-
-class AdminIgnore(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    source: Literal["admin"] = "admin"
-    ignored_by: str
-    ignored_at: AwareDatetime
-    ignored_until: AwareDatetime | None = Field(
-        default=None,
-        description="When the snooze ends. Null means the warning is ignored until an admin restores it.",
-    )
 
 
 class EnvVarIgnore(LiteLLMBaseModel):
@@ -109,12 +97,6 @@ class DeploymentWarningIgnoreResponse(LiteLLMBaseModel):
     ignore: AdminIgnore | None
 
 
-class DeploymentWarningIgnoreStore(Protocol):
-    async def get_raw_ignores(self) -> object: ...
-
-    async def upsert_ignores(self, payload: str) -> None: ...
-
-
 class ConfigAuditLogger(Protocol):
     async def __call__(
         self,
@@ -127,7 +109,6 @@ class ConfigAuditLogger(Protocol):
     ) -> None: ...
 
 
-_IGNORES_ADAPTER: Final[TypeAdapter[Mapping[str, AdminIgnore]]] = TypeAdapter(Mapping[str, AdminIgnore])
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _AUDIT_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[DeploymentWarningIgnoreResponse, ...]]] = TypeAdapter(
     tuple[DeploymentWarningIgnoreResponse, ...]
@@ -185,18 +166,8 @@ def is_known_warning_id(warning_id: str) -> bool:
         return False
 
 
-def _parse_stored_ignores(raw: object) -> Mapping[str, AdminIgnore]:
-    if raw is None:
-        return MappingProxyType({})
-    try:
-        return MappingProxyType(_IGNORES_ADAPTER.validate_python(json.loads(raw) if isinstance(raw, str) else raw))
-    except (json.JSONDecodeError, ValidationError):
-        verbose_proxy_logger.warning("Ignoring unreadable %s row", DEPLOYMENT_WARNING_IGNORES_ROW_ID)
-        return MappingProxyType({})
-
-
 async def _read_unexpired_ignores(store: DeploymentWarningIgnoreStore, now: datetime) -> Mapping[str, AdminIgnore]:
-    stored: Final = _parse_stored_ignores(await store.get_raw_ignores())
+    stored: Final = await store.get_ignores()
     return MappingProxyType(
         {
             warning_id: ignore
@@ -223,14 +194,6 @@ def _ignores_as_audit_entries(ignores: Mapping[str, AdminIgnore]) -> JsonValue:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def deployment_warning_ignore_store() -> DeploymentWarningIgnoreStore | None:
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        return None
-    return DeploymentWarningIgnoreRepository(prisma_client, use_writer=True)
 
 
 def config_audit_logger() -> ConfigAuditLogger:
@@ -281,7 +244,7 @@ async def current_warning_conditions(now: Annotated[datetime, Depends(utc_now)])
 async def get_deployment_warnings(
     _: Annotated[UserAPIKeyAuth, Depends(_deployment_warning_reader)],
     conditions: Annotated[tuple[WarningCondition, ...], Depends(current_warning_conditions)],
-    store: Annotated[DeploymentWarningIgnoreStore | None, Depends(deployment_warning_ignore_store)],
+    store: DeploymentWarningIgnoreRepositoryDep,
     now: Annotated[datetime, Depends(utc_now)],
 ) -> DeploymentWarningsResponse:
     """
@@ -309,7 +272,7 @@ async def update_deployment_warning_ignore(
     warning_id: str,
     update: DeploymentWarningIgnoreUpdate,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_deployment_warning_admin)],
-    store: Annotated[DeploymentWarningIgnoreStore | None, Depends(deployment_warning_ignore_store)],
+    store: DeploymentWarningIgnoreRepositoryDep,
     audit_logger: Annotated[ConfigAuditLogger, Depends(config_audit_logger)],
     now: Annotated[datetime, Depends(utc_now)],
 ) -> DeploymentWarningIgnoreResponse:
@@ -338,7 +301,7 @@ async def update_deployment_warning_ignore(
     others: Final = {other_id: other for other_id, other in before.items() if other_id != warning_id}
     after: Final = MappingProxyType(others if ignore is None else {**others, warning_id: ignore})
 
-    await store.upsert_ignores(_IGNORES_ADAPTER.dump_json(dict(after)).decode())
+    await store.save_ignores(after)
     await audit_logger(
         param_name=DEPLOYMENT_WARNING_IGNORES_ROW_ID,
         action="updated",

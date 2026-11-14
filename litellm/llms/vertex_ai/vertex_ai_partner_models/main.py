@@ -1,6 +1,6 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Final
@@ -260,14 +260,15 @@ class VertexAIPartnerModels(VertexBase):
     async def count_tokens(
         self,
         model: str,
-        messages: list,
-        litellm_params: dict,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        messages: Sequence[Mapping[str, object]],
+        litellm_params: Mapping[str, object],
+        vertex_project: object = None,
+        vertex_location: object = None,
+        vertex_credentials: object = None,
         system: object | None = None,
-        tools: list[dict[str, object]] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         count_options: Mapping[str, object] = MappingProxyType({}),
+        context_management: object = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -302,19 +303,32 @@ class VertexAIPartnerModels(VertexBase):
                 "model": model,
                 "messages": messages,
                 **MappingProxyType(
-                    {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
+                    {
+                        key: value
+                        for key, value in (
+                            ("system", system),
+                            ("tools", tools),
+                            ("context_management", context_management),
+                        )
+                        if value is not None
+                    }
                 ),
                 **count_options,
             }
 
             # Prepare litellm_params with credentials
-            _litellm_params: Final = litellm_params.copy()
-            if vertex_project:
-                _litellm_params["vertex_project"] = vertex_project
-            if vertex_location:
-                _litellm_params["vertex_location"] = vertex_location
-            if vertex_credentials:
-                _litellm_params["vertex_credentials"] = vertex_credentials
+            _litellm_params: Final = {
+                **litellm_params,
+                **{
+                    key: value
+                    for key, value in (
+                        ("vertex_project", vertex_project),
+                        ("vertex_location", vertex_location),
+                        ("vertex_credentials", vertex_credentials),
+                    )
+                    if value
+                },
+            }
 
             # Call the token counter
             token_counter: Final = VertexAIPartnerModelsTokenCounter()

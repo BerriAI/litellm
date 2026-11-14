@@ -1199,7 +1199,7 @@ def test_anthropic_messages_explicit_null_reaches_upstream(gateway: Gateway) -> 
             "anthropic_messages",
             deployment_params={"max_tokens": 32},
             provider_model="openai/gpt-4o-mini",
-            response_route="acompletion",
+            response_route="aresponses",
         )
         response: Final = _post(
             gateway,
