@@ -22,6 +22,8 @@ BASELINE_TEAM_MEMBER_PERMISSIONS: Final = [
 
 DEFAULT_TEAM_MEMBER_PERMISSIONS: Final = BASELINE_TEAM_MEMBER_PERMISSIONS
 
+_KEY_MANAGEMENT_ROUTE_VALUES: Final = frozenset(route.value for route in KeyManagementRoutes)
+
 
 class TeamMemberPermissionChecks:
     @staticmethod
@@ -37,10 +39,12 @@ class TeamMemberPermissionChecks:
           DEFAULT_TEAM_MEMBER_PERMISSIONS.
         """
         if team_table.team_member_permissions is not None and isinstance(team_table.team_member_permissions, list):
-            permissions: Final = {KeyManagementRoutes(permission) for permission in team_table.team_member_permissions}
-            # Always include baseline permissions
-            permissions.update(BASELINE_TEAM_MEMBER_PERMISSIONS)
-            return list(permissions)
+            granted: Final = frozenset(
+                KeyManagementRoutes(permission)
+                for permission in team_table.team_member_permissions
+                if permission in _KEY_MANAGEMENT_ROUTE_VALUES
+            )
+            return list(granted | frozenset(BASELINE_TEAM_MEMBER_PERMISSIONS))
 
         return DEFAULT_TEAM_MEMBER_PERMISSIONS
 
@@ -239,10 +243,7 @@ class TeamMemberPermissionChecks:
         """
         Returns all available team member permissions
         """
-        all_available_permissions: Final = []
-        for route in LiteLLMRoutes.key_management_routes.value:
-            all_available_permissions.append(route)
-        return all_available_permissions
+        return [route for route in LiteLLMRoutes.key_management_routes.value if route in _KEY_MANAGEMENT_ROUTE_VALUES]
 
     @staticmethod
     def default_team_member_permissions() -> list[str]:

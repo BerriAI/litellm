@@ -5,6 +5,7 @@ import pytest
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
+    LiteLLM_TeamTableCachedObj,
     Member,
     ProxyException,
     UserAPIKeyAuth,
@@ -541,3 +542,36 @@ class TestCanTeamMemberExecuteKeyManagementEndpointServiceAccount:
             )
         assert str(exc.value.code) == "401"
         assert exc.value.type == "team_member_permission_error"
+
+
+DAILY_ACTIVITY_SUBROUTE_PERMISSIONS = (
+    "/team/daily/activity/aggregated/keys",
+    "/team/daily/activity/aggregated/search",
+    "/team/daily/activity/aggregated/model_top_keys",
+    "/team/daily/activity/export",
+)
+
+
+def _team_granting(*permissions: str) -> LiteLLM_TeamTableCachedObj:
+    return LiteLLM_TeamTableCachedObj(team_id="team-a", team_member_permissions=list(permissions))
+
+
+def test_member_can_generate_keys_when_team_also_stores_daily_activity_subroutes() -> None:
+    team = _team_granting(KeyManagementRoutes.KEY_GENERATE.value, *DAILY_ACTIVITY_SUBROUTE_PERMISSIONS)
+
+    allowed = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_role="user",
+        team_table=team,
+        route=KeyManagementRoutes.KEY_GENERATE.value,
+    )
+
+    assert allowed is True
+
+
+@pytest.mark.parametrize("permission", TeamMemberPermissionChecks.get_all_available_team_member_permissions())
+def test_every_offered_team_member_permission_takes_effect_when_granted(permission: str) -> None:
+    team = _team_granting(permission)
+
+    assert TeamMemberPermissionChecks.is_route_granted_to_team_members(team_table=team, route=permission), (
+        f"/team/permissions_list offers {permission} but granting it gives team members nothing"
+    )
