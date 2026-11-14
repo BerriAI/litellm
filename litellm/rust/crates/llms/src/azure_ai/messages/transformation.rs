@@ -18,10 +18,15 @@ use crate::{
     anthropic::{
         beta_gated_fields::strip_beta_gated_system_messages,
         beta_headers::BetaPolicy,
-        common_utils::{API_KEY_PLACEMENT, existing_betas, strip_trailing_slashes},
+        common_utils::{
+            API_KEY_PLACEMENT, existing_betas, map_messages, strip_raw_unsignable_thinking_blocks,
+            strip_trailing_slashes, strip_unsignable_thinking_blocks,
+        },
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+            transformation::{
+                is_claude_model, transform_messages_request, update_headers_with_safeguards_beta,
+            },
         },
     },
     azure_ai::common_utils::{
@@ -55,7 +60,7 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
 impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+            hoist_defer_loading: is_claude_model(model),
         }
     }
 
@@ -79,6 +84,20 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, options.reading_unparsed_messages())
+    }
+
+    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
+        if !is_claude_model(&request.model) {
+            return request;
+        }
+        MessagesRequest {
+            messages: map_messages(
+                request.messages,
+                strip_unsignable_thinking_blocks,
+                strip_raw_unsignable_thinking_blocks,
+            ),
+            ..request
+        }
     }
 
     fn get_complete_url(
@@ -419,6 +438,45 @@ mod tests {
 
     fn to_value(request: MessagesRequest) -> serde_json::Value {
         serde_json::to_value(request).expect("serializable request")
+    }
+
+    #[rstest]
+    #[case::claude("claude-sonnet-5-5", false)]
+    #[case::non_claude("kimi-k3", true)]
+    fn unsigned_thinking_is_dropped_only_for_a_claude_deployment(
+        #[case] model: &str,
+        #[case] kept: bool,
+    ) {
+        let unsigned = json!({"type": "thinking", "thinking": "Read it first.", "signature": ""});
+        let tool_use = json!({
+            "type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}
+        });
+        let non_string_signature =
+            json!({"type": "thinking", "thinking": "Add them.", "signature": 5});
+        let unparsed_text = json!({"type": "text", "text": "22", "cache_control": "ephemeral"});
+        let messages = json!([
+            {"role": "user", "content": "Read numbers.txt."},
+            {"role": "assistant", "content": [unsigned, tool_use]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
+            ]},
+            {"role": "assistant", "content": [non_string_signature, unparsed_text]},
+            {"role": "user", "content": "And the product?"}
+        ]);
+        let sent = to_value(AZURE_ANTHROPIC_MESSAGES_CONFIG.request_for_url(
+            request_from(json!({"model": model, "max_tokens": 64, "messages": messages})),
+            "https://team.services.ai.azure.com/anthropic/v1/messages",
+        ));
+        let (tool_turn, unparsed_turn) = if kept {
+            (
+                json!([unsigned, tool_use]),
+                json!([non_string_signature, unparsed_text]),
+            )
+        } else {
+            (json!([tool_use]), json!([unparsed_text]))
+        };
+        assert_eq!(sent["messages"][1]["content"], tool_turn);
+        assert_eq!(sent["messages"][3]["content"], unparsed_turn);
     }
 
     fn finalized(

@@ -1121,6 +1121,26 @@ pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
     })
 }
 
+fn is_raw_unsignable_thinking_block(block: &Value) -> bool {
+    is_raw_encrypted_reasoning_block(block)
+        || (raw_block_type(block) == Some("thinking")
+            && !block
+                .get("signature")
+                .and_then(Value::as_str)
+                .is_some_and(|signature| !signature.is_empty()))
+}
+
+pub fn strip_raw_unsignable_thinking_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_unsignable_thinking_block(block))
+            .cloned()
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
+}
+
 pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
     let lower = error_text.to_lowercase();
     if !lower.contains("thinking") {
