@@ -5086,7 +5086,7 @@ async def test_vercel_ai_gateway_jev_decisions_send_images(model: str, respx_moc
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("vercel_gateway_key")
 async def test_vercel_ai_gateway_decisions_inline_remote_images(
-    respx_mock: respx.MockRouter, async_only_image_fetch
+    respx_mock: respx.MockRouter, async_only_image_fetch: AsyncOnlyImageFetch
 ) -> None:
     route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
         json=_vercel_response("openai/gpt-6-luna-decisions", {})
