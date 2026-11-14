@@ -9,6 +9,7 @@ pub struct ModelInfoFields {
     pub max_tokens: Option<i64>,
     pub max_input_tokens: Option<i64>,
     pub max_output_tokens: Option<i64>,
+    pub max_context_tokens: Option<i64>,
     pub input_cost_per_token: Option<f64>,
     pub input_cost_per_token_flex: Option<f64>,
     pub input_cost_per_token_priority: Option<f64>,

@@ -67,6 +67,8 @@ attributes! {
     input_dbu_cost_per_token: Dbu,
     /// LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers.
     litellm_provider: String,
+    /// Maximum input plus output tokens of one request, when the provider counts both against one shared window.
+    max_context_tokens: u64 as Count,
     /// Maximum prompt/context tokens the model accepts.
     max_input_tokens: u64 as Count,
     /// Maximum tokens the model can generate in one response.

@@ -95,6 +95,36 @@ fn a_minimum_billed_input_token_count_is_read_and_mergeable() {
 }
 
 #[rstest]
+fn a_shared_context_window_is_read_and_mergeable() {
+    let document = json!({
+        "fallback_generalizations": {"rules": [{"name": "family", "pattern": "^new-", "model_info": {}}]},
+        "Test": {"litellm_provider": "test", "max_context_tokens": 1048576}
+    });
+    let problems: Vec<String> = Catalog::problems(document.to_string().as_bytes())
+        .iter()
+        .map(report)
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let attributes = catalog(document)
+        .lookup("Test")
+        .unwrap()
+        .entry
+        .model()
+        .unwrap()
+        .attributes
+        .clone();
+    assert_eq!(attributes.max_context_tokens, Some(1048576));
+}
+
+#[rstest]
+fn a_negative_shared_context_window_is_reported_on_its_row() {
+    let problems =
+        error_text(json!({"Test": {"litellm_provider": "test", "max_context_tokens": -1}}));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("Test.max_context_tokens: invalid value"));
+}
+
+#[rstest]
 fn a_negative_minimum_billed_input_token_count_is_reported_on_its_row() {
     let problems =
         error_text(json!({"Test": {"litellm_provider": "test", "min_billed_input_tokens": -1}}));
