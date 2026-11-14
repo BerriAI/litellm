@@ -17,7 +17,7 @@ from typing import Final
 
 import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, UI_PASSWORD, UI_USERNAME, unique_marker
-from e2e_http import StreamingResponse, Success, unwrap
+from e2e_http import NoBody, StreamingResponse, Success, unwrap
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import (
@@ -31,6 +31,7 @@ from models import (
     KeyGenerateBody,
     KeyGenerateResponse,
     KeyInfoParams,
+    KeyInfoResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
     ModelInfoEntry,
@@ -1211,18 +1212,30 @@ class TestKeyInfoOwnership:
         assert client.proxy.key_info(caller_hash).user_id is None
         assert client.proxy.key_info(target_hash).user_id is None
         assert unwrap(client.key_info_as(caller_hash, caller_key=caller)).info.team_id == caller_team
+        assert unwrap(client.key_info_as(caller, caller_key=caller)).info.team_id == caller_team
+        assert unwrap(
+            client.proxy.transport.get(
+                "/key/info",
+                headers=client.proxy.transport.bearer(caller),
+                params=NoBody(),
+                response_type=KeyInfoResponse,
+            )
+        ).info.team_id == caller_team
         if deleted:
             client.delete_key_strict(target)
         admin_info: Final = client.proxy.key_info(target_hash)
         assert admin_info.team_id == target_team
         assert admin_info.status == ("deleted" if deleted else "active")
 
-        denied: Final = client.proxy.transport.probe(
-            "/key/info",
-            headers=client.proxy.transport.bearer(caller),
-            params=KeyInfoParams(key=target_hash),
+        denied: Final = tuple(
+            client.proxy.transport.probe(
+                "/key/info",
+                headers=client.proxy.transport.bearer(caller),
+                params=KeyInfoParams(key=lookup),
+            )
+            for lookup in (target_hash, target)
         )
-        assert denied.status_code == 403, denied.body
+        assert all(outcome.status_code == 403 for outcome in denied), denied
         member_user: Final = _create_user(
             client,
             resources,

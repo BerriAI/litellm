@@ -5257,7 +5257,7 @@ async def info_key_fn(
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
-                key=key,
+                key=hashed_key,
                 key_info=key_info,
             )
             is not True
