@@ -29,7 +29,7 @@ _MIGRATION: Final = next(
     Path(__file__)
     .resolve()
     .parents[3]
-    .joinpath("litellm-proxy-extras/litellm_proxy_extras/migrations")
+    .joinpath("litellm/proxy-extras/litellm_proxy_extras/migrations")
     .glob("*_scheduled_job_runs/migration.sql")
 )
 _PODS: Final = 4

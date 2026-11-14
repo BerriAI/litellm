@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import BudgetDurationDropdown from "./budget_duration_dropdown";
+import BudgetDurationDropdown, { getBudgetDurationLabel } from "./budget_duration_dropdown";
 
 describe("BudgetDurationDropdown", () => {
   it("labels an unset period as Never resets in the trigger and option", async () => {
@@ -38,4 +38,14 @@ describe("BudgetDurationDropdown", () => {
 
     expect(await screen.findByRole("option", { name: "Not set" })).toBeInTheDocument();
   });
+});
+
+it("saves and displays an annual budget period", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<BudgetDurationDropdown value="30d" onChange={onChange} />);
+  await user.click(screen.getByRole("combobox"));
+  await user.click(await screen.findByRole("option", { name: "annually" }));
+  expect(onChange).toHaveBeenCalledWith("12mo", expect.anything());
+  expect(getBudgetDurationLabel("12mo")).toBe("annually");
 });

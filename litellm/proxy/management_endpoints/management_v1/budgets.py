@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.models.budget import BudgetLimits
 from litellm.proxy._types import (
     CommonProxyErrors,
     UserAPIKeyAuth,
@@ -62,6 +63,7 @@ class BudgetListItem(LiteLLMBaseModel):
     rpm_limit: int | None = None
     tpd_limit: int | None = None
     budget_duration: str | None = None
+    budget_limits: BudgetLimits | None = None
     budget_reset_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

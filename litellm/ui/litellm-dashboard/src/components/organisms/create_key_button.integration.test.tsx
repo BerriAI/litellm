@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import type { Team } from "../key_team_helpers/key_list";
 import { keyCreateCall, keyCreateServiceAccountCall, modelAvailableCall, userFilterUICall } from "../networking";
 import { toast } from "@/lib/toast";
@@ -591,6 +591,68 @@ describe("CreateKey", () => {
       await submit();
 
       expect((await createdPayload()).metadata).toBe('{"team":"research"}');
+    });
+
+    const addBudgetAlertRow = async (threshold: string, emails: string) => {
+      await userEvent.click(await screen.findByRole("button", { name: "Add Budget Alert Threshold" }));
+      const thresholds = screen.getAllByPlaceholderText("% of budget");
+      fireEvent.change(thresholds[thresholds.length - 1], { target: { value: threshold } });
+      const recipients = screen.getAllByPlaceholderText("Additional recipients, e.g. finance@example.com");
+      fireEvent.change(recipients[recipients.length - 1], { target: { value: emails } });
+    };
+
+    it("merges the budget alert rows into the metadata JSON box content", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      fireEvent.change(await screen.findByLabelText("Metadata"), { target: { value: '{"team":"research"}' } });
+      await addBudgetAlertRow("80", "shared-mailbox@example.com, finance-dl@example.com");
+      await submit();
+
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).toEqual({
+        team: "research",
+        max_budget_alert_emails: { "80": ["shared-mailbox@example.com", "finance-dl@example.com"] },
+      });
+      expect(payload).not.toHaveProperty("max_budget_alert_emails");
+    });
+
+    it("moves a recipient map typed into the metadata JSON box into the rows on blur", async () => {
+      vi.mocked(toast.info).mockClear();
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await addBudgetAlertRow("80", "row@example.com");
+      const metadataBox = await screen.findByLabelText("Metadata");
+      fireEvent.change(metadataBox, {
+        target: { value: JSON.stringify({ team: "research", max_budget_alert_emails: { "80": "typed@example.com" } }) },
+      });
+      fireEvent.blur(metadataBox);
+
+      expect(toast.info).toHaveBeenCalledWith(
+        "Moved alert thresholds 80% from metadata to the Budget Alert Thresholds rows",
+      );
+      expect(screen.getByPlaceholderText("Additional recipients, e.g. finance@example.com")).toHaveValue(
+        "typed@example.com",
+      );
+      await submit();
+
+      expect(JSON.parse(String((await createdPayload()).metadata))).toEqual({
+        team: "research",
+        max_budget_alert_emails: { "80": ["typed@example.com"] },
+      });
+    });
+
+    it("blocks the create on a duplicate budget alert threshold", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await addBudgetAlertRow("80", "a@example.com");
+      await addBudgetAlertRow("80", "b@example.com");
+      await submit();
+
+      expect(await screen.findAllByText("Duplicate threshold")).toHaveLength(2);
+      expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
     });
 
     it("carries the typed key alias and the chosen team onto the wire", async () => {

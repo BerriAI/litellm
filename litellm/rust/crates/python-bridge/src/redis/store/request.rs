@@ -1,8 +1,21 @@
+use std::sync::Arc;
+
+use litellm_redis_client::CallTag;
 use litellm_redis_store::{RequestRedis, Send};
 use pyo3::prelude::*;
 
 use super::{call, duration};
-use crate::execution::run_async_value;
+use crate::{execution::run_async_value, redis::events::RedisCall};
+
+/// The tag of a deadline flush, asked on the thread whose post-call declaration arms the deadline.
+fn deadline_flush_tag() -> Option<CallTag> {
+    Python::attach(RedisCall::deadline_flush)
+        .inspect_err(|error| {
+            tracing::warn!(%error, "a post-call deadline flush will be reported without its request");
+        })
+        .ok()
+        .map(RedisCall::tag)
+}
 
 /// One request's native Redis batches. Python builds one per request scope and passes it to each
 /// request-aware store call.
@@ -15,9 +28,8 @@ impl NativeRequestRedis {
     fn new(py: Python<'_>, post_call_deadline_seconds: f64) -> PyResult<Self> {
         let runtime = litellm_host_python::runtime_handle()?;
         let deadline = duration(post_call_deadline_seconds)?;
-        let deadline_tag = call(py, "post_call_redis_batch")?.tag();
         Ok(Self(crate::logger::capture(py).scope(|| {
-            RequestRedis::with_deadline_tag(runtime, deadline, Some(deadline_tag))
+            RequestRedis::with_deadline_tag(runtime, deadline, Arc::new(deadline_flush_tag))
         })))
     }
 

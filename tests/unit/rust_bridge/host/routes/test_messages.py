@@ -1,6 +1,5 @@
 import datetime
 import functools
-import json
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
@@ -294,6 +293,26 @@ def test_body_params_forward_the_thread_like_the_python_handler(
     }
 
     assert messages_host.body_params(request, asynchronous=True).get("thread") == expected
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    (
+        ({"user_id": "u-1", "user_api_key_auth": object(), "pillar_flagged": False}, {"user_id": "u-1"}),
+        ({"user_api_key_auth": object()}, {}),
+        (["u-1"], ["u-1"]),
+    ),
+    ids=("litellm-keys-dropped", "only-litellm-keys", "not-an-object-left-for-rust-to-reject"),
+)
+def test_body_params_forward_only_the_metadata_anthropic_accepts(metadata: object, expected: object) -> None:
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "metadata": metadata,
+    }
+
+    assert messages_host.body_params(request, asynchronous=True)["metadata"] == expected
 
 
 def _marked(phase: str | None = None, *args: object) -> ValueError:
@@ -989,8 +1008,9 @@ def test_a_positive_timeout_keeps_the_native_client(timeout: object) -> None:
 
 
 @pytest.mark.asyncio
-async def test_transport_send_posts_what_the_python_handler_posts() -> None:
+async def test_transport_send_posts_the_native_wire_bytes_unchanged() -> None:
     logger: Final = object()
+    wire: Final = '{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"h\u00e9llo"}]}'.encode()
     timeout: Final = httpx.Timeout(30.0, connect=2.0)
     handler: Final = _Handler(
         httpx.Response(200, json={"id": "msg_1"}, headers={"request-id": "req_1"}, request=_REQUEST)
@@ -1001,7 +1021,7 @@ async def test_transport_send_posts_what_the_python_handler_posts() -> None:
         {"litellm_logging_obj": logger, "timeout": timeout},
         _URL,
         [("x-api-key", "sk-ant"), ("anthropic-version", "2023-06-01")],
-        {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "héllo"}]},
+        wire,
         False,
     )
 
@@ -1009,7 +1029,7 @@ async def test_transport_send_posts_what_the_python_handler_posts() -> None:
         {
             "url": _URL,
             "headers": {"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
-            "data": json.dumps({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "héllo"}]}),
+            "data": wire,
             "stream": False,
             "logging_obj": logger,
             "timeout": timeout,
@@ -1035,7 +1055,7 @@ async def test_transport_send_leaves_a_stream_for_the_route_to_read() -> None:
         httpx.Response(200, stream=httpx.ByteStream(b"event: message_stop\n\n"), request=_REQUEST)
     )
 
-    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], {}, True)
+    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], b"", True)
 
     assert sent.chunks is not None
     assert sent.text is None
@@ -1049,7 +1069,7 @@ async def test_transport_send_reports_a_rejection_with_the_status_error(checked:
     error: Final = httpx.HTTPStatusError("rate limited", request=_REQUEST, response=rejected)
     handler: Final = _Handler(error if checked else rejected)
 
-    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], {}, False)
+    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], b"", False)
 
     assert (sent.status, sent.text) == (429, "slow down")
     assert ("retry-after", "7") in sent.headers
@@ -1062,7 +1082,7 @@ async def test_a_rejection_python_cannot_read_reaches_the_caller_as_raised() -> 
     unread: Final = httpx.Response(500, stream=httpx.ByteStream(b"unread"), request=_REQUEST)
 
     with pytest.raises(messages_host.RawTransportFailure) as raised:
-        await messages_host.transport_send(_Handler(unread), {}, _URL, [], {}, True)
+        await messages_host.transport_send(_Handler(unread), {}, _URL, [], b"", True)
 
     assert isinstance(raised.value.error, httpx.ResponseNotRead)
     assert isinstance(raised.value.error.__context__, httpx.HTTPStatusError)
@@ -1073,7 +1093,7 @@ async def test_a_handler_failure_is_raised_for_the_route_to_map() -> None:
     failure: Final = httpx.ConnectError("refused")
 
     with pytest.raises(httpx.ConnectError) as raised:
-        await messages_host.transport_send(_Handler(failure), {}, _URL, [], {}, False)
+        await messages_host.transport_send(_Handler(failure), {}, _URL, [], b"", False)
 
     assert raised.value is failure
 

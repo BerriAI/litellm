@@ -116,7 +116,7 @@ export function AgentControlPlaneView() {
 }
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
-const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "chargebacks"]);
+const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();

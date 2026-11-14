@@ -82,6 +82,14 @@ def test_register_model_receives_cache_pricing_fields():
     litellm.model_cost.pop(model_key, None)
 
 
+def test_register_model_given_neither_a_table_nor_a_url_registers_nothing():
+    registered: Final = model_cost_inputs.registered_keys()
+
+    assert litellm.register_model(None) is None
+
+    assert model_cost_inputs.registered_keys() == registered
+
+
 def test_register_model_strips_none_litellm_provider():
     """``get_model_info`` returns ``litellm_provider: None`` for deployments
     registered without a provider (e.g. ``Router.add_deployment`` flows).
@@ -123,7 +131,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
 
     The companion test above hits the ``except Exception`` branch where
     ``existing_model`` is an empty dict, so the ``pop`` is a no-op. This
-    test patches ``get_model_info`` to return the failure mode the strip
+    test patches the catalog lookup to return the failure mode the strip
     was added to handle, namely a populated dict whose ``litellm_provider``
     is ``None``. Without the strip, the merged entry in
     ``litellm.model_cost`` would carry ``litellm_provider: None`` and
@@ -146,7 +154,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
             "max_tokens": 4096,
         }
 
-    monkeypatch.setattr(litellm_utils, "get_model_info", _fake_get_model_info)
+    monkeypatch.setattr(litellm_utils, "get_model_info_helper", _fake_get_model_info)
 
     try:
         litellm.register_model(
@@ -167,7 +175,7 @@ def test_register_model_strips_none_litellm_provider_from_get_model_info(monkeyp
             "register_model failed to strip litellm_provider=None returned "
             f"by get_model_info, got {registered.get('litellm_provider')!r}"
         )
-        # Metadata from the patched ``get_model_info`` must still flow
+        # Metadata from the patched catalog lookup must still flow
         # through, so we know the strip did not nuke the rest of the entry.
         assert registered.get("mode") == "chat"
         assert registered.get("max_tokens") == 4096
@@ -656,11 +664,13 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
     )
     publish(litellm.model_cost)
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_by_a_concurrent_registration)
         litellm.register_model({geo_key: {"mode": "chat"}}, persist_across_reloads=False)
 
     try:
@@ -694,16 +704,18 @@ def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
         },
     )
     publish(litellm.model_cost)
-    real_lookup: Final = litellm.utils.get_model_info
+    real_lookup: Final = litellm.utils.get_model_info_helper
     lookups: Final = itertools.count()
 
-    def lookup_tripped_once_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> object:
+    def lookup_tripped_once_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> object:
         if next(lookups) == 0:
             raise RuntimeError("dictionary changed size during iteration")
-        return real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+        return real_lookup(model=model, custom_llm_provider=custom_llm_provider, catalog_only=catalog_only)
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_once_by_a_concurrent_registration)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_once_by_a_concurrent_registration)
         litellm.register_model({alias: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False)
     litellm.register_model({catalog_key: {"input_cost_per_token": repriced_input_cost}}, persist_across_reloads=False)
 
@@ -733,14 +745,16 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
     builtin_cost_map: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     def long_prompt_cost_after_registering_with(lookup: Callable[..., object]) -> float:
         monkeypatch.setattr(litellm, "model_cost", {**builtin_cost_map, catalog_key: dict(catalog_row)})
         publish(litellm.model_cost)
         with pytest.MonkeyPatch.context() as lookup_patch:
-            lookup_patch.setattr(litellm.utils, "get_model_info", lookup)
+            lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup)
             litellm.register_model(
                 {
                     registered_key: {
@@ -762,7 +776,7 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
 
     try:
         assert long_prompt_cost_after_registering_with(lookup_tripped_by_a_concurrent_registration) == pytest.approx(
-            long_prompt_cost_after_registering_with(litellm.utils.get_model_info)
+            long_prompt_cost_after_registering_with(litellm.utils.get_model_info_helper)
         )
     finally:
         publish(litellm.model_cost)
@@ -788,12 +802,14 @@ def test_register_model_prices_a_provider_less_azure_ai_key_without_repricing_th
     )
     publish(litellm.model_cost)
 
-    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+    def lookup_tripped_by_a_concurrent_registration(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
         if lookup_trips:
-            lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+            lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_tripped_by_a_concurrent_registration)
         litellm.register_model(
             {azure_ai_key: {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}},
             persist_across_reloads=False,
@@ -830,16 +846,18 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monk
         **builtin_cost_map,
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
-    real_lookup: Final = litellm.utils.get_model_info
+    real_lookup: Final = litellm.utils.get_model_info_helper
 
-    def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
-        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
+    def lookup_racing_a_price_data_reload(
+        model: str, custom_llm_provider: str | None = None, *, catalog_only: bool = False
+    ) -> object:
+        info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider, catalog_only=catalog_only)
         if litellm.model_cost is not reloaded_cost_map:
             _publish(reloaded_cost_map)
         return info
 
     with pytest.MonkeyPatch.context() as lookup_patch:
-        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_racing_a_price_data_reload)
+        lookup_patch.setattr(litellm.utils, "get_model_info_helper", lookup_racing_a_price_data_reload)
         litellm.register_model({deployment_key: {"litellm_provider": "bedrock"}}, persist_across_reloads=False)
 
     try:

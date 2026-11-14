@@ -8,12 +8,8 @@ use litellm_router_core::{
     Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
     InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
     RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
-    SuccessReport,
-    call::StreamOrigin,
-    fallback::Fallbacks,
-    health::{UsageMetric, current_minute, usage_key},
-    host::UncountedRetries,
-    select::PassThrough,
+    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
+    host::UncountedRetries, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -325,12 +321,12 @@ async fn a_rate_limit_cools_the_deployment_down(config: RouterConfig) {
 }
 
 #[rstest]
-#[case::now(false, (Some(1.0), (10, 1)))]
-#[case::deferred(true, (None, (10, 1)))]
+#[case::now(false, (1, (10, 1)))]
+#[case::deferred(true, (0, (10, 1)))]
 #[tokio::test]
 async fn a_deferred_attempt_counts_its_request_and_tokens_but_no_success(
     #[case] deferred: bool,
-    #[case] expected: (Option<f64>, (u64, u64)),
+    #[case] expected: (u64, (u64, u64)),
 ) {
     let config: RouterConfig = serde_json::from_value(json!({
         "model_list": [
@@ -348,10 +344,7 @@ async fn a_deferred_attempt_counts_its_request_and_tokens_but_no_success(
         .await
         .unwrap();
     let deployment = router.registry().deployment("a1").unwrap();
-    let successes = host
-        .cache
-        .get("a1:successes")
-        .and_then(|count| count.as_f64());
+    let successes = host.cache.outcomes("a1").await.unwrap().successes;
     let usage = router.health().usage(&deployment).await.unwrap();
     assert_eq!((successes, usage), expected);
 }
@@ -422,28 +415,33 @@ async fn a_reported_success_keeps_the_filled_wildcard_model() {
     };
     router.report_success("w1", 7.0, 0.0, report).await.unwrap();
     let minute = current_minute(std::time::SystemTime::now());
-    let key = |model: &str| usage_key("w1", model, UsageMetric::Tpm, &minute);
+    let tokens = |model: &str| {
+        host.cache
+            .counted(&UsageWindow {
+                deployment_id: "w1".to_owned(),
+                model: model.to_owned(),
+                minute: minute.clone(),
+            })
+            .tokens
+    };
     assert_eq!(
-        (
-            host.cache.get(&key("openai/gpt-4o")),
-            host.cache.get(&key("openai/*")),
-        ),
-        (Some(json!(7)), None),
+        (tokens("openai/gpt-4o"), tokens("openai/*")),
+        (Some(7.0), None),
     );
 }
 
 /// `async_deployment_callback_on_failure`'s request is written only when it runs: a failure the
 /// host says ran no failure callback (`recorded`) writes none, nor does a sync call's.
 #[rstest]
-#[case::the_first_logged_failure(false, false, 1, Some(1.0))]
-#[case::a_later_failure_on_the_shared_logging_object(true, false, 0, None)]
-#[case::a_sync_call(false, true, 0, Some(1.0))]
+#[case::the_first_logged_failure(false, false, 1, 1)]
+#[case::a_later_failure_on_the_shared_logging_object(true, false, 0, 0)]
+#[case::a_sync_call(false, true, 0, 1)]
 #[tokio::test]
 async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
     #[case] recorded: bool,
     #[case] uncounted_request: bool,
     #[case] requests: u64,
-    #[case] fails: Option<f64>,
+    #[case] fails: u64,
 ) {
     let config: RouterConfig = serde_json::from_value(json!({
         "model_list": [
@@ -459,7 +457,7 @@ async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
     let _ = router.call(Op::from("acompletion"), request()).await;
     let deployment = router.registry().deployment("a1").unwrap();
     let usage = router.health().usage(&deployment).await.unwrap();
-    let counted = host.cache.get("a1:fails").and_then(|count| count.as_f64());
+    let counted = host.cache.outcomes("a1").await.unwrap().fails;
     assert_eq!((usage.1, counted), (requests, fails));
 }
 
@@ -499,9 +497,9 @@ async fn a_reported_failure_counts_its_request_when_asked(
         .await
         .unwrap();
     let deployment = router.registry().deployment("a1").unwrap();
-    let fails = host.cache.get("a1:fails").and_then(|count| count.as_f64());
+    let fails = host.cache.outcomes("a1").await.unwrap().fails;
     let usage = router.health().usage(&deployment).await.unwrap();
-    assert_eq!((fails, usage.1), (Some(1.0), requests));
+    assert_eq!((fails, usage.1), (1, requests));
 }
 
 #[rstest]

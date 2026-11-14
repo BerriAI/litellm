@@ -6,7 +6,6 @@ import errno
 import functools
 import inspect
 import ipaddress
-import json
 import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -25,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
+    only,
     proxy_request_headers,
     stream_cost_injection_requested,
 )
@@ -174,8 +174,17 @@ def modify_max_tokens(
         cache.remember_unclamped(kwargs.get("litellm_logging_obj"), unclamped)
 
 
+def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    if metadata is None:
+        return params
+    return {**params, "metadata": only(metadata, "user_id")}
+
+
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+    params: Final = _anthropic_metadata(
+        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
+    )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
@@ -1253,14 +1262,14 @@ async def transport_send(
     request: Mapping[str, object],
     url: str,
     headers: Sequence[tuple[str, str]],
-    body: object,
+    body: bytes,
     stream: bool,
 ) -> Sent:
     try:
         response: Final = await handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped dict params
             url=_sent_url(request, url),
             headers=dict(headers),
-            data=body if isinstance(body, bytes) else json.dumps(body),
+            data=body,
             stream=stream,
             logging_obj=cast(  # cast-ok: the call's logger, handed on as Python's handler hands it
                 "LiteLLMLoggingObj | None", request.get("litellm_logging_obj")

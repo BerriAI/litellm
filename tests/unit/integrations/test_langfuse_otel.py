@@ -14,14 +14,18 @@ import pytest
 from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Span
 
 import litellm
 from litellm.integrations._types.open_inference import SpanAttributes
-from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, REDACTED_BY_LITELLM
+from litellm.constants import (
+    FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    REDACTED_BY_LITELLM,
+)
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
@@ -1554,6 +1558,65 @@ def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> Exp
     return ExportedSpan(frozenset(getattr(span, "attributes", None) or {}), getattr(span, "dropped_attributes", 0))
 
 
+def _failed_tool_span(
+    tools: int, usage: Mapping[str, object], *, joins_caller: bool, recovered: bool = False
+) -> ReadableSpan:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(exporter="console", skip_set_global=True),
+        tracer_provider=provider,
+        callback_name="langfuse_otel",
+    )
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        **CHAT_KWARGS,
+        **usage,
+        "model": "test-model",
+        "litellm_params": {
+            "metadata": {"trace_id": "a" * 32},
+            "proxy_server_request": {
+                "headers": {"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01"} if joins_caller else {}
+            },
+        },
+        "optional_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f"lookup_{index}",
+                        "description": f"Looks up record {index}",
+                        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+                    },
+                }
+                for index in range(tools)
+            ]
+        },
+        "standard_logging_object": {
+            "metadata": {"requester": "test"},
+            "error_information": {
+                "error_code": "500",
+                "error_class": "InternalServerError",
+                "error_message": "scripted failure",
+                "llm_provider": "openai",
+                "traceback": "scripted traceback",
+            },
+        },
+    }
+    response: Final = (
+        ModelResponse(usage={"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9}) if recovered else None
+    )
+    try:
+        logger.log_failure_event(  # pyright: ignore[reportUnknownMemberType]  # legacy hook is untyped
+            kwargs, response, at, at
+        )
+        (span,) = exporter.get_finished_spans()
+        return span
+    finally:
+        provider.shutdown()
+
+
 class TestDerivedTraceFieldsAtTheSpanAttributeLimit:
     @pytest.mark.parametrize("failed", [False, True])
     @pytest.mark.parametrize("filler", range(SPAN_ATTRIBUTE_LIMIT - 30, SPAN_ATTRIBUTE_LIMIT + 1))
@@ -1563,6 +1626,35 @@ class TestDerivedTraceFieldsAtTheSpanAttributeLimit:
 
         assert without_trace_fields.keys <= derived.keys
         assert derived.dropped == without_trace_fields.dropped
+
+    @pytest.mark.parametrize("tools", range(30, 41))
+    @pytest.mark.parametrize(
+        ("usage", "recovered"),
+        (
+            ({}, False),
+            ({}, True),
+            ({FAILED_PROMPT_TOKEN_ESTIMATE_KEY: None}, False),
+            ({FAILED_PROMPT_TOKEN_ESTIMATE_KEY: 7}, False),
+        ),
+        ids=("no-usage-marker", "recovered-usage", "unknown-usage", "estimated-usage"),
+    )
+    def test_failed_trace_fields_preserve_existing_attributes(
+        self, tools: int, usage: Mapping[str, object], recovered: bool
+    ) -> None:
+        derived: Final = _failed_tool_span(tools, usage, joins_caller=False, recovered=recovered)
+        joined: Final = _failed_tool_span(tools, usage, joins_caller=True, recovered=recovered)
+
+        assert set(joined.attributes or {}) <= set(derived.attributes or {})
+        assert derived.dropped_attributes == joined.dropped_attributes
+        assert (derived.attributes or {}).get("litellm.usage.provider_status") == (
+            "unknown" if FAILED_PROMPT_TOKEN_ESTIMATE_KEY in usage else None
+        )
+        assert (derived.attributes or {}).get("litellm.usage.estimated_input_tokens") == usage.get(
+            FAILED_PROMPT_TOKEN_ESTIMATE_KEY
+        )
+        if recovered:
+            assert (derived.attributes or {})["llm.token_count.prompt"] == 5
+            assert (derived.attributes or {})["llm.token_count.completion"] == 4
 
     def test_a_span_with_room_to_spare_carries_every_trace_field(self) -> None:
         derived: Final = _exported_full_span(SPAN_ATTRIBUTE_LIMIT - 30, joins_caller=False, failed=False)

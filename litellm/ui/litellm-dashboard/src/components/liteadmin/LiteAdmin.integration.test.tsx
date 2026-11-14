@@ -148,6 +148,7 @@ interface GatewayOptions {
   read?: () => Promise<Response>;
   usage?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
+  uiSettings?: () => Promise<Response>;
   useSiTerminology?: boolean;
 }
 
@@ -191,6 +192,7 @@ function gateway(
       if (typeof settings === "function") return settings(request);
       return json({ PROXY_BASE_URL: MANAGEMENT, LITELLM_UI_API_DOC_BASE_URL: settings.target }, settings.status);
     }
+    if (path.endsWith("/get/ui_settings")) return options.uiSettings ? options.uiSettings() : json({ values: {} });
     if (path.endsWith("/model_group/info"))
       return json({
         data: options.models ?? [
@@ -254,6 +256,89 @@ afterEach(() => {
 });
 
 describe("Aria Agent in the gateway", () => {
+  it.each(["internal_user", "internal_user_viewer"])("hides Aria for %s with no internal access", async (role) => {
+    session(role);
+    gateway([], { uiSettings: async () => json({ values: { aria_internal_user_access: "none" } }) });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["internal_user", "own_usage", false],
+    ["internal_user", "own_and_team_usage", true],
+    ["proxy_admin", "none", true],
+    ["proxy_admin_viewer", "none", true],
+  ] as const)("applies internal access %s %s to team tools", async (role, access, teamTool) => {
+    session(role, "first-admin", { premium_user: true });
+    const requests = gateway([answer("Ready.")], {
+      uiSettings: async () => json({ values: { aria_internal_user_access: access } }),
+    });
+    renderWidget(undefined, false, true);
+    const input = await screen.findByPlaceholderText("Ask Aria…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "What usage can I see?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText("Ready.");
+    const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
+    const names = completion?.body.tools.map((tool: { function: { name: string } }) => tool.function.name);
+    expect(names).toContain("get_usage_data");
+    expect(names.includes("get_team_usage_data")).toBe(teamTool);
+    if (role === "internal_user") expect(names).toHaveLength(teamTool ? 3 : 2);
+  });
+  it.each([
+    ["proxy_admin", true],
+    ["proxy_admin", false],
+    ["proxy_admin_viewer", true],
+    ["internal_user", true],
+    ["internal_user_viewer", false],
+    ["org_admin", true],
+  ] as const)("hides every Aria entry point for %s with premium=%s when disabled", async (role, premium) => {
+    session(role, "first-admin", { premium_user: premium });
+    const requests = gateway([], { uiSettings: async () => json({ values: { disable_aria: true } }) });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(requests.some((request) => request.url === `${MANAGEMENT}/get/ui_settings`)).toBe(true));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "j", metaKey: true });
+    fireEvent.keyDown(document, { key: "j", ctrlKey: true });
+    expect(push).not.toHaveBeenCalled();
+    expect(requests.some((request) => request.url.endsWith("/models"))).toBe(false);
+  });
+
+  it("waits for settings and does not show Aria when the initial read fails", async () => {
+    const settings = deferred<Response>();
+    gateway([], { uiSettings: () => settings.promise });
+    const { client } = renderWidget(undefined, false, true);
+    await screen.findByText("Session ready");
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    await act(async () => settings.resolve(json({ error: "Unavailable" }, 503)));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+  });
+
+  it("waits for the destination gateway's settings instead of reusing an enabled gateway", async () => {
+    const settings = deferred<Response>();
+    gateway([], {
+      uiSettings: async () =>
+        localStorage.getItem("litellm_worker_url") ? settings.promise : json({ values: { disable_aria: false } }),
+    });
+    const view = renderWidget(undefined, false, true, { showPage: false });
+    await screen.findByRole("link", { name: "Ask Aria" });
+    switchToWorkerUrl("https://other-gateway.test");
+    view.refresh();
+    expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument();
+    await act(async () => settings.resolve(json({ values: { disable_aria: true } })));
+    await waitFor(() => expect(view.client.isFetching()).toBe(0));
+    expect(screen.queryByRole("link", { name: "Ask Aria" })).not.toBeInTheDocument();
+  });
+
   it.each([true, false])(
     "keeps the answer, draft and model when returning to Aria with premium=%s",
     async (premium) => {
@@ -643,7 +728,7 @@ describe("Aria Agent in the gateway", () => {
       const { client } = renderWidget(undefined, true);
       await screen.findByText("Session ready");
       await waitFor(() => expect(client.isFetching()).toBe(0));
-      expect(screen.getByRole("link", { name: "Aria Agent" })).toBeVisible();
+      expect(await screen.findByRole("link", { name: "Aria Agent" })).toBeVisible();
       expect(screen.queryByRole("region", { name: "Ask Aria Agent", hidden: true })).not.toBeInTheDocument();
       await waitFor(() => expect(screen.getByPlaceholderText("Ask Aria…")).toBeEnabled());
       act(() => send("Show my usage"));
@@ -1040,19 +1125,20 @@ describe("Aria Agent in the gateway", () => {
   });
 
   it.each(
-    ["account", "gateway", "destination", "permission"].flatMap((transition) =>
+    ["account", "gateway", "destination", "permission", "visibility"].flatMap((transition) =>
       ["pending", "approval", "draft"].map((stage) => [transition, stage] as const),
     ),
   )("should clear the conversation when %s changes during %s", async (transition, stage) => {
     const pending = deferred<ModelReply>();
     const settings = { target: INFERENCE, status: 200 };
+    const visibility = { disable_aria: false };
     const replies = [
       answer("Old answer."),
       ...(stage === "pending" ? [pending.promise] : []),
       ...(stage === "approval" ? [toolReply("key_create", keyArguments)] : []),
       answer("Fresh session."),
     ];
-    const requests = gateway(replies, { settings });
+    const requests = gateway(replies, { settings, uiSettings: async () => json({ values: visibility }) });
     const view = renderWidget(undefined, true);
     await openWidget();
     act(() => send("Old question"));
@@ -1079,6 +1165,13 @@ describe("Aria Agent in the gateway", () => {
     } else if (transition === "destination") {
       settings.target = INFERENCE + "/updated";
       await act(async () => view.client.invalidateQueries({ queryKey: ["proxySettings"] }));
+    } else if (transition === "visibility") {
+      visibility.disable_aria = true;
+      await act(async () => view.client.invalidateQueries({ queryKey: ["uiSettings"] }));
+      await waitFor(() => expect(screen.queryByRole("link", { name: "Aria Agent" })).not.toBeInTheDocument());
+      expect(screen.queryByPlaceholderText("Ask Aria…")).not.toBeInTheDocument();
+      visibility.disable_aria = false;
+      await act(async () => view.client.invalidateQueries({ queryKey: ["uiSettings"] }));
     } else {
       session("proxy_admin_viewer", "first-admin", { premium_user: true }, "sk-session-first-admin-viewer");
       view.refresh();

@@ -29,6 +29,26 @@ def test_a_fully_documented_post_has_no_findings(request_type: str, response_typ
     assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
 
 
+def test_a_documented_created_response_satisfies_the_success_schema_rule() -> None:
+    operation: Final = {**_DOCUMENTED, "responses": {"201": _RESPONSES["200"]}}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+@pytest.mark.parametrize("responses", (
+    {},
+    {"201": {"description": "Created"}},
+    {"201": {"content": {"application/json": {"schema": {}}}}},
+    {"422": _RESPONSES["200"]},
+))
+def test_an_error_schema_or_an_untyped_created_response_cannot_replace_a_success_schema(
+    responses: Mapping[str, object],
+) -> None:
+    operation: Final = {**_DOCUMENTED, "responses": responses}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == (
+        checker.Violation("POST", "/v1/thing", "OA003"),
+    )
+
+
 def test_a_schema_under_another_media_type_still_counts_as_undocumented() -> None:
     operation: Final = _post_with_media_types("application/octet-stream", "audio/wav")
     assert {v.code for v in checker.violations({"paths": {"/v1/thing": {"post": operation}}})} == {"OA001", "OA003"}

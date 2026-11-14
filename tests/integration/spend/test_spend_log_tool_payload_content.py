@@ -34,6 +34,7 @@ def _prompt_storage_config(
     tmp_path: Path,
     *,
     store_prompts: bool = True,
+    redact_tokens: bool = False,
     local_cache: bool = False,
     model_list: tuple[dict[str, JsonValue], ...] = (),
 ) -> Path:
@@ -49,6 +50,7 @@ def _prompt_storage_config(
                     "disable_responses_id_security": True,
                     "store_model_in_db": True,
                     "store_prompts_in_spend_logs": store_prompts,
+                    "redact_tokens_in_spend_logs": redact_tokens,
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                 },
@@ -504,7 +506,7 @@ def test_stored_messages_mask_a_github_token_inside_tool_output(gateway: Gateway
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path, redact_tokens=True)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
