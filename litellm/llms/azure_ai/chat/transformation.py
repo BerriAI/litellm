@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Collection, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -29,8 +29,10 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
-from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
+    declared_reasoning_efforts,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
@@ -149,26 +151,20 @@ def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, objec
     )
 
 
-def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
-    row: Final = GetModelCostMap.loaded_model_cost_map().get(f"azure_ai/{model}")
-    return declared_reasoning_efforts(row) if row is not None else None
+_DEFAULT_REASONING_EFFORT: Final = "default"
+_FOUNDRY_REASONING_EFFORTS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 
 
 def _declares_reasoning_effort(model: str) -> bool:
-    return bool(_catalog_reasoning_efforts(model))
+    row: Final = GetModelCostMap.loaded_model_cost_map_entry(f"azure_ai/{model}")
+    return row is not None and bool(declared_reasoning_efforts(row))
 
 
-def _reasoning_effort_level(
-    requested: object, model: str, declared: Sequence[str], drop_params: bool
-) -> Mapping[str, str]:
-    fields: Final = as_str_mapping(requested)
-    level: Final = fields.get("effort") if fields is not None else requested
-    if isinstance(level, str):
-        return {"reasoning_effort": nearest_declared_reasoning_effort(level, declared)}
+def _unsupported_reasoning_effort(requested: object, model: str, drop_params: bool) -> Mapping[str, str]:
     if not drop_params and litellm.drop_params is not True:
         raise UnsupportedParamsError(
-            message=f"azure_ai takes reasoning_effort only as a level such as 'high', got {requested!r}. To drop "
-            "unsupported openai params from the call, set `litellm.drop_params = True`",
+            message=f"azure_ai takes reasoning_effort as one of {', '.join(REASONING_EFFORT_ADVERTISEMENT_ORDER)}, "
+            f"got {requested!r}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
             llm_provider="azure_ai",
             model=model,
             status_code=400,
@@ -179,18 +175,30 @@ def _reasoning_effort_level(
     return {}
 
 
-def _declared_reasoning_effort_param(
-    non_default_params: Mapping[str, object],
-    model: str,
-    deployment_levels: Collection[str] | None,
-    drop_params: bool,
-) -> Mapping[str, str]:
-    model_levels: Final = _catalog_reasoning_efforts(model)
-    if "reasoning_effort" not in non_default_params or not model_levels:
+def _reasoning_effort_level(requested: object, model: str, drop_params: bool) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(requested)
+    level: Final = fields.get("effort") if fields is not None else requested
+    if level == _DEFAULT_REASONING_EFFORT:
         return {}
-    return _reasoning_effort_level(
-        non_default_params["reasoning_effort"], model, tuple(deployment_levels or ()) or model_levels, drop_params
-    )
+    if not isinstance(level, str) or level not in _FOUNDRY_REASONING_EFFORTS:
+        return _unsupported_reasoning_effort(requested, model, drop_params)
+    if fields is not None and any(key != "effort" for key in fields):
+        warn_dropped_reasoning(
+            "reasoning_effort",
+            requested,
+            model,
+            f"Azure AI Foundry takes only a level name, so {level!r} is sent without the other fields.",
+            drop_params_gated=False,
+        )
+    return {"reasoning_effort": level}
+
+
+def _declared_reasoning_effort_param(
+    non_default_params: Mapping[str, object], model: str, drop_params: bool
+) -> Mapping[str, str]:
+    if "reasoning_effort" not in non_default_params or not _declares_reasoning_effort(model):
+        return {}
+    return _reasoning_effort_level(non_default_params["reasoning_effort"], model, drop_params)
 
 
 def _message_fields_to_strip(model: str) -> tuple[str, ...]:
@@ -271,9 +279,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 non_default_params=non_default_params,
                 optional_params={
                     **optional_params,
-                    **_declared_reasoning_effort_param(
-                        non_default_params, model, declared_reasoning_efforts, drop_params
-                    ),
+                    **_declared_reasoning_effort_param(non_default_params, model, drop_params),
                 },
                 model=model,
                 drop_params=drop_params,

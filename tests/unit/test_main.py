@@ -10670,12 +10670,12 @@ def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
     ] == "none"
 
 
-def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
+def test_a_model_map_declaration_alone_forwards_reasoning_effort_without_rounding_it(
     local_model_cost_map: None, respx_mock: respx.MockRouter
 ) -> None:
-    assert "reasoning_effort" not in _chat_body_sent(
-        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
-    )
+    assert _chat_body_sent(respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True)[
+        "reasoning_effort"
+    ] == "medium"
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])

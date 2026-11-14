@@ -372,23 +372,26 @@ def foundry_reasoner(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 @pytest.mark.parametrize(
-    ("requested", "sent"),
+    ("model", "requested", "sent"),
     [
-        pytest.param("high", "high", id="level"),
-        pytest.param("medium", "high", id="level-the-row-does-not-list-rounds-up"),
-        pytest.param({"effort": "low", "summary": "detailed"}, "low", id="effort-with-summary"),
+        pytest.param("FW-Reasoner", "high", "high", id="declared-level"),
+        pytest.param("FW-Reasoner", "medium", "medium", id="level-the-row-does-not-list-is-sent-as-asked"),
+        pytest.param("FW-Reasoner", "none", "none", id="none"),
+        pytest.param("FW-Reasoner", {"effort": "low", "summary": "detailed"}, "low", id="effort-with-summary"),
+        pytest.param("fw-reasoner", "high", "high", id="model-named-in-another-case"),
     ],
 )
+@pytest.mark.usefixtures("foundry_reasoner")
 @pytest.mark.asyncio
 async def test_foundry_model_declaring_reasoning_efforts_sends_the_level_as_a_string(
-    respx_mock: respx.MockRouter, foundry_reasoner: str, requested: object, sent: str
+    respx_mock: respx.MockRouter, model: str, requested: object, sent: str
 ) -> None:
     route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
         return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
     )
 
     await litellm.acompletion(
-        model=f"azure_ai/{foundry_reasoner}",
+        model=f"azure_ai/{model}",
         api_key="azure-ai-test-key",
         api_base="https://example-resource.services.ai.azure.com",
         messages=[{"role": "user", "content": "What is 17*23?"}],
@@ -396,6 +399,89 @@ async def test_foundry_model_declaring_reasoning_efforts_sends_the_level_as_a_st
     )
 
     assert json.loads(route.calls.last.request.content)["reasoning_effort"] == sent
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_foundry_reasoning_effort_default_leaves_the_level_to_the_model(
+    respx_mock: respx.MockRouter, drop_params: bool
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    await litellm.acompletion(
+        model="azure_ai/FW-Reasoner",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        messages=[{"role": "user", "content": "What is 17*23?"}],
+        reasoning_effort="default",
+        drop_params=drop_params,
+    )
+
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    ("requested", "warns"),
+    [
+        pytest.param({"effort": "low"}, False, id="effort-only"),
+        pytest.param({"effort": "low", "summary": "detailed"}, True, id="effort-with-summary"),
+    ],
+)
+def test_foundry_reasoning_effort_object_sends_its_level_and_warns_about_the_rest(
+    foundry_reasoner: str, caplog: pytest.LogCaptureFixture, requested: object, warns: bool
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=False,
+        )
+
+    assert optional_params == {"reasoning_effort": "low"}
+    assert any("summary" in record.getMessage() for record in caplog.records) is warns
+
+
+NOT_A_FOUNDRY_LEVEL: Final = (
+    pytest.param("High", id="level-in-another-case"),
+    pytest.param("ultra", id="unknown-level"),
+    pytest.param({"summary": "detailed"}, id="object-without-a-level"),
+)
+
+
+@pytest.mark.parametrize("requested", NOT_A_FOUNDRY_LEVEL)
+def test_foundry_reasoning_effort_that_is_not_a_level_is_refused_without_drop_params(
+    foundry_reasoner: str, requested: object
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("requested", NOT_A_FOUNDRY_LEVEL)
+def test_foundry_reasoning_effort_that_is_not_a_level_is_dropped_with_a_warning_under_drop_params(
+    foundry_reasoner: str, caplog: pytest.LogCaptureFixture, requested: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested, "temperature": 0.2},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=True,
+        )
+
+    assert optional_params == {"temperature": 0.2}
+    assert any(
+        "reasoning_effort" in record.getMessage() and "drop_params=True" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -476,46 +562,6 @@ async def test_foundry_model_without_declared_reasoning_efforts_still_refuses_re
     assert not route.called
 
 
-def test_foundry_deployment_declared_levels_win_over_the_model_row(foundry_reasoner: str) -> None:
-    optional_params: Final = AzureAIStudioConfig().map_openai_params(
-        non_default_params={"reasoning_effort": "medium"},
-        optional_params={},
-        model=foundry_reasoner,
-        drop_params=False,
-        declared_reasoning_efforts=("low", "medium", "high"),
-    )
-
-    assert optional_params == {"reasoning_effort": "medium"}
-
-
-def test_foundry_reasoning_effort_without_a_level_is_refused_without_drop_params(foundry_reasoner: str) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError):
-        AzureAIStudioConfig().map_openai_params(
-            non_default_params={"reasoning_effort": {"summary": "detailed"}},
-            optional_params={},
-            model=foundry_reasoner,
-            drop_params=False,
-        )
-
-
-def test_foundry_reasoning_effort_without_a_level_is_dropped_with_a_warning_under_drop_params(
-    foundry_reasoner: str, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        optional_params: Final = AzureAIStudioConfig().map_openai_params(
-            non_default_params={"reasoning_effort": {"summary": "detailed"}, "temperature": 0.2},
-            optional_params={},
-            model=foundry_reasoner,
-            drop_params=True,
-        )
-
-    assert optional_params == {"temperature": 0.2}
-    assert any(
-        "reasoning_effort" in record.getMessage() and foundry_reasoner in record.getMessage()
-        for record in caplog.records
-    )
-
-
 def test_azure_ai_grok_stop_parameter_handling():
     """
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
@@ -533,7 +579,9 @@ def test_azure_ai_grok_stop_parameter_handling():
     # Test supported parameters for Grok models
     for model in ("grok-4-fast", "grok-4.3"):
         grok_params = config.get_supported_openai_params(model)
-        assert "stop" not in grok_params, "Grok models should not support stop parameter"
+        assert (
+            "stop" not in grok_params
+        ), "Grok models should not support stop parameter"
 
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
@@ -801,7 +849,8 @@ def test_azure_model_router_response_shows_actual_model():
 
     # Verify that the response contains the actual model used, not the router model
     assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
-        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), but got '{result.model}'"
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
+        f"but got '{result.model}'"
     )
 
 
@@ -859,11 +908,19 @@ def test_azure_model_router_stamps_selected_model_on_hidden_params():
     )
 
     assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == result.model
-    assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == "azure_ai/grok-4-1-fast-reasoning"
-    assert AzureFoundryModelInfo.get_model_router_selected_model(result._hidden_params) == (
-        "azure_ai/grok-4-1-fast-reasoning"
+    assert (
+        result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY]
+        == "azure_ai/grok-4-1-fast-reasoning"
     )
-    assert AzureFoundryModelInfo.is_model_router_call(model="smart-pick", hidden_params=result._hidden_params) is True
+    assert AzureFoundryModelInfo.get_model_router_selected_model(
+        result._hidden_params
+    ) == ("azure_ai/grok-4-1-fast-reasoning")
+    assert (
+        AzureFoundryModelInfo.is_model_router_call(
+            model="smart-pick", hidden_params=result._hidden_params
+        )
+        is True
+    )
 
 
 def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
@@ -886,10 +943,14 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     mock_response.text = error_text
     mock_response.json.return_value = json.loads(error_text)
     mock_response.status_code = 400
-    e = httpx.HTTPStatusError(message="400", request=MagicMock(), response=mock_response)
+    e = httpx.HTTPStatusError(
+        message="400", request=MagicMock(), response=mock_response
+    )
 
     assert config._error_has_tool_level_extra_fields(error_text) is True
-    assert config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    assert (
+        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    )
 
     request_data = {
         "model": "FW-Kimi-K2.6",
@@ -980,8 +1041,7 @@ def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(capl
     assert retried == {"model": "Mistral-Large-3", "messages": [{"role": "user", "content": "Say hi."}]}
     assert len(drop_warnings) == 1
     assert all(
-        fragment in drop_warnings[0]
-        for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
+        fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
     )
 
 
@@ -1050,6 +1110,7 @@ def test_azure_ai_strips_non_openai_spec_message_fields():
     transformed_messages = request["messages"]
 
     assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert transformed_messages[1]["reasoning_content"] == "The user wants me to read a file."
     assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
     assert not _find_key_anywhere(transformed_messages, "cache_control")
 
@@ -1103,7 +1164,9 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
         {
             "role": "assistant",
             "content": "I can help.",
-            "thinking_blocks": [{"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}],
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
             "provider_specific_fields": {"thought_signature": "sig-top"},
             "tool_calls": [
                 {
@@ -1234,6 +1297,7 @@ def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint
     assert not _find_key_anywhere(request["messages"], "data")
 
 
+
 def test_azure_ai_renames_a_cache_control_mark_to_a_breakpoint_for_a_model_that_reads_them(_local_model_cost_map):
     request: Final = AzureAIStudioConfig().transform_request(
         model="gpt-6-astra",
@@ -1325,10 +1389,7 @@ def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_pa
 @pytest.mark.parametrize(
     ("registered", "keeps_parts"),
     [
-        (
-            {"azure_ai/qa-foundry-alias": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}},
-            True,
-        ),
+        ({"azure_ai/qa-foundry-alias": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}}, True),
         ({"qa-foundry-alias": {"litellm_provider": "openai", "supports_prompt_cache_breakpoint": True}}, False),
     ],
     ids=["azure_ai-entry-opts-in", "openai-entry-does-not-speak-for-azure_ai"],
@@ -1362,7 +1423,6 @@ def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_s
             "opted-out": {"supports_prompt_cache_breakpoint": False},
         }
     )
-
     def deployment(host: str, model_info: dict[str, object]) -> dict[str, object]:
         return {
             "model_name": host,
@@ -1383,9 +1443,7 @@ def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_s
                     "object": "chat.completion",
                     "created": 1700000000,
                     "model": "qa-shared-deployment",
-                    "choices": [
-                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
-                    ],
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                 },
             )
@@ -1630,7 +1688,9 @@ async def test_azure_ai_with_image_url():
                             },
                             {
                                 "type": "image_url",
-                                "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
+                                "image_url": {
+                                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                                },
                             },
                         ],
                     },
@@ -1656,7 +1716,9 @@ async def test_azure_ai_with_image_url():
                     {"type": "text", "text": "What is in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
+                        "image_url": {
+                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                        },
                     },
                 ],
             }
