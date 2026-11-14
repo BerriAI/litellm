@@ -1,11 +1,12 @@
 import asyncio
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
@@ -261,29 +262,52 @@ async def test_a_failed_scan_frees_the_window_for_another_pod(router_redis: tupl
     healthy_db.db.query_raw.assert_awaited_once()
 
 
+@asynccontextmanager
+async def _disconnected_redis(url: str) -> AsyncIterator[RedisCache]:
+    """A RedisCache whose in-process fakeredis server refuses every command with a ConnectionError, wired the same
+    way as the router_redis fixture."""
+    from fakeredis import FakeRedis, FakeServer
+    from fakeredis.aioredis import FakeConnection
+    from redis.asyncio import BlockingConnectionPool
+
+    server: Final = FakeServer()
+    server.connected = False
+    client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            yield RedisCache(url=url)
+    finally:
+        await pool.aclose()
+        client.close()
+
+
 @pytest.mark.asyncio
 async def test_open_redis_circuit_breaker_still_scans_and_sends(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.redis import store_settings
 
     monkeypatch.setattr(store_settings, "REDIS_CIRCUIT_BREAKER_ENABLED", True)
     monkeypatch.setattr(store_settings, "REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 1)
-    unreachable: Final = RedisCache(host="127.0.0.1", port=1, socket_timeout=0.2, db=7)
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    manager: Final = KeyExpiryAlertManager(
-        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=unreachable)
-    )
-    await manager.process_alerts()
+    async with _disconnected_redis("redis://expiry-breaker.example:6379/7") as redis:
+        manager: Final = KeyExpiryAlertManager(
+            _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+        )
+        await manager.process_alerts()
     assert email.send_key_expiring_email.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_unreachable_redis_still_scans_and_sends() -> None:
-    unreachable: Final = RedisCache(host="127.0.0.1", port=1, socket_timeout=0.2)
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    manager: Final = KeyExpiryAlertManager(
-        _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=unreachable)
-    )
-    await manager.process_alerts()
+    async with _disconnected_redis("redis://expiry-down.example:6379/0") as redis:
+        manager: Final = KeyExpiryAlertManager(
+            _database((_key(),)), DualCache(), email, lambda: NOW, pod_lock_manager=PodLockManager(redis_cache=redis)
+        )
+        await manager.process_alerts()
     assert email.send_key_expiring_email.await_count == 1
 
 
@@ -408,8 +432,9 @@ async def test_startup_built_job_waits_for_the_proxy_pod_lock_then_scans_with_th
     )
     manager: Final = ProxyStartupEvent._build_key_expiry_alert_manager()
     assert manager is not None
+    manager.clock = lambda: NOW
     other_pod: Final = PodLockManager(redis_cache=redis)
-    window_job: Final = _window_job(datetime.now(timezone.utc))
+    window_job: Final = _window_job(NOW)
     assert await other_pod.acquire_lock(cronjob_id=window_job)
     await manager.process_alerts()
     db.db.query_raw.assert_not_awaited()
