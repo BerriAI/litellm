@@ -445,7 +445,6 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
 
 
-
 @pytest.mark.parametrize(
     ("cohere_api_base", "expected_url"),
     [

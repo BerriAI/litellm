@@ -36,7 +36,6 @@ async def test_bedrock_cohere_embedding_sends_the_caller_timeout(
     assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
-
 @pytest.mark.parametrize(
     ("cohere_api_base", "expected_url"),
     [
