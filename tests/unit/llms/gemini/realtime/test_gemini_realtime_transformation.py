@@ -2511,3 +2511,53 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("definitions", "message"),
+    [
+        ({"Shared": {"type": "string", "description": "x" * 5_000_000}}, "tool 'shared_tree'"),
+        ([{"Shared": {"type": "string"}}], "must be JSON objects"),
+    ],
+    ids=("over-the-inlining-budget", "non-object-defs"),
+)
+def test_gemini_live_rejects_a_session_update_whose_tool_schema_gemini_cannot_take(
+    drop_params: bool, definitions: object, message: str
+) -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "shared_tree",
+        "parameters": {
+            "type": "object",
+            "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+            "$defs": definitions,
+        },
+    }
+
+    rejection: Final = GeminiRealtimeConfig(drop_params=drop_params).setup_session_update_rejection(
+        "gemini-live-2.5-flash-preview", {"tools": [tool]}, setup_sent=False
+    )
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", "session.tools")
+    assert message in rejection.message
+
+
+def test_gemini_live_accepts_a_session_update_whose_tool_schema_fits() -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"$ref": "#/$defs/City"}},
+            "$defs": {"City": {"type": "string"}},
+        },
+    }
+
+    assert (
+        GeminiRealtimeConfig().setup_session_update_rejection(
+            "gemini-live-2.5-flash-preview", {"tools": [tool]}, setup_sent=False
+        )
+        is None
+    )

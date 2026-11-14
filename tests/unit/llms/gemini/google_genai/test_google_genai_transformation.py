@@ -10,6 +10,7 @@ import litellm
 from litellm.google_genai import agenerate_content_stream
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS
+from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROMPT: Final = "Hello, can you tell me a short joke?"
@@ -300,3 +301,26 @@ def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
         if integer_enum_sent
         else {"type": "integer"}
     )
+
+
+@pytest.mark.parametrize(
+    ("config", "llm_provider"), [(GoogleGenAIConfig(), "gemini"), (VertexAIGoogleGenAIConfig(), "vertex_ai")]
+)
+def test_generate_content_response_schema_over_the_inlining_budget_is_a_context_window_error(
+    config: GoogleGenAIConfig, llm_provider: str
+) -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+        "$defs": {"Shared": {"type": "string", "description": "x" * 5_000_000}},
+    }
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="the response schema") as raised:
+        config.transform_generate_content_request(
+            model="gemini-1.5-pro",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            tools=None,
+            generate_content_config_dict={"responseSchema": schema},
+        )
+
+    assert (raised.value.status_code, raised.value.llm_provider) == (400, llm_provider)

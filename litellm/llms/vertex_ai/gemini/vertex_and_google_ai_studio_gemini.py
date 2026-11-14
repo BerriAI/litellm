@@ -31,6 +31,7 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
@@ -95,11 +96,11 @@ from litellm.utils import (
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ..common_utils import (
-    VERTEX_SCHEMAS_MAX_INLINED_BYTES,
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
     build_vertex_schema_within_budget,
+    schema_budget_errors_as_context_window_errors,
     supports_response_json_schema,
     with_integer_enums_that_fit,
 )
@@ -155,6 +156,10 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _tool_schema_name(tool_name: str, earlier_tools_inlined_bytes: int) -> str:
+    return f"tool '{tool_name}' and the tools before it" if earlier_tools_inlined_bytes else f"tool '{tool_name}'"
 
 
 def _response_header(headers: Mapping[str, str], name: str) -> str | None:
@@ -615,6 +620,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    @property
+    def _llm_provider(self) -> str:
+        return "vertex_ai"
+
     def get_json_schema_from_pydantic_object(self, response_format: type["BaseModel"] | dict | None) -> dict | None:
         """
         Override to use Pydantic's model_json_schema() instead of OpenAI's
@@ -1070,8 +1079,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"], tool_inlined_bytes = build_vertex_schema_within_budget(
                         _openai_function_object["parameters"],
-                        max_inlined_bytes=VERTEX_SCHEMAS_MAX_INLINED_BYTES - inlined_bytes,
-                        schema_name=f"tool '{_openai_function_object.get('name', '')}'",
+                        max_inlined_bytes=DEFS_MAX_INLINED_BYTES - inlined_bytes,
+                        schema_name=_tool_schema_name(_openai_function_object.get("name", ""), inlined_bytes),
                         send_integer_enums=send_integer_enums,
                     )
                     inlined_bytes += tool_inlined_bytes
@@ -1661,9 +1670,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(
-                    value=value, optional_params=optional_params, model=model, allow_integer_enums=allow_integer_enums
-                )
+                with schema_budget_errors_as_context_window_errors(model, self._llm_provider):
+                    self.apply_response_schema_transformation(
+                        value=value,
+                        optional_params=optional_params,
+                        model=model,
+                        allow_integer_enums=allow_integer_enums,
+                    )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1676,10 +1689,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = with_integer_enums_that_fit(
-                    partial(self._map_function, value, optional_params),
-                    allow_integer_enums and self._is_gemini_3_or_newer(model),
-                )
+                with schema_budget_errors_as_context_window_errors(model, self._llm_provider):
+                    mapped_tools = with_integer_enums_that_fit(
+                        partial(self._map_function, value, optional_params),
+                        allow_integer_enums and self._is_gemini_3_or_newer(model),
+                    )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(

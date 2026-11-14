@@ -4,6 +4,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.types.utils import ImageResponse
@@ -583,3 +584,27 @@ def test_gemini_image_generation_response_rejection_text_is_the_same_wherever_th
         {"candidates": [{"content": {"parts": [malformed_entry]}}]}
     )
     assert _rejection_text({"candidates": late_candidates}) == _rejection_text({"candidates": [malformed_entry]})
+
+
+def test_gemini_image_generation_tool_over_the_inlining_budget_is_a_context_window_error():
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "shared_tree",
+            "parameters": {
+                "type": "object",
+                "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+                "$defs": {"Shared": {"type": "string", "description": "x" * 5_000_000}},
+            },
+        },
+    }
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="tool 'shared_tree'") as raised:
+        GoogleImageGenConfig().map_openai_params(
+            non_default_params={"tools": [tool]},
+            optional_params={},
+            model="gemini-3.1-flash-image-preview",
+            drop_params=False,
+        )
+
+    assert raised.value.llm_provider == "gemini"

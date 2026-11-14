@@ -14,7 +14,11 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_web_search_requests,
     map_gemini_image_tools_params,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_base_url,
+    map_vertex_image_size,
+    schema_budget_errors_as_context_window_errors,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -112,12 +116,13 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 ).items()
                 if key not in image_config
             }
-            return map_gemini_image_tools_params(
-                _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
-            )
+            with schema_budget_errors_as_context_window_errors(model, "vertex_ai"):
+                return map_gemini_image_tools_params(
+                    _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
+                )
 
-        mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
-        return mapped_params
+        with schema_budget_errors_as_context_window_errors(model, "vertex_ai"):
+            return map_gemini_image_tools_params(non_default_params, mapped_params)
 
     def _resolve_vertex_project(self) -> str | None:
         return (

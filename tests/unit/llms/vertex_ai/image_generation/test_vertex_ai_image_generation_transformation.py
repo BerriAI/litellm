@@ -1148,3 +1148,24 @@ def test_imagen_image_generation_validation_uses_supplied_vertex_token() -> None
         config._credentials_project_mapping.pop(cache_key, None)
 
     assert headers == {"Content-Type": "application/json", "Authorization": "Bearer test-access-token"}
+
+
+def test_vertex_gemini_image_generation_tool_over_the_inlining_budget_is_a_context_window_error():
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "shared_tree",
+            "parameters": {
+                "type": "object",
+                "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+                "$defs": {"Shared": {"type": "string", "description": "x" * 5_000_000}},
+            },
+        },
+    }
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="tool 'shared_tree'") as raised:
+        VertexAIGeminiImageGenerationConfig().map_openai_params(
+            {"tools": [tool]}, {}, "gemini-3.1-flash-image-preview", False
+        )
+
+    assert raised.value.llm_provider == "vertex_ai"

@@ -1250,6 +1250,10 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+class DefsInliningBudgetExceededError(ValueError):
+    pass
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
@@ -1317,7 +1321,7 @@ def unpack_defs(
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(target_schema)
                     if inlined_bytes > max_inlined_bytes:
-                        raise ValueError(
+                        raise DefsInliningBudgetExceededError(
                             f"unpack_defs: inlined schema exceeded the "
                             f"{max_inlined_bytes:,}-byte budget. Refusing to "
                             f"deep-copy further to prevent schema-bomb "

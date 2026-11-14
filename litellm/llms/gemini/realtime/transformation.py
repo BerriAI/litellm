@@ -15,8 +15,10 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import DefsInliningBudgetExceededError
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
@@ -576,7 +578,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self, model: str, session: Mapping[str, object], *, setup_sent: bool
     ) -> RealtimeSessionUpdateRejection | None:
         if self.drop_params:
-            return None
+            return None if setup_sent else self._tools_rejection(session)
         if setup_sent:
             return RealtimeSessionUpdateRejection(
                 code="session_update_not_applied",
@@ -587,7 +589,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ),
                 param="session",
             )
-        return self._modality_rejection(model, session) or self._voice_rejection(model, session)
+        return (
+            self._modality_rejection(model, session)
+            or self._voice_rejection(model, session)
+            or self._tools_rejection(session)
+        )
+
+    @staticmethod
+    def _tools_rejection(session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+        tools: Final = session.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        try:
+            VertexGeminiConfig().map_function(
+                value=[_chat_completion_tool(tool) for tool in _JSON_ARRAY.validate_python(tools)],
+                optional_params={},
+            )
+        except (DefsInliningBudgetExceededError, VertexAIError) as e:
+            return RealtimeSessionUpdateRejection(code="invalid_value", message=str(e), param="session.tools")
+        return None
 
     @staticmethod
     def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
