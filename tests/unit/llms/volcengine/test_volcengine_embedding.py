@@ -298,7 +298,7 @@ def test_volcengine_embedding_returns_the_provider_vectors_model_and_usage(respx
     )
 
     response: Final = litellm.embedding(
-        model="volcengine/doubao-embedding-text-240715",
+        model="volcengine/doubao-embedding-text",
         input=["hello"],
         api_base="https://gateway.example.com/ark",
         api_key="volcengine-test-key",
