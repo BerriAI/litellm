@@ -6,12 +6,16 @@ import asyncio
 import gc
 import warnings
 from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
+from weakref import ReferenceType, ref
 
 import pytest
+from starlette.requests import Request
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -21,11 +25,11 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     admission_counter_keys,
     bind_admission_counter_keys,
     post_call_counter_keys,
+    read_batched_spend_counters,
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
 from litellm.rust_bridge._native import NativeRedisStoreError
-from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -40,6 +44,36 @@ TOKEN_KEYS = frozenset(
         "spend:org:org",
     }
 )
+
+
+def _request_key_supplier(batch: SpendCounterBatch) -> ReferenceType[Request]:
+    request: Final = Request({"type": "http", "headers": [(b"x-counter-key", b"spend:customer_org:org")]})
+    batch.provide_counter_keys(lambda: frozenset((request.headers["x-counter-key"],)))
+    return ref(request)
+
+
+def test_consumed_counter_key_supplier_releases_its_request() -> None:
+    batch: Final = SpendCounterBatch(FakeSpendCounters().store())
+    request: Final = _request_key_supplier(batch)
+    assert request() is not None
+
+    batch.bind(frozenset(("spend:key:key",)))
+
+    assert batch.counter_keys == frozenset(("spend:key:key", "spend:customer_org:org"))
+    gc.collect()
+    assert request() is None
+
+
+def test_closed_batch_releases_an_unused_counter_key_supplier_request() -> None:
+    batch: Final = SpendCounterBatch(FakeSpendCounters().store())
+    request: Final = _request_key_supplier(batch)
+    assert request() is not None
+
+    batch.close()
+
+    assert not batch.is_open
+    gc.collect()
+    assert request() is None
 
 
 def test_admission_counter_keys_cover_every_entity_the_checks_read():
@@ -63,6 +97,35 @@ def test_post_call_counter_keys_skip_ids_that_are_not_strings():
         tags=[placeholder, "t1"],
         model_access_groups=None,
     ) == {"spend:team:team", "spend:end_user:eu", "spend:tag:t1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", (False, True))
+async def test_bulk_read_distinguishes_an_authoritative_miss_from_an_unavailable_batch(available: bool) -> None:
+    handle: Final = FakeSpendCounters(redis={"spend:key:hashed": 1.5}, batch_reads=available)
+    keys: Final = frozenset(("spend:key:hashed", "spend:team:team"))
+    with spend_counter_batch_scope(handle.store()):
+        assert await read_batched_spend_counters(frozenset()) == {}
+        assert await read_batched_spend_counters(keys) == (
+            {"spend:key:hashed": 1.5, "spend:team:team": None} if available else {}
+        )
+    assert await read_batched_spend_counters(keys) == {}
+
+
+@pytest.mark.asyncio
+async def test_bulk_reads_observe_recorded_writes_forgets_and_a_closed_scope() -> None:
+    handle: Final = FakeSpendCounters(redis={"spend:key:hashed": 1.5})
+    batch: Final = SpendCounterBatch(handle.store())
+    known: Final = frozenset(("spend:key:hashed", "spend:team:team"))
+    requested: Final = known | frozenset(("spend:user:unbound",))
+    batch.bind(known)
+    assert await batch.read_many(requested) == {"spend:key:hashed": 1.5, "spend:team:team": None}
+    batch.record("spend:key:hashed", 2.0)
+    batch.forget("spend:team:team")
+    assert await batch.read_many(requested) == {"spend:key:hashed": 2.0}
+    batch.close()
+    assert await batch.read_many(requested) == {}
+    assert handle.commands == ["MGET spend:key:hashed spend:team:team"]
 
 
 @pytest.mark.asyncio

@@ -216,6 +216,7 @@ class PerformanceTestCase:
     """Tables whose background write is one upsert per writer flush and, at this case's request rate, lands
     above the `postgres_max_background_statement_per_request` cap without being per request."""
     event_loop: EventLoopStalls | None = None
+    customer_hierarchy: bool = False
 
     def team(self, name: str) -> Team:
         return next(team for team in self.teams if team.name == name)

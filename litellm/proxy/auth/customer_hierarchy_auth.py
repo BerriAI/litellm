@@ -243,6 +243,8 @@ def select_customer_team(hierarchy: CustomerHierarchyAuth, customer_team_id: str
     selected: Final = next((scope for scope in hierarchy.team_scopes if scope.entity_id == customer_team_id), None)
     if selected is None:
         return None
+    if hierarchy.customer_team_id == customer_team_id and selected in hierarchy.scopes:
+        return hierarchy
     return hierarchy.model_copy(
         update={
             "customer_team_id": customer_team_id,
@@ -290,7 +292,9 @@ async def get_customer_hierarchy(
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | None:
     cache_key: Final = customer_member_cache_key(customer_member_id)
-    cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
+    cached: Final = await user_api_key_cache.async_get_frozen_model(
+        cache_key, CustomerHierarchyAuth, get_management_object_ttl(user_api_key_cache)
+    )
     if cached is not None:
         return cached
     lease: Final = await user_api_key_cache.lease(cache_key)
@@ -312,8 +316,11 @@ async def get_customer_hierarchy(
     )
     row_values: Final = {**row.model_dump(), "teams": tuple(team.model_dump() for team in teams)}
     hierarchy: Final = customer_hierarchy_from_member_row(row_values, loaded_at)
-    _ = await user_api_key_cache.async_set_leased(
-        lease, hierarchy, _cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache))
+    await user_api_key_cache.async_set_frozen_model(
+        key=cache_key,
+        value=hierarchy,
+        ttl=_cache_ttl(row_values, loaded_at, get_management_object_ttl(user_api_key_cache)),
+        lease=lease,
     )
     return hierarchy
 
@@ -379,7 +386,9 @@ async def get_customer_organization_hierarchy(
 ) -> CustomerHierarchyAuth | AmbiguousOrganizationAlias | None:
     """The organization-only hierarchy behind an alias, None when no organization carries it."""
     cache_key: Final = customer_org_alias_cache_key(customer_org_alias)
-    cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
+    cached: Final = await user_api_key_cache.async_get_frozen_model(
+        cache_key, CustomerHierarchyAuth, get_management_object_ttl(user_api_key_cache)
+    )
     if cached is not None:
         return cached
     lease: Final = await user_api_key_cache.lease(cache_key)
@@ -393,7 +402,9 @@ async def get_customer_organization_hierarchy(
     hierarchy: Final = customer_hierarchy_from_organization_row(
         rows[0].model_dump(), now if now is not None else utc_now()
     )
-    _ = await user_api_key_cache.async_set_leased(lease, hierarchy, get_management_object_ttl(user_api_key_cache))
+    await user_api_key_cache.async_set_frozen_model(
+        key=cache_key, value=hierarchy, ttl=get_management_object_ttl(user_api_key_cache), lease=lease
+    )
     return hierarchy
 
 

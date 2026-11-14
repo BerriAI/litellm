@@ -135,6 +135,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_identity_from_headers,
     resolve_customer_hierarchy,
 )
+from litellm.proxy.auth.customer_spend_batch import cached_customer_spend_keys
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
@@ -200,6 +201,7 @@ from litellm.proxy.spend_tracking.committed_spend import (
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
+    provide_spend_counter_keys,
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
@@ -2524,6 +2526,9 @@ async def user_api_key_auth_builder(
         user_custom_auth,
     )
 
+    provide_spend_counter_keys(
+        lambda: cached_customer_spend_keys(safe_get_request_headers(request), user_api_key_cache)
+    )
     parent_otel_span: Span | None = None
     # Prefer the receive-instant stamped by the early helper in
     # user_api_key_auth (before body parse) — overwriting it would shorten

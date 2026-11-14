@@ -14,6 +14,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
+from litellm.proxy.common_utils.frozen_model_cache import FrozenModelCache
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore
 from litellm.redis.stores.connection import connect
 
@@ -111,6 +112,7 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
         )
         self._auth_cache: Final = auth_cache
+        self._models: Final = FrozenModelCache(self.in_memory_cache)
         self._redis_connection: RedisCache | None = None
         self._shared: AuthCacheStore | None = None
         self._leases: Final[WeakValueDictionary[str, CacheLease]] = WeakValueDictionary()
@@ -169,6 +171,11 @@ class UserApiKeyCache(DualCache):
 
     def get_local(self, key: str) -> object:
         """This worker's memory copy alone."""
+        model: Final = (
+            self._models.get(key, BaseModel) if key.startswith(("customer_member_id:", "customer_org_alias:")) else None
+        )
+        if model is not None:
+            return model
         if self._shared is not None:
             return self._shared.get_local(key)
         return self._python_memory(key).get_cache(key=key)
@@ -176,6 +183,7 @@ class UserApiKeyCache(DualCache):
     def set_local(self, key: str, value: object, ttl: float | None) -> None:
         """A memory write alone, with ``default_in_memory_ttl`` when ``ttl`` is None."""
         if self._shared is not None:
+            self.in_memory_cache.delete_cache(key)
             self._shared.set_local(key, value, ttl)
             return
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
@@ -219,6 +227,7 @@ class UserApiKeyCache(DualCache):
 
     def delete_local(self, key: str) -> None:
         """Drops this worker's memory copy alone, as a cross-worker eviction broadcast does."""
+        self.in_memory_cache.delete_cache(key)
         self._void_leases((key,))
         if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
             self.budget_windows_absent_cache.delete_cache(key)
@@ -229,6 +238,31 @@ class UserApiKeyCache(DualCache):
 
     def _python_memory(self, key: str) -> InMemoryCache:
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
+
+    async def async_get_frozen_model(self, key: str, model_type: type[T], ttl: float) -> T | None:
+        cached: Final = self._models.get(key, model_type)
+        if cached is not None:
+            return cached
+        loaded: Final = await self.async_get_cache(key=key, model_type=model_type)
+        remaining: Final = self._shared.local_ttl(key) if self._shared is not None else ttl
+        if loaded is not None and remaining is not None and remaining > 0:
+            self._models.remember(key, loaded, min(ttl, remaining))
+        return loaded
+
+    def get_local_frozen_model(self, key: str, model_type: type[T]) -> T | None:
+        cached: Final = self._models.get(key, model_type)
+        return cached if cached is not None else self.get_cache(key=key, model_type=model_type, local_only=True)
+
+    async def async_set_frozen_model(
+        self, key: str, value: BaseModel, ttl: float, *, lease: CacheLease | None = None
+    ) -> None:
+        if lease is None:
+            await self.async_set_cache(key=key, value=value, ttl=ttl)
+        elif not await self.async_set_leased(lease, value, ttl):
+            return
+        remaining: Final = self._shared.local_ttl(key) if self._shared is not None else ttl
+        if remaining is not None and remaining > 0:
+            self._models.remember(key, value, min(ttl, remaining))
 
     @overload
     def get_cache(
@@ -341,6 +375,7 @@ class UserApiKeyCache(DualCache):
         if shared is not None:
             if key is None:
                 return None
+            self.in_memory_cache.delete_cache(key)
             try:
                 if local_only:
                     shared.set_local(key, payload, _ttl(kwargs))
@@ -368,6 +403,7 @@ class UserApiKeyCache(DualCache):
         shared: Final = self._shared
         if shared is not None:
             if key is not None:
+                self.in_memory_cache.delete_cache(key)
                 await self._set_shared(shared, key, payload, local_only=local_only, pipelined=pipelined, kwargs=kwargs)
             return None
         if key is not None and is_user_key_cache_key(key):
@@ -394,6 +430,7 @@ class UserApiKeyCache(DualCache):
             verbose_proxy_logger.error("UserApiKeyCache.async_set_cache failed for key=%r: %s", key, e)
 
     def delete_cache(self, key: str) -> None:
+        self.in_memory_cache.delete_cache(key)
         self._void_leases((key,))
         if self._shared is not None:
             self._shared.delete_sync((key,))
@@ -404,6 +441,7 @@ class UserApiKeyCache(DualCache):
         super().delete_cache(key)
 
     async def async_delete_cache(self, key: str) -> None:
+        self.in_memory_cache.delete_cache(key)
         self._void_leases((key,))
         if self._shared is not None:
             await self._shared.delete((key,))
@@ -415,6 +453,7 @@ class UserApiKeyCache(DualCache):
 
     def declare_delete(self, key: str) -> Awaitable[None] | None:
         """The DEL on the request's pre-call batch; None without Redis or outside a request, so the caller deletes."""
+        self.in_memory_cache.delete_cache(key)
         self._void_leases((key,))
         return None if self._shared is None else self._shared.declare_delete(key)
 
@@ -427,6 +466,8 @@ class UserApiKeyCache(DualCache):
         """
         self._void_leases(keys)
         if self._shared is not None:
+            for key in keys:
+                self.in_memory_cache.delete_cache(key)
             if keys:
                 await self._shared.delete(keys)
             return
@@ -444,6 +485,7 @@ class UserApiKeyCache(DualCache):
     def flush_cache(self) -> None:
         self._leases.clear()
         self.budget_windows_absent_cache.flush_cache()
+        self.in_memory_cache.flush_cache()
         if self._shared is not None:
             self._shared.flush_local()
             return
@@ -460,6 +502,8 @@ class UserApiKeyCache(DualCache):
         normalized: Final = tuple((key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list)
         shared: Final = self._shared
         if shared is not None:
+            for key, _value in normalized:
+                self.in_memory_cache.delete_cache(key)
             await self._set_many_shared(shared, normalized, local_only=local_only, ttl=_ttl(kwargs))
             return
         key_object_entries: Final = tuple(entry for entry in normalized if is_user_key_cache_key(entry[0]))

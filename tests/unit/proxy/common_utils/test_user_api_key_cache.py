@@ -21,7 +21,85 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
 from litellm.redis.stores.auth_cache import AuthCacheStore
 from litellm.rust_bridge._native import NativeAuthCache
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared", (False, True))
+async def test_frozen_policy_hits_preserve_identity_and_invalidation(shared: bool) -> None:
+    cache: Final = shared_cache()[0] if shared else UserApiKeyCache()
+    key: Final = "customer_member_id:member"
+    policy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    await cache.async_set_frozen_model(key, policy, 60)
+    assert await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60) is policy
+    cache.delete_local(key)
+    reloaded: Final = await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60)
+    assert reloaded == (policy if shared else None)
+    assert reloaded is not policy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared", (False, True))
+@pytest.mark.parametrize("evicted", (False, True))
+async def test_frozen_policy_fill_keeps_identity_only_when_its_lease_survives(shared: bool, evicted: bool) -> None:
+    cache: Final = shared_cache()[0] if shared else UserApiKeyCache()
+    key: Final = "customer_member_id:member"
+    policy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    lease: Final = await cache.lease(key)
+    if evicted:
+        await cache.async_delete_cache(key)
+    await cache.async_set_frozen_model(key, policy, 60, lease=lease)
+    assert await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60) is (None if evicted else policy)
+
+
+@pytest.mark.asyncio
+async def test_frozen_policy_fill_cannot_restore_another_workers_eviction() -> None:
+    resetter, shared = shared_cache()
+    loader, _ = shared_cache(FakeAuthCache(redis=shared.redis, generations=shared.generations))
+    key: Final = "customer_member_id:member"
+    lease: Final = await loader.lease(key)
+    await resetter.async_delete_cache(key)
+    await loader.async_set_frozen_model(key, CustomerHierarchyAuth(customer_org_id="org", scopes=()), 60, lease=lease)
+    assert await loader.async_get_frozen_model(key, CustomerHierarchyAuth, 60) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("serialized", (False, True))
+async def test_shortened_policy_ttl_is_not_extended_by_typed_cache_hits(serialized: bool) -> None:
+    clock: Final = _ManualClock()
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=clock))
+    key: Final = "customer_member_id:member"
+    policy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    if serialized:
+        await cache.async_set_cache(key, policy.model_dump(mode="json"), ttl=2)
+    else:
+        await cache.async_set_frozen_model(key, policy, 2)
+    clock.advance(1)
+    assert await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60) == policy
+    clock.advance(2)
+    assert await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60) is None
+
+
+@pytest.mark.asyncio
+async def test_serialized_shared_policy_stays_json_safe_and_raw_updates_replace_the_typed_copy() -> None:
+    cache, handle = shared_cache()
+    key: Final = "customer_member_id:member"
+    policy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    await cache.async_set_frozen_model(key, policy, 60)
+    assert handle.redis[key] == policy.model_dump(mode="json")
+    changed: Final = policy.model_copy(update={"customer_org_id": "new-org"})
+    await cache.async_set_cache(key, changed, ttl=60)
+    assert await cache.async_get_frozen_model(key, CustomerHierarchyAuth, 60) == changed
+
+
+def test_customer_model_limits_cannot_be_changed_through_a_cached_policy() -> None:
+    scope: Final = CustomerScopeAuth(key="customer_org", entity_id="org", model_tpm_limit={"model": 10})
+    assert scope.model_tpm_limit is not None
+    with pytest.raises(TypeError):
+        scope.model_tpm_limit["model"] = 99  # pyright: ignore[reportIndexIssue]  # verify runtime immutability
+    assert CustomerScopeAuth.model_validate(scope.model_dump(mode="json")) == scope
+
 
 HASHED_TOKEN = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
 

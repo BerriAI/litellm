@@ -226,7 +226,7 @@ class InMemoryCache(BaseCache):
             return True
         return False
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, **kwargs) -> Any:  # noqa: ANN401  # preserves this untyped cache's existing return contract
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
@@ -234,11 +234,12 @@ class InMemoryCache(BaseCache):
                 original_cached_response: Final = self.cache_dict[key]
             except KeyError:
                 return None
+            if not isinstance(original_cached_response, (str, bytes, bytearray)):
+                return original_cached_response
             try:
-                cached_response = json.loads(original_cached_response)
+                return json.loads(original_cached_response)
             except Exception:
-                cached_response = original_cached_response
-            return cached_response
+                return original_cached_response
         return None
 
     def batch_get_cache(self, keys: list, **kwargs):

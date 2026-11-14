@@ -162,6 +162,10 @@ class FakeAuthCache:
         entry: Final = self.memory.get(key)
         return None if entry is None else entry[0]
 
+    def local_ttl(self, key: str) -> float | None:
+        entry: Final = self.memory.get(key)
+        return None if entry is None else entry[1] if entry[1] is not None else 600
+
     def set_local(self, key: str, value: object, ttl_seconds: float | None = None) -> None:
         self.memory[key] = (value, ttl_seconds)
 

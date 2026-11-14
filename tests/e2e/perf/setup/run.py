@@ -64,6 +64,7 @@ def wire_request(item: PlannedRequest, setup: CaseSetup) -> WireRequest:
         stream=item.stream,
         blocked=item.blocked,
         send_at_s=item.send_at_s,
+        customer_headers=setup.customer_headers,
     )
 
 
