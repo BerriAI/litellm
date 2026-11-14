@@ -19,7 +19,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -1084,6 +1084,60 @@ async def test_ProxyConfig__process_includes_terminates_on_a_cycle(tmp_path):
     )
 
     assert result == {"model_list": [{"model_name": "from-a"}, {"model_name": "from-b"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_warns_when_a_nested_include_is_read_beside_the_root_config(
+    tmp_path, caplog
+):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text("include:\n  - more_models.yaml\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: beside-root\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await ProxyConfig()._process_includes(
+            {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+    assert result == {"model_list": [{"model_name": "beside-root"}]}
+    assert [
+        record
+        for record in caplog.records
+        if "was not found next to it" in record.getMessage()
+        and str(tmp_path / "shared" / "models.yaml") in record.getMessage()
+        and str(tmp_path / "more_models.yaml") in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_keeps_key_order_and_values_only_python_yaml_produces(tmp_path):
+    (tmp_path / "models.yaml").write_text(
+        "released: 2024-02-01\nlimits:\n  1: one\nmodel_list:\n  - model_name: included\n"
+    )
+    started: Final = datetime(2024, 2, 1, 12, 30)
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["models.yaml"], "started": started, "model_list": [{"model_name": "root"}], "ratio": 1.0},
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    assert list(result.items()) == [
+        ("started", started),
+        ("model_list", [{"model_name": "root"}, {"model_name": "included"}]),
+        ("ratio", 1.0),
+        ("released", date(2024, 2, 1)),
+        ("limits", {1: "one"}),
+    ]
+    assert result["started"] is started
+    assert isinstance(result["ratio"], float)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_rejects_an_include_that_is_not_a_list(tmp_path):
+    with pytest.raises(ValueError, match="'include' must be a list of file paths"):
+        await ProxyConfig()._process_includes(
+            {"include": "models.yaml"}, config_file_path=str(tmp_path / "config.yaml")
+        )
 
 
 # ---------------------------------------------------------------------------

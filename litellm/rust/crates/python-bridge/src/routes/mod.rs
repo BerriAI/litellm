@@ -147,7 +147,7 @@ fn call_hooks(
     ))
 }
 
-fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+pub(crate) fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     py.import("litellm.rust_bridge.execution")
 }
 

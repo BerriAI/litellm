@@ -1,11 +1,5 @@
 use litellm_config::{Config, Error, Spelled, TracingStoreSettings};
 use rstest::{fixture, rstest};
-use tempfile::TempDir;
-
-#[fixture]
-fn directory() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
 
 #[fixture]
 fn model_list_yaml() -> &'static str {
@@ -24,11 +18,8 @@ model_list:
 }
 
 #[rstest]
-fn loads_model_list_from_file(directory: TempDir, model_list_yaml: &str) {
-    let path = directory.path().join("config.yaml");
-    std::fs::write(&path, model_list_yaml).unwrap();
-
-    let config = Config::load(path).unwrap();
+fn reads_the_model_list(model_list_yaml: &str) {
+    let config = Config::from_yaml(model_list_yaml).unwrap();
     assert_eq!(config.model_list.len(), 2);
     let anthropic = &config.model_list[0];
     assert_eq!(anthropic.model_name, "assistant");
@@ -80,20 +71,6 @@ fn config_debug_redacts_api_keys() {
 )]
 fn rejects_malformed_and_incomplete_config(#[case] yaml: &str) {
     assert!(matches!(Config::from_yaml(yaml), Err(Error::Parse(_))));
-}
-
-#[rstest]
-fn distinguishes_read_errors_from_parse_errors(directory: TempDir) {
-    let error = Config::load(directory.path().join("missing.yaml")).unwrap_err();
-    assert!(
-        litellm_error::Report::new(&error)
-            .to_string()
-            .contains("missing.yaml")
-    );
-    assert!(matches!(
-        error,
-        Error::Read { source, .. } if source.kind() == std::io::ErrorKind::NotFound
-    ));
 }
 
 #[rstest]
@@ -339,7 +316,7 @@ include:
 #[case::gateway("../../../../tests/e2e/gateway/stage_mirror_ci_config.yml")]
 fn parses_representative_python_configs(#[case] relative_path: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-    let config = Config::load(path).unwrap();
+    let config = Config::from_yaml(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert!(!config.model_list.is_empty());
 }
 
@@ -385,32 +362,6 @@ fn debug_output_does_not_expose_config_values(#[case] field: &str, #[case] secre
     };
     let config = Config::from_yaml(&yaml).unwrap();
     assert!(!format!("{config:?}").contains(secret));
-}
-
-#[rstest]
-fn resolves_nested_includes_once_in_breadth_first_order() {
-    let directory = TempDir::new().unwrap();
-    let root = directory.path();
-    std::fs::create_dir(root.join("nested")).unwrap();
-    std::fs::write(root.join("config.yaml"), "include: [nested/first.yaml, second.yaml]\nmodel_list: [{model_name: root, litellm_params: {model: root}}]\n").unwrap();
-    std::fs::write(root.join("nested/first.yaml"), "include: [third.yaml]\nmodel_list: [{model_name: first, litellm_params: {model: first}}]\n").unwrap();
-    std::fs::write(root.join("second.yaml"), "general_settings: {master_key: second}\nmodel_list: [{model_name: second, litellm_params: {model: second}}]\n").unwrap();
-    std::fs::write(root.join("nested/third.yaml"), "include: [../config.yaml]\ngeneral_settings: {master_key: third}\nmodel_list: [{model_name: third, litellm_params: {model: third}}]\n").unwrap();
-
-    let config = Config::load(root.join("config.yaml")).unwrap();
-    assert_eq!(
-        config
-            .model_list
-            .iter()
-            .map(|model| model.model_name.as_str())
-            .collect::<Vec<_>>(),
-        ["root", "first", "second", "third"]
-    );
-    assert_eq!(
-        config.general_settings.master_key.unwrap().expose(),
-        "third"
-    );
-    assert!(config.include.is_empty());
 }
 
 #[rstest]

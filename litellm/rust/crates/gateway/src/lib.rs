@@ -1,8 +1,10 @@
 mod auth;
+mod config;
 mod error;
 mod redis;
 mod secrets;
-pub use error::Error;
+pub use config::load_config;
+pub use error::{ConfigSourceError, Error};
 pub use redis::RedisClients;
 
 use std::{sync::Arc, time::Instant};
