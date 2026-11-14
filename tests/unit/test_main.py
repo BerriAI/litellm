@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import urllib.parse
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -12233,3 +12234,142 @@ def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
 
     with pytest.raises(APIError):
         _aleph_alpha_completion()
+
+
+_DECISIONS_ONLY_CHAT_URL: Final = "http://ai-guard:5004/v1/chat/completions"
+
+_CHAT_COMPLETION_RESPONSE: Final = {
+    "id": "chatcmpl-decisions-only-control",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "chat-model",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _decisions_only_router(mode: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "d3-lite",
+                "litellm_params": {
+                    "model": "hosted_vllm/d3-lite",
+                    "api_base": "http://ai-guard:5004/v1",
+                    "api_key": "k",
+                },
+                "model_info": {"id": "d3-lite-ai-guard", "mode": mode, "discoverable": False},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize("mode", ["decisions", "evaluation"])
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_decisions_only_deployment_fails_fast_with_400(
+    respx_mock: respx.MockRouter, mode: str
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+    router: Final = _decisions_only_router(mode)
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        await router.acompletion(
+            model="d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("mode", ["decisions", "evaluation"])
+def test_sync_chat_completions_against_a_decisions_only_deployment_fails_fast_with_400(
+    respx_mock: respx.MockRouter, mode: str
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+    router: Final = _decisions_only_router(mode)
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        router.completion(
+            model="d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_decisions_only_deployment_rejects_without_a_router(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        await litellm.acompletion(
+            model="hosted_vllm/d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="http://ai-guard:5004/v1",
+            api_key="k",
+            model_info={"id": "d3-lite-ai-guard", "mode": "decisions"},
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_chat_mode_deployment_still_serves_chat(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # respx only mocks httpx; without this the call goes out over aiohttp to a real socket.
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = respx_mock.post("http://ai-guard:5004/v1/chat/completions").respond(
+        json=_CHAT_COMPLETION_RESPONSE
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-model",
+                "litellm_params": {
+                    "model": "hosted_vllm/chat-model",
+                    "api_base": "http://ai-guard:5004/v1",
+                    "api_key": "k",
+                },
+                "model_info": {"id": "chat-model-ai-guard", "mode": "chat"},
+            },
+        ]
+    )
+
+    response: Final = await router.acompletion(
+        model="chat-model",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert upstream.called
+    assert response.choices[0].message.content == "hi"
+
+
+def test_completion_with_fallbacks_does_not_receive_caller_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forwarded_calls: Final = MagicMock()
+    monkeypatch.setattr(litellm_main, "completion_with_fallbacks", forwarded_calls)
+
+    litellm.completion(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "hi"}],
+        fallbacks=["gpt-4o"],
+    )
+
+    forwarded_calls.assert_called_once()
+    assert "caller_kwargs" not in forwarded_calls.call_args.kwargs

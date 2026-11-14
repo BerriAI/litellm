@@ -648,6 +648,27 @@ class AsyncCompletions:
         return response
 
 
+def _reject_decisions_only_chat_completion(model: str, model_info: object) -> None:
+    """Fail fast when chat completions target a decisions-only deployment.
+
+    A deployment whose model_info.mode is "decisions" or "evaluation" serves the Decisions
+    API only. Without this check the call forwards to the upstream /chat/completions route
+    the decision server does not expose and the caller gets an opaque upstream 404.
+    """
+    info: Final = as_str_mapping(model_info)
+    mode: Final = None if info is None else info.get("mode")
+    if not isinstance(mode, str) or not is_decisions_model_mode(mode):
+        return
+    raise litellm.BadRequestError(
+        message=(
+            f"Model '{model}' is a decisions-only deployment (model_info.mode is '{mode}') "
+            "and serves the Decisions API only. Send this request to a deployment that is not decisions-only."
+        ),
+        model=model,
+        llm_provider="",
+    )
+
+
 @tracer.wrap()
 @client
 async def acompletion(
@@ -764,6 +785,7 @@ async def acompletion(
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
     caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
+    _reject_decisions_only_chat_completion(model, kwargs.get("model_info"))
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -5675,6 +5697,7 @@ def completion(
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
+    _reject_decisions_only_chat_completion(model, kwargs.get("model_info"))
     # validate messages
     messages = validate_and_fix_openai_messages(
         messages=messages, model=model, request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
