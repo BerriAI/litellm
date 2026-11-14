@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -202,6 +203,34 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
     if not (litellm_params.get("drop_params") or litellm.drop_params):
         return False
     return not _supports_audio_input(model, litellm_params)
+
+
+def _requests_background_run(optional_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    return any(
+        value is not None and value is not False
+        for value in (optional_params.get("background"), extra_body.get("background"))
+    )
+
+
+def without_background_run(
+    optional_params: Mapping[str, object], policy: DropPolicy, model: str, custom_llm_provider: str
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if _requests_background_run(optional_params) and not policy.drops("background"):
+        raise litellm.UnsupportedParamsError(
+            model=model,
+            llm_provider=custom_llm_provider,
+            message=(
+                f"/chat/completions does not support parameters: ['background'], for model={model}. "
+                "A background run answers with a response id that /chat/completions has no way to retrieve. "
+                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+        )
+    kept: Final = {key: value for key, value in optional_params.items() if key != "background"}
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body"))
+    if extra_body is None or "background" not in extra_body:
+        return kept
+    return {**kept, "extra_body": {key: value for key, value in extra_body.items() if key != "background"}}
 
 
 def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:

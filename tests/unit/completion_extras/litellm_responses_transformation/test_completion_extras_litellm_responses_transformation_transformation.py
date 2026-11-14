@@ -6439,3 +6439,121 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+_BACKGROUND_BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs"),
+    [
+        ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
+        (
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses",
+            {"aws_region_name": "us-east-1"},
+        ),
+    ],
+    ids=["openai-responses-only", "bedrock-mantle"],
+)
+
+
+def _foreground_responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_foreground",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_foreground",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _background_chat_request(
+    model: str, provider_kwargs: Mapping[str, object], background_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        **provider_kwargs,
+        **background_kwargs,
+    }
+
+
+@pytest.mark.parametrize(
+    "background_kwargs",
+    [{"background": True}, {"extra_body": {"background": True}}, {"background": "true"}, {"background": 0}],
+    ids=["top-level", "extra-body", "truthy-string", "falsy-int"],
+)
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_rejects_background_before_any_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(**_background_chat_request(model, provider_kwargs, background_kwargs))
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "background_kwargs"),
+    [
+        (False, {"background": True, "drop_params": True}),
+        (False, {"extra_body": {"background": True}, "drop_params": True}),
+        (False, {"background": True, "additional_drop_params": ["background"]}),
+        (False, {"extra_body": {"background": True}, "additional_drop_params": ["background"]}),
+        (True, {"background": True}),
+        (False, {"background": False}),
+        (False, {"extra_body": {"background": False}}),
+    ],
+    ids=[
+        "drop-params",
+        "drop-params-extra-body",
+        "additional-drop-params",
+        "additional-drop-params-extra-body",
+        "global-drop-params",
+        "false",
+        "false-extra-body",
+    ],
+)
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: bool,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model))
+        )
+        response: Final = litellm.completion(**_background_chat_request(model, provider_kwargs, background_kwargs))
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)

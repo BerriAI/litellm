@@ -1091,7 +1091,9 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
-from litellm.responses.bridge_check import bridge_reasoning_effort  # noqa: E402  # imported at the old definition site, same as its neighbours
+from litellm.responses.bridge_check import (
+    bridge_reasoning_effort,  # noqa: E402  # imported at the old definition site, same as its neighbours
+)
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -5968,6 +5970,10 @@ def completion(
 
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
+            from litellm.completion_extras.litellm_responses_transformation.transformation import (
+                without_background_run,
+            )
+            from litellm.litellm_core_utils.tool_fields import drop_policy
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
@@ -5994,7 +6000,12 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
+                optional_params=without_background_run(
+                    cast("Mapping[str, object]", optional_params),  # cast-ok: completion's untyped optional_params
+                    drop_policy(cast("Mapping[str, object]", kwargs)),  # cast-ok: kwargs is the untyped request dict
+                    model,
+                    custom_llm_provider,
+                ),
                 litellm_params=litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
