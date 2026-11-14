@@ -9,30 +9,40 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import gc
 import io
 import json
 import math
 import wave
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
+from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio.lowlevel
 import httpx
+import orjson
 import pytest
 import respx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
+from starlette.background import BackgroundTask
 from starlette.datastructures import FormData, UploadFile
+from starlette.responses import StreamingResponse
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import Cache
+from litellm.constants import AUDIO_SPEECH_CHUNK_SIZE
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd, StreamFailed
 from litellm.proxy import proxy_server
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
@@ -56,6 +66,7 @@ def patched_speech(monkeypatch, request):
             post_call_failure_hook=AsyncMock(),
             post_call_response_headers_hook=AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
+            arelease_max_parallel_requests=AsyncMock(),
         ),
     )
 
@@ -419,6 +430,354 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
     assert len(response.content) > 0
 
 
+class _RecordingAudioStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes], produced: list[bytes]):
+        self._chunks = chunks
+        self._produced = produced
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self._produced.append(chunk)
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream():
+    """A streaming upstream response reaches the client piece by piece as it arrives, with no
+    wait for a full AUDIO_SPEECH_CHUNK_SIZE before the first audio goes out."""
+    produced: Final[list[bytes]] = []
+    first, second = b"a" * (AUDIO_SPEECH_CHUNK_SIZE // 8), b"b" * AUDIO_SPEECH_CHUNK_SIZE
+    stream: Final = _RecordingAudioStream([first, second], produced)
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
+    )
+
+    chunks: Final = proxy_server._audio_speech_chunk_generator(
+        response, on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+    )
+
+    assert await anext(chunks) == first
+    assert produced == [first]
+    assert b"".join([chunk async for chunk in chunks]) == second
+    assert stream.closed is True
+
+
+def _speech_request(payload: dict) -> Request:
+    body: Final = orjson.dumps(payload)
+
+    async def _receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/audio/speech",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive=_receive,
+    )
+
+
+def _audio_response(stream: httpx.AsyncByteStream) -> HttpxBinaryResponseContent:
+    return HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
+    )
+
+
+async def _serve_until_disconnect(response: StreamingResponse) -> None:
+    """Drive the response through one ASGI cycle where the client drops at the first chunk."""
+
+    async def _send(message):
+        if message["type"] == "http.response.body":
+            raise OSError("client gone")
+
+    async def _receive():
+        return {"type": "http.disconnect"}
+
+    with contextlib.suppress(Exception):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
+
+
+def _route_speech_to(
+    monkeypatch: pytest.MonkeyPatch,
+    response: HttpxBinaryResponseContent,
+    response_headers_hook: Callable[..., Awaitable[dict[str, str]]] | None = None,
+) -> AsyncMock:
+    failure_hook: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=failure_hook,
+            post_call_response_headers_hook=response_headers_hook or AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+            arelease_max_parallel_requests=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _llm_call() -> HttpxBinaryResponseContent:
+        return response
+
+    async def _fake_route_request(*args: object, **kwargs: object) -> Awaitable[HttpxBinaryResponseContent]:
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+    return failure_hook
+
+
+@pytest.fixture
+def patched_streaming_speech(monkeypatch):
+    """Route /v1/audio/speech to an upstream whose audio body is left unread."""
+    stream: Final = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
+    _route_speech_to(monkeypatch, _audio_response(stream))
+    yield stream
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
+    """A client that drops mid-clip still has its upstream connection released. Starlette
+    raises ClientDisconnect out of the response before any background task runs, so the
+    body iterator's own cleanup is what has to cover this."""
+    stream: Final = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE] * 3, [])
+    response: Final = _audio_response(stream)
+
+    await _serve_until_disconnect(
+        StreamingResponse(
+            proxy_server._audio_speech_chunk_generator(
+                response, on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+            ),
+            media_type="audio/mpeg",
+            background=BackgroundTask(proxy_server._close_audio_speech_response, response),
+        )
+    )
+    # The abandoned iterator is suspended mid-yield; it runs its cleanup once dropped.
+    gc.collect()
+    await asyncio.sleep(0.1)
+
+    assert stream.closed is True
+
+
+class _SilentAfterFirstChunkStream(httpx.AsyncByteStream):
+    def __init__(self, first: bytes) -> None:
+        self._first: Final = first
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first
+        await asyncio.Event().wait()
+
+    async def aclose(self) -> None:
+        await anyio.lowlevel.checkpoint()
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_frees_its_upstream_when_the_client_hangs_up_while_the_provider_is_silent():
+    stream: Final = _SilentAfterFirstChunkStream(b"a" * AUDIO_SPEECH_CHUNK_SIZE)
+    first_chunk_sent: Final = asyncio.Event()
+
+    async def _send(message: Mapping[str, object]) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            first_chunk_sent.set()
+
+    async def _receive() -> dict[str, str]:
+        await first_chunk_sent.wait()
+        return {"type": "http.disconnect"}
+
+    await StreamingResponse(
+        proxy_server._audio_speech_chunk_generator(
+            _audio_response(stream), on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+        ),
+        media_type="audio/mpeg",
+    )({"type": "http", "asgi": {"spec_version": "2.3"}}, _receive, _send)
+
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_frees_the_key_slot_before_the_caller_sees_the_clip_end(monkeypatch):
+    """A caller may send its next clip to another instance the moment this one ends, so the key's
+    max_parallel_requests slot has to be free by then, not whenever a logging task gets to it."""
+    events: Final[list[str]] = []
+    _route_speech_to(monkeypatch, _audio_response(_RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])))
+    release: Final = proxy_server.proxy_logging_obj.arelease_max_parallel_requests
+    release.side_effect = lambda _key: events.append("slot released")
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", max_parallel_requests=1)
+
+    response: Final = await proxy_server.audio_speech(
+        request=_speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True}),
+        fastapi_response=Response(),
+        user_api_key_dict=caller,
+    )
+
+    async def _send(message):
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            events.append("clip end sent")
+
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
+
+    assert events == ["slot released", "clip end sent"]
+    release.assert_awaited_once_with(caller)
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_releases_an_upstream_whose_body_is_never_read(monkeypatch, patched_streaming_speech):
+    """A response the server never iterates leaves the body iterator's cleanup unrun and
+    out of reach of GC, so the route itself has to arm the release."""
+    stream: Final = patched_streaming_speech
+    captured: Final[list[StreamingResponse]] = []
+
+    original: Final = proxy_server.StreamingResponse
+
+    def _capture(*args, **kwargs):
+        response: Final = original(*args, **kwargs)
+        captured.append(response)
+        return response
+
+    monkeypatch.setattr(proxy_server, "StreamingResponse", _capture)
+
+    request: Final = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
+    await proxy_server.audio_speech(
+        request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+
+    assert len(captured) == 1
+    assert stream.closed is False
+
+    await captured[0].background()
+
+    assert stream.closed is True
+
+
+def _elevenlabs_client(stream: httpx.AsyncByteStream) -> litellm.AsyncHTTPHandler:
+    return litellm.AsyncHTTPHandler(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream)
+        )
+    )
+
+
+async def _headers_from_the_audio_body(*, response: HttpxBinaryResponseContent, **_: object) -> dict[str, str]:
+    return {"x-audio-bytes": str(len(response.content))}
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_frees_the_deployment_slot_when_a_response_hook_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A response hook that fails before any audio is sent must not keep the deployment's only
+    slot, or every later clip on max_parallel_requests: 1 is turned away."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {
+                    "model": "elevenlabs/eleven_multilingual_v2",
+                    "api_key": "fake-key",
+                    "max_parallel_requests": 1,
+                },
+            }
+        ]
+    )
+    first_upstream: Final = _RecordingAudioStream([b"audio"], [])
+    first_clip: Final = await router.aspeech(
+        model="tts", input="hello", voice="voice-id", client=_elevenlabs_client(first_upstream), stream=True
+    )
+    _route_speech_to(monkeypatch, first_clip, response_headers_hook=_headers_from_the_audio_body)
+
+    with pytest.raises(ProxyException):
+        await proxy_server.audio_speech(
+            request=_speech_request({"model": "tts", "input": "hello", "voice": "voice-id", "stream": True}),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    next_clip: Final = await router.aspeech(
+        model="tts",
+        input="hello",
+        voice="voice-id",
+        client=_elevenlabs_client(_RecordingAudioStream([b"audio"], [])),
+        stream=True,
+    )
+    await next_clip.aclose()
+    assert first_upstream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_ends_the_audio_as_failed_when_a_response_hook_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A route error before any audio is sent is a failure, not a caller hang-up, through every
+    wrapper the router and the SDK put around the audio."""
+    upstream: Final = _RecordingAudioStream([b"audio"], [])
+    ends: Final[list[tuple[str, StreamEnd]]] = []
+
+    async def _record(layer: str, end: StreamEnd) -> None:
+        ends.append((layer, end))
+
+    sdk_stream: Final = OnEndAsyncByteStream(upstream, map_error=lambda e: e, on_end=partial(_record, "sdk"))
+    router_stream: Final = OnEndAsyncByteStream(sdk_stream, map_error=lambda e: e, on_end=partial(_record, "router"))
+    _route_speech_to(monkeypatch, _audio_response(router_stream), response_headers_hook=_headers_from_the_audio_body)
+
+    with pytest.raises(ProxyException):
+        await proxy_server.audio_speech(
+            request=_speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True}),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert [(layer, type(end)) for layer, end in ends] == [("sdk", StreamFailed), ("router", StreamFailed)]
+    assert upstream.closed is True
+
+
+class _BreaksMidClipAudioStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"a" * AUDIO_SPEECH_CHUNK_SIZE
+        raise httpx.ReadError("upstream reset")
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_bills_a_clip_whose_upstream_breaks_mid_stream(monkeypatch: pytest.MonkeyPatch):
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=_BreaksMidClipAudioStream())
+    )
+    response.hidden_params = {"response_cost": 0.25}
+    failure_hook: Final = _route_speech_to(monkeypatch, response)
+
+    request: Final = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
+    streaming: Final = await proxy_server.audio_speech(
+        request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+    assert isinstance(streaming, StreamingResponse)
+    body: Final = aiter(streaming.body_iterator)
+    assert await anext(body) == b"a" * AUDIO_SPEECH_CHUNK_SIZE
+    with pytest.raises(proxy_server.AudioSpeechStreamCutOff) as cut_off:
+        await anext(body)
+
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(cut_off.value) is False
+    failure_hook.assert_awaited_once()
+    assert failure_hook.await_args is not None
+    assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)
+    assert failure_hook.await_args.kwargs["request_data"]["response_cost"] == 0.25
+
+
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
 def test_audio_transcription_stream_returns_sse(client, auth_as, patched_transcription_stream, path):
     files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
@@ -541,7 +900,11 @@ def _streams_when_asked(request: httpx.Request) -> httpx.Response:
 
 def _sse_events(body: str) -> tuple[object, ...]:
     assert body.endswith("data: [DONE]\n\n")
-    return tuple(json.loads(frame.removeprefix("data: ")) for frame in body.removesuffix("data: [DONE]\n\n").split("\n\n") if frame)
+    return tuple(
+        json.loads(frame.removeprefix("data: "))
+        for frame in body.removesuffix("data: [DONE]\n\n").split("\n\n")
+        if frame
+    )
 
 
 @pytest.mark.usefixtures("patched_transcription_stream")

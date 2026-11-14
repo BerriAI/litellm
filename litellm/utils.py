@@ -7,6 +7,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import contextlib
 import contextvars
 import copy
 import datetime
@@ -120,6 +121,14 @@ from litellm.litellm_core_utils.model_cost_table import (
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.litellm_core_utils.on_end_byte_stream import (
+    OnEndAsyncByteStream,
+    OnEndSyncByteStream,
+    StreamClosedEarly,
+    StreamCompleted,
+    StreamEnd,
+    StreamFailed,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import (
@@ -243,6 +252,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    HttpxBinaryResponseContent,
     OpenAITextCompletionUserMessage,
     OpenAIWebSearchOptions,
 )
@@ -1693,6 +1703,102 @@ def dispatch_success_logging(
         )
 
 
+def _unread_speech_upstream(result: object, call_type: str, stream_requested: bool) -> httpx.Response | None:
+    if (
+        not stream_requested
+        or call_type not in _SPEECH_CALL_TYPES
+        or not isinstance(result, HttpxBinaryResponseContent)
+    ):
+        return None
+    return result.unread_response()
+
+
+async def _close_unread_speech(result: object, call_type: str, stream_requested: bool) -> None:
+    unread_speech: Final = _unread_speech_upstream(result, call_type, stream_requested)
+    if unread_speech is not None:
+        with contextlib.suppress(Exception):
+            await unread_speech.aclose()
+
+
+def _bill_failed_speech_stream(logging_obj: LiteLLMLoggingObject, result: object) -> None:
+    logging_obj.record_partial_usage_for_failure(Usage(), logging_obj.response_cost_calculator(result=result) or 0.0)
+
+
+def _speech_stream_error_mapper(
+    model: str | None, logging_obj: LiteLLMLoggingObject
+) -> Callable[[httpx.TransportError], Exception]:
+    llm_provider: Final = str(logging_obj.model_call_details.get("custom_llm_provider") or "")
+
+    def map_error(error: httpx.TransportError) -> Exception:
+        if isinstance(error, httpx.TimeoutException):
+            return litellm.Timeout(message=str(error), model=model or "", llm_provider=llm_provider)
+        return litellm.APIConnectionError(message=str(error), llm_provider=llm_provider, model=model or "")
+
+    return map_error
+
+
+def _async_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> Callable[[StreamEnd], Awaitable[None]]:
+    async def log_speech_end(end: StreamEnd) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        match end:
+            case StreamFailed(error=error):
+                if is_litellm_internal_call:
+                    return
+                traceback_exception: Final = "".join(traceback.format_exception(error))
+                _bill_failed_speech_stream(logging_obj, result)
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+                logging_obj.failure_handler(error, traceback_exception, start_time, end_time, for_async_request=True)
+                await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
+                return
+            case StreamClosedEarly():
+                logging_obj.record_client_disconnect()
+            case StreamCompleted():
+                pass
+        dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
+            is_litellm_internal_call=is_litellm_internal_call,
+        )
+
+    return log_speech_end
+
+
+def _sync_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_litellm_internal_call: bool,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> Callable[[StreamEnd], None]:
+    ctx: Final = contextvars.copy_context()
+
+    def log_speech_end(end: StreamEnd) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        match end:
+            case StreamFailed(error=error):
+                _bill_failed_speech_stream(logging_obj, result)
+                logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
+                return
+            case StreamClosedEarly():
+                logging_obj.record_client_disconnect()
+            case StreamCompleted():
+                pass
+        if is_litellm_internal_call:
+            return
+        executor.submit(ctx.run, logging_obj.success_handler, result, start_time, end_time)
+
+    return log_speech_end
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -2433,11 +2539,26 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            if not is_internal_call.get():
+            executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
+            unread_speech: Final = _unread_speech_upstream(
+                result, call_type, "stream" in kwargs and kwargs["stream"] is True
+            )
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.SyncByteStream):
+                unread_speech.stream = OnEndSyncByteStream(
+                    unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
+                    _sync_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        is_litellm_internal_call=is_internal_call.get(),
+                        executor=executor,
+                    ),
+                )
+            elif not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
-                executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
@@ -2744,18 +2865,35 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            dispatch_success_logging(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                is_litellm_internal_call=_is_litellm_internal_call,
+            unread_speech: Final = _unread_speech_upstream(
+                result, call_type, "stream" in kwargs and kwargs["stream"] is True
             )
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.AsyncByteStream):
+                unread_speech.stream = OnEndAsyncByteStream(
+                    unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
+                    _async_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        is_litellm_internal_call=_is_litellm_internal_call,
+                    ),
+                )
+            else:
+                dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
 
             return _replayed_when_run_unstreamed(result, transcription_runs_unstreamed)
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            await _close_unread_speech(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
@@ -2912,7 +3050,16 @@ _STREAMING_CALL_TYPES: Final = frozenset(
     }
 )
 
-_NEVER_STREAMING_CALL_TYPES: Final = frozenset(
+_SPEECH_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.speech,
+        CallTypes.aspeech,
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
+
+_NEVER_STREAMING_CALL_TYPES: Final = _SPEECH_CALL_TYPES | frozenset(
     {
         CallTypes.extraction,
         CallTypes.aextraction,
@@ -2933,6 +3080,10 @@ def _is_streaming_request(
     Returns True if:
         - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
         - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
+
+    Speech and extraction are excluded. Extraction never streams, and "stream=True" on speech asks
+    for the audio bytes to be forwarded as they arrive while the return value is still a single
+    response object, so both are logged like any other non-streaming call.
     """
     if call_type in _NEVER_STREAMING_CALL_TYPES or call_type in _RESULT_DECIDES_STREAMING_CALL_TYPES:
         return False

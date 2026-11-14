@@ -15,7 +15,8 @@ Each wrapper also reports its stream's outcome to the core when the stream ends,
 logging reports it to the Python router's callbacks: the attempt that returned the stream counted
 only its request (the attempt answer is ``deferred``), so the success with the stream's final tokens,
 or a failure the stream raised after it opened, is recorded then (``StreamAttempt.report_success`` /
-``report_failure``). A stream closed before it ends reports nothing.
+``report_failure``). A stream closed before it ends reports nothing, except a speech stream, which
+litellm logs as a success.
 
 The wrappers decide nothing about routing: what may take over, the retry budget and every
 deployment pick come from the core. They hold live Python iterators, frames and hidden params,
@@ -65,7 +66,9 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
+from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.router_rust.invoke.slots import hold_slot_until_closed
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
 from litellm.types.utils import ModelResponseStream, Usage
 
@@ -111,7 +114,7 @@ class StreamAttempt:
     committed_budget: int | None = None
     # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
     routed: str | None = None
-    # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
+    # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
@@ -1854,6 +1857,25 @@ def _reported_transcription_stream(attempt: StreamAttempt, response: object) -> 
     return response
 
 
+def _reported_speech_stream(attempt: StreamAttempt, response: object) -> object:
+    """A speech response still pulling audio from the provider keeps its deployment's slot until the
+    audio ends and reports its attempt's outcome then: a read that fails counts against the deployment
+    and cools it down by the rules, as the router's failure callback does, and a caller hanging up
+    counts nothing against it. A buffered response is done at the attempt, which counts it as any other."""
+
+    def report(end: StreamEnd) -> None:
+        match end:
+            case StreamFailed(error=error):
+                attempt.report_failure(error)
+            case StreamCompleted() | StreamClosedEarly():
+                attempt.report_success(0, response)
+
+    slot: Final = attempt.slot if attempt.slot is not None else contextlib.ExitStack()
+    if hold_slot_until_closed(response, slot, report):
+        attempt.take_outcome()
+    return response
+
+
 # --- the attempt hook ---------------------------------------------------------------------------
 
 
@@ -1868,6 +1890,8 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         first_chunk: Final = await _aread_first_chunk(response)
         held_slot: Final = attempt.slot.pop_all() if attempt.slot is not None else contextlib.ExitStack()
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
+    if attempt.op == "aspeech":
+        return _reported_speech_stream(attempt, response)
     if not attempt.kwargs.get("stream"):
         return response
     if attempt.op == "atranscription":

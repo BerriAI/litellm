@@ -71,6 +71,7 @@ async def test_audio_speech_success_does_not_call_post_call_success_hook(
     mock_logging.pre_call_hook = mock_pre_call
     mock_logging.update_request_status = mock_update_status
     mock_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    mock_logging.arelease_max_parallel_requests = AsyncMock()
 
     async def _mock_route_request(*, data, route_type, llm_router, user_model):
         assert route_type == "aspeech"

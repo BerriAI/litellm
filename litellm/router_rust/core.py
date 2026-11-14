@@ -2651,6 +2651,9 @@ class RustCore(
         return await self._drive(plan_for("atranscription"), request_from_call("atranscription", args, kwargs))
 
     async def aspeech(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
+        """With stream=True the response comes back at the provider's headers and keeps its
+        deployment slot until it is read to the end or closed, so close a response you stop
+        reading early."""
         request: Final = dict(request_from_call("aspeech", args, kwargs))
         request.setdefault("voice", None)
         return await self._drive(plan_for("aspeech"), request)
@@ -5269,7 +5272,7 @@ class _Driver:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
-            # The deployment's max_parallel_requests slot; an open chat stream takes it along.
+            # The deployment's max_parallel_requests slot; an open chat or speech stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
             with enter_deployment_slot(port, self._plan, deployment, call.kwargs) as slot:
                 # A search tool is no deployment: nothing to check; Python's `_arerank` and

@@ -57,6 +57,7 @@ from litellm.constants import (
     FAILED_PROMPT_TOKEN_ESTIMATE_KEY,
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
@@ -422,6 +423,11 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInformation] = {
+    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+    "error_message": "Client disconnected the request",
+    "error_class": "ClientDisconnected",
+}
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
@@ -1498,6 +1504,22 @@ class Logging(LiteLLMLoggingBaseClass):
         self.applied_timeout = timeout
         self.litellm_params["timeout"] = timeout
         self.model_call_details["litellm_params"] = self.litellm_params
+
+    def record_client_disconnect(self) -> None:
+        litellm_params: Final[object] = self.model_call_details.get("litellm_params")
+        if not is_str_keyed_dict(litellm_params):
+            return
+        request_metadata: Final = tuple(
+            (key, metadata)
+            for key in ("metadata", "litellm_metadata")
+            if is_str_keyed_dict(metadata := litellm_params.get(key))
+        )
+        for key, existing in request_metadata or (("metadata", {}),):
+            litellm_params[key] = {
+                **existing,
+                "client_disconnected": True,
+                "error_information": dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION),
+            }
 
     def update_from_kwargs(
         self,
