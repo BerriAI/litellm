@@ -318,20 +318,20 @@ def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
         (
             "sk-" + "5a" * 32,
             b"litellm-mcp-bridge:envelope-signing:",
-            b"sk-1234",
-            "2dd852bb9586bb6dd8cb8095937d5302d8bae6655ff8853877f4231dc841f33a",
+            b"sk-test-master-key",
+            "f79c523d3eb85f1c76e690f5952f64fd2f4bd8974316c284e4588ca6a45b5a32",
         ),
         (
             "sk-" + "5a" * 32,
             b"litellm-mcp-bridge:envelope-encryption:",
-            b"sk-1234",
-            "bb0c3ad002bc351ce5a17ef447d0434c963871be4c9e0c99913952c76f123ff8",
+            b"sk-test-master-key",
+            "3a5a1c0d6869e879ff6b8ac216a1391640ee6cd23d73fcc9b684e9995db22f7c",
         ),
         (
             "sk-" + "5a" * 32,
             b"litellm-mcp-gateway:session-signing:",
-            b"sk-1234",
-            "fe035ac559e2eb7d77d94da5f01c70c37104340368565e3b08f0f0a77f510cbc",
+            b"sk-test-master-key",
+            "96bf0dfc44b74e843737e6eb2f00cf263eb9c1a2a1da5f8478d0020f246cf0f6",
         ),
         (
             "sk-" + "5a" * 32,
