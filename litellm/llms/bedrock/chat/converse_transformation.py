@@ -7,7 +7,7 @@ import json
 import re
 import time
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
@@ -21,6 +21,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -186,6 +187,46 @@ def _has_native_text_format(output_config: object) -> bool:
         return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
     except ValidationError:
         return False
+
+
+def _guard_content_as_system_text(block: SystemContentBlock) -> SystemContentBlock | None:
+    match block:
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return SystemContentBlock(text=text) if text.strip() else None
+        case _:
+            return block
+
+
+def _guard_content_as_text(block: ContentBlock) -> ContentBlock | None:
+    match block:
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return ContentBlock(text=text) if text.strip() else None
+        case _:
+            return block
+
+
+def system_with_guard_content_as_text(blocks: Iterable[SystemContentBlock]) -> Iterator[SystemContentBlock]:
+    return (block for block in map(_guard_content_as_system_text, blocks) if block is not None)
+
+
+def _content_with_guard_content_as_text(content: Iterable[ContentBlock]) -> Iterator[ContentBlock]:
+    return (block for block in map(_guard_content_as_text, content) if block is not None)
+
+
+def messages_with_guard_content_as_text(messages: Iterable[MessageBlock]) -> Iterator[MessageBlock]:
+    return (
+        MessageBlock(role=message["role"], content=list(_content_with_guard_content_as_text(message["content"])))
+        for message in messages
+    )
+
+
+def _request_with_guard_content_as_text(
+    messages: Iterable[MessageBlock], request: CommonRequestObject
+) -> RequestObject:
+    unguarded: Final[RequestObject] = {"messages": list(messages_with_guard_content_as_text(messages)), **request}
+    if "system" not in request:
+        return unguarded
+    return {**unguarded, "system": list(system_with_guard_content_as_text(request["system"]))}
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -2241,8 +2282,9 @@ class AmazonConverseConfig(BaseConfig):
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
-
-        return data
+        if "guardrailConfig" in data or not drops_unsupported_params(litellm_params.get("drop_params")):
+            return data
+        return _request_with_guard_content_as_text(bedrock_messages, _data)
 
     @staticmethod
     def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
@@ -2321,8 +2363,9 @@ class AmazonConverseConfig(BaseConfig):
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
-
-        return data
+        if "guardrailConfig" in data or not drops_unsupported_params(litellm_params.get("drop_params")):
+            return data
+        return _request_with_guard_content_as_text(bedrock_messages, _data)
 
     def transform_response(
         self,

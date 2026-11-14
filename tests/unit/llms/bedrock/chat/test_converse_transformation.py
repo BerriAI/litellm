@@ -3999,6 +3999,8 @@ def _conversation_with_parts(placement: str, part_type: str) -> list[AllMessageV
                 {"role": "assistant", "content": "ok"},
                 {"role": "user", "content": "go on"},
             ]
+        case "user":
+            return [{"role": "user", "content": [{"type": "text", "text": "hi"}, *parts]}]
     raise AssertionError(placement)
 
 
@@ -4033,6 +4035,44 @@ async def test_guarded_text_part_maps_like_a_text_part_wrapped_in_guard_content(
         {**message, "content": [_guard_block_as_text(block) for block in message["content"]]}
         for message in guarded["messages"]
     ] == as_text["messages"]
+
+
+_GUARDRAIL_CONFIG: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
+@pytest.mark.parametrize(
+    ("optional_params", "drop_params", "sends_guard_content"),
+    [({}, True, False), (_GUARDRAIL_CONFIG, True, True), ({}, False, True)],
+    ids=["drop_params_without_guardrail", "drop_params_with_guardrail", "no_drop_params"],
+)
+async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_guardrail(
+    use_async: bool,
+    placement: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sends_guard_content: bool,
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params=dict(optional_params),
+            litellm_params={"drop_params": drop_params},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is sends_guard_content
+    if not sends_guard_content:
+        assert guarded == await transformed("text")
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():

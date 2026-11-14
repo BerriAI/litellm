@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import pytest
 
@@ -132,20 +133,20 @@ GUARDED_CONVERSATION = [
 
 
 @pytest.mark.parametrize("drop_params_source", ["request", "global"])
-def test_guarded_parts_drop_under_drop_params_because_invoke_model_rejects_guard_content(
+def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects_guard_content(
     local_model_cost_map, monkeypatch, drop_params_source
 ):
     if drop_params_source == "global":
         monkeypatch.setattr(litellm, "drop_params", True)
-    request = _transform_request(
+    request: Final = _transform_request(
         messages=GUARDED_CONVERSATION,
         optional_params={"max_tokens": 20},
         litellm_params={"drop_params": True} if drop_params_source == "request" else {},
     )
-    assert request["system"] == [{"text": "be brief", "cachePoint": DEFAULT_CACHE_POINT}]
+    assert request["system"] == [{"text": "be brief"}, {"text": "guarded system", "cachePoint": DEFAULT_CACHE_POINT}]
     assert [message["content"] for message in request["messages"]] == [
-        [{"text": "hello"}],
-        [{"text": "hi"}],
+        [{"text": "hello"}, {"text": "guarded user"}],
+        [{"text": "hi"}, {"text": "guarded assistant"}],
         [{"text": "again"}],
     ]
 
