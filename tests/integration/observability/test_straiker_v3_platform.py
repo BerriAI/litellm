@@ -573,7 +573,6 @@ def test_v3_block_verdict_on_an_answer_through_apply_guardrail_is_a_400(rig: Rig
     assert response.json()["error"]["message"] == BLOCK_MESSAGE, response.text
 
 
-# H2d: without on_flagged_action a prompt block stays an HTTP 400 on every route, as on other guardrails
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
 def test_v3_block_verdict_without_on_flagged_action_is_a_400(rig: Rig, path: str) -> None:
     marker: Final = rig.marker()

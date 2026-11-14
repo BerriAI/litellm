@@ -1254,7 +1254,7 @@ async def test_v3_a_blocked_prompt_is_an_error_where_no_route_can_send_a_reply(c
     ],
 )
 @pytest.mark.asyncio
-async def test_v3_a_blocked_prompt_is_a_400_by_default_even_where_a_reply_could_be_sent(call_type):
+async def test_v3_a_blocked_prompt_is_a_400_by_default_even_where_a_reply_could_be_sent(call_type: str) -> None:
     """Without on_flagged_action 'passthrough' a prompt block is HTTP 400, as on other guardrails."""
     g = _make_guardrail(api_key=V3_KEY)
     assert g.on_flagged_action == "block"
@@ -1273,7 +1273,7 @@ async def test_v3_a_blocked_prompt_is_a_400_by_default_even_where_a_reply_could_
 
 
 @pytest.mark.asyncio
-async def test_v3_a_resend_of_a_blocked_prompt_is_a_400_from_memory_by_default():
+async def test_v3_a_resend_of_a_blocked_prompt_is_a_400_from_memory_by_default() -> None:
     g = _make_guardrail(api_key=V3_KEY)
     g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_BLOCK)
     for _ in range(2):
@@ -1290,7 +1290,7 @@ async def test_v3_a_resend_of_a_blocked_prompt_is_a_400_from_memory_by_default()
 
 
 @pytest.mark.asyncio
-async def test_v3_a_blocked_answer_is_a_reply_whatever_on_flagged_action_says():
+async def test_v3_a_blocked_answer_is_a_reply_whatever_on_flagged_action_says() -> None:
     for action in ("block", "passthrough"):
         g = _make_guardrail(api_key=V3_KEY, on_flagged_action=action)
         g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_BLOCK)
@@ -1304,7 +1304,7 @@ async def test_v3_a_blocked_answer_is_a_reply_whatever_on_flagged_action_says():
         assert blocked.value.message == V3_GATEWAY_BLOCK["straiker"]["block_message"], action
 
 
-def test_init_rejects_invalid_on_flagged_action():
+def test_init_rejects_invalid_on_flagged_action() -> None:
     with pytest.raises(ValueError, match="on_flagged_action"):
         StraikerGuardrail(api_key="k", on_flagged_action="monitor")
 
@@ -1320,7 +1320,13 @@ def test_init_rejects_invalid_on_flagged_action():
         ({"on_flagged_action": "reply"}, None, "block", True),
     ],
 )
-def test_initializer_reads_on_flagged_action(flattened, nested, expected, warns, monkeypatch):
+def test_initializer_reads_on_flagged_action(
+    flattened: dict[str, str],
+    nested: dict[str, str] | None,
+    expected: str,
+    warns: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
     from litellm._logging import verbose_proxy_logger
     from litellm.types.guardrails import LitellmParams
@@ -1348,7 +1354,9 @@ def test_initializer_reads_on_flagged_action(flattened, nested, expected, warns,
         ({}, "block"),
     ],
 )
-def test_a_guardrail_saved_and_reloaded_keeps_its_on_flagged_action(configured, expected, monkeypatch):
+def test_a_guardrail_saved_and_reloaded_keeps_its_on_flagged_action(
+    configured: dict[str, object], expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import litellm
     from litellm._logging import verbose_proxy_logger
     from litellm.types.guardrails import LitellmParams
