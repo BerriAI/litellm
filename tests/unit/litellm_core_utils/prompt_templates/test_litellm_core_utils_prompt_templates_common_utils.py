@@ -1270,15 +1270,25 @@ def test_defs_unpacked_keeps_the_annotations_next_to_a_ref() -> None:
     }
 
 
-def test_defs_unpacked_keeps_the_target_constraints_over_the_keys_next_to_a_ref() -> None:
+def test_defs_unpacked_adds_a_required_next_to_a_ref_to_the_target_constraints() -> None:
     city: Final = {
         "type": "object",
         "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
         "required": ["name"],
     }
+    town: Final = {"type": "object", "properties": {"name": {"type": "string"}}}
     schema: Final = {
         "type": "object",
-        "properties": {"capital": {"$ref": "#/$defs/City", "required": ["country"], "type": "string"}},
-        "$defs": {"City": city},
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "required": ["country", "name"], "type": "string"},
+            "town": {"$ref": "#/$defs/Town", "required": ["name"]},
+        },
+        "$defs": {"City": city, "Town": town},
     }
-    assert defs_unpacked(schema) == {"type": "object", "properties": {"capital": city}}
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {
+            "capital": {**city, "required": ["name", "country"]},
+            "town": {**town, "required": ["name"]},
+        },
+    }
