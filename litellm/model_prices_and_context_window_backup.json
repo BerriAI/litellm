@@ -13078,6 +13078,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 3.48e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -13094,6 +13099,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 5.1e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -13111,6 +13121,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
