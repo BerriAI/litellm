@@ -43,6 +43,7 @@ async def test_bedrock_cohere_embedding_sends_the_caller_timeout(
         ("https://gateway.example.com", "https://gateway.example.com/v2/embed"),
         ("https://gateway.example.com/v1/embed", "https://gateway.example.com/v1/embed"),
         ("https://gateway.example.com/v2/chat", "https://gateway.example.com/v2/embed"),
+        ("https://gateway.example.com/v2/rerank", "https://gateway.example.com/v2/embed"),
     ],
 )
 async def test_cohere_embedding_sends_the_request_to_cohere_api_base(
@@ -63,7 +64,7 @@ async def test_cohere_embedding_prefers_the_caller_api_base_over_cohere_api_base
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("COHERE_API_BASE", "https://env-gateway.example.com")
-    route: Final = respx_mock.post("https://caller-gateway.example.com/v2/embed").mock(
+    route: Final = respx_mock.post("https://caller-gateway.example.com/gw/cohere-route").mock(
         return_value=httpx.Response(200, json=COHERE_EMBED_RESPONSE)
     )
 
@@ -71,7 +72,7 @@ async def test_cohere_embedding_prefers_the_caller_api_base_over_cohere_api_base
         model="cohere/embed-english-v3.0",
         input=["hello"],
         api_key="mock-key",
-        api_base="https://caller-gateway.example.com",
+        api_base="https://caller-gateway.example.com/gw/cohere-route",
     )
 
     assert route.calls.call_count == 1

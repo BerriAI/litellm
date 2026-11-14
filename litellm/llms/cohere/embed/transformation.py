@@ -23,9 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.bedrock import (
     CohereEmbeddingRequest,
     CohereEmbeddingRequestWithModel,
@@ -39,7 +39,15 @@ from ..common_utils import CohereError
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
 COHERE_DEFAULT_EMBED_URL: Final = "https://api.cohere.ai/v2/embed"
-_COHERE_CHAT_ROUTE: Final = re.compile(r"(?:/v\d+)?/chat/*$", re.IGNORECASE)
+_COHERE_ROUTE_SUFFIX: Final = re.compile(r"(?:/v\d+)?(?:/(?:chat|rerank))?/*$", re.IGNORECASE)
+
+
+def _embed_url_from_cohere_api_base(cohere_api_base: str) -> str:
+    parts: Final = urlsplit(cohere_api_base)
+    if parts.path.rstrip("/").lower().endswith("/embed"):
+        return cohere_api_base
+    prefix: Final = _COHERE_ROUTE_SUFFIX.sub("", parts.path, count=1)
+    return urlunsplit(parts._replace(path=f"{prefix}/v2/embed"))
 
 
 class _SupportsEncode(Protocol):
@@ -210,13 +218,12 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        if not api_base:
-            return COHERE_DEFAULT_EMBED_URL
-        parts: Final = urlsplit(api_base)
-        if "embed" in parts.path.rstrip("/").rsplit("/", 1)[-1].lower():
+        if api_base:
             return api_base
-        host_and_prefix: Final = urlunsplit(parts._replace(path=_COHERE_CHAT_ROUTE.sub("", parts.path)))
-        return ensure_api_route(host_and_prefix, "v2/embed")
+        cohere_api_base: Final = get_secret_str("COHERE_API_BASE")
+        if not cohere_api_base:
+            return COHERE_DEFAULT_EMBED_URL
+        return _embed_url_from_cohere_api_base(cohere_api_base)
 
     def _transform_request(
         self, model: str, input: list[str], inference_params: dict
