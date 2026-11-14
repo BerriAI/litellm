@@ -9815,8 +9815,13 @@ def _resolves_to_a_provider(model: str) -> bool:
     return True
 
 
-def test_validate_environment_asks_for_the_together_ai_key_for_bare_together_ai_model_ids(
+_TOGETHER_AI_KEY_NAMES: Final = ("TOGETHER_API_KEY", "TOGETHER_AI_API_KEY", "TOGETHERAI_API_KEY", "TOGETHER_AI_TOKEN")
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefixed_together_ai_ids(
     monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
 ) -> None:
     claimed_by_other_providers: Final = frozenset(
         itertools.chain.from_iterable(
@@ -9829,17 +9834,22 @@ def test_validate_environment_asks_for_the_together_ai_key_for_bare_together_ai_
     unresolved_bare_ids: Final = tuple(
         sorted(bare_id for bare_id in bare_ids - claimed_by_other_providers if not _resolves_to_a_provider(bare_id))
     )
+    bare_and_prefixed_ids: Final = (
+        *unresolved_bare_ids,
+        *(f"together_ai/{bare_id}" for bare_id in unresolved_bare_ids),
+    )
 
-    monkeypatch.delenv("TOGETHERAI_API_KEY", raising=False)
-    without_key: Final = {bare_id: validate_environment(model=bare_id) for bare_id in unresolved_bare_ids}
-    monkeypatch.setenv("TOGETHERAI_API_KEY", "together-test-key")
-    with_key: Final = {bare_id: validate_environment(model=bare_id) for bare_id in unresolved_bare_ids}
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
 
     assert unresolved_bare_ids
     assert without_key == dict.fromkeys(
-        unresolved_bare_ids, {"keys_in_environment": False, "missing_keys": ["TOGETHERAI_API_KEY"]}
+        bare_and_prefixed_ids, {"keys_in_environment": False, "missing_keys": ["TOGETHERAI_API_KEY"]}
     )
-    assert with_key == dict.fromkeys(unresolved_bare_ids, {"keys_in_environment": True, "missing_keys": []})
+    assert with_key == dict.fromkeys(bare_and_prefixed_ids, {"keys_in_environment": True, "missing_keys": []})
 
 
 def test_get_supported_openai_params() -> None:

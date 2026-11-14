@@ -80,6 +80,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    TOGETHER_AI_API_KEY_ENV_VARS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -8140,7 +8141,7 @@ def validate_environment(
             else:
                 missing_keys.append("AI21_API_KEY")
         elif custom_llm_provider == "together_ai":
-            if "TOGETHERAI_API_KEY" in os.environ:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
@@ -8414,7 +8415,7 @@ def validate_environment(
                 missing_keys.append("AI21_API_KEY")
         ## together_ai
         elif f"together_ai/{model}" in litellm.together_ai_models:
-            if "TOGETHERAI_API_KEY" in os.environ:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")

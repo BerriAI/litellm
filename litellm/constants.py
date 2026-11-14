@@ -1307,6 +1307,13 @@ empower_models: Final = set(
     ]
 )
 
+TOGETHER_AI_API_KEY_ENV_VARS: Final = (
+    "TOGETHER_API_KEY",
+    "TOGETHER_AI_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "TOGETHER_AI_TOKEN",
+)
+
 featherless_ai_models: Final[set] = set(
     [
         "featherless-ai/Qwerky-72B",
