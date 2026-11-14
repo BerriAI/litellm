@@ -1114,3 +1114,58 @@ def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threa
 
     _ = asyncio.run(_run_other_work_while_the_provider_is_quiet())
     assert provider_stream.closed
+
+
+_RESPONSE_IN_PROGRESS: Final = (
+    b'data: {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+
+
+class _SyncProviderStreamThatSendsNoTextAfterGoingQuiet(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.quiet = threading.Event()
+        self.next_bytes = threading.Event()
+        self.read_after_close = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.quiet.set()
+        _ = self.next_bytes.wait(timeout=5)
+        yield _RESPONSE_IN_PROGRESS
+        self.read_after_close = self.closed
+        if self.closed:
+            raise httpx.ReadError("[Errno 9] Bad file descriptor")
+        yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_reading_the_closed_provider_response():
+    provider_stream: Final = _SyncProviderStreamThatSendsNoTextAfterGoingQuiet()
+    logging_obj: Final = _logging_obj_that_records_failures()
+
+    async def _close_while_the_provider_is_quiet() -> None:
+        upstream: Final = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").anthropic_sse_wrapper()
+        while b'"text_delta"' not in await sse.__anext__():
+            pass
+        quiet_read: Final = asyncio.ensure_future(sse.__anext__())
+        assert await asyncio.to_thread(provider_stream.quiet.wait, 5)
+        sse.close()
+        provider_stream.next_bytes.set()
+        with pytest.raises(StopAsyncIteration):
+            await quiet_read
+
+    asyncio.run(_close_while_the_provider_is_quiet())
+    assert provider_stream.closed
+    assert not provider_stream.read_after_close
+    assert logging_obj.async_failure_handler.await_count == 0

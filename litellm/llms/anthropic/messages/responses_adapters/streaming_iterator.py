@@ -540,6 +540,8 @@ class AnthropicResponsesStreamWrapper:
         except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
             self._fail_on_upstream_error(e)
 
+        if self._closed:
+            raise StopAsyncIteration
         last_chunk: Final = self._chunk_after_upstream_ends()
         if last_chunk is None:
             raise StopAsyncIteration
