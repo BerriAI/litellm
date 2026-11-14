@@ -155,10 +155,8 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
 
 
 def test_together_dedicated_only_rows_stay_off_the_model_list(cost_map: CostMap):
-    listed = tuple(
-        model
-        for model in DEDICATED_ONLY_MODELS
-        if model in cost_map and not is_hidden_as_retired(cost_map[model])
+    listed: Final = tuple(
+        model for model in DEDICATED_ONLY_MODELS if model in cost_map and not is_hidden_as_retired(cost_map[model])
     )
     assert listed == ()
 
@@ -182,18 +180,21 @@ def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap
     rows: Final = _together_rows(cost_map, "image_generation")
     assert rows
     for model, info in rows:
-        cost = default_image_cost_calculator(
-            model=model,
-            custom_llm_provider="together_ai",
-            size="1024x1024",
-            model_info=ModelInfo(**info),  # pyright: ignore[reportArgumentType]  # untyped cost map JSON
-        )
-        assert cost > 0, f"{model} has no usable image price"
+        assert (
+            default_image_cost_calculator(
+                model=model,
+                custom_llm_provider="together_ai",
+                size="1024x1024",
+                model_info=ModelInfo(**info),  # pyright: ignore[reportArgumentType]  # untyped cost map JSON
+            )
+            > 0
+        ), f"{model} has no usable image price"
 
 
 def test_together_transcription_rows_carry_a_per_second_rate(cost_map: CostMap):
     rows: Final = _together_rows(cost_map, "audio_transcription")
     assert rows
     for model, info in rows:
-        rate = info.get("input_cost_per_second")
-        assert isinstance(rate, float) and rate > 0, f"{model} has no usable transcription price"
+        assert isinstance(rate := info.get("input_cost_per_second"), float) and rate > 0, (
+            f"{model} has no usable transcription price"
+        )
