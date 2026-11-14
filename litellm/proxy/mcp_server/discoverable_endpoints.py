@@ -1488,12 +1488,41 @@ async def exchange_token_with_server(
 
     async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     try:
-        response: Final = await async_client.post(
-            token_url,
-            headers={"Accept": "application/json", **token_request.headers},
-            data=token_data,
-        )
-        response.raise_for_status()
+        try:
+            response = await async_client.post(
+                token_url,
+                headers={"Accept": "application/json", **token_request.headers},
+                data=token_data,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as first_exc:
+            if (
+                server_client_wins
+                and client_id
+                and client_id != resolved_server.client_id
+                and first_exc.response is not None
+                and first_exc.response.status_code in (400, 401)
+            ):
+                caller_token_request = build_upstream_oauth2_token_request(
+                    resolved_server,
+                    auth_method=client_token_endpoint_auth_method
+                    or resolved_server.token_endpoint_auth_method,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    cimd_client_id=None,
+                )
+                caller_token_data = {
+                    k: v for k, v in token_data.items() if k not in token_request.body
+                }
+                caller_token_data.update(caller_token_request.body)
+                response = await async_client.post(
+                    token_url,
+                    headers={"Accept": "application/json", **caller_token_request.headers},
+                    data=caller_token_data,
+                )
+                response.raise_for_status()
+            else:
+                raise
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
