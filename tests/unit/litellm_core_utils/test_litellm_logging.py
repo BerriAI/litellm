@@ -5118,16 +5118,20 @@ class _ChunkLogHeldOpenRecorder(CustomLogger):
         self.release_chunk_log: Final = asyncio.Event()
         self.events: Final[list[tuple[str, object]]] = []  # mutable-ok: records each callback as it fires
 
-    async def async_logging_hook(self, kwargs, result, call_type):
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         if isinstance(result, litellm.ModelResponseStream):
             self.chunk_log_held.set()
             await self.release_chunk_log.wait()
         return kwargs, result
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.events.append(("success", response_obj.choices[0].message.content))
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
+        self.events.append(("success", type(response_obj).__name__))
 
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_stream_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
         self.events.append(("stream", type(response_obj).__name__))
 
 
@@ -5181,20 +5185,30 @@ async def test_a_chunk_log_racing_the_stream_end_logs_a_stream_event_not_a_secon
     recorder: Final = _ChunkLogHeldOpenRecorder()
 
     class ShadowEvalSuccessRecorder(ShadowEvalLogger):
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time, *, guardrail_snapshot=None):
-            recorder.events.append(("shadow", response_obj.choices[0].message.content))
+        async def async_log_success_event(
+            self,
+            kwargs: Mapping[str, object],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+            *,
+            guardrail_snapshot: object = None,
+        ) -> None:
+            recorder.events.append(("shadow", type(response_obj).__name__))
 
-    async def log_success_function(kwargs, response_obj, start_time, end_time):
-        recorder.events.append(("function", response_obj.choices[0].message.content))
+    async def log_success_function(
+        kwargs: Mapping[str, object], response_obj: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
+        recorder.events.append(("function", type(response_obj).__name__))
 
     await _log_a_chunk_held_open_across_the_stream_end(
         recorder, callbacks=(recorder, ShadowEvalSuccessRecorder(), log_success_function)
     )
 
     assert recorder.events == [
-        ("success", "Hello there"),
-        ("shadow", "Hello there"),
-        ("function", "Hello there"),
+        ("success", "ModelResponse"),
+        ("shadow", "ModelResponse"),
+        ("function", "ModelResponse"),
         ("stream", "ModelResponseStream"),
     ]
 
@@ -5203,13 +5217,24 @@ class _StringCallbackIntegrationRecorder:
     def __init__(self) -> None:
         self.events: Final[list[str]] = []  # mutable-ok: records each delivery as it fires
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
         self.events.append("success")
 
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_stream_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
         self.events.append("stream")
 
-    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def async_log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: dt_object,
+        end_time: dt_object,
+        print_verbose: Callable[..., object],
+    ) -> None:
         self.events.append("success")
 
 

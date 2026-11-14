@@ -4812,7 +4812,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ## LOGGING HOOK ##
 
         hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
-        include_v2: Final = self.stream is not True or "async_complete_streaming_response" in self.model_call_details
+        include_v2: Final = self.stream is not True or delivers_final_stream_log
         prepared: Final = _LogHookRun(details=self.model_call_details, result=result)
         await _run_callbacks(
             Hook.log_prepare,
