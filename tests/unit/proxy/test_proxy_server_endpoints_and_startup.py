@@ -4125,14 +4125,14 @@ async def test_load_config_warns_that_the_source_login_limit_is_off_without_trus
     ],
 )
 async def test_load_config_warns_about_removed_accounting_settings_by_name_only(
-    tmp_path, caplog, general_settings: dict[str, object], removed: tuple[str, ...]
-):
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, general_settings: Mapping[str, object], removed: tuple[str, ...]
+) -> None:
     import logging
 
     from litellm.proxy.proxy_server import ProxyConfig
 
     config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+    config_file.write_text(yaml.dump({"model_list": [], "general_settings": dict(general_settings)}))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
