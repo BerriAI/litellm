@@ -5014,7 +5014,7 @@ def check_model_access_helper(
 _check_model_access_helper: Final = check_model_access_helper
 
 
-def _owning_team_names_for_team_deployment(
+def owning_team_names_for_team_deployment(
     model: str,
     llm_router: RegistryReader | None,
     team_id: str | None,
@@ -5104,7 +5104,7 @@ def _can_object_call_model(
     owning_team_names: Final = (
         ()
         if key_alias_applied
-        else _owning_team_names_for_team_deployment(
+        else owning_team_names_for_team_deployment(
             model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
         )
     )

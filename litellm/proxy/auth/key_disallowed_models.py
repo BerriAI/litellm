@@ -19,12 +19,12 @@ def key_disallowed_models(valid_token: UserAPIKeyAuth) -> frozenset[str]:
 def _deployment_names(
     name: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
 ) -> tuple[str | None, ...]:
-    from litellm.proxy.auth.auth_checks import _owning_team_names_for_team_deployment
+    from litellm.proxy.auth.auth_checks import owning_team_names_for_team_deployment
 
     deployment: Final = llm_router.registry().deployment(name) if llm_router is not None else None
     return (
         *(() if deployment is None else (deployment.model_name, deployment.model_info.team_public_model_name)),
-        *_owning_team_names_for_team_deployment(name, llm_router, valid_token.team_id, valid_token.team_model_aliases),
+        *owning_team_names_for_team_deployment(name, llm_router, valid_token.team_id, valid_token.team_model_aliases),
     )
 
 
