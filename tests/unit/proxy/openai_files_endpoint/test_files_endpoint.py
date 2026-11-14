@@ -15,6 +15,7 @@ import litellm
 from litellm import Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -5015,6 +5016,11 @@ class _ManagedFileTableOverRows:
     async def find_first(self, where):
         return next(iter(self._owned_rows(where)), None)
 
+    async def delete(self, where):
+        deleted_row: Final = await self.find_first(where)
+        self.rows = [row for row in self.rows if row is not deleted_row]
+        return deleted_row
+
     async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
         owned_rows: Final = self._owned_rows(where)
         oldest_first: Final = bool(order) and order[0].get("created_at") == "asc"
@@ -5742,9 +5748,9 @@ def _setup_managed_file_route_answering_404(
     )
 
 
-def _call_managed_file_route(method: str, path: str) -> httpx.Response:
+def _call_managed_file_route(method: str, path: str, extra_headers: dict[str, str] | None = None) -> httpx.Response:
     try:
-        return client.request(method, path, headers={"Authorization": "Bearer test-key"})
+        return client.request(method, path, headers={"Authorization": "Bearer test-key", **(extra_headers or {})})
     finally:
         import litellm.proxy.proxy_server as ps
 
@@ -5821,82 +5827,182 @@ def test_get_file_content_reports_a_missing_managed_file_as_a_404(
     assert response.json() == _missing_managed_file_error(file_id)
 
 
-@pytest.mark.parametrize(
-    ("method", "suffix", "expected_body"),
-    [
-        ("GET", "", {"id": _unified_managed_file_id(), "filename": "hello.txt"}),
-        ("GET", "/content", {"content": "hello from the managed file"}),
-        ("DELETE", "", {"id": _unified_managed_file_id(), "deleted": True}),
-    ],
-    ids=["retrieve", "content", "delete"],
-)
-@pytest.mark.parametrize(
+_ROUTING_HINTS: Final = pytest.mark.parametrize(
     ("routing_headers", "routing_query"),
     [({"x-litellm-model": "gpt-3.5-turbo"}, ""), ({}, "?model=gpt-3.5-turbo")],
     ids=["x-litellm-model header", "model query param"],
 )
-def test_managed_file_routes_ignore_a_model_routing_hint(
-    mocker: MockerFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    llm_router: Router,
-    method: str,
-    suffix: str,
-    expected_body: dict[str, object],
-    routing_headers: dict[str, str],
-    routing_query: str,
+
+
+@pytest.fixture
+def stored_managed_file_table(monkeypatch: pytest.MonkeyPatch, llm_router: Router):
+    """Wire the single-file routes to the real managed files hook, registered as a callback the way the
+    proxy registers it, over one stored file the router's gpt-3.5-turbo deployment holds as file-victim-abc123."""
+    import litellm.proxy.proxy_server as ps
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    managed_files: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=MagicMock())
+    managed_file_table: Final = _ManagedFileTableOverRows(
+        [
+            LiteLLM_ManagedFileTable(
+                unified_file_id=_unified_managed_file_id(),
+                file_object=OpenAIFileObject(
+                    id="file-victim-abc123",
+                    object="file",
+                    bytes=27,
+                    created_at=1234567890,
+                    filename="hello.txt",
+                    purpose="user_data",
+                    status="processed",
+                ),
+                model_mappings={"gpt-3.5-turbo-id": "file-victim-abc123"},
+                flat_model_file_ids=["file-victim-abc123"],
+                created_by="test-user",
+            )
+        ]
+    )
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    setup_proxy_logging_object(monkeypatch, llm_router).proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr(litellm, "callbacks", [managed_files])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    ProxyLogging._callback_capabilities_cache.clear()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    yield managed_file_table
+    app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _openai_answering_404_for(upstream: respx.MockRouter, file_id: str) -> respx.Route:
+    return upstream.route(url__startswith=f"https://api.openai.com/v1/files/{file_id}").mock(
+        return_value=httpx.Response(
+            status_code=404,
+            json={"error": {"message": f"No such File object: {file_id}", "type": "invalid_request_error"}},
+        )
+    )
+
+
+@_ROUTING_HINTS
+def test_retrieve_managed_file_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
 ):
     """A model named by the x-litellm-model header or ?model= routes a raw provider file id, so a managed
     id sent with one still resolves through the managed files hook instead of reaching the provider as is."""
-    import litellm.proxy.proxy_server as ps
-    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
-    from openai.types.file_deleted import FileDeleted
-
     file_id: Final = _unified_managed_file_id()
 
-    async def _provider_without_the_managed_id(file_id: str, **kwargs: object) -> None:
-        raise litellm.NotFoundError(
-            message=f"No such File object: {file_id}", model="gpt-3.5-turbo", llm_provider="openai"
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        response: Final = _call_managed_file_route("GET", f"/v1/files/{file_id}{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": file_id,
+        "object": "file",
+        "bytes": 27,
+        "created_at": 1234567890,
+        "filename": "hello.txt",
+        "purpose": "user_data",
+        "status": "processed",
+        "expires_at": None,
+        "status_details": None,
+    }
+    assert managed_id_upstream.call_count == 0
+
+
+@_ROUTING_HINTS
+def test_get_managed_file_content_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
+):
+    file_id: Final = _unified_managed_file_id()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        provider_content: Final = upstream.get("https://api.openai.com/v1/files/file-victim-abc123/content").mock(
+            return_value=httpx.Response(status_code=200, content=b"hello from the managed file")
+        )
+        response: Final = _call_managed_file_route(
+            "GET", f"/v1/files/{file_id}/content{routing_query}", routing_headers
         )
 
-    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
-    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
-    managed_files.afile_retrieve = mocker.AsyncMock(
-        return_value=OpenAIFileObject(
-            id=file_id,
-            object="file",
-            bytes=27,
-            created_at=1234567890,
-            filename="hello.txt",
-            purpose="user_data",
-            status="processed",
+    assert response.status_code == 200, response.text
+    assert response.content == b"hello from the managed file"
+    assert provider_content.call_count == 1
+    assert managed_id_upstream.call_count == 0
+
+
+@_ROUTING_HINTS
+def test_delete_managed_file_ignores_a_model_routing_hint(
+    stored_managed_file_table: _ManagedFileTableOverRows, routing_headers: dict[str, str], routing_query: str
+):
+    file_id: Final = _unified_managed_file_id()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        managed_id_upstream: Final = _openai_answering_404_for(upstream, file_id)
+        provider_delete: Final = upstream.delete("https://api.openai.com/v1/files/file-victim-abc123").mock(
+            return_value=httpx.Response(
+                status_code=200, json={"id": "file-victim-abc123", "object": "file", "deleted": True}
+            )
         )
-    )
-    managed_files.afile_content = mocker.AsyncMock(
-        return_value=HttpxBinaryResponseContent(
-            response=httpx.Response(status_code=200, content=b"hello from the managed file")
-        )
-    )
-    managed_files.afile_delete = mocker.AsyncMock(return_value=FileDeleted(id=file_id, object="file", deleted=True))
-    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
-    for provider_call in ("afile_retrieve", "afile_content", "afile_delete"):
-        monkeypatch.setattr(litellm, provider_call, _provider_without_the_managed_id)
+        response: Final = _call_managed_file_route("DELETE", f"/v1/files/{file_id}{routing_query}", routing_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": file_id, "object": "file", "deleted": True}
+    assert provider_delete.call_count == 1
+    assert managed_id_upstream.call_count == 0
+    assert stored_managed_file_table.rows == []
+
+
+@pytest.mark.parametrize(
+    ("method", "provider_body"),
+    [
+        (
+            "GET",
+            {
+                "id": _unified_managed_file_id(),
+                "object": "file",
+                "bytes": 27,
+                "created_at": 1234567890,
+                "filename": "hello.txt",
+                "purpose": "user_data",
+                "status": "processed",
+                "expires_at": None,
+                "status_details": None,
+            },
+        ),
+        ("DELETE", {"id": _unified_managed_file_id(), "object": "file", "deleted": True}),
+    ],
+    ids=["retrieve", "delete"],
+)
+@_ROUTING_HINTS
+def test_proxy_without_managed_files_forwards_a_managed_id_to_the_hinted_model(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    method: str,
+    provider_body: dict[str, object],
+    routing_headers: dict[str, str],
+    routing_query: str,
+):
+    """A proxy with no database loads no managed files hook, so a managed id it sees belongs to whatever
+    the hinted model points at, like an upstream LiteLLM proxy, and goes there as is."""
+    import litellm.proxy.proxy_server as ps
+
+    file_id: Final = _unified_managed_file_id()
+    setup_proxy_logging_object(monkeypatch, llm_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
 
-    try:
-        response = client.request(
-            method,
-            f"/v1/files/{file_id}{suffix}{routing_query}",
-            headers={"Authorization": "Bearer test-key", **routing_headers},
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream_file: Final = upstream.route(method=method, url=f"https://api.openai.com/v1/files/{file_id}").mock(
+            return_value=httpx.Response(status_code=200, json=provider_body)
         )
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        response: Final = _call_managed_file_route(method, f"/v1/files/{file_id}{routing_query}", routing_headers)
 
     assert response.status_code == 200, response.text
-    body: Final = {"content": response.text} if suffix == "/content" else response.json()
-    assert {key: body[key] for key in expected_body} == expected_body
+    assert response.json() == provider_body
+    assert upstream_file.call_count == 1
 
 
 def _setup_managed_file_stored_in_an_unknown_storage_backend(
