@@ -2460,37 +2460,6 @@ async def _read_only_check(handler, auth):
     return await handler.should_rate_limit(descriptors=descriptors, read_only=True)
 
 
-@pytest.mark.parametrize(
-    "limits",
-    [{"rpm_limit": 2}, {"max_parallel_requests": 1}, {"tpm_limit": 1000}],
-    ids=["rpm_window", "parallel_gauge", "tpm_reservation"],
-)
-@pytest.mark.asyncio
-async def test_fail_closed_rejects_with_503_when_redis_counters_are_unreachable(limits):
-    handler = _handler_with_redis(_unreachable_redis(), fail_closed=True)
-    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed"), **limits)
-
-    with pytest.raises(HTTPException) as exc:
-        await _admit(handler, auth)
-
-    assert exc.value.status_code == 503
-    assert not isinstance(exc.value, ProxyRateLimitError)
-    assert "fail_closed_rate_limit_enforcement" in str(exc.value.detail)
-
-
-@pytest.mark.asyncio
-async def test_fail_open_default_keeps_enforcing_per_pod_from_memory_when_redis_counters_are_unreachable():
-    handler = _handler_with_redis(_unreachable_redis(), fail_closed=False)
-    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-open"), rpm_limit=2)
-
-    await _admit(handler, auth)
-    await _admit(handler, auth)
-    with pytest.raises(ProxyRateLimitError) as exc:
-        await _admit(handler, auth)
-
-    assert exc.value.status_code == 429
-
-
 @pytest.mark.asyncio
 async def test_fail_closed_is_a_no_op_while_redis_answers():
     handler = _handler_with_redis(_ScriptedRedis(), fail_closed=True)
@@ -2526,39 +2495,6 @@ async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired(
         )
     ]
     assert get_or_create_request_stash().parallel_slot is None
-
-
-@pytest.mark.parametrize(
-    "limits",
-    [{"rpm_limit": 2}, {"max_parallel_requests": 1}],
-    ids=["rpm_window", "parallel_gauge"],
-)
-@pytest.mark.asyncio
-async def test_fail_closed_read_only_check_rejects_with_503_when_redis_counters_are_unreachable(limits):
-    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-read-only"), **limits)
-
-    with pytest.raises(HTTPException) as exc:
-        await _read_only_check(_handler_with_redis(_unreachable_redis(), fail_closed=True), auth)
-    assert exc.value.status_code == 503
-
-    response = await _read_only_check(_handler_with_redis(_unreachable_redis(), fail_closed=False), auth)
-    assert response["overall_code"] == "OK"
-
-
-@pytest.mark.asyncio
-async def test_fail_closed_socket_turn_check_refuses_with_503_when_redis_counters_are_unreachable():
-    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-socket-turn"), tpm_limit=1000)
-
-    with pytest.raises(ServiceUnavailableError) as exc:
-        await _handler_with_redis(_unreachable_redis(), fail_closed=True).enforce_token_limits_for_frame(
-            user_api_key_dict=auth, requested_model="gpt-5.4"
-        )
-    assert exc.value.status_code == 503
-    assert "fail_closed_rate_limit_enforcement" in str(exc.value)
-
-    await _handler_with_redis(_unreachable_redis(), fail_closed=False).enforce_token_limits_for_frame(
-        user_api_key_dict=auth, requested_model="gpt-5.4"
-    )
 
 
 @pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (2, "OVER_LIMIT"), (3, "OVER_LIMIT")])
