@@ -31,6 +31,18 @@ for spec in "$@"; do
     uv pip install --python "$tree/.venv/bin/python" "maturin==1.15.0" \
       "prometheus-client==$(locked prometheus-client)" "boto3==$(locked boto3)"
     VIRTUAL_ENV="$tree/.venv" "$tree/.venv/bin/maturin" develop --release --uv
+    if [ -d "$tree/litellm/cli" ] && [ -f "$tree/.github/packaging/cli_package.py" ]; then
+      site="$("$tree/.venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+      "$tree/.venv/bin/python" -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + "/.github/packaging")
+from cli_package import editable_support
+for name, data in editable_support(Path(sys.argv[1]) / "litellm" / "cli"):
+    (Path(sys.argv[2]) / name).write_bytes(data)
+' "$tree" "$site"
+      "$tree/.venv/bin/python" -c "import litellm_cli.main"
+    fi
     "$tree/.venv/bin/python" -c "import litellm.rust_bridge._native"
   )
   echo "ready: $name $sha"
