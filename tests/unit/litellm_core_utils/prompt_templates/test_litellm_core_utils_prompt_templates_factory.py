@@ -9664,3 +9664,28 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    ["falcon_instruct_pt", "falcon_chat_pt", "mpt_chat_pt", "wizardcoder_pt", "phind_codellama_pt"],
+)
+def test_legacy_text_templates_accept_content_parts_and_null_content(template_name):
+    from litellm.litellm_core_utils.prompt_templates import factory
+
+    template: Final = getattr(factory, template_name)
+    as_string: Final = template(
+        [
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "ab"},
+            {"role": "assistant", "content": ""},
+        ]
+    )
+    as_parts: Final = template(
+        [
+            {"role": "system", "content": [{"type": "text", "text": "be brief"}]},
+            {"role": "user", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]},
+            {"role": "assistant", "content": None},
+        ]
+    )
+    assert as_parts == as_string

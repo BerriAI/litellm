@@ -405,10 +405,11 @@ def mistral_instruct_pt(messages):
 def falcon_instruct_pt(messages):
     prompt = ""
     for message in messages:
+        content = convert_content_list_to_str(message)
         if message["role"] == "system":
-            prompt += message["content"]
+            prompt += content
         else:
-            prompt += message["role"] + ":" + message["content"].replace("\r\n", "\n").replace("\n\n", "\n")
+            prompt += message["role"] + ":" + content.replace("\r\n", "\n").replace("\n\n", "\n")
             prompt += "\n\n"
 
     return prompt
@@ -417,12 +418,13 @@ def falcon_instruct_pt(messages):
 def falcon_chat_pt(messages):
     prompt = ""
     for message in messages:
+        content = convert_content_list_to_str(message)
         if message["role"] == "system":
-            prompt += "System: " + message["content"]
+            prompt += "System: " + content
         elif message["role"] == "assistant":
-            prompt += "Falcon: " + message["content"]
+            prompt += "Falcon: " + content
         elif message["role"] == "user":
-            prompt += "User: " + message["content"]
+            prompt += "User: " + content
 
     return prompt
 
@@ -431,12 +433,13 @@ def falcon_chat_pt(messages):
 def mpt_chat_pt(messages):
     prompt = ""
     for message in messages:
+        content = convert_content_list_to_str(message)
         if message["role"] == "system":
-            prompt += "<|im_start|>system" + message["content"] + "<|im_end|>" + "\n"
+            prompt += "<|im_start|>system" + content + "<|im_end|>" + "\n"
         elif message["role"] == "assistant":
-            prompt += "<|im_start|>assistant" + message["content"] + "<|im_end|>" + "\n"
+            prompt += "<|im_start|>assistant" + content + "<|im_end|>" + "\n"
         elif message["role"] == "user":
-            prompt += "<|im_start|>user" + message["content"] + "<|im_end|>" + "\n"
+            prompt += "<|im_start|>user" + content + "<|im_end|>" + "\n"
     return prompt
 
 
@@ -444,12 +447,13 @@ def mpt_chat_pt(messages):
 def wizardcoder_pt(messages):
     prompt = ""
     for message in messages:
+        content = convert_content_list_to_str(message)
         if message["role"] == "system":
-            prompt += message["content"] + "\n\n"
+            prompt += content + "\n\n"
         elif message["role"] == "user":  # map to 'Instruction'
-            prompt += "### Instruction:\n" + message["content"] + "\n\n"
+            prompt += "### Instruction:\n" + content + "\n\n"
         elif message["role"] == "assistant":  # map to 'Response'
-            prompt += "### Response:\n" + message["content"] + "\n\n"
+            prompt += "### Response:\n" + content + "\n\n"
     return prompt
 
 
@@ -457,12 +461,13 @@ def wizardcoder_pt(messages):
 def phind_codellama_pt(messages):
     prompt = ""
     for message in messages:
+        content = convert_content_list_to_str(message)
         if message["role"] == "system":
-            prompt += "### System Prompt\n" + message["content"] + "\n\n"
+            prompt += "### System Prompt\n" + content + "\n\n"
         elif message["role"] == "user":
-            prompt += "### User Message\n" + message["content"] + "\n\n"
+            prompt += "### User Message\n" + content + "\n\n"
         elif message["role"] == "assistant":
-            prompt += "### Assistant\n" + message["content"] + "\n\n"
+            prompt += "### Assistant\n" + content + "\n\n"
     return prompt
 
 
