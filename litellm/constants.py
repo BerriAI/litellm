@@ -1105,6 +1105,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
+    "https://api.iteracompute.com/v1",
     "https://inference.runanywhere.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
@@ -1193,6 +1194,7 @@ openai_compatible_providers: Final[list[str]] = [
     "sail",
     "reka",
     "streamlake",
+    "iteracompute",
     "wally",
 ]
 

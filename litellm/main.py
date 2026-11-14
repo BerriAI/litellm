@@ -2814,14 +2814,18 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if custom_llm_provider == "bigmodel" and not api_key:
+    if custom_llm_provider in ("bigmodel", "iteracompute") and not api_key:
         raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+            message=f"Set {custom_llm_provider.upper()}_API_KEY or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
         )
-    organization = (
-        organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
-        or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+    organization = organization or (
+        ""
+        if custom_llm_provider == "iteracompute"
+        else None
+        if custom_llm_provider == "bigmodel"
+        else litellm.organization or get_secret("OPENAI_ORGANIZATION") or None
     )
     openai.organization = organization
     # set API KEY
