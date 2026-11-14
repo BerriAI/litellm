@@ -312,3 +312,67 @@ async def test_powerspring_anthropic_messages_request(monkeypatch: pytest.Monkey
     assert body["model"] == "gpt-oss-120b"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Powerspring"
+
+
+def test_missing_powerspring_key_does_not_send_openai_credentials_on_chat(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("POWERSPRING_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="POWERSPRING_API_KEY"):
+            litellm.completion(model="powerspring/gpt-oss-120b", messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.call_count == 0
+
+
+def test_chat_does_not_send_the_openai_organization_to_powerspring(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="powerspring/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="powerspring-test-key",
+        )
+
+    assert "openai-organization" not in route.calls.last.request.headers
+
+
+def test_missing_powerspring_key_does_not_send_openai_credentials_on_responses(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("POWERSPRING_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_DEFAULT_API_BASE}/responses").respond(
+            401, json={"error": {"message": "no key"}}
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.responses(model="powerspring/gpt-oss-120b", input="Say hello")
+
+    headers: Final = route.calls.last.request.headers
+    assert "unrelated-openai-key" not in headers.get("authorization", "")
+    assert "openai-organization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_missing_powerspring_key_does_not_send_openai_credentials_on_messages(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("POWERSPRING_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_DEFAULT_API_BASE}/messages").respond(
+            401, json={"error": {"message": "no key"}}
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.anthropic.messages.acreate(
+                model="powerspring/gpt-oss-120b",
+                messages=[{"role": "user", "content": "Say hello"}],
+                max_tokens=32,
+            )
+
+    headers: Final = route.calls.last.request.headers
+    assert "unrelated-openai-key" not in headers.get("authorization", "")
+    assert "unrelated-anthropic-key" not in headers.get("x-api-key", "")
+    assert "unrelated-anthropic-key" not in headers.get("authorization", "")
