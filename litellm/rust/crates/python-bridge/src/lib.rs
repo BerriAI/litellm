@@ -77,7 +77,7 @@ mod _native {
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
     };
     #[pymodule_export]
-    use crate::router::{RouterCall, RouterCoreHandle};
+    use crate::router::{AttemptShape, RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -201,6 +201,7 @@ mod tests {
                 "Tokenizer",
                 "RouterCoreHandle",
                 "RouterCall",
+                "AttemptShape",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
