@@ -4196,6 +4196,35 @@ async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_g
         assert guarded == await transformed("text")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("optional_params", "drop_params", "sent_block"),
+    [
+        (_GUARDRAIL_CONFIG, False, {"guardContent": {"text": {"text": "Leaves fall"}}}),
+        ({}, True, {"text": "Leaves fall"}),
+    ],
+    ids=["guardrail", "drop_params_without_guardrail"],
+)
+async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_trailing_whitespace(
+    use_async: bool, optional_params: Mapping[str, object], drop_params: bool, sent_block: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[
+            {"role": "user", "content": "Write a haiku about autumn."},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": "Leaves fall \n"}]},
+        ],
+        optional_params=dict(optional_params),
+        litellm_params={"drop_params": drop_params},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][-1] == {"role": "assistant", "content": [sent_block]}
+
+
 def test_convert_consecutive_user_messages_to_guarded_text():
     """Test that consecutive user messages at the end are converted to guarded_text."""
     config = AmazonConverseConfig()

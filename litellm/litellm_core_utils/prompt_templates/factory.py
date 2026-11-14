@@ -4701,8 +4701,14 @@ def _with_text_when_document_only(message: BedrockMessageBlock) -> BedrockMessag
     return BedrockMessageBlock(role="user", content=[*blocks[:cut], placeholder, *blocks[cut:]])
 
 
-def _rstrip_text_block(block: BedrockContentBlock) -> BedrockContentBlock:
-    return BedrockContentBlock(text=block["text"].rstrip()) if "text" in block else block
+def _rstripped_text_block(block: BedrockContentBlock) -> BedrockContentBlock | None:
+    match block:
+        case {"text": str() as text}:
+            return BedrockContentBlock(text=text.rstrip())
+        case {"guardContent": {"text": {"text": str() as text}}}:
+            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
+        case _:
+            return None
 
 
 def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
@@ -4710,11 +4716,13 @@ def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlo
     if message["role"] != "assistant":
         return message
     blocks: Final = message["content"]
-    last_text_index: Final = max((index for index, block in enumerate(blocks) if "text" in block), default=None)
+    stripped: Final = tuple(_rstripped_text_block(block) for block in blocks)
+    last_text_index: Final = max((index for index, block in enumerate(stripped) if block is not None), default=None)
     return BedrockMessageBlock(
         role="assistant",
         content=[
-            _rstrip_text_block(block) if index == last_text_index else block for index, block in enumerate(blocks)
+            stripped_block if index == last_text_index and stripped_block is not None else block
+            for index, (block, stripped_block) in enumerate(zip(blocks, stripped, strict=True))
         ],
     )
 

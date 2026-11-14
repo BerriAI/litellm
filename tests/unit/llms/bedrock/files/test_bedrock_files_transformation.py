@@ -148,6 +148,23 @@ class TestBedrockFilesTransformation:
 
         assert "serviceTier" not in result[0]["modelInput"]
 
+    def test_nova_row_level_drop_params_sends_a_guarded_system_part_as_text(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    body_params={
+                        "messages": [
+                            {"role": "system", "content": [{"type": "guarded_text", "text": "be brief"}]},
+                            {"role": "user", "content": "hi"},
+                        ],
+                        "drop_params": True,
+                    }
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["system"] == [{"text": "be brief"}]
+
     @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
     def test_deployment_drop_params_drops_the_service_tier_from_the_uploaded_nova_rows(self, tier: str):
         request: Final = BedrockFilesConfig().transform_create_file_request(
