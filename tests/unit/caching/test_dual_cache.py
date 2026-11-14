@@ -909,3 +909,45 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+class _ValueThatCountsItsStringConversions:
+    def __init__(self) -> None:
+        self.string_conversions = 0
+
+    def __str__(self) -> str:
+        self.string_conversions += 1
+        return "cached-value-text"
+
+    __repr__ = __str__
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_does_not_stringify_cached_values_when_verbose_logging_is_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm._logging.set_verbose", False)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    value: Final = _ValueThatCountsItsStringConversions()
+
+    await dual_cache.async_set_cache(key="k", value=value)
+    await dual_cache.async_set_cache_pipeline(cache_list=[("k2", value)])
+    assert await dual_cache.async_get_cache(key="k") is value
+    assert dual_cache.get_cache(key="k") is value
+
+    assert value.string_conversions == 0
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_still_prints_cached_values_when_verbose_logging_is_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    monkeypatch.setattr("litellm._logging.set_verbose", True)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    value: Final = _ValueThatCountsItsStringConversions()
+
+    await dual_cache.async_set_cache(key="k", value=value, local_only=True)
+    await dual_cache.async_get_cache(key="k")
+
+    printed: Final = capsys.readouterr().out
+    assert "async set cache: cache key: k; local_only: True; value: cached-value-text" in printed
+    assert "get cache: cache result: cached-value-text" in printed
+
