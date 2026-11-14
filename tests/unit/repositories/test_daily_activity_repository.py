@@ -710,6 +710,61 @@ async def test_daily_rows_exclusion_without_entity_filter_keeps_null_entity_rows
 
 
 @pytest.mark.asyncio
+async def test_export_redacts_credential_named_values_inside_metadata_objects() -> None:
+    database: Final = _FakeDatabase(
+        (
+            (
+                {
+                    **_export_row("key-1"),
+                    "key_metadata": {
+                        "cost_center": "cc-1",
+                        "cost_center_api_key": "sk-cost-1234567890",
+                        "api_key": "sk-live-1234567890",
+                        "webhook": {"url": "https://hooks.example", "auth_token": "t0k3n", "clientSecret": "cs"},
+                        "owners": [{"name": "ops", "password": "pw"}],
+                        "scim_roles": ["admin"],
+                        "langfuse": {"apiKey": "lf", "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}]},
+                        "OpenAIAPIKey": "sk-acronym",
+                        "apikey": "sk-unseparated",
+                        "APIKEY": "sk-upper",
+                        "passwd": "pw-short",
+                    },
+                    "user_metadata": {
+                        "department": "research",
+                        "github_token": "ghp_secret",
+                        "logging": [{"callback_name": "langfuse"}],
+                        "profile": {"scim_enterprise": {"employeeNumber": "E-1"}, "team": "ops"},
+                    },
+                },
+                {**_export_row("key-2"), "key_metadata": {}, "user_metadata": {}},
+            ),
+        )
+    )
+    repository, _ = _repository(database)
+
+    rows: Final = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+
+    assert rows[0].key_metadata == {
+        "cost_center": "cc-1",
+        "cost_center_api_key": "REDACTED",
+        "api_key": "REDACTED",
+        "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED", "clientSecret": "REDACTED"},
+        "owners": [{"name": "ops", "password": "REDACTED"}],
+        "langfuse": {"apiKey": "REDACTED"},
+        "OpenAIAPIKey": "REDACTED",
+        "apikey": "REDACTED",
+        "APIKEY": "REDACTED",
+        "passwd": "REDACTED",
+    }
+    assert rows[0].user_metadata == {
+        "department": "research",
+        "github_token": "REDACTED",
+        "profile": {"team": "ops"},
+    }
+    assert (rows[1].key_metadata, rows[1].user_metadata) == ({}, {})
+
+
+@pytest.mark.asyncio
 async def test_export_is_lazy_and_uses_the_last_row_as_the_next_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 2)
     database = _FakeDatabase(

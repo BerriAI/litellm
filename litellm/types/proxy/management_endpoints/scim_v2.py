@@ -19,6 +19,9 @@ SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:ent
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
 SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
+SCIM_DIRECTORY_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+)
 
 SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
 SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"

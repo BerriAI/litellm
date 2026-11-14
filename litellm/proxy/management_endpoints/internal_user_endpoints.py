@@ -125,9 +125,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIM_ENTERPRISE_METADATA_KEY,
-    SCIM_ENTITLEMENTS_METADATA_KEY,
-    SCIM_ROLES_METADATA_KEY,
+    SCIM_DIRECTORY_METADATA_KEYS,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -919,9 +917,7 @@ async def _get_user_info_teams(
     return team_list, teams_1
 
 
-_SCIM_DIRECTORY_METADATA_KEYS: Final = frozenset(
-    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
-)
+_SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
 def _redact_scim_enterprise_metadata(

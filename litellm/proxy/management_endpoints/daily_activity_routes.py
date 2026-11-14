@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
@@ -226,6 +226,8 @@ def _search_rows(keys: Sequence[str], response: SpendAnalyticsPaginatedResponse)
 
 
 def _csv_cell(value: object) -> object:
+    if isinstance(value, Mapping):
+        return json.dumps(value, separators=(",", ":"))
     if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{value}"
     return value
@@ -501,7 +503,11 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
                 prisma_client,
                 user_aggregated=False,
             )
-            rows: Final = repository.export_rows(resolved.scope, export_type=export_type)
+            rows: Final = repository.export_rows(
+                resolved.scope,
+                export_type=export_type,
+                include_metadata=user_api_key_has_admin_view(user_api_key_dict),
+            )
             first_row: Final = await anext(rows, None)
             return StreamingResponse(
                 _stream_export_rows(first_row, rows, file_format),

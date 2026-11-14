@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
@@ -12,8 +12,10 @@ from typing_extensions import assert_never
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, redact_credentials_in_payload
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
+    EXPORT_METADATA_DROPPED_KEYS,
     ExportCursor,
     SqlQuery,
     adjust_dates_for_timezone,
@@ -189,6 +191,45 @@ def _daily_rows_table(
     raise AssertionError("unreachable")
 
 
+_EXPORT_UNSEPARATED_CREDENTIAL_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "apikey",
+        "apitoken",
+        "accesskey",
+        "accesstoken",
+        "authkey",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "passwd",
+        "privatekey",
+        "pwd",
+        "refreshtoken",
+        "secretkey",
+        "sessiontoken",
+        "signingkey",
+        "webhooksecret",
+    }
+)
+_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(
+    non_sensitive_overrides=frozenset(),
+    extra_sensitive_patterns=_EXPORT_UNSEPARATED_CREDENTIAL_NAMES,
+    split_camel_case=True,
+)
+
+
+def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(metadata, _EXPORT_METADATA_MASKER, dropped_keys=EXPORT_METADATA_DROPPED_KEYS)
+
+
+def _with_redacted_metadata(row: ExportRow) -> ExportRow:
+    if not row.key_metadata and not row.user_metadata:
+        return row
+    return replace(
+        row, key_metadata=_redacted_metadata(row.key_metadata), user_metadata=_redacted_metadata(row.user_metadata)
+    )
+
+
 def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -> ExportCursor:
     last: Final = batch[-1]
     cursor_key: Final = (
@@ -307,15 +348,25 @@ class DailyActivityRepository:
         query: Final = build_cache_leakage_keys_sql(scope, limit=limit)
         return _KEY_SPEND_ADAPTER.validate_python(await self._query(query))
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
         batch_size: Final = constants.USAGE_EXPORT_BATCH_SIZE
         cursor: ExportCursor | None = None  # rebind-ok: each page advances the export keyset cursor
         while True:
             batch: tuple[ExportRow, ...] = _EXPORT_ADAPTER.validate_python(
-                await self._query(build_export_sql(scope, export_type=export_type, after=cursor, batch_size=batch_size))
+                await self._query(
+                    build_export_sql(
+                        scope,
+                        export_type=export_type,
+                        after=cursor,
+                        batch_size=batch_size,
+                        include_metadata=include_metadata,
+                    )
+                )
             )
             for row in batch:
-                yield row
+                yield _with_redacted_metadata(row)
             if len(batch) < batch_size:
                 return
             cursor = _next_export_cursor(batch, export_type)
