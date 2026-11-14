@@ -11107,6 +11107,36 @@ def test_check_valid_key_returns_false_for_http_unauthorized() -> None:
         assert upstream.calls.last.request.headers["Authorization"] == "Bearer invalid-test-key"
 
 
+def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["anthropic/claude-haiku-5-5"])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=False) as upstream:
+        _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
+            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+        )
+        fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+        valid_key: Final = check_valid_key(model="gpt-5-mini", api_key="invalid-test-key")
+
+    assert valid_key is False
+    assert not fallback_route.called
+
+
 def test_check_valid_key_returns_true_for_successful_completion() -> None:
     response_body: Final = {
         "id": "chatcmpl-test",
