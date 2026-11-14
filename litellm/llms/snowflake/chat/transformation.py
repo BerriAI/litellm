@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -354,13 +354,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                         if isinstance(block, Mapping) and block.get("type") == "text"
                     )
             elif role == "assistant":
-                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                tool_calls: object = (
+                    msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                )
                 thinking_blocks = _signed_thinking_blocks(msg)
                 if tool_calls:
                     content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:
+                    for tc in iter_items(tool_calls):
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")

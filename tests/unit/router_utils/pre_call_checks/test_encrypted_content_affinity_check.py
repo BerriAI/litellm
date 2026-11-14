@@ -3,7 +3,7 @@ Tests for encrypted_content_affinity pre-call check.
 
 The mechanism works without any cache and supports two encoding strategies:
 
-1. **Items with IDs**: item IDs for output items with `encrypted_content` are rewritten to
+1. **Items with IDs**: IDs of reasoning, compaction and other `encrypted_content` output items are rewritten to
    `encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}`.
 
 2. **Items without IDs** (Codex): encrypted_content itself is wrapped with model_id metadata:
@@ -18,10 +18,12 @@ The mechanism works without any cache and supports two encoding strategies:
 import datetime
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -132,6 +134,13 @@ class TestEncryptedItemIdCodec:
         assert decoded["item_id"] == original_item_id
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadOnlyReasoningItem:
+    id: str
+    type: str
+    encrypted_content: str
+
+
 class TestUpdateEncryptedContentItemIds:
     def test_rewrites_encrypted_items_in_dict_response(self):
         model_id = "deployment-1"
@@ -156,6 +165,52 @@ class TestUpdateEncryptedContentItemIds:
         response = {"output": [{"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}]}
         result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, None)
         assert result["output"][0]["id"] == "rs_xyz"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"id": "resp_failed", "status": "failed", "error": {"code": "server_error", "message": "boom"}},
+            {
+                "id": "resp_failed",
+                "status": "failed",
+                "error": {"code": "server_error", "message": "boom"},
+                "output": None,
+            },
+        ],
+        ids=["output-absent", "output-none"],
+    )
+    def test_passes_a_response_without_output_through_unchanged(self, response: dict[str, object]):
+        expected: Final = {**response}
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            response, "deployment-1"
+        )
+        assert result == expected
+
+    def test_leaves_read_only_output_items_as_returned(self):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]}, "deployment-1"
+        )
+        assert result["output"] == [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]
+
+    @pytest.mark.parametrize(
+        "item, encoded",
+        [
+            ({"id": "rs_xyz", "type": "reasoning", "summary": []}, True),
+            ({"id": "cmp_xyz", "type": "compaction", "encrypted_content": "secret"}, True),
+            ({"id": "ws_xyz", "type": "web_search_call"}, False),
+            ({"id": ResponsesAPIRequestUtils._build_encrypted_item_id("dep-0", "rs_xyz"), "type": "reasoning"}, False),
+        ],
+        ids=["reasoning-before-ciphertext", "compaction", "non-reasoning", "already-encoded"],
+    )
+    def test_encodes_reasoning_and_compaction_ids_by_type(self, item: dict[str, object], encoded: bool):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [dict(item)]}, "deployment-1"
+        )
+        assert result["output"][0]["id"] == (
+            ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-1", str(item["id"]))
+            if encoded
+            else item["id"]
+        )
 
 
 class TestEncryptedContentWrapping:
@@ -219,10 +274,10 @@ class TestRestoreEncryptedContentItemIds:
         request_input = [
             {"type": "message", "id": "msg_abc123", "role": "assistant"},
             {"type": "reasoning", "id": encoded_id, "encrypted_content": "secret"},
+            {"type": "item_reference", "id": encoded_id},
         ]
         restored = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
-        assert restored[0]["id"] == "msg_abc123"
-        assert restored[1]["id"] == original_id
+        assert [item["id"] for item in restored] == ["msg_abc123", original_id, original_id]
 
     def test_unwraps_encrypted_content(self):
         """Test that wrapped encrypted_content is unwrapped before forwarding."""
@@ -713,6 +768,32 @@ async def test_encrypted_content_affinity_does_not_create_litellm_metadata_for_c
     assert request_kwargs["metadata"]["tags"] == ["prod"]
     # All deployments returned (no pinning)
     assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_item_reference_to_a_reasoning_item_returned_without_ciphertext_pins_its_deployment():
+    returned: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        {"id": "resp_stored", "output": [{"type": "reasoning", "id": "rs_stored", "summary": []}]},
+        "openai",
+        {"model_info": {"id": "dep-2"}, "encrypted_content_affinity_enabled": True},
+    )
+    returned_output: Final = TypeAdapter(list[dict[str, object]]).validate_python(returned["output"])
+    deployments: Final = [
+        {"model_info": {"id": "dep-1"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+        {"model_info": {"id": "dep-2"}, "litellm_params": {"model": "openai/gpt-5.1-codex"}},
+    ]
+
+    pinned: Final = await EncryptedContentAffinityCheck().async_filter_deployments(
+        model="gpt-5.1-codex",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs={
+            "input": [{"type": "item_reference", "id": returned_output[0]["id"]}],
+            "litellm_metadata": {},
+        },
+    )
+
+    assert pinned == [deployments[1]]
 
 
 @pytest.mark.asyncio
@@ -1752,11 +1833,7 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [
@@ -3508,3 +3585,215 @@ async def _forwarded_reasoning_after_order_fallback(boundary: str | None) -> tup
 )
 async def test_order_fallback_keeps_reasoning_only_on_a_declared_boundary_peer(boundary, expected_reasoning):
     assert await _forwarded_reasoning_after_order_fallback(boundary) == ("region-3", expected_reasoning)
+
+
+def _tagged_deployment(
+    vendor: str, boundary: str | None = None, tags: tuple[str, ...] = ("default",)
+) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{vendor}.example.invalid/v1",
+            "api_key": f"sk-{vendor}",
+            "tags": [*tags, f"vendor:{vendor}"],
+        },
+        "model_info": {"id": vendor} | ({} if boundary is None else {"encrypted_content_boundary": boundary}),
+    }
+
+
+async def _tagged_followup(
+    tags: list[str] | None, peer_boundary: str | None = None, origin_tags: tuple[str, ...] = ("default",)
+) -> tuple[str, object]:
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a", origin_tags), _tagged_deployment("b", peer_boundary)],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_tagged"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {"role": "user", "content": "first question"},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "thought about it"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={} if tags is None else {"tags": tags},
+        )
+    return response._hidden_params["model_id"], handler.await_args.kwargs["input"][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tags", [None, ["vendor:a"]], ids=["untagged", "tag-matches-pin"])
+async def test_tagged_followup_stays_on_the_deployment_that_minted_its_reasoning(tags: list[str] | None) -> None:
+    served_by, reasoning = await _tagged_followup(tags)
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_untagged_followup_stays_pinned_when_only_another_deployment_is_tagged_default() -> None:
+    served_by, reasoning = await _tagged_followup(None, origin_tags=())
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_excludes_the_pin_routes_to_the_tagged_deployment_without_its_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"])
+
+    assert served_by == "b"
+    assert "encrypted_content" not in reasoning
+    assert reasoning["summary"] == [{"type": "summary_text", "text": "thought about it"}]
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_picks_an_encryption_boundary_peer_keeps_the_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"], peer_boundary="org-a")
+
+    assert served_by == "b"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_left_to_fail_open_keeps_the_pin_when_only_a_cooled_deployment_opts_in() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _tagged_deployment("a"),
+            _tagged_deployment("opted-in") | {"model_info": {"id": "opted-in", "allow_fail_open": True}},
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="opted-in", original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=3600
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["!default"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "a"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_decrypt() -> None:
+    shares_only_a_credentials: Final = _tagged_deployment("a", tags=()) | {
+        "model_name": "other-group",
+        "model_info": {"id": "c"},
+    }
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a"), _tagged_deployment("b", "org-a"), shares_only_a_credentials],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_peer"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from a"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from c"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-c", "c"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["vendor:b"]},
+        )
+    forwarded: Final = handler.await_args.kwargs["input"]
+
+    assert response._hidden_params["model_id"] == "b"
+    assert [item.get("encrypted_content") for item in forwarded[:2]] == ["blob-from-a", None]
+
+
+def _boundary_peer(name: str, tags: list[str], model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{name}.example.invalid/v1",
+            "api_key": f"sk-{name}",
+            "tags": tags,
+        },
+        "model_info": {"id": name, "encrypted_content_boundary": "org-a", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_tags_that_fail_open_onto_a_boundary_peer_are_served_by_it() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _boundary_peer("a", ["z"], {}) | {"model_name": "other-group"},
+            _boundary_peer("default-peer", ["default", "x"], {"allow_fail_open": True}),
+            _boundary_peer("y-peer", ["y"], {}),
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["&x", "&y"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "default-peer"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"
