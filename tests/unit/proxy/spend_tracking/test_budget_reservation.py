@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
-from unittest.mock import patch
+from typing import Final, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -22,6 +22,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    NO_TEAM_MEMBERSHIP_SENTINEL,
     project_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -34,7 +35,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     reserve_budget_for_request,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
@@ -258,6 +259,114 @@ def test_google_route_reserves_on_the_model_its_path_param_selects(monkeypatch: 
     assert url_model_cost is not None and cheap_cost is not None
     assert path_param_cost == cheap_cost
     assert math.isclose(url_model_cost, cheap_cost * 1000)
+
+
+@pytest.mark.asyncio
+async def test_team_member_reservation_reloads_custom_budget_after_cache_invalidation(
+    spend_counter_store: SpendCounterStore,
+) -> None:
+    user_id: Final = "member-cache-miss"
+    team_id: Final = "team-cache-miss"
+    cache: Final = UserApiKeyCache()
+    membership: Final = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        spend=221.0,
+        budget_id="custom-budget",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=500.0),
+    )
+    cache_key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    await cache.async_set_cache(key=cache_key, value=membership)
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget", value=LiteLLM_BudgetTable(max_budget=10.0)
+    )
+    await cache.async_delete_cache(key=cache_key)
+    database: Final = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=membership)))
+        ),
+    )
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": "default-budget"}),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+        prisma_client=database,
+    )
+    assert counter is not None
+    assert counter.max_budget == 500.0
+    assert counter.fallback_spend == 221.0
+    spend_counter_store.set_local(counter.counter_key, 221.0)
+    await cache.async_delete_cache(key=cache_key)
+    reservation: Final = await reserve_budget_for_request(
+        request_body={"model": "gpt-4o", "input": "hello", "max_output_tokens": 16},
+        route="/v1/responses",
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": "default-budget"}),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        prisma_client=database,
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    assert reservation is not None
+    assert spend_counter_store.get_local(counter.counter_key) == pytest.approx(221.0 + reservation["reserved_cost"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached", [None, NO_TEAM_MEMBERSHIP_SENTINEL])
+async def test_missing_team_membership_reservation_keeps_default_budget(cached: str | None) -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget", value=LiteLLM_BudgetTable(max_budget=10.0)
+    )
+    if cached is not None:
+        await cache.async_set_cache(
+            key=team_membership_reservation_cache_key(user_id="missing", team_id="team"), value=cached
+        )
+    database: Final = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)))
+        ),
+    )
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(user_id="missing", team_id="team"),
+        team_object=LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default-budget"}),
+        user_object=LiteLLM_UserTable(user_id="missing"),
+        user_api_key_cache=cache,
+        prisma_client=database,
+    )
+    assert counter is not None
+    assert counter.max_budget == 10.0
+    assert counter.fallback_spend == 0.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_reservation_does_not_use_default_when_database_read_fails() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget", value=LiteLLM_BudgetTable(max_budget=10.0)
+    )
+    database: Final = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_teammembership=SimpleNamespace(
+                    find_unique=AsyncMock(side_effect=RuntimeError("database unavailable"))
+                )
+            )
+        ),
+    )
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await _get_team_member_budget_counter(
+            valid_token=UserAPIKeyAuth(user_id="failed", team_id="team"),
+            team_object=LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default-budget"}),
+            user_object=LiteLLM_UserTable(user_id="failed"),
+            user_api_key_cache=cache,
+            prisma_client=database,
+        )
 
 
 @pytest.mark.asyncio
