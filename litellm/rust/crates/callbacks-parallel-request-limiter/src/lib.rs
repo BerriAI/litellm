@@ -5,6 +5,7 @@ mod descriptor;
 mod engine;
 mod enqueued;
 mod estimate;
+mod failure;
 mod hosted;
 mod limiter;
 mod ptu;

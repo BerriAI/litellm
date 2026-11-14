@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import copy
 import functools
+import logging
 import shutil
 import socket
 import subprocess
@@ -20,6 +21,7 @@ import redis
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger_v2.call import CallContext, CallFacts, CallIds, CallKind, CallTarget, CallTiming
@@ -1863,6 +1865,38 @@ async def test_fail_closed_refuses_with_503_when_redis_is_down_like_python(
     ]
     _GOLDEN.agree(outcomes[0], outcomes[1])
     assert (outcomes[0] is not None and outcomes[0][:2] == ("RateLimitUnverifiableError", 503)) == refused, outcomes
+
+
+class _Lines(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.lines: Final[list[tuple[str, str]]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append((record.levelname, record.getMessage()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_closed", (False, True))
+async def test_redis_failures_are_logged_like_python(fail_closed: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"fail_closed_rate_limit_enforcement": fail_closed}
+    )
+    clock: Final = Clock()
+    request: Final = Request(_auth(rpm_limit=5, tpm_limit=4000, max_parallel_requests=2), {**_CHAT, "max_tokens": 20})
+    logged: Final[list[list[tuple[str, str]]]] = []
+    for native in (False, True):
+        side = _side(clock, native=native, port=_free_port())
+        handler = _Lines()
+        verbose_proxy_logger.addHandler(handler)
+        try:
+            await _run(side, 0, _admit, request)
+            await _run(side, 0, _end, request)
+        finally:
+            verbose_proxy_logger.removeHandler(handler)
+        logged.append(handler.lines)
+    _GOLDEN.agree(logged[0], logged[1])
+    assert logged[0] != []
 
 
 @pytest.mark.asyncio

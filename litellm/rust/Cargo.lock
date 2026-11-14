@@ -3719,6 +3719,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "litellm-callbacks",
+ "litellm-error",
  "litellm-host",
  "litellm-redis-client",
  "litellm-redis-store",

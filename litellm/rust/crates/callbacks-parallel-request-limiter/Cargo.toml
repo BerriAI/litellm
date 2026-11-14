@@ -9,6 +9,7 @@ repository.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 litellm-callbacks.workspace = true
+litellm-error.workspace = true
 litellm-host.workspace = true
 litellm-redis-client.workspace = true
 litellm-redis-store.workspace = true

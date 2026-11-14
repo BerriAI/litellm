@@ -9,7 +9,10 @@ use litellm_redis_store::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::engine::Now;
+use crate::{
+    engine::Now,
+    failure::{Failure, redis_failure},
+};
 
 pub const ENQUEUED_TTL_SECONDS: i64 = 8 * 24 * 60 * 60;
 
@@ -97,8 +100,8 @@ impl EnqueuedTokens {
         if self.store.has_redis() {
             match self.reserve_via_redis(tokens, &scopes).await {
                 Ok(outcome) => return outcome,
-                Err(error) => tracing::warn!(
-                    %error,
+                Err(error) => redis_failure!(
+                    &error,
                     "Redis enqueued-token reserve failed, falling back to in-memory"
                 ),
             }
@@ -110,7 +113,7 @@ impl EnqueuedTokens {
         &self,
         tokens: i64,
         scopes: &[EnqueuedScope],
-    ) -> Result<EnqueuedOutcome, String> {
+    ) -> Result<EnqueuedOutcome, Failure> {
         let started = self.now();
         for (index, scope) in scopes.iter().enumerate() {
             let reply = match self.store.enqueued_reserve(
@@ -119,8 +122,11 @@ impl EnqueuedTokens {
                 ENQUEUED_TTL_SECONDS,
                 scope.limit,
             ) {
-                Some(pending) => pending.await.map_err(|error| error.to_string()),
-                None => Err("no Redis client for the enqueued-token store".to_owned()),
+                Some(pending) => pending.await.map_err(Failure::from),
+                None => Err(Failure::raised(
+                    "RuntimeError",
+                    "no Redis client for the enqueued-token store",
+                )),
             };
             let reply: EnqueuedReply = match reply {
                 Ok(reply) => reply,
@@ -149,17 +155,21 @@ impl EnqueuedTokens {
     async fn rollback(&self, tokens: i64, scopes: &[EnqueuedScope]) {
         if let Err(error) = self.refund_via_redis(tokens, scopes).await {
             tracing::warn!(
-                %error,
-                "Rollback of partially reserved enqueued tokens failed; leaked increments expire with the TTL"
+                "Rollback of partially reserved enqueued tokens failed; leaked increments expire with the TTL: {error}"
             );
         }
     }
 
-    async fn refund_via_redis(&self, tokens: i64, scopes: &[EnqueuedScope]) -> Result<(), String> {
+    async fn refund_via_redis(&self, tokens: i64, scopes: &[EnqueuedScope]) -> Result<(), Failure> {
         for scope in scopes {
             match self.store.enqueued_refund(&counter_key(scope), tokens) {
-                Some(pending) => pending.await.map_err(|error| error.to_string())?,
-                None => return Err("no Redis client for the enqueued-token store".to_owned()),
+                Some(pending) => pending.await.map_err(Failure::from)?,
+                None => {
+                    return Err(Failure::raised(
+                        "RuntimeError",
+                        "no Redis client for the enqueued-token store",
+                    ));
+                }
             }
         }
         Ok(())
@@ -234,8 +244,7 @@ impl EnqueuedTokens {
                 .await
             {
                 tracing::warn!(
-                    %error,
-                    "Redis enqueued-token refund failed; leaked increments expire with the TTL"
+                    "Redis enqueued-token refund failed; leaked increments expire with the TTL: {error}"
                 );
             }
             return;
@@ -273,8 +282,8 @@ impl EnqueuedTokens {
         {
             match pending.await {
                 Ok(()) => return,
-                Err(error) => tracing::warn!(
-                    %error,
+                Err(error) => redis_failure!(
+                    &Failure::from(error),
                     "Redis enqueued-token reservation save failed, falling back to in-memory"
                 ),
             }
@@ -292,8 +301,8 @@ impl EnqueuedTokens {
         let key = record_key(batch_id);
         let remote = match self.store.enqueued_record_pop(&key, ENQUEUED_TTL_SECONDS) {
             Some(pending) => pending.await.unwrap_or_else(|error| {
-                tracing::warn!(
-                    %error,
+                redis_failure!(
+                    &Failure::from(error),
                     "Redis enqueued-token reservation pop failed, falling back to in-memory"
                 );
                 None

@@ -12,6 +12,7 @@ use litellm_redis_store::{
 
 use crate::{
     descriptor::{Declared, Descriptor, Limits, PROJECT_ITPM, PROJECT_OTPM},
+    failure::{Failure, python_counter},
     status::{Backend, Code, LimitKind, Response, Status, WindowIdentity, identities},
 };
 
@@ -284,7 +285,9 @@ impl Engine {
         if !policy.fail_closed {
             return Ok(());
         }
-        tracing::warn!(%error, "fail_closed_rate_limit_enforcement: rejecting request, {operation} could not verify the counters against Redis");
+        tracing::warn!(
+            "fail_closed_rate_limit_enforcement: rejecting request, {operation} could not verify the counters against Redis: {error}"
+        );
         Err(Unverifiable)
     }
 
@@ -539,8 +542,8 @@ impl Engine {
                 Some(pending) => self
                     .labelled("batch_counter_read_script", pending)
                     .await
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             match reply {
                 Ok(values) => {
@@ -558,7 +561,7 @@ impl Engine {
                 }
                 Err(error) => {
                     self.unverifiable(ctx.policy, "batch_counter_read_script", &error)?;
-                    tracing::warn!(%error, "batch_counter_read_script failed, using local mirror");
+                    tracing::warn!("batch_counter_read_script failed, using local mirror: {error}");
                     return Ok(self.local_states(counters));
                 }
             }
@@ -604,7 +607,7 @@ impl Engine {
                 Some(declared) => self
                     .labelled("batch_rate_limiter_script", declared)
                     .await
-                    .map_err(|error| error.to_string()),
+                    .map_err(Failure::from),
                 None => match self
                     .store
                     .sliding_window(RedisSend::Now, group, now_int, window_size)
@@ -612,8 +615,8 @@ impl Engine {
                     Some(now) => self
                         .labelled("batch_rate_limiter_script", now)
                         .await
-                        .map_err(|error| error.to_string()),
-                    None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                        .map_err(Failure::from),
+                    None => Err(Failure::no_redis()),
                 },
             };
             match reply {
@@ -651,7 +654,7 @@ impl Engine {
                         }
                     }
                     self.unverifiable(ctx.policy, "batch_rate_limiter_script", &error)?;
-                    tracing::warn!(%error, "Redis Lua script failed for slot group {index}");
+                    tracing::warn!("Redis Lua script failed for slot group {index}: {error}");
                     let _guard = self.store.memory_guard();
                     states_by_group.push(self.sliding_window_memory(group, now_int, window_size));
                 }
@@ -699,11 +702,14 @@ impl Engine {
                     .labelled("window_guarded_token_increment_script", pending)
                     .await
                     .map(|_| ())
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             if let Err(error) = outcome {
-                tracing::warn!(%error, counter = ?refund.counter, "Failed to refund counter on rollback");
+                tracing::warn!(
+                    "Failed to refund {} on rollback: {error}",
+                    python_counter(&refund.counter)
+                );
             }
         }
     }
@@ -741,14 +747,14 @@ impl Engine {
                     Some(pending) => self
                         .labelled("parallel_count_script", pending)
                         .await
-                        .map_err(|error| error.to_string()),
-                    None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                        .map_err(Failure::from),
+                    None => Err(Failure::no_redis()),
                 };
                 match reply {
                     Ok(values) => values.into_iter().map(|value| value.max(0)).collect(),
                     Err(error) => {
                         self.unverifiable(ctx.policy, "parallel_count_script", &error)?;
-                        tracing::warn!(%error, "parallel_count_script failed, using local mirror");
+                        tracing::warn!("parallel_count_script failed, using local mirror: {error}");
                         self.local_gauge_counts(&scopes)
                     }
                 }
@@ -801,13 +807,15 @@ impl Engine {
                 Some(pending) => self
                     .labelled("parallel_acquire_script", pending)
                     .await
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             return match reply {
                 Err(error) => {
                     self.unverifiable(ctx.policy, "parallel_acquire_script", &error)?;
-                    tracing::warn!(%error, "parallel_acquire_script failed, falling back to in-memory gauge");
+                    tracing::warn!(
+                        "parallel_acquire_script failed, falling back to in-memory gauge: {error}"
+                    );
                     let now = self.now();
                     let _guard = self.store.memory_guard();
                     Ok(self.acquire_in_memory(gauges, slot_id, now))
@@ -895,8 +903,8 @@ impl Engine {
                 Some(pending) => self
                     .labelled("parallel_release_script", pending)
                     .await
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             match reply {
                 Ok(remaining) => {
@@ -911,7 +919,9 @@ impl Engine {
                     return;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "parallel_release_script failed, falling back to in-memory release");
+                    tracing::warn!(
+                        "parallel_release_script failed, falling back to in-memory release: {error}"
+                    );
                 }
             }
         }
@@ -1087,9 +1097,12 @@ impl Engine {
             .iter()
             .any(|(_, meta)| meta.iter().any(|meta| meta.increment == i64::MAX))
         {
-            let error = "an increment beyond a signed 64-bit integer";
+            let error = Failure::raised(
+                "OverflowError",
+                "an increment beyond a signed 64-bit integer",
+            );
             self.unverifiable(ctx.policy, "check_and_increment_by_n_script", &error)?;
-            tracing::error!(%error, "atomic_check_and_increment_by_n: Redis Lua execution failed, falling back to in-memory enforcement");
+            self.log_atomic_failure("Refunded", 0, "prior", &error);
             let flat: Vec<AtomicMeta> = groups.into_iter().flat_map(|(_, meta)| meta).collect();
             let now = self.now();
             let _guard = self.store.memory_guard();
@@ -1109,20 +1122,20 @@ impl Engine {
         let mut applied: Vec<Refund> = Vec::new();
         let mut statuses = Vec::new();
         let mut windows = Vec::new();
-        for (counters, meta) in &groups {
+        for (index, (counters, meta)) in groups.iter().enumerate() {
             let reply = match self.store.check_and_increment(RedisSend::Now, counters) {
                 Some(pending) => self
                     .labelled("check_and_increment_by_n_script", pending)
                     .await
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             let reply = match reply {
                 Ok(reply) => reply,
                 Err(error) => {
                     self.refund(applied).await;
                     self.unverifiable(ctx.policy, "check_and_increment_by_n_script", &error)?;
-                    tracing::error!(%error, "atomic_check_and_increment_by_n: Redis Lua execution failed, falling back to in-memory enforcement");
+                    self.log_atomic_failure("Refunded", index, "prior", &error);
                     let flat: Vec<AtomicMeta> =
                         groups.iter().flat_map(|(_, meta)| meta.clone()).collect();
                     let now = self.now();
@@ -1133,6 +1146,7 @@ impl Engine {
             let response = match Self::atomic_response(&reply, meta) {
                 Ok(response) => response,
                 Err(error) => {
+                    let error = Failure::raised("ValueError", error);
                     self.refund(applied).await;
                     self.unverifiable(ctx.policy, "check_and_increment_by_n_script", &error)?;
                     let flat: Vec<AtomicMeta> =
@@ -1166,25 +1180,27 @@ impl Engine {
         declared: Vec<Option<Pending<AtomicReply>>>,
         ctx: Ctx<'_>,
     ) -> Result<Response, Unverifiable> {
-        let replies: Vec<Result<AtomicReply, String>> =
+        let replies: Vec<Result<AtomicReply, Failure>> =
             join_all(declared.into_iter().map(|declared| async move {
                 match declared {
                     Some(pending) => self
                         .labelled("check_and_increment_by_n_script", pending)
                         .await
-                        .map_err(|error| error.to_string()),
-                    None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                        .map_err(Failure::from),
+                    None => Err(Failure::no_redis()),
                 }
             }))
             .await;
-        let responses: Vec<Result<Response, String>> = replies
+        let responses: Vec<Result<Response, Failure>> = replies
             .iter()
             .zip(&groups)
             .map(|(reply, (_, meta))| match reply {
-                Ok(reply) => Self::atomic_response(reply, meta),
-                Err(error) => Err(error.clone()),
+                Ok(reply) => Self::atomic_response(reply, meta)
+                    .map_err(|error| Failure::raised("ValueError", error)),
+                Err(error) => Err(Failure::raised(error.exception(), error.to_string())),
             })
             .collect();
+        let mut applied_groups = 0;
         let mut applied = Vec::new();
         let mut statuses = Vec::new();
         let mut windows = Vec::new();
@@ -1195,6 +1211,7 @@ impl Engine {
             if response.overall != Code::Ok {
                 continue;
             }
+            applied_groups += 1;
             applied.extend(Self::atomic_refunds(reply, meta));
             statuses.extend(response.statuses.clone());
             windows.extend(response.windows().iter().cloned());
@@ -1209,8 +1226,8 @@ impl Engine {
         }
         if let Some(Err(error)) = responses.iter().find(|response| response.is_err()) {
             self.refund(applied).await;
-            self.unverifiable(ctx.policy, "check_and_increment_by_n_script", &error)?;
-            tracing::error!(%error, "atomic_check_and_increment_by_n: Redis Lua execution failed, falling back to in-memory enforcement");
+            self.unverifiable(ctx.policy, "check_and_increment_by_n_script", error)?;
+            self.log_atomic_failure("Refunding", applied_groups, "pipelined", error);
             let flat: Vec<AtomicMeta> = groups.iter().flat_map(|(_, meta)| meta.clone()).collect();
             let now = self.now();
             let _guard = self.store.memory_guard();
@@ -1226,6 +1243,14 @@ impl Engine {
             statuses,
             windows: Some(identities(windows)),
         })
+    }
+
+    fn log_atomic_failure(&self, refund: &str, groups: usize, which: &str, error: &Failure) {
+        tracing::error!(
+            "atomic_check_and_increment_by_n: Redis Lua execution failed ({}). {refund} {groups} {which} descriptors and falling back to in-memory enforcement, counters will diverge from Redis until window expires (window_size={}s): {error}",
+            error.exception(),
+            self.settings.window_size,
+        );
     }
 
     fn atomic_in_memory(&self, metas: &[AtomicMeta], now: f64) -> Response {
@@ -1583,11 +1608,13 @@ impl Engine {
                     .labelled("token_increment_script", pending)
                     .await
                     .map(|_| ())
-                    .map_err(|error| error.to_string()),
-                None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                    .map_err(Failure::from),
+                None => Err(Failure::no_redis()),
             };
             if let Err(error) = outcome {
-                tracing::warn!(%error, "TTL preservation failed, falling back to regular pipeline");
+                tracing::warn!(
+                    "TTL preservation failed, falling back to regular pipeline: {error}"
+                );
                 self.labelled(
                     "async_increment_pipeline",
                     self.store.increment_many(operations),
@@ -1700,12 +1727,15 @@ impl Engine {
                         .labelled("window_guarded_token_increment_script", pending)
                         .await
                         .map(|_| ())
-                        .map_err(|error| error.to_string()),
-                    None => Err("the rate limiter has no Redis to run its scripts on".to_owned()),
+                        .map_err(Failure::from),
+                    None => Err(Failure::no_redis()),
                 };
                 match outcome {
                     Ok(()) => continue,
-                    Err(error) => tracing::warn!(%error, "Window-guarded token adjustment failed"),
+                    Err(error) => tracing::warn!(
+                        "Window-guarded token adjustment failed for {}: {error}",
+                        python_counter(&increment.counter)
+                    ),
                 }
             }
             if increment.amount.as_f64() > 0.0 {
