@@ -373,6 +373,7 @@ async def aget_copilot_api_base(
 def pin_session_authorization(
     headers: MutableMapping[str, str],  # mutable-ok: the helper fixes caller-owned headers in place
     session_token: str,
+    integration_id: str | None = None,
 ) -> None:
     """The stored per-user session token owns Authorization outright: drop every
     caller-supplied bearer header (any casing) so it can never displace the
@@ -380,3 +381,7 @@ def pin_session_authorization(
     for key in tuple(k for k in headers if k.lower() == "authorization"):
         del headers[key]
     headers["Authorization"] = f"Bearer {session_token}"
+    if integration_id is not None:
+        for key in tuple(k for k in headers if k.lower() == "copilot-integration-id"):
+            del headers[key]  # rebind-ok: pin the authenticated identity in caller-owned headers
+        headers["copilot-integration-id"] = integration_id  # rebind-ok: pin the authenticated identity

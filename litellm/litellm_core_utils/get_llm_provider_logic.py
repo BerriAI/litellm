@@ -849,8 +849,10 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     elif custom_llm_provider == "github_copilot":
-        from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, get_copilot_api_base
+        from litellm.llms.github_copilot.app_auth import app_config
+        from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
         from litellm.llms.github_copilot.per_user_auth import (
+            copilot_session_api_base,
             github_copilot_per_user_credential_name,
             github_copilot_user_session_from,
         )
@@ -858,11 +860,13 @@ def _get_openai_compatible_provider_info(
         user_session: Final = github_copilot_user_session_from(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
+        github_app: Final = app_config(litellm_params) if user_session is None else None
         if user_session is not None:
-            api_base = get_copilot_api_base(  # rebind-ok: resolves provider args in place
-                None, lambda: user_session.token, user_session.endpoints
-            )
+            api_base = copilot_session_api_base(user_session)  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
+        elif github_app is not None:
+            api_base = github_app.api_base  # rebind-ok: resolves provider args in place
+            dynamic_api_key = None  # rebind-ok: token resolution runs in the request wrapper
         elif (
             github_copilot_per_user_credential_name(
                 cast("dict[str, object]", litellm_params)  # cast-ok: untyped params dict

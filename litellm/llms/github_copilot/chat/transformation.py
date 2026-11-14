@@ -18,8 +18,9 @@ from ..common_utils import (
     InvalidAPIBaseError,
     get_copilot_api_base,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
-from ..per_user_auth import GithubCopilotUserSession, require_github_copilot_user_session
+from ..per_user_auth import GithubCopilotUserSession, copilot_session_api_base, require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -41,7 +42,7 @@ class GithubCopilotConfig(OpenAIConfig):
     def api_base_without_login(self, user_session: GithubCopilotUserSession | None = None) -> str | None:
         try:
             if user_session is not None:
-                return get_copilot_api_base(None, lambda: user_session.token, user_session.endpoints)
+                return copilot_session_api_base(user_session)
             return get_copilot_api_base(None, self.authenticator.stored_access_token)
         except InvalidAPIBaseError:
             return None
@@ -125,10 +126,10 @@ class GithubCopilotConfig(OpenAIConfig):
         )
         session_token: Final = user_session.token if user_session is not None else None
         validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
-        if session_token is not None:
+        if user_session is not None:
             # the caller's stored session token wins unconditionally, even over a
             # caller-supplied api_key or the parent's placeholder Authorization
-            validated_headers["Authorization"] = f"Bearer {session_token}"
+            pin_session_authorization(validated_headers, user_session.token, user_session.integration_id)
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)
