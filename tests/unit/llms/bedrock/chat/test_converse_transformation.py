@@ -4168,8 +4168,91 @@ async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_
     assert request["messages"][-1] == {"role": "assistant", "content": [sent_block]}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("model", "content", "sent"),
+    [
+        (
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            [{"type": "text", "text": "Leaves fall "}, {"type": "guarded_text", "text": "softly \n"}],
+            [{"text": "Leaves fall "}, {"guardContent": {"text": {"text": "softly"}}}],
+        ),
+        (
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            [{"type": "guarded_text", "text": "Leaves fall "}, {"type": "text", "text": "softly \n"}],
+            [{"guardContent": {"text": {"text": "Leaves fall "}}}, {"text": "softly \n"}],
+        ),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "Leaves fall \n", [{"text": "Leaves fall \n"}]),
+        (
+            "us.amazon.nova-pro-v1:0",
+            [{"type": "guarded_text", "text": "Leaves fall \n"}],
+            [{"guardContent": {"text": {"text": "Leaves fall \n"}}}],
+        ),
+    ],
+    ids=["claude_guarded_part_last", "claude_text_part_last", "claude_plain_text", "nova_guarded_part"],
+)
+async def test_only_a_guarded_part_that_ends_a_final_claude_assistant_turn_is_rstripped(
+    use_async: bool, model: str, content: str | list[dict[str, str]], sent: list[dict[str, object]]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=[
+            {"role": "user", "content": [{"type": "guarded_text", "text": "Write a haiku about autumn."}]},
+            {"role": "assistant", "content": content},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][-1] == {"role": "assistant", "content": sent}
+
+
 _LOOKUP_CALL: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
 _LOOKUP_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tool_results", "optional_params", "keeps_part"),
+    [
+        ([{"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}], {}, True),
+        ([], {}, True),
+        ([{"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}], {"tools": [_LOOKUP_TOOL]}, False),
+    ],
+    ids=["answered_without_tools", "unanswered_without_tools", "answered_with_tools"],
+)
+async def test_without_a_guardrail_or_drop_params_a_tool_call_turn_sent_as_text_keeps_its_guarded_part(
+    use_async: bool, tool_results: list[AllMessageValues], optional_params: Mapping[str, object], keeps_part: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Pick a city."},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": "Paris."}]},
+            {"role": "user", "content": "Look up the weather there."},
+            {
+                "role": "assistant",
+                "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}],
+                "tool_calls": [_LOOKUP_CALL],
+            },
+            *tool_results,
+        ],
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+    sent: Final = json.dumps(
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert (_GUARDED_PART_TEXT in sent) is keeps_part
+    assert "Paris." not in sent
+    assert "guardContent" not in sent
 
 
 def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:

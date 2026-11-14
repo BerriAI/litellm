@@ -62,6 +62,7 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_converse_accepts_redacted_thinking,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
@@ -249,6 +250,42 @@ def _without_parts_outside_user_turns(
     )
 
 
+def _rstripped_guarded_text(part: object) -> object:
+    match part:
+        case {"type": "guarded_text", "text": str() as text}:
+            cache_control: Final = message_field(part, "cache_control")
+            stripped: Final = {"type": "guarded_text", "text": text.rstrip()}
+            return stripped if cache_control is None else {**stripped, "cache_control": cache_control}
+        case _:
+            return part
+
+
+def _is_text_part(part: object) -> bool:
+    return message_field(part, "type") in ("text", "guarded_text")
+
+
+def _with_a_final_guarded_part_rstripped(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    if not messages or message_field(messages[-1], "role") != "assistant":
+        return messages
+    parts: Final = parts_of(message_field(messages[-1], "content"))
+    last_text_index: Final = max((index for index, part in enumerate(parts) if _is_text_part(part)), default=None)
+    if last_text_index is None or not _is_guarded_text(parts[last_text_index]):
+        return messages
+    return (
+        *messages[:-1],
+        cast(  # cast-ok: only the content parts change, so the message keeps its role's shape
+            AllMessageValues,
+            {
+                **messages[-1],
+                "content": [
+                    _rstripped_guarded_text(part) if index == last_text_index else part
+                    for index, part in enumerate(parts)
+                ],
+            },
+        ),
+    )
+
+
 def _has_guarded_text(message: object) -> bool:
     return any(map(_is_guarded_text, parts_of(message_field(message, "content"))))
 
@@ -409,6 +446,16 @@ class AmazonConverseConfig(BaseConfig):
                 messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
 
         return messages_copy
+
+    @staticmethod
+    def _rewrites_tool_calls_as_text(
+        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> bool:
+        return (
+            litellm.bedrock_neutralize_orphaned_tool_blocks
+            and not optional_params.get("tools")
+            and AmazonConverseConfig._has_orphaned_tool_blocks(messages)
+        )
 
     @staticmethod
     def _has_orphaned_tool_blocks(messages: Sequence[AllMessageValues]) -> bool:
@@ -2361,14 +2408,11 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
-        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
-            litellm_params.get("drop_params")
+        typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        sendable_messages: Final = self._sendable_messages(
+            messages, typed_optional_params, litellm_params, capability_model
         )
-        left_out: Final = _is_guarded_text_without_string_text if can_send_guarded_text else _is_guarded_text
-        sendable_messages: Final = [_without_parts_outside_user_turns(message, left_out) for message in messages]
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(
-            sendable_messages, _JSON_OBJECT.validate_python(optional_params)
-        )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
         messages, system_content_blocks = self._transform_system_message(
             list(
                 _guarded_text_as_text_past_the_system_prompt(sendable_messages)
@@ -2425,6 +2469,31 @@ class AmazonConverseConfig(BaseConfig):
             return data
         return _request_with_guard_content_as_text(bedrock_messages, _data)
 
+    def _sendable_messages(
+        self,
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        capability_model: str,
+    ) -> Sequence[AllMessageValues]:
+        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
+            litellm_params.get("drop_params")
+        )
+        tool_calls_become_text: Final = self._rewrites_tool_calls_as_text(messages, optional_params)
+        sendable: Final = [
+            _without_parts_outside_user_turns(
+                message,
+                _is_guarded_text_without_string_text
+                if can_send_guarded_text or (tool_calls_become_text and bool(message_field(message, "tool_calls")))
+                else _is_guarded_text,
+            )
+            for message in messages
+        ]
+        to_claude: Final = bedrock_converse_accepts_redacted_thinking(
+            capability_model, self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params))
+        )
+        return _with_a_final_guarded_part_rstripped(sendable) if to_claude else sendable
+
     @staticmethod
     def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
         base_model: Final = litellm_params.get("base_model")
@@ -2459,14 +2528,11 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
-        can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
-            litellm_params.get("drop_params")
+        typed_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        sendable_messages: Final = self._sendable_messages(
+            messages, typed_optional_params, litellm_params, capability_model
         )
-        left_out: Final = _is_guarded_text_without_string_text if can_send_guarded_text else _is_guarded_text
-        sendable_messages: Final = [_without_parts_outside_user_turns(message, left_out) for message in messages]
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(
-            sendable_messages, _JSON_OBJECT.validate_python(optional_params)
-        )
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(sendable_messages, typed_optional_params)
         messages, system_content_blocks = self._transform_system_message(
             list(
                 _guarded_text_as_text_past_the_system_prompt(sendable_messages)

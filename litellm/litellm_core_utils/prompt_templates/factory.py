@@ -4390,32 +4390,6 @@ def _ensure_document_messages_have_text(
     return [_with_text_when_document_only(message) for message in contents]
 
 
-def _rstripped_text_block(block: BedrockContentBlock) -> BedrockContentBlock | None:
-    match block:
-        case {"text": str() as text}:
-            return BedrockContentBlock(text=text.rstrip())
-        case {"guardContent": {"text": {"text": str() as text}}}:
-            return BedrockContentBlock(guardContent={"text": {"text": text.rstrip()}})
-        case _:
-            return None
-
-
-def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlock:
-    """Claude on Converse rejects a final assistant turn that ends in whitespace, as the Anthropic path strips it."""
-    if message["role"] != "assistant":
-        return message
-    blocks: Final = message["content"]
-    stripped: Final = tuple(_rstripped_text_block(block) for block in blocks)
-    last_text_index: Final = max((index for index, block in enumerate(stripped) if block is not None), default=None)
-    return BedrockMessageBlock(
-        role="assistant",
-        content=[
-            stripped_block if index == last_text_index and stripped_block is not None else block
-            for index, (block, stripped_block) in enumerate(zip(blocks, stripped, strict=True))
-        ],
-    )
-
-
 def _sort_bedrock_assistant_content_blocks(
     blocks: list[BedrockContentBlock],
 ) -> list[BedrockContentBlock]:
@@ -5046,12 +5020,7 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        converse_messages: Final = _ensure_document_messages_have_text(
-            _rename_duplicate_bedrock_document_names(contents)
-        )
-        if not (to_claude and converse_messages):
-            return converse_messages
-        return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
+        return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5499,10 +5468,7 @@ def _bedrock_converse_messages_pt(
                 llm_provider=llm_provider,
             )
 
-    converse_messages: Final = _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
-    if not (to_claude and converse_messages):
-        return converse_messages
-    return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
+    return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
