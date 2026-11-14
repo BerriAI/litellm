@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -2452,3 +2453,134 @@ async def test_s3_callback_params_override_none_falls_back_to_global(
     await _upload(logger, _payload("global"))
 
     assert bucket.puts()[0].path.startswith("/from-global/")
+
+
+_SIGV4_ACCESS_KEY: Final = re.compile(r"Credential=(AKIA\d+)/")
+
+
+@pytest.fixture
+def rotating_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    import sys
+    import textwrap
+    import uuid
+
+    counter: Final = tmp_path / "generation"
+    script: Final = tmp_path / "rotate_credentials.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import json, sys
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+
+            counter = Path({str(counter)!r})
+            generation = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(generation + 1))
+            expiry = (datetime.now(timezone.utc) + timedelta(minutes=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            json.dump(
+                {{
+                    "Version": 1,
+                    "AccessKeyId": f"AKIA{{generation}}",
+                    "SecretAccessKey": f"secret-{{generation}}",
+                    "SessionToken": f"token-{{generation}}",
+                    "Expiration": expiry,
+                }},
+                sys.stdout,
+            )
+            """
+        )
+    )
+    profile: Final = f"rotating-{uuid.uuid4().hex}"
+    (tmp_path / "config").write_text(f"[profile {profile}]\ncredential_process = {sys.executable} {script}\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
+    return profile
+
+
+def _generation(request: Received) -> tuple[str, str]:
+    access_key: Final = _SIGV4_ACCESS_KEY.search(request.headers["authorization"])
+    assert access_key is not None
+    return access_key.group(1).removeprefix("AKIA"), request.headers["x-amz-security-token"].removeprefix("token-")
+
+
+def _profile_logger(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, profile: str) -> S3LoggerV3:
+    logger: Final = rust_s3_logger(
+        monkeypatch,
+        s3_bucket_name="test-bucket",
+        s3_endpoint_url=bucket.url,
+        s3_region_name="us-east-1",
+        s3_aws_profile_name=profile,
+        s3_flush_interval=3600,
+    )
+    _ = logger.periodic_flush_task.cancel()
+    return logger
+
+
+_SIGNATURE_DOES_NOT_MATCH: Final = "<Error><Code>SignatureDoesNotMatch</Code></Error>"
+
+
+@pytest.mark.asyncio
+async def test_async_upload_signs_with_one_frozen_credential_snapshot(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str
+) -> None:
+    await _upload(_profile_logger(monkeypatch, bucket, rotating_profile), _payload("frozen"))
+
+    assert len(bucket.puts()) == 1
+    access_key_generation, token_generation = _generation(bucket.puts()[0])
+    assert access_key_generation == token_generation
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_403_with_fresh_credentials_and_signature(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str
+) -> None:
+    bucket.reply("_test-403.json", (403, _SIGNATURE_DOES_NOT_MATCH), (200, ""))
+    logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
+
+    await _upload(logger, _payload("test-403"))
+
+    requests: Final = bucket.puts()
+    assert len(requests) == 2
+    first_key, first_token = _generation(requests[0])
+    second_key, second_token = _generation(requests[1])
+    assert first_key == first_token
+    assert second_key == second_token
+    assert int(second_key) > int(first_key)
+    assert requests[1].headers["authorization"] != requests[0].headers["authorization"]
+    _assert_backoff_gaps(requests)
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_async_upload_exhausts_403_retries_through_production_http_handler(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str
+) -> None:
+    bucket.reply("_test-403-exhausted.json", (403, _SIGNATURE_DOES_NOT_MATCH))
+    logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
+
+    with _failures() as failure:
+        await _upload(logger, _payload("test-403-exhausted"))
+
+    assert len(bucket.puts()) == 3
+    _assert_backoff_gaps(bucket.puts())
+    failure.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transient_status", [500, 503])
+async def test_async_upload_recovers_from_transient_5xx_through_production_http_handler(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str, transient_status: int
+) -> None:
+    bucket.reply(f"_test-{transient_status}.json", (transient_status, _SIGNATURE_DOES_NOT_MATCH), (200, ""))
+    logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
+
+    with _failures() as failure:
+        await _upload(logger, _payload(f"test-{transient_status}"))
+
+    requests: Final = bucket.puts()
+    assert len(requests) == 2
+    assert all(request.method == "PUT" for request in requests)
+    assert requests[0].path == requests[1].path
+    assert requests[0].body == requests[1].body
+    _assert_backoff_gaps(requests)
+    failure.assert_not_called()
+    assert logger.sink.queued_keys() == []
