@@ -101932,5 +101932,153 @@
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "powerspring/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 5.8023e-09,
+        "input_cost_per_token": 2.1120372e-07,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 6.3477162e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "powerspring/glm-5.3-flash": {
+        "cache_read_input_token_cost": 1.856736e-08,
+        "input_cost_per_token": 1.044414e-07,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.6438444e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "powerspring/gpt-oss-120b": {
+        "input_cost_per_token": 8.8416e-08,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 131000,
+        "max_output_tokens": 131000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4208e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "powerspring/gpt-oss-20b": {
+        "input_cost_per_token": 4.4208e-08,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 131000,
+        "max_output_tokens": 131000,
+        "mode": "chat",
+        "output_cost_per_token": 1.6578e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "powerspring/qwen3.8-27b": {
+        "cache_read_input_token_cost": 4.177656e-08,
+        "input_cost_per_token": 1.044414e-07,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 500000,
+        "mode": "chat",
+        "output_cost_per_token": 4.1660514e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "powerspring/gemma-4-31b": {
+        "input_cost_per_token": 2.32092e-07,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 262000,
+        "max_output_tokens": 262000,
+        "mode": "chat",
+        "output_cost_per_token": 4.06161e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "powerspring/gemma-4-26b-a4b": {
+        "input_cost_per_token": 1.16046e-07,
+        "litellm_provider": "powerspring",
+        "max_input_tokens": 262000,
+        "max_output_tokens": 81920,
+        "mode": "chat",
+        "output_cost_per_token": 5.8023e-07,
+        "source": "https://api.powerspring.eu/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
