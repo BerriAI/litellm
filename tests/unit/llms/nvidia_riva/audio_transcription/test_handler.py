@@ -1,780 +1,641 @@
-"""
-End-to-end-ish tests for NvidiaRivaAudioTranscription.
-
-We mock ``riva.client`` so the test does not need the real gRPC SDK or a
-running Riva server. The mock also lets us assert how Auth metadata is
-constructed (NVCF vs self-hosted) and how the streaming generator output
-is aggregated.
-"""
-
 import asyncio
 import io
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+import ipaddress
+import threading
+import uuid
+import wave
+from array import array
+from collections.abc import Iterable, Iterator
+from concurrent import futures
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from queue import SimpleQueue
+from typing import Final
 
+import grpc
 import httpx
-import numpy as np
 import pytest
-import soundfile as sf
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+from riva.client.proto import riva_asr_pb2, riva_asr_pb2_grpc, riva_audio_pb2
 
 import litellm
-from litellm.llms.nvidia_riva.audio_transcription import handler as handler_mod
-from litellm.llms.nvidia_riva.audio_transcription.handler import (
-    NvidiaRivaAudioTranscription,
-)
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.nvidia_riva.audio_transcription.handler import NvidiaRivaAudioTranscription
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
 from litellm.types.utils import TranscriptionResponse
 
+_SAMPLE_RATE_HZ: Final = 16000
+_SERVER_WAIT_SECONDS: Final = 30
+_STALL_LIMIT_SECONDS: Final = 60
+_NO_DEADLINE_SECONDS: Final = 10**9
+_STALL_TIMEOUT_SECONDS: Final = 0.5
+_API_KEY: Final = "nvapi-test"
 
-def _make_wav_bytes(seconds: float = 1.0, sample_rate: int = 16000) -> bytes:
-    n = int(sample_rate * seconds)
-    samples = (0.05 * np.sin(np.linspace(0, 2 * np.pi * 220 * seconds, n))).astype(
-        np.float32
+
+@dataclass(frozen=True, slots=True)
+class _Script:
+    streaming: tuple[riva_asr_pb2.StreamingRecognizeResponse, ...] = ()
+    offline: riva_asr_pb2.RecognizeResponse = field(default_factory=riva_asr_pb2.RecognizeResponse)
+    abort: tuple[grpc.StatusCode, str] | None = None
+    stall: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Call:
+    rpc: str
+    metadata: tuple[tuple[str, str], ...]
+    config: riva_asr_pb2.RecognitionConfig
+    audio: bytes
+    deadline_seconds: float | None
+    cancelled: bool
+
+    def header(self, key: str) -> tuple[str, ...]:
+        return tuple(value for name, value in self.metadata if name == key)
+
+
+@dataclass(frozen=True, slots=True)
+class _Riva:
+    address: str
+    calls: SimpleQueue[_Call]
+
+    def only_call(self) -> _Call:
+        call: Final = self.calls.get(timeout=_SERVER_WAIT_SECONDS)
+        assert self.calls.empty(), "Riva received more than one call"
+        return call
+
+
+class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
+    def __init__(self, script: _Script, calls: SimpleQueue[_Call]) -> None:
+        self._script: Final = script
+        self._calls: Final = calls
+
+    def _settle(
+        self, context: grpc.ServicerContext, rpc: str, config: riva_asr_pb2.RecognitionConfig, audio: bytes
+    ) -> None:
+        remaining: Final = context.time_remaining()
+        released: Final = threading.Event()
+        if self._script.stall and context.add_callback(released.set):
+            released.wait(timeout=_STALL_LIMIT_SECONDS)
+        self._calls.put(
+            _Call(
+                rpc=rpc,
+                metadata=tuple((item.key, item.value) for item in context.invocation_metadata()),
+                config=config,
+                audio=audio,
+                deadline_seconds=None if remaining is None or remaining > _NO_DEADLINE_SECONDS else remaining,
+                cancelled=not context.is_active(),
+            )
+        )
+        if self._script.abort is not None:
+            context.abort(*self._script.abort)
+
+    def Recognize(
+        self, request: riva_asr_pb2.RecognizeRequest, context: grpc.ServicerContext
+    ) -> riva_asr_pb2.RecognizeResponse:
+        self._settle(context, "Recognize", request.config, request.audio)
+        return self._script.offline
+
+    def StreamingRecognize(
+        self, request_iterator: Iterable[riva_asr_pb2.StreamingRecognizeRequest], context: grpc.ServicerContext
+    ) -> Iterator[riva_asr_pb2.StreamingRecognizeResponse]:
+        first, *rest = tuple(request_iterator)
+        self._settle(
+            context, "StreamingRecognize", first.streaming_config.config, b"".join(r.audio_content for r in rest)
+        )
+        yield from self._script.streaming
+
+
+@dataclass(frozen=True, slots=True)
+class _Tls:
+    key_pem: bytes
+    cert_pem: bytes
+
+
+def _self_signed_loopback_tls() -> _Tls:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime(2000, 1, 1, tzinfo=timezone.utc))
+        .not_valid_after(datetime(2099, 1, 1, tzinfo=timezone.utc))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
     )
-    buf = io.BytesIO()
-    sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
-    return buf.getvalue()
-
-
-def _fake_word(word: str, start_ms: int, end_ms: int):
-    return SimpleNamespace(word=word, start_time=start_ms, end_time=end_ms)
-
-
-def _fake_alternative(transcript: str, words=None):
-    return SimpleNamespace(transcript=transcript, words=words or [])
-
-
-def _fake_result(is_final: bool, alternatives):
-    return SimpleNamespace(is_final=is_final, alternatives=alternatives)
-
-
-def _fake_response(results):
-    return SimpleNamespace(results=results)
-
-
-@pytest.fixture
-def mock_riva(monkeypatch):
-    """
-    Stand-ins for the bits of ``riva.client`` the handler touches:
-    - ``Auth`` (constructor)
-    - ``ASRService`` with ``streaming_response_generator``
-    - ``RecognitionConfig``, ``StreamingRecognitionConfig``, ``EndpointingConfig``
-    - ``AudioEncoding`` namespace with ``LINEAR_PCM``
-    """
-    auth_calls = {}
-
-    class FakeAuth:
-        def __init__(self, *args, **kwargs):
-            # Support both keyword and positional Auth constructors.
-            if kwargs:
-                auth_calls["uri"] = kwargs.get("uri")
-                auth_calls["use_ssl"] = kwargs.get("use_ssl")
-                auth_calls["metadata_args"] = kwargs.get("metadata_args")
-            else:
-                # positional: (None, use_ssl, uri, metadata)
-                auth_calls["use_ssl"] = args[1] if len(args) > 1 else None
-                auth_calls["uri"] = args[2] if len(args) > 2 else None
-                auth_calls["metadata_args"] = args[3] if len(args) > 3 else None
-
-    class FakeRecognitionConfig:
-        def __init__(self, **kwargs):
-            self._kwargs = kwargs
-            self.endpointing_config = SimpleNamespace(CopyFrom=lambda _: None)
-
-    class FakeStreamingRecognitionConfig:
-        def __init__(self, config, interim_results):
-            self.config = config
-            self.interim_results = interim_results
-
-    class FakeEndpointingConfig:
-        def __init__(self, **kwargs):
-            self._kwargs = kwargs
-
-    class FakeAudioEncoding:
-        LINEAR_PCM = "LINEAR_PCM"
-
-    streaming_responses_holder = {"value": []}
-    offline_response_holder = {"value": None}
-    offline_error_holder = {"value": None}
-    offline_future_holder = {"value": None}
-    streaming_calls = []
-    offline_calls = {}
-
-    class FakeRecognizeFuture:
-        def result(self, timeout: float | None = None) -> object:
-            offline_calls["timeout"] = timeout
-            if offline_error_holder["value"] is not None:
-                raise offline_error_holder["value"]
-            return offline_response_holder["value"]
-
-        def done(self) -> bool:
-            return True
-
-        def cancel(self) -> bool:
-            return False
-
-    class FakeASRService:
-        def __init__(self, auth):
-            self.auth = auth
-
-        def streaming_response_generator(self, audio_chunks, streaming_config):
-            # Drain audio_chunks generator so we exercise the chunking path.
-            streaming_calls.append(list(audio_chunks))
-            yield from streaming_responses_holder["value"]
-
-        def offline_recognize(self, audio_bytes: bytes, config: object, future: bool = False) -> object:
-            offline_calls["audio_bytes"] = audio_bytes
-            offline_calls["config"] = config
-            pending = offline_future_holder["value"] or FakeRecognizeFuture()
-            return pending if future else pending.result()
-
-    fake_riva_client = SimpleNamespace(
-        Auth=FakeAuth,
-        ASRService=FakeASRService,
-        RecognitionConfig=FakeRecognitionConfig,
-        StreamingRecognitionConfig=FakeStreamingRecognitionConfig,
-        EndpointingConfig=FakeEndpointingConfig,
-        AudioEncoding=FakeAudioEncoding,
-    )
-
-    def fake_import_riva():
-        return fake_riva_client, fake_riva_client
-
-    monkeypatch.setattr(handler_mod, "_import_riva", fake_import_riva)
-
-    return SimpleNamespace(
-        auth_calls=auth_calls,
-        responses=streaming_responses_holder,
-        offline_response=offline_response_holder,
-        offline_error=offline_error_holder,
-        offline_future=offline_future_holder,
-        streaming_calls=streaming_calls,
-        offline_calls=offline_calls,
-        client=fake_riva_client,
+    return _Tls(
+        key_pem=key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ),
+        cert_pem=cert.public_bytes(serialization.Encoding.PEM),
     )
 
 
-@pytest.fixture
-def logging_obj():
-    return MagicMock()
+@contextmanager
+def _riva_server(script: _Script, max_receive_bytes: int | None = None, tls: _Tls | None = None) -> Iterator[_Riva]:
+    calls: Final[SimpleQueue[_Call]] = SimpleQueue()
+    options: Final = () if max_receive_bytes is None else (("grpc.max_receive_message_length", max_receive_bytes),)
+    server: Final = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=options)
+    riva_asr_pb2_grpc.add_RivaSpeechRecognitionServicer_to_server(_Asr(script, calls), server)
+    port: Final = (
+        server.add_insecure_port("127.0.0.1:0")
+        if tls is None
+        else server.add_secure_port("127.0.0.1:0", grpc.ssl_server_credentials(((tls.key_pem, tls.cert_pem),)))
+    )
+    server.start()
+    try:
+        yield _Riva(f"127.0.0.1:{port}", calls)
+    finally:
+        server.stop(grace=None).wait()
 
 
-def test_sync_path_aggregates_only_final_results(mock_riva, logging_obj):
-    mock_riva.responses["value"] = [
-        # Empty heartbeat chunk: ignore.
-        _fake_response(results=[]),
-        # Interim chunk (not final): ignore.
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=False, alternatives=[_fake_alternative("partial...")]
-                )
-            ]
-        ),
-        # Two final chunks aggregated.
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=True,
-                    alternatives=[
-                        _fake_alternative(
-                            "Hello,",
-                            words=[_fake_word("Hello,", 0, 320)],
-                        )
-                    ],
-                )
-            ]
-        ),
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=True,
-                    alternatives=[
-                        _fake_alternative(
-                            " world.",
-                            words=[_fake_word("world.", 480, 870)],
-                        )
-                    ],
-                )
-            ]
-        ),
-    ]
+def _samples(seconds: float) -> array[int]:
+    return array("h", (((index * 37) % 2001 - 1000) * 16 for index in range(int(seconds * _SAMPLE_RATE_HZ))))
 
-    impl = NvidiaRivaAudioTranscription()
-    response: TranscriptionResponse = impl.audio_transcriptions(
-        model="nvidia/parakeet-ctc-1_1b-asr",
-        audio_file=_make_wav_bytes(),
-        optional_params={
-            "language_code": "en-US",
-            "enable_word_time_offsets": True,
-            "response_format": "verbose_json",
-            "timestamp_granularities": ["word"],
-        },
-        litellm_params={},
+
+def _wav(seconds: float = 1.0) -> bytes:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(_SAMPLE_RATE_HZ)
+        writer.writeframes(_samples(seconds).tobytes())
+    return buffer.getvalue()
+
+
+def _carries_clip(audio: bytes, seconds: float) -> bool:
+    sent: Final = _samples(seconds)
+    if len(audio) != len(sent) * 2:
+        return False
+    return all(abs(left - right) <= 1 for left, right in zip(sent, array("h", audio), strict=True))
+
+
+def _alternative(
+    transcript: str, words: tuple[tuple[str, int, int], ...] = ()
+) -> riva_asr_pb2.SpeechRecognitionAlternative:
+    return riva_asr_pb2.SpeechRecognitionAlternative(
+        transcript=transcript,
+        words=[riva_asr_pb2.WordInfo(word=word, start_time=start, end_time=end) for word, start, end in words],
+    )
+
+
+def _streamed(transcript: str, is_final: bool = True) -> riva_asr_pb2.StreamingRecognizeResponse:
+    return riva_asr_pb2.StreamingRecognizeResponse(
+        results=[riva_asr_pb2.StreamingRecognitionResult(alternatives=[_alternative(transcript)], is_final=is_final)]
+    )
+
+
+def _offline(*transcripts: str) -> riva_asr_pb2.RecognizeResponse:
+    return riva_asr_pb2.RecognizeResponse(
+        results=[riva_asr_pb2.SpeechRecognitionResult(alternatives=[_alternative(text)]) for text in transcripts]
+    )
+
+
+def _answers(transcript: str) -> _Script:
+    return _Script(streaming=(_streamed(transcript),), offline=_offline(transcript))
+
+
+def _logging() -> Logging:
+    return Logging(
+        model="m",
+        messages=[],
+        stream=False,
+        call_type="transcription",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id=str(uuid.uuid4()),
+        function_id="riva-test",
+    )
+
+
+def _transcribe(
+    riva: _Riva,
+    optional_params: dict[str, object] | None = None,
+    *,
+    api_key: str | None = None,
+    timeout: float | str | httpx.Timeout | None = 60,
+    litellm_params: dict[str, object] | None = None,
+) -> TranscriptionResponse:
+    return NvidiaRivaAudioTranscription().audio_transcriptions(
+        model="m",
+        audio_file=_wav(),
+        optional_params={"language_code": "en-US", **(optional_params or {})},
+        litellm_params=litellm_params or {},
         model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key="nvapi-xxx",
-        api_base="grpc.nvcf.nvidia.com:443",
-    )
-
-    assert response.text == "Hello, world."
-    # duration is propagated from the resampler.
-    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(
-        1.0, abs=0.05
-    )
-    # word timestamps converted from ms to seconds.
-    words = response["words"]
-    assert words[0]["start"] == pytest.approx(0.0)
-    assert words[1]["end"] == pytest.approx(0.87)
-    assert (
-        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
-        is False
+        timeout=timeout,
+        logging_obj=_logging(),
+        api_key=api_key,
+        api_base=riva.address,
     )
 
 
-def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock
-) -> None:
-    """
-    Offline-only NIMs (Parakeet TDT, Whisper) reject StreamingRecognize. With
-    ``riva_offline`` the handler must call ``offline_recognize`` with the whole
-    resampled buffer and a bare ``RecognitionConfig``, and must keep every
-    result even though ``RecognizeResponse`` results carry no ``is_final``.
-    """
-    mock_riva.offline_response["value"] = _fake_response(
+def test_streaming_aggregates_only_final_results_and_their_word_timings() -> None:
+    heartbeat: Final = riva_asr_pb2.StreamingRecognizeResponse()
+    hello: Final = riva_asr_pb2.StreamingRecognizeResponse(
         results=[
-            SimpleNamespace(alternatives=[_fake_alternative("Hello,", words=[_fake_word("Hello,", 0, 320)])]),
-            SimpleNamespace(alternatives=[_fake_alternative(" world.", words=[_fake_word("world.", 480, 870)])]),
+            riva_asr_pb2.StreamingRecognitionResult(
+                alternatives=[_alternative("Hello,", (("Hello,", 0, 320),))], is_final=True
+            )
         ]
     )
-
-    impl = NvidiaRivaAudioTranscription()
-    response: TranscriptionResponse = impl.audio_transcriptions(
-        model="nvidia/parakeet-0.6b-tdt",
-        audio_file=_make_wav_bytes(),
-        optional_params={
-            "language_code": "multi",
-            "riva_offline": True,
-            "enable_word_time_offsets": True,
-            "response_format": "verbose_json",
-            "timestamp_granularities": ["word"],
-        },
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
+    world: Final = riva_asr_pb2.StreamingRecognizeResponse(
+        results=[
+            riva_asr_pb2.StreamingRecognitionResult(
+                alternatives=[_alternative(" world.", (("world.", 480, 870),))], is_final=True
+            )
+        ]
     )
+    with _riva_server(_Script(streaming=(heartbeat, _streamed("partial...", is_final=False), hello, world))) as riva:
+        response: Final = _transcribe(
+            riva,
+            {"enable_word_time_offsets": True, "response_format": "verbose_json", "timestamp_granularities": ["word"]},
+        )
+        call: Final = riva.only_call()
 
     assert response.text == "Hello, world."
-    assert response["words"][1]["end"] == pytest.approx(0.87)
-    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0, abs=0.05)
-    assert mock_riva.streaming_calls == []
-    assert len(mock_riva.offline_calls["audio_bytes"]) == pytest.approx(32000, abs=1600)
-    assert mock_riva.offline_calls["config"]._kwargs["language_code"] == "multi"
-    assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is True
-
-
-def test_default_mode_streams_and_never_calls_offline_recognize(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock
-) -> None:
-    mock_riva.responses["value"] = [
-        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
+    assert response["words"] == [
+        {"word": "Hello,", "start": 0.0, "end": 0.32},
+        {"word": "world.", "start": 0.48, "end": 0.87},
     ]
+    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0)
+    assert call.rpc == "StreamingRecognize"
+    assert _carries_clip(call.audio, 1.0), "streamed chunks do not add up to the resampled clip"
 
-    impl = NvidiaRivaAudioTranscription()
-    response = impl.audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"language_code": "en-US"},
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
+
+def test_riva_offline_uses_recognize_and_keeps_results_without_is_final() -> None:
+    offline: Final = riva_asr_pb2.RecognizeResponse(
+        results=[
+            riva_asr_pb2.SpeechRecognitionResult(alternatives=[_alternative("Hello,", (("Hello,", 0, 320),))]),
+            riva_asr_pb2.SpeechRecognitionResult(alternatives=[_alternative(" world.", (("world.", 480, 870),))]),
+        ]
     )
-    assert response.text == "streamed"
-    assert mock_riva.offline_calls == {}
-    assert len(mock_riva.streaming_calls) == 1
-    assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is False
-
-
-
-@pytest.mark.parametrize(("riva_offline", "expect_offline"), [("false", False), ("False", False), ("true", True)])
-def test_riva_offline_string_from_multipart_form_is_parsed(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock, riva_offline: str, expect_offline: bool
-) -> None:
-    mock_riva.responses["value"] = [
-        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
-    ]
-    mock_riva.offline_response["value"] = _fake_response(
-        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
-    )
-
-    response = NvidiaRivaAudioTranscription().audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"language_code": "en-US", "riva_offline": riva_offline},
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
-    )
-
-    assert response.text == ("offline" if expect_offline else "streamed")
-    assert (mock_riva.offline_calls != {}) is expect_offline
-
-
-@pytest.mark.parametrize("riva_offline", ["yes", "", 1])
-def test_riva_offline_malformed_value_is_rejected_before_any_rpc(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock, riva_offline: object
-) -> None:
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        NvidiaRivaAudioTranscription().audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "en-US", "riva_offline": riva_offline},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=60,
-            logging_obj=logging_obj,
-            api_key=None,
-            api_base="localhost:50051",
+    with _riva_server(_Script(offline=offline)) as riva:
+        response: Final = _transcribe(
+            riva,
+            {
+                "language_code": "multi",
+                "riva_offline": True,
+                "enable_word_time_offsets": True,
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["word"],
+            },
         )
+        call: Final = riva.only_call()
 
-    assert excinfo.value.status_code == 400
-    assert "riva_offline" in excinfo.value.message
-    assert mock_riva.offline_calls == {}
-    assert mock_riva.streaming_calls == []
+    assert response.text == "Hello, world."
+    assert response["words"][1] == {"word": "world.", "start": 0.48, "end": 0.87}
+    assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0)
+    assert call.rpc == "Recognize"
+    assert call.config.language_code == "multi"
+    assert _carries_clip(call.audio, 1.0), "offline request does not carry the whole resampled clip"
 
 
-def test_riva_offline_malformed_value_is_dropped_under_drop_params(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock
-) -> None:
-    mock_riva.responses["value"] = [
-        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
-    ]
+@pytest.mark.parametrize("riva_offline", [False, True])
+def test_recognition_config_reaches_riva_as_nvidia_decodes_it(riva_offline: bool) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        _transcribe(
+            riva,
+            {
+                "riva_offline": riva_offline,
+                "enable_word_time_offsets": True,
+                "riva_model_name": "parakeet",
+                "sample_rate_hertz": 8000,
+                "profanity_filter": True,
+            },
+        )
+        call: Final = riva.only_call()
 
-    response = NvidiaRivaAudioTranscription().audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"language_code": "en-US", "riva_offline": "yes"},
-        litellm_params={"drop_params": True},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
+    assert call.config == riva_asr_pb2.RecognitionConfig(
+        encoding=riva_audio_pb2.AudioEncoding.LINEAR_PCM,
+        sample_rate_hertz=_SAMPLE_RATE_HZ,
+        language_code="en-US",
+        max_alternatives=1,
+        profanity_filter=True,
+        audio_channel_count=1,
+        enable_word_time_offsets=True,
+        enable_automatic_punctuation=True,
+        model="parakeet",
     )
+
+
+def test_default_mode_streams_and_never_calls_recognize() -> None:
+    with _riva_server(_answers("streamed")) as riva:
+        response: Final = _transcribe(riva)
+        call: Final = riva.only_call()
 
     assert response.text == "streamed"
-    assert mock_riva.offline_calls == {}
-
-
-def test_deployment_riva_offline_reaches_the_handler_through_transcription(mock_riva: SimpleNamespace) -> None:
-    mock_riva.offline_response["value"] = _fake_response(
-        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
-    )
-
-    response = litellm.transcription(
-        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
-        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
-        api_base="localhost:50051",
-        riva_offline=True,
-    )
-
-    assert response.text == "offline"
-    assert mock_riva.streaming_calls == []
-    assert mock_riva.offline_calls != {}
+    assert call.rpc == "StreamingRecognize"
 
 
 @pytest.mark.parametrize(
-    ("timeout", "waited_for"),
-    [("7.5", 7.5), (httpx.Timeout(30.0, read=7.5), 7.5), (httpx.Timeout(5.0, read=None), 600.0), (None, None)],
+    ("riva_offline", "rpc"), [("false", "StreamingRecognize"), ("False", "StreamingRecognize"), ("true", "Recognize")]
 )
-def test_offline_recognition_waits_the_timeout_in_seconds_whatever_its_form(
-    mock_riva: SimpleNamespace, timeout: str | httpx.Timeout | None, waited_for: float | None
-) -> None:
-    mock_riva.offline_response["value"] = _fake_response(
-        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
-    )
+def test_riva_offline_string_from_multipart_form_is_parsed(riva_offline: str, rpc: str) -> None:
+    with _riva_server(_Script(streaming=(_streamed("streamed"),), offline=_offline("offline"))) as riva:
+        response: Final = _transcribe(riva, {"riva_offline": riva_offline})
+        call: Final = riva.only_call()
 
-    response = litellm.transcription(
-        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
-        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
-        api_base="localhost:50051",
-        riva_offline=True,
-        timeout=timeout,
-    )
+    assert call.rpc == rpc
+    assert response.text == ("offline" if rpc == "Recognize" else "streamed")
+
+
+@pytest.mark.parametrize("riva_offline", ["yes", "", 1])
+def test_riva_offline_malformed_value_is_rejected_before_any_rpc(riva_offline: object) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, {"riva_offline": riva_offline})
+
+        assert riva.calls.empty()
+
+    assert excinfo.value.status_code == 400
+    assert "riva_offline" in excinfo.value.message
+
+
+def test_riva_offline_malformed_value_is_dropped_under_drop_params() -> None:
+    with _riva_server(_Script(streaming=(_streamed("streamed"),), offline=_offline("offline"))) as riva:
+        response: Final = _transcribe(riva, {"riva_offline": "yes"}, litellm_params={"drop_params": True})
+        call: Final = riva.only_call()
+
+    assert response.text == "streamed"
+    assert call.rpc == "StreamingRecognize"
+
+
+def test_deployment_riva_offline_reaches_the_handler_through_transcription() -> None:
+    with _riva_server(_Script(offline=_offline("offline"))) as riva:
+        response: Final = litellm.transcription(
+            model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+            file=("clip.wav", _wav(), "audio/wav"),
+            api_base=riva.address,
+            riva_offline=True,
+        )
+        call: Final = riva.only_call()
 
     assert response.text == "offline"
-    assert mock_riva.offline_calls["timeout"] == waited_for
+    assert call.rpc == "Recognize"
 
 
-@pytest.mark.parametrize("timeout", ["abc", "30s"])
-def test_malformed_timeout_on_offline_call_is_a_400_before_any_rpc(
-    mock_riva: SimpleNamespace, timeout: str
+@pytest.mark.parametrize(
+    ("timeout", "deadline_seconds"),
+    [
+        (12.5, 12.5),
+        ("12.5", 12.5),
+        (httpx.Timeout(60.0, read=12.5), 12.5),
+        (httpx.Timeout(5.0, read=None), 600.0),
+        (None, None),
+    ],
+)
+def test_streaming_deadline_is_the_timeout_in_seconds_whatever_its_form(
+    timeout: float | str | httpx.Timeout | None, deadline_seconds: float | None
 ) -> None:
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        litellm.transcription(
-            model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
-            file=("clip.wav", _make_wav_bytes(), "audio/wav"),
-            api_base="localhost:50051",
-            riva_offline=True,
+    with _riva_server(_answers("streamed")) as riva:
+        response: Final = litellm.transcription(
+            model="nvidia_riva/nvidia/parakeet-ctc-1.1b",
+            file=("clip.wav", _wav(), "audio/wav"),
+            api_base=riva.address,
             timeout=timeout,
         )
+        call: Final = riva.only_call()
+
+    assert response.text == "streamed"
+    assert call.deadline_seconds == (None if deadline_seconds is None else pytest.approx(deadline_seconds, rel=0.25))
+
+
+@pytest.mark.parametrize("riva_offline", [False, True])
+@pytest.mark.parametrize("timeout", ["abc", "30s"])
+def test_malformed_timeout_is_a_400_before_any_rpc(riva_offline: bool, timeout: str) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            litellm.transcription(
+                model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+                file=("clip.wav", _wav(), "audio/wav"),
+                api_base=riva.address,
+                riva_offline=riva_offline,
+                timeout=timeout,
+            )
+
+        assert riva.calls.empty()
 
     assert excinfo.value.status_code == 400
     assert "timeout" in excinfo.value.message
-    assert "audio_bytes" not in mock_riva.offline_calls
 
 
-def test_malformed_timeout_on_offline_call_waits_the_default_under_drop_params(
-    mock_riva: SimpleNamespace,
-) -> None:
-    mock_riva.offline_response["value"] = _fake_response(
-        results=[SimpleNamespace(alternatives=[_fake_alternative("offline")])]
-    )
-
-    response = litellm.transcription(
-        model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
-        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
-        api_base="localhost:50051",
-        riva_offline=True,
-        timeout="abc",
-        drop_params=True,
-    )
-
-    assert response.text == "offline"
-    assert mock_riva.offline_calls["timeout"] == 600.0
-
-
-def test_malformed_timeout_still_streams_when_the_client_takes_no_timeout(mock_riva: SimpleNamespace) -> None:
-    mock_riva.responses["value"] = [
-        _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
-    ]
-
-    response = litellm.transcription(
-        model="nvidia_riva/nvidia/parakeet-ctc-1.1b",
-        file=("clip.wav", _make_wav_bytes(), "audio/wav"),
-        api_base="localhost:50051",
-        timeout="abc",
-    )
-
-    assert response.text == "streamed"
-    assert len(mock_riva.streaming_calls) == 1
-
-
-def test_oversized_offline_audio_is_a_non_retryable_413(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:
-    class FakeGrpcError(Exception):
-        def code(self) -> SimpleNamespace:
-            return SimpleNamespace(name="RESOURCE_EXHAUSTED")
-
-        def details(self) -> str:
-            return "SERVER: Received message larger than max (4348825 vs. 4194304)"
-
-    mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
-
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        NvidiaRivaAudioTranscription().audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "en-US", "riva_offline": True},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=60,
-            logging_obj=logging_obj,
-            api_key=None,
-            api_base="localhost:50051",
+def test_malformed_streaming_timeout_falls_back_to_the_default_deadline_under_drop_params() -> None:
+    with _riva_server(_answers("ok")) as riva:
+        response: Final = litellm.transcription(
+            model="nvidia_riva/nvidia/parakeet-ctc-1.1b",
+            file=("clip.wav", _wav(), "audio/wav"),
+            api_base=riva.address,
+            timeout="abc",
+            drop_params=True,
         )
+        call: Final = riva.only_call()
 
-    assert excinfo.value.status_code == 413
+    assert response.text == "ok"
+    assert call.rpc == "StreamingRecognize"
+    assert call.deadline_seconds == pytest.approx(600.0, rel=0.25)
+
+
+def test_malformed_offline_timeout_is_ignored_under_drop_params() -> None:
+    with _riva_server(_answers("ok")) as riva:
+        response: Final = litellm.transcription(
+            model="nvidia_riva/nvidia/parakeet-0.6b-tdt",
+            file=("clip.wav", _wav(), "audio/wav"),
+            api_base=riva.address,
+            riva_offline=True,
+            timeout="abc",
+            drop_params=True,
+        )
+        call: Final = riva.only_call()
+
+    assert response.text == "ok"
+    assert call.rpc == "Recognize"
+
+
+@pytest.mark.parametrize(
+    "timeout", [_STALL_TIMEOUT_SECONDS, str(_STALL_TIMEOUT_SECONDS), httpx.Timeout(30.0, read=_STALL_TIMEOUT_SECONDS)]
+)
+def test_stalled_offline_recognition_is_cancelled_and_times_out_as_408(timeout: float | str | httpx.Timeout) -> None:
+    with _riva_server(_Script(stall=True)) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, {"riva_offline": True}, timeout=timeout)
+        call: Final = riva.only_call()
+
+    assert excinfo.value.status_code == 408
+    assert f"within {_STALL_TIMEOUT_SECONDS} seconds" in excinfo.value.message
+    assert call.cancelled is True
+
+
+def test_stalled_streaming_recognition_hits_its_deadline_as_504() -> None:
+    with _riva_server(_Script(stall=True)) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, timeout=_STALL_TIMEOUT_SECONDS)
+        call: Final = riva.only_call()
+
+    assert excinfo.value.status_code == 504, excinfo.value.message
+    assert "DEADLINE_EXCEEDED" in excinfo.value.message
+    assert call.cancelled is True
+
+
+def test_oversized_offline_audio_is_a_non_retryable_413() -> None:
+    with _riva_server(_answers("ok"), max_receive_bytes=4096) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, {"riva_offline": True})
+
+        assert riva.calls.empty()
+
+    assert excinfo.value.status_code == 413, excinfo.value.message
     assert litellm.utils.should_retry(excinfo.value.status_code) is False
 
 
-def test_stalled_offline_recognition_is_cancelled_and_times_out_as_408(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock
+@pytest.mark.parametrize(
+    ("riva_offline", "code", "status_code"),
+    [
+        (False, grpc.StatusCode.UNAUTHENTICATED, 401),
+        (True, grpc.StatusCode.INVALID_ARGUMENT, 400),
+        (False, grpc.StatusCode.RESOURCE_EXHAUSTED, 429),
+    ],
+)
+def test_grpc_error_is_wrapped_as_nvidia_riva_exception(
+    riva_offline: bool, code: grpc.StatusCode, status_code: int
 ) -> None:
-    class FutureTimeoutError(Exception):
-        pass
+    with _riva_server(_Script(abort=(code, "Riva said no"))) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, {"riva_offline": riva_offline}, api_key=_API_KEY)
 
-    class StalledRecognizeFuture:
-        def __init__(self) -> None:
-            self.waited_for: float | None = None
-            self.cancelled = False
+    assert excinfo.value.status_code == status_code
+    assert code.name in excinfo.value.message
+    assert "Riva said no" in excinfo.value.message
 
-        def result(self, timeout: float | None = None) -> object:
-            self.waited_for = timeout
-            raise FutureTimeoutError()
 
-        def done(self) -> bool:
-            return self.cancelled
+@pytest.mark.parametrize("riva_offline", [False, True])
+def test_self_hosted_api_key_is_sent_as_one_bearer_token(riva_offline: bool) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        _transcribe(riva, {"riva_offline": riva_offline}, api_key=_API_KEY)
+        call: Final = riva.only_call()
 
-        def cancel(self) -> bool:
-            self.cancelled = True
-            return True
+    assert call.header("authorization") == (f"Bearer {_API_KEY}",)
+    assert call.header("function-id") == ()
 
-    stalled = StalledRecognizeFuture()
-    mock_riva.offline_future["value"] = stalled
 
+@pytest.mark.parametrize("riva_offline", [False, True])
+def test_nvcf_function_id_and_api_key_are_each_sent_once(riva_offline: bool) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        _transcribe(
+            riva, {"riva_offline": riva_offline, "nvcf_function_id": "abc-123", "use_ssl": False}, api_key=_API_KEY
+        )
+        call: Final = riva.only_call()
+
+    assert call.header("function-id") == ("abc-123",)
+    assert call.header("authorization") == (f"Bearer {_API_KEY}",)
+
+
+@pytest.mark.parametrize("riva_offline", [False, True])
+def test_no_api_key_sends_no_authorization(riva_offline: bool) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        _transcribe(riva, {"riva_offline": riva_offline})
+        call: Final = riva.only_call()
+
+    assert call.header("authorization") == ()
+    assert call.header("function-id") == ()
+
+
+@pytest.mark.parametrize("riva_offline", [False, True])
+@pytest.mark.parametrize(
+    ("optional_params", "function_ids"),
+    [({"use_ssl": True}, ()), ({"nvcf_function_id": "abc-123"}, ("abc-123",))],
+    ids=["use_ssl", "nvcf_default_tls"],
+)
+def test_tls_api_key_is_sent_as_one_bearer_token(
+    monkeypatch: pytest.MonkeyPatch,
+    optional_params: dict[str, object],
+    function_ids: tuple[str, ...],
+    riva_offline: bool,
+) -> None:
+    tls: Final = _self_signed_loopback_tls()
+    system_roots: Final = grpc.ssl_channel_credentials
+    monkeypatch.setattr(grpc, "ssl_channel_credentials", lambda: system_roots(root_certificates=tls.cert_pem))
+    with _riva_server(_answers("ok"), tls=tls) as riva:
+        response: Final = _transcribe(riva, {**optional_params, "riva_offline": riva_offline}, api_key=_API_KEY)
+        call: Final = riva.only_call()
+
+    assert response.text == "ok"
+    assert call.header("authorization") == (f"Bearer {_API_KEY}",)
+    assert call.header("function-id") == function_ids
+
+
+@pytest.mark.parametrize("optional_params", [{"use_ssl": True}, {"nvcf_function_id": "abc-123"}])
+def test_tls_never_falls_back_to_plaintext(optional_params: dict[str, object]) -> None:
+    with _riva_server(_answers("ok")) as riva:
+        with pytest.raises(NvidiaRivaException) as excinfo:
+            _transcribe(riva, optional_params, api_key=_API_KEY, timeout=_SERVER_WAIT_SECONDS)
+
+        assert riva.calls.empty()
+
+    assert excinfo.value.status_code == 503, excinfo.value.message
+
+
+def test_explicit_endpointing_config_keeps_zero_thresholds() -> None:
+    with _riva_server(_answers("ok")) as riva:
+        _transcribe(riva, {"endpointing_config": {"stop_threshold": 0.0, "stop_history": 800}})
+        call: Final = riva.only_call()
+
+    assert call.config.HasField("endpointing_config")
+    assert call.config.endpointing_config.HasField("stop_threshold")
+    assert call.config.endpointing_config == riva_asr_pb2.EndpointingConfig(stop_threshold=0.0, stop_history=800)
+
+
+def test_unknown_endpointing_field_falls_back_to_riva_defaults() -> None:
+    with _riva_server(_answers("ok")) as riva:
+        response: Final = _transcribe(riva, {"endpointing_config": {"stop_threshold": 0.5, "not_a_field": 1}})
+        call: Final = riva.only_call()
+
+    assert response.text == "ok"
+    assert not call.config.HasField("endpointing_config")
+
+
+def test_missing_api_base_raises_clear_error() -> None:
     with pytest.raises(NvidiaRivaException) as excinfo:
         NvidiaRivaAudioTranscription().audio_transcriptions(
             model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "en-US", "riva_offline": True},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=7.5,
-            logging_obj=logging_obj,
-            api_key=None,
-            api_base="localhost:50051",
-        )
-
-    assert excinfo.value.status_code == 408
-    assert stalled.waited_for == 7.5
-    assert stalled.cancelled is True
-
-def test_riva_offline_grpc_error_is_wrapped(mock_riva: SimpleNamespace, logging_obj: MagicMock) -> None:
-    class FakeGrpcError(Exception):
-        def code(self) -> SimpleNamespace:
-            return SimpleNamespace(name="INVALID_ARGUMENT")
-
-        def details(self) -> str:
-            return "Unavailable model requested"
-
-    mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
-
-    impl = NvidiaRivaAudioTranscription()
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        impl.audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "multi", "riva_offline": True},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=60,
-            logging_obj=logging_obj,
-            api_key=None,
-            api_base="localhost:50051",
-        )
-    assert excinfo.value.status_code == 400
-    assert "INVALID_ARGUMENT" in excinfo.value.message
-
-
-def test_auth_nvcf_defaults_use_ssl_and_attaches_function_id(mock_riva, logging_obj):
-    mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=True,
-                    alternatives=[_fake_alternative("ok")],
-                )
-            ]
-        )
-    ]
-    impl = NvidiaRivaAudioTranscription()
-    impl.audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={
-            "nvcf_function_id": "abc-123",
-            "language_code": "en-US",
-        },
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key="nvapi-xxx",
-        api_base="grpc.nvcf.nvidia.com:443",
-    )
-
-    assert mock_riva.auth_calls["uri"] == "grpc.nvcf.nvidia.com:443"
-    assert mock_riva.auth_calls["use_ssl"] is True
-    metadata = dict(mock_riva.auth_calls["metadata_args"])
-    assert metadata["function-id"] == "abc-123"
-    assert metadata["authorization"] == "Bearer nvapi-xxx"
-
-
-def test_auth_self_hosted_defaults_no_ssl_and_no_function_id(mock_riva, logging_obj):
-    mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-            ]
-        )
-    ]
-    impl = NvidiaRivaAudioTranscription()
-    impl.audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"language_code": "en-US"},
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
-    )
-
-    assert mock_riva.auth_calls["uri"] == "localhost:50051"
-    assert mock_riva.auth_calls["use_ssl"] is False
-    metadata = dict(mock_riva.auth_calls["metadata_args"])
-    # No function-id, no authorization metadata.
-    assert "function-id" not in metadata
-    assert "authorization" not in metadata
-
-
-def test_explicit_use_ssl_override_wins(mock_riva, logging_obj):
-    """
-    Self-hosted Riva behind an ingress with TLS termination is a real
-    deployment topology. ``use_ssl=True`` must be honored even without an
-    NVCF function id.
-    """
-    mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-            ]
-        )
-    ]
-    impl = NvidiaRivaAudioTranscription()
-    impl.audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"use_ssl": True, "language_code": "en-US"},
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=60,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="riva.internal.company.com:443",
-    )
-
-    assert mock_riva.auth_calls["use_ssl"] is True
-
-
-def test_missing_api_base_raises_clear_error(mock_riva, logging_obj):
-    impl = NvidiaRivaAudioTranscription()
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        impl.audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
+            audio_file=_wav(),
             optional_params={},
             litellm_params={},
             model_response=TranscriptionResponse(),
             timeout=60,
-            logging_obj=logging_obj,
+            logging_obj=_logging(),
             api_key=None,
             api_base=None,
         )
+
+    assert excinfo.value.status_code == 400
     assert "api_base" in excinfo.value.message
 
 
-def test_async_path_uses_to_thread(mock_riva, logging_obj):
-    mock_riva.responses["value"] = [
-        _fake_response(
-            results=[
-                _fake_result(
-                    is_final=True, alternatives=[_fake_alternative("async ok")]
-                )
-            ]
-        )
-    ]
-    impl = NvidiaRivaAudioTranscription()
-    response = asyncio.run(
-        impl.async_audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "en-US"},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=60,
-            logging_obj=logging_obj,
-            api_key=None,
-            api_base="localhost:50051",
-        )
-    )
-    assert response.text == "async ok"
-    assert (
-        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
-        is True
-    )
-
-
-@pytest.mark.parametrize("timeout", [12.5, "12.5", httpx.Timeout(60.0, read=12.5)])
-def test_timeout_is_forwarded_to_streaming_generator_when_supported(
-    mock_riva: SimpleNamespace, logging_obj: MagicMock, timeout: float | str | httpx.Timeout
-) -> None:
-    """
-    Without a deadline the gRPC stream can block forever on a stalled Riva
-    server. The handler must forward the call-level ``timeout`` to
-    ``streaming_response_generator`` whenever the installed riva-client
-    accepts a ``timeout`` kwarg.
-    """
-    captured_kwargs = {}
-
-    def streaming_with_timeout(self, audio_chunks, streaming_config, timeout=None):
-        captured_kwargs["timeout"] = timeout
-        list(audio_chunks)
-        yield from [
-            _fake_response(
-                results=[
-                    _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
-                ]
+def test_async_path_transcribes() -> None:
+    with _riva_server(_answers("async ok")) as riva:
+        response: Final = asyncio.run(
+            NvidiaRivaAudioTranscription().async_audio_transcriptions(
+                model="m",
+                audio_file=_wav(),
+                optional_params={"language_code": "en-US"},
+                litellm_params={},
+                model_response=TranscriptionResponse(),
+                timeout=60,
+                logging_obj=_logging(),
+                api_key=_API_KEY,
+                api_base=riva.address,
             )
-        ]
-
-    mock_riva.client.ASRService.streaming_response_generator = streaming_with_timeout
-
-    impl = NvidiaRivaAudioTranscription()
-    impl.audio_transcriptions(
-        model="m",
-        audio_file=_make_wav_bytes(),
-        optional_params={"language_code": "en-US"},
-        litellm_params={},
-        model_response=TranscriptionResponse(),
-        timeout=timeout,
-        logging_obj=logging_obj,
-        api_key=None,
-        api_base="localhost:50051",
-    )
-    assert captured_kwargs["timeout"] == pytest.approx(12.5)
-
-
-def test_grpc_error_is_wrapped_as_nvidia_riva_exception(mock_riva, logging_obj):
-    class FakeGrpcError(Exception):
-        def code(self):
-            return SimpleNamespace(name="UNAUTHENTICATED")
-
-        def details(self):
-            return "bad token"
-
-    def raising_streaming_response_generator(self, audio_chunks, streaming_config):
-        list(audio_chunks)
-        raise FakeGrpcError("rpc fail")
-
-    mock_riva.client.ASRService.streaming_response_generator = (
-        raising_streaming_response_generator
-    )
-
-    impl = NvidiaRivaAudioTranscription()
-    with pytest.raises(NvidiaRivaException) as excinfo:
-        impl.audio_transcriptions(
-            model="m",
-            audio_file=_make_wav_bytes(),
-            optional_params={"language_code": "en-US"},
-            litellm_params={},
-            model_response=TranscriptionResponse(),
-            timeout=60,
-            logging_obj=logging_obj,
-            api_key="nvapi-xxx",
-            api_base="grpc.nvcf.nvidia.com:443",
         )
+        call: Final = riva.only_call()
 
-    assert excinfo.value.status_code == 401
-    assert "UNAUTHENTICATED" in excinfo.value.message
+    assert response.text == "async ok"
+    assert call.header("authorization") == (f"Bearer {_API_KEY}",)

@@ -26,13 +26,14 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
-from litellm.router_utils.common_utils import is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
@@ -831,6 +832,24 @@ _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:
+    model: Final = probe_params.get("model")
+    if model == deployment_model:
+        return True
+    if not isinstance(model, str) or deployment_model is None:
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    provider: Final = provider_param if isinstance(provider_param, str) else None
+    try:
+        deployment_name, deployment_provider = resolve_model_and_provider_for_metadata(
+            model=deployment_model, custom_llm_provider=provider
+        )
+        probe_name, probe_provider = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return (deployment_name, deployment_provider) == (probe_name, probe_provider)
+
+
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
 ) -> dict:
@@ -855,6 +874,8 @@ def update_litellm_params_for_health_check(
       `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
       in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
       and `modalities` set there without "audio" turns the audio fields off
+    - sends a SageMaker deployment's `X-Amzn-SageMaker-Inference-Component` extra header as `model_id` when the
+      deployment sets none, so legacy `sagemaker/` probes reach that component the way routed requests do
     """
     incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
     base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
@@ -892,6 +913,15 @@ def update_litellm_params_for_health_check(
         litellm_params["model"] = _health_check_model
     if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+
+    logging_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
+        _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model_info") or {}
+    )
+    probe_logging_model_info: Final = (
+        logging_model_info
+        if _same_health_check_model(base_model_owner, _PROBE_PARAMS_ADAPTER.validate_python(litellm_params))
+        else {key: value for key, value in logging_model_info.items() if key == "id"}
+    )
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
@@ -935,9 +965,16 @@ def update_litellm_params_for_health_check(
     audio_output_params: Final = _health_check_audio_output_params(
         _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
     )
+    model_id_pin: Final = deployment_model_id_pin(probe_params)
+    model_id_params: Final = {} if model_id_pin is None else {"model_id": model_id_pin}
     return {
         key: value
-        for key, value in {**audio_output_params, **probe_params}.items()
+        for key, value in {
+            **audio_output_params,
+            **model_id_params,
+            **probe_params,
+            **({"model_info": probe_logging_model_info} if "model_info" in probe_params else {}),
+        }.items()
         if not is_model_capability_field(key)
     }
 
