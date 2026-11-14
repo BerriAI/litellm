@@ -577,6 +577,36 @@ def _reasoning_done_stream_chunk(
     )
 
 
+def _done_tool_arguments(chunk: Mapping[str, object]) -> str | None:
+    event_type: Final = _responses_event_type(chunk)
+    arguments: Final = (
+        chunk.get("arguments")
+        if event_type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value
+        else chunk.get("input")
+        if event_type == ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value
+        else None
+    )
+    return arguments if isinstance(arguments, str) and arguments else None
+
+
+def _streams_tool_arguments(chunk: Mapping[str, object]) -> bool:
+    event_type: Final = _responses_event_type(chunk)
+    if event_type in (
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value,
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+    ):
+        return bool(chunk.get("delta"))
+    if event_type != "response.output_item.added":
+        return _done_tool_arguments(chunk) is not None
+    item: Final = as_str_mapping(chunk.get("item"))
+    if item is None:
+        return False
+    item_type: Final = item.get("type")
+    return item_type in ("function_call", "custom_tool_call") and bool(
+        item.get("input" if item_type == "custom_tool_call" else "arguments") or chunk.get("arguments")
+    )
+
+
 def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
     shifted: Final = {
         key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
@@ -2135,6 +2165,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._first_message_item_done: bool = False
         self._reasoning_summary_streamed: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
+        self._tool_argument_outputs: frozenset[int | None] = frozenset()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2473,11 +2504,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if self._streams_reasoning_signatures
             else None
         )
+        done_arguments_chunk: Final = self._unstreamed_tool_arguments_chunk(chunk)
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
             else reasoning_chunk
             if reasoning_chunk is not None
+            else done_arguments_chunk
+            if done_arguments_chunk is not None
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk,
                 tool_call_index_map=self._tool_call_index_map,
@@ -2491,7 +2525,38 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
             self._reasoning_summary_streamed = True
             self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
+        if _streams_tool_arguments(chunk):
+            self._tool_argument_outputs = self._tool_argument_outputs | {_stream_output_index(chunk)}
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+
+    def _unstreamed_tool_arguments_chunk(self, chunk: Mapping[str, object]) -> "ModelResponseStream | None":
+        """Some backends (the ChatGPT/Codex one) send a tool call's arguments only in the
+        ``.done`` event, with no deltas before it."""
+        arguments: Final = _done_tool_arguments(chunk)
+        output_index: Final = _stream_output_index(chunk)
+        if arguments is None or output_index in self._tool_argument_outputs:
+            return None
+        tool_call_index: Final = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
+            self._tool_call_index_map, output_index if output_index is not None else 0
+        )
+        return ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionToolCallChunk(
+                                id=None,
+                                index=tool_call_index,
+                                type="function",
+                                function=ChatCompletionToolCallFunctionChunk(name=None, arguments=arguments),
+                            )
+                        ]
+                    ),
+                    finish_reason=None,
+                )
+            ]
+        )
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
         """Under a structured response_format the first message item is the whole answer, so

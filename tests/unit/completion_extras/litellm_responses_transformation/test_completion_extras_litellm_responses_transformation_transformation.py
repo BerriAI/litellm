@@ -27,6 +27,7 @@ from openai.types.responses.response_reasoning_item import (
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
+    OpenAiResponsesToChatCompletionStreamIterator,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -3127,6 +3128,51 @@ def test_streaming_parallel_tool_calls_have_distinct_indices():
                     assert tc.index == expected_index, (
                         f"Event {chunk['type']}: expected tool_call.index={expected_index}, got {tc.index}"
                     )
+
+
+def _tool_call_events(
+    output_index: int, kind: Literal["function", "custom"], payload: str, with_deltas: bool
+) -> tuple[dict[str, object], ...]:
+    item_type, event_prefix, field = (
+        ("function_call", "response.function_call_arguments", "arguments")
+        if kind == "function"
+        else ("custom_tool_call", "response.custom_tool_call_input", "input")
+    )
+    item: Final = {"type": item_type, "id": f"fc_{output_index}", "call_id": f"call_{output_index}", "name": "lookup"}
+    half: Final = len(payload) // 2
+    deltas: Final = (
+        tuple(
+            {"type": f"{event_prefix}.delta", "output_index": output_index, "item_id": item["id"], "delta": part}
+            for part in (payload[:half], payload[half:])
+        )
+        if with_deltas
+        else ()
+    )
+    return (
+        {"type": "response.output_item.added", "output_index": output_index, "item": {**item, field: ""}},
+        *deltas,
+        {"type": f"{event_prefix}.done", "output_index": output_index, "item_id": item["id"], field: payload},
+        {"type": "response.output_item.done", "output_index": output_index, "item": {**item, field: payload}},
+    )
+
+
+def _streamed_tool_call_arguments(events: Sequence[dict[str, object]]) -> dict[int, str]:
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    arguments: Final[dict[int, str]] = {}
+    for event in events:
+        for tool_call in iterator.chunk_parser(event).choices[0].delta.tool_calls or ():
+            arguments[tool_call.index] = arguments.get(tool_call.index, "") + (tool_call.function.arguments or "")
+    return arguments
+
+
+@pytest.mark.parametrize("kind", ["function", "custom"])
+@pytest.mark.parametrize("with_deltas", [False, True], ids=["done-only", "deltas-then-done"])
+def test_streamed_tool_call_arguments_arrive_exactly_once(kind: Literal["function", "custom"], with_deltas: bool):
+    events: Final = _tool_call_events(0, kind, '{"city": "Paris"}', with_deltas) + _tool_call_events(
+        1, kind, '{"city": "London"}', with_deltas
+    )
+
+    assert _streamed_tool_call_arguments(events) == {0: '{"city": "Paris"}', 1: '{"city": "London"}'}
 
 
 # =============================================================================
