@@ -3,13 +3,15 @@ import functools
 import inspect
 import re
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
+    BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS,
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
+    BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -44,6 +46,8 @@ Helper utils used for logging callbacks
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
 _DATA_URI_RE: Final = re.compile(r"data:([^;,\s]{1,255});base64,([A-Za-z0-9+/=]+)")
+_DATA_URI_PREFIX: Final = "data:"
+_DATA_URI_BASE64_MARKER: Final = ";base64,"
 
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
@@ -60,15 +64,20 @@ def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
+def _may_contain_base64_data_uri(value: str) -> bool:
+    return ";" in value and _DATA_URI_PREFIX in value and _DATA_URI_BASE64_MARKER in value
+
+
 def _truncate_base64_in_string(value: str) -> str:
     """Replace long base64 data-URI payloads in a string with a size placeholder."""
-    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0 or not _may_contain_base64_data_uri(value):
         return value
     return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
 
 
 def _truncate_base64_in_value(
     value: str | dict[str, object] | list[object] | None,
+    truncate_string: Callable[[str], str],
 ) -> str | dict[str, object] | list[object] | None:
     """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
 
@@ -78,13 +87,13 @@ def _truncate_base64_in_value(
     # Stack entries: (source_value, depth, parent_container, key_or_index)
     # We mutate *copies* of dicts/lists in-place via parent references.
     if isinstance(value, str):
-        return _truncate_base64_in_string(value)
+        return truncate_string(value)
     if not isinstance(value, (dict, list)):
         return value
 
     # Shallow-copy the root so we don't mutate the caller's data.
     root: Final = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
-    stack: Final[list] = [(root, 0)]
+    stack: Final[list[tuple[dict[str, object] | list[object], int]]] = [(root, 0)]  # mutable-ok: explicit stack
 
     while stack:
         container, depth = stack.pop()
@@ -93,19 +102,19 @@ def _truncate_base64_in_value(
         if isinstance(container, dict):
             for k, v in container.items():
                 if isinstance(v, str):
-                    container[k] = _truncate_base64_in_string(v)
+                    container[k] = truncate_string(v)
                 elif isinstance(v, dict):
-                    copy: dict | list = {ck: cv for ck, cv in v.items()}
+                    copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
                 elif isinstance(v, list):
                     copy = list(v)
                     container[k] = copy
                     stack.append((copy, depth + 1))
-        elif isinstance(container, list):
+        else:
             for i, v in enumerate(container):
                 if isinstance(v, str):
-                    container[i] = _truncate_base64_in_string(v)
+                    container[i] = truncate_string(v)
                 elif isinstance(v, dict):
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy
@@ -127,8 +136,15 @@ def truncate_base64_in_messages(
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
+    return _copy_messages(messages, _truncate_base64_in_string)
+
+
+def _copy_messages(
+    messages: str | dict[str, object] | list[object],  # mutable-ok: same contract as truncate_base64_in_messages
+    truncate_string: Callable[[str], str],
+) -> str | dict[str, object] | list[object] | None:  # mutable-ok: same contract as truncate_base64_in_messages
     try:
-        return _truncate_base64_in_value(messages)
+        return _truncate_base64_in_value(messages, truncate_string)
     except Exception as e:
         verbose_logger.debug("Failed to truncate base64 in messages: %s", e)
         return messages
@@ -151,19 +167,31 @@ def _iter_string_leaves(value: _StringTree) -> Iterator[str]:
                 pass
 
 
+def _is_few_plain_strings(leaves: tuple[str, ...]) -> bool:
+    return len(leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS and not any(
+        _may_contain_base64_data_uri(leaf) for leaf in leaves
+    )
+
+
 async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
 ) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
     Same result as truncate_base64_in_messages, but payloads whose string content
-    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
-    thread so the regex pass over multi-MB base64 images does not block the event loop.
+    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are copied in a worker thread,
+    so neither the regex pass over multi-MB base64 images nor the copy of a long
+    history blocks the event loop. A few strings with no data URI, under
+    BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS in total, are copied inline, since
+    checking them for data URIs and copying them costs less than the thread hop.
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
-    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
+    leaves: Final = tuple(_iter_string_leaves(messages))
+    total_chars: Final = sum(len(leaf) for leaf in leaves)
     if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
         return truncate_base64_in_messages(messages)
+    if total_chars < BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS and _is_few_plain_strings(leaves):
+        return _copy_messages(messages, lambda text: text)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 
 

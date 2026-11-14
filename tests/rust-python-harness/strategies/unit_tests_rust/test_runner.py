@@ -19,12 +19,12 @@ def test_runs_cargo_tests_and_propagates_ignored_or_failing_tests(
     cargo_project: Callable[[str, str], Path],
 ) -> None:
     cargo_project("rust-unit-check", '#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
-    rust_root: Final = tmp_path / "litellm-rust"
-    rust_root.mkdir()
+    rust_root: Final = tmp_path / "litellm/rust"
+    rust_root.mkdir(parents=True)
     (tmp_path / "Cargo.toml").rename(rust_root / "Cargo.toml")
     (tmp_path / "src").rename(rust_root / "src")
     suite: Final = RustSuite(
-        cargo_manifest="litellm-rust/Cargo.toml",
+        cargo_manifest="litellm/rust/Cargo.toml",
         cargo_filter="test_decode",
     )
     case: Final = HarnessCase(

@@ -6,7 +6,8 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final, get_args, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, ClassVar, Final, get_args, overload
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -15,6 +16,7 @@ import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -39,6 +41,7 @@ from ..base_aws_llm import (
     run_aws_signing,
 )
 from ..common_utils import BedrockError, split_bedrock_region_path
+from ..web_identity_session_policy import BEDROCK_EMBEDDING_SESSION_POLICY, WebIdentitySessionPolicy
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -77,6 +80,8 @@ def _without_region_path(model: str) -> str:
 
 
 class BedrockEmbedding(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_EMBEDDING_SESSION_POLICY
+
     @overload
     def _load_credentials(
         self,
@@ -100,7 +105,7 @@ class BedrockEmbedding(BaseAWSLLM):
         region_from_model: str | None = None,
     ) -> tuple[Credentials | None, str]:
         auth_params: Final = pop_aws_auth_params(optional_params)
-        explicit_region_name: Final = optional_params.pop("aws_region_name", None)
+        explicit_region_name: Final = _OPTIONAL_STR.validate_python(optional_params.pop("aws_region_name", None))
         aws_region_name = region_from_model if explicit_region_name is None else explicit_region_name
 
         ### SET REGION NAME ###
@@ -288,9 +293,10 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
+        extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in batch_data:
+        for data in ({**extra_body, **item} for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -357,9 +363,10 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
+        extra_body: Mapping[str, object] = MappingProxyType({}),
     ):
         responses: Final[list[dict]] = []
-        for data in batch_data:
+        for data in ({**extra_body, **item} for item in batch_data):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
@@ -459,9 +466,12 @@ class BedrockEmbedding(BaseAWSLLM):
             )
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
-            k: v for k, v in inference_params.items() if k.lower() not in self.aws_authentication_params
+            k: v
+            for k, v in inference_params.items()
+            if k.lower() not in self.aws_authentication_params and k != "extra_body"
         }
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
+        extra_body: Final = extra_body_fields(optional_params)
 
         data: CohereEmbeddingRequest | None = None
         batch_data: list | None = None
@@ -532,6 +542,8 @@ class BedrockEmbedding(BaseAWSLLM):
                 )
                 batch_data.append(nova_request)
 
+        request_data: Final = None if data is None else {**extra_body, **data}
+
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
@@ -549,6 +561,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                     timeout=timeout,
                     batch_data=batch_data,
+                    extra_body=extra_body,
                     credentials=credentials,
                     extra_headers=extra_headers,
                     endpoint_url=endpoint_url,
@@ -563,6 +576,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 timeout=timeout,
                 batch_data=batch_data,
+                extra_body=extra_body,
                 credentials=credentials,
                 extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
@@ -576,7 +590,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if returned_response is None:
                 raise Exception("Unable to map Bedrock request to provider")
             return returned_response
-        elif data is None:
+        elif request_data is None:
             raise Exception("Unable to map Bedrock request to provider")
 
         headers = {"Content-Type": "application/json"}
@@ -588,7 +602,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
             extra_headers=extra_headers,
             endpoint_url=endpoint_url,
-            data=json.dumps(data),
+            data=json.dumps(request_data),
             headers=headers,
             api_key=api_key,
         )
@@ -604,7 +618,7 @@ class BedrockEmbedding(BaseAWSLLM):
             logging_obj=logging_obj,
             optional_params=optional_params,
             encoding=encoding,
-            data=data,
+            data=request_data,
             complete_api_base=prepped.url,
             api_key=None,
             aembedding=aembedding,

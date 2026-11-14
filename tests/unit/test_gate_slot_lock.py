@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-HELPER = ROOT / "scripts" / "gate_slot_lock.py"
+HELPER = ROOT / "litellm/scripts" / "gate_slot_lock.py"
 
 _spec = importlib.util.spec_from_file_location("gate_slot_lock", HELPER)
 assert _spec is not None and _spec.loader is not None

@@ -27,8 +27,9 @@ _MALFORMED: Final[tuple[tuple[str, JsonValue], ...]] = (
     ("5kb-string", "x" * 5000),
     ("empty-object", {}),
     ("bogus-mode", {"mode": "bogus"}),
-    ("bad-ttl", {"mode": "explicit", "ttl": "1h"}),
+    ("bogus-mode-with-ttl", {"mode": "bogus", "ttl": "30m"}),
 )
+_UNSUPPORTED_TTL: Final[Mapping[str, JsonValue]] = {"mode": "explicit", "ttl": "1h"}
 _MALFORMED_IDS: Final = tuple(name for name, _ in _MALFORMED)
 _MALFORMED_VALUES: Final = tuple(value for _, value in _MALFORMED)
 _CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
@@ -190,6 +191,27 @@ def test_marker_with_an_unknown_key(bridge: _Bridge, mode: Mode, expected: JsonV
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNKNOWN_KEY)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
     bridge.spend.landed(bridge.model(mode), call_id, marker)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"), (("on", None), ("off", _UNSUPPORTED_TTL)), ids=("dropped-on", "verbatim-off")
+)
+def test_marker_with_an_unsupported_ttl(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
+    marker: Final = uuid.uuid4().hex
+    call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNSUPPORTED_TTL)]), marker)
+    pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
+
+
+def test_marker_with_an_unsupported_ttl_keeps_its_mode_on_a_host_opted_in_with_prompt_cache_options(
+    bridge: _Bridge,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with bridge.gateway.scenario() as scenario:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, drop_params=True, **_OPTED_IN)
+        call_id: Final = _completion(_chat(bridge, model, [_user(marker, _UNSUPPORTED_TTL)]), marker)
+        pcb.assert_marker(_user_block_on_wire(bridge, marker), pcb.EXPLICIT)
+        bridge.spend.landed(model, call_id, marker)
 
 
 def _second_block_on_wire(bridge: _Bridge, marker: str) -> dict[str, JsonValue]:
@@ -530,6 +552,51 @@ def test_anthropic_sdk_cache_control_on_an_assistant_turn_is_dropped(bridge: _Br
     assert pcb.content_of(pcb.input_items(request), "assistant") == [
         {"type": "output_text", "text": "earlier answer"}
     ], "OpenAI accepts a breakpoint on output_text but writes no cache for it (live gpt-5.6, 2026-10-12)"
+
+
+_CHAT_MODEL_BRIDGED_FOR_TOOLS: Final = "openai/gpt-6.1-sol"
+_LOOKUP_TOOL: Final[openai.types.chat.ChatCompletionToolParam] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "expected_system"),
+    [
+        (_OPTED_IN, {"type": "input_text", "text": "Stable rules", "prompt_cache_breakpoint": pcb.EXPLICIT}),
+        ({}, {"type": "input_text", "text": "Stable rules"}),
+    ],
+    ids=["reads-breakpoints", "does-not-read-breakpoints"],
+)
+def test_openai_sdk_chat_cache_control_with_a_tool_and_reasoning_reaches_the_responses_wire_as_a_breakpoint(
+    bridge: _Bridge, deployment_params: Mapping[str, JsonValue], expected_system: Mapping[str, JsonValue]
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    system: Final[dict[str, JsonValue]] = {
+        "role": "system",
+        "content": [{"type": "text", "text": "Stable rules", "cache_control": {"type": "ephemeral"}}],
+    }
+    with (
+        bridge.gateway.scenario() as scenario,
+        openai.OpenAI(api_key=bridge.gateway.key, base_url=_v1(bridge.gateway), max_retries=0) as client,
+    ):
+        model: Final = scenario.model(
+            model=_CHAT_MODEL_BRIDGED_FOR_TOOLS, api_base=bridge.api_base, **deployment_params
+        )
+        completion: Final = client.chat.completions.create(
+            model=model,
+            messages=[system, {"role": "user", "content": pcb.prompt(marker)}],
+            tools=[_LOOKUP_TOOL],
+            reasoning_effort="low",
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    assert completion.choices[0].message.content == rv.answer(marker), completion
+    request: Final = pcb.posted(bridge.wire, marker)
+    body: Final = _wire_body(request)
+    assert [tool["name"] for tool in rv.ITEMS.validate_python(body["tools"])] == ["lookup"], body
+    assert pcb.content_of(pcb.input_items(request), "system") == [expected_system], body
+    assert b"cache_control" not in request.body, request.body
 
 
 @pytest.mark.parametrize(
