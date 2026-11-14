@@ -18,8 +18,12 @@ _CREDENTIALS: Final[TypeAdapter[str | Mapping[str, JsonValue] | None]] = TypeAda
     str | Mapping[str, JsonValue] | None
 )
 _AUTH: Final = VertexBase()
-_MUSE_FAMILIES: Final = ("muse-wonder-", "muse-ember-", "muse-spark-")
+_MUSE_PREFIX: Final = "muse-"
 _STORED_RESPONSE_PARAMS: Final = frozenset({"background", "conversation", "previous_response_id"})
+
+
+def is_vertex_muse_model(model: str | None) -> bool:
+    return (model or "").removeprefix("vertex_ai/").removeprefix("meta/").startswith(_MUSE_PREFIX)
 
 
 class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -29,8 +33,7 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     @classmethod
     def for_model(cls, model: str | None) -> "VertexAIMuseResponsesAPIConfig | None":
-        name: Final = (model or "").removeprefix("vertex_ai/").removeprefix("meta/")
-        return cls() if name.startswith(_MUSE_FAMILIES) else None
+        return cls() if is_vertex_muse_model(model) else None
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -85,9 +88,10 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
     ) -> dict[str, object]:  # mutable-ok: Responses handler mutates the returned request
-        if response_api_optional_request_params.get("store") is True:
+        if response_api_optional_request_params.get("store") is True and not drops_params(litellm_params):
             raise UnsupportedParamsError(
-                status_code=400, message="Vertex Muse supports stateless Responses requests only. Set store=False."
+                status_code=400,
+                message="Vertex Muse supports stateless Responses requests only. Set store=False or drop_params=True.",
             )
         tool_choice: Final = response_api_optional_request_params.get("tool_choice")
         if tool_choice is not None and tool_choice != "auto" and not drops_params(litellm_params):

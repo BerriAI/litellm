@@ -177,6 +177,19 @@ def test_muse_refuses_server_side_response_storage() -> None:
         )
 
 
+def test_muse_drop_params_sends_store_false_instead_of_refusing(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+    litellm.responses(
+        model="vertex_ai/meta/muse-wonder-1.0",
+        input="Say hello",
+        vertex_project="unit-project",
+        store=True,
+        drop_params=True,
+        num_retries=0,
+    )
+    assert FIELDS.validate_json(route.calls.last.request.content)["store"] is False
+
+
 @pytest.mark.parametrize(
     ("model", "input_tokens", "price_suffix"),
     tuple((model, 47, "") for model in MODELS)
@@ -218,6 +231,21 @@ def test_muse_chat_completions_bridge_uses_the_native_responses_endpoint(respx_m
     assert route.called
     assert response.choices[0].message.content == "Hello"
     assert response.usage.total_tokens == 9
+
+
+@pytest.mark.parametrize("model", ["muse-spark-9.9", "muse-nova-1.0"])
+def test_muse_chat_completions_bridge_covers_models_missing_from_the_cost_map(
+    model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    response: Final = litellm.completion(
+        model=f"vertex_ai/meta/{model}",
+        messages=[{"role": "user", "content": "Say hello"}],
+        vertex_project="unit-project",
+        num_retries=0,
+    )
+    assert FIELDS.validate_json(route.calls.last.request.content)["model"] == model
+    assert response.choices[0].message.content == "Hello"
 
 
 @pytest.mark.parametrize("surface", ["responses", "chat"])
