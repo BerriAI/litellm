@@ -175,7 +175,9 @@ def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
         mapper_names=["genai", "mixpanel"],
         exporters=[ExporterSpec(kind="sdk_mixpanel", owner=ExporterOwner.MIXPANEL)],
     )
-    logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True))
+    logger = OpenTelemetryV2(
+        config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True)
+    )
 
     def emit() -> None:
         if in_baggage is not None:

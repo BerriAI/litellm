@@ -774,7 +774,9 @@ def test_mixpanel_dynamic_headers_and_endpoint_routing(
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         for no_region in ("", "   ", "None"):
             assert (
-                dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": no_region})
+                dynamic_otlp_endpoint(
+                    "mixpanel", {"mixpanel_project_token": "team-token", "mixpanel_region": no_region}
+                )
                 == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
             )
     assert "unknown mixpanel_region" not in caplog.text
