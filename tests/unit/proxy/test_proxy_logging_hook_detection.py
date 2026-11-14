@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 
@@ -591,6 +593,13 @@ async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeyp
     monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail("MASK")])
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     logging_obj = _streaming_logging_obj()
+    served_texts_seen_by_logging = asyncio.get_running_loop().create_future()
+
+    async def deferred_logging() -> None:
+        served_texts_seen_by_logging.set_result(logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY))
+
+    logging_obj._on_deferred_stream_complete = deferred_logging
+    logging_obj._deferred_stream_complete_args = ()
 
     async def fake_stream():
         yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
@@ -606,7 +615,7 @@ async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeyp
             delivered_text += choice.delta.content or ""
 
     assert "zebra" not in delivered_text
-    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == (delivered_text,)
+    assert await asyncio.wait_for(served_texts_seen_by_logging, timeout=5) == (delivered_text,)
 
 
 @pytest.mark.asyncio
