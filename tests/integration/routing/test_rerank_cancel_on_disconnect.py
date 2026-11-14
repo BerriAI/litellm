@@ -5,7 +5,7 @@ import json
 import socket
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,12 +16,13 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 from integration._support.async_server import LoopbackServer
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment, held
 from integration._support.ports import allocate_port
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from pydantic import JsonValue, TypeAdapter
 
 MODEL: Final = "rerank-held"
+PER_QUERY_MODEL: Final = "rerank-per-query"
 DEPLOYMENT_TIMEOUT_SECONDS: Final = 3.0
 CANCEL_DEADLINE_SECONDS: Final = 1.0
 INPUT_COST_PER_TOKEN: Final = 0.001
@@ -104,7 +105,16 @@ def rig_config(directory: Path, upstream_url: str, *, cancel_on_disconnect: bool
                     "timeout": DEPLOYMENT_TIMEOUT_SECONDS,
                     "input_cost_per_token": INPUT_COST_PER_TOKEN,
                 },
-            }
+            },
+            {
+                "model_name": PER_QUERY_MODEL,
+                "litellm_params": {
+                    "model": "cohere/rerank-v3.5",
+                    "api_base": upstream_url,
+                    "api_key": "synthetic-cohere-key",
+                    "timeout": DEPLOYMENT_TIMEOUT_SECONDS,
+                },
+            },
         ],
     }
     path: Final = directory / f"rerank-{uuid.uuid4().hex[:8]}.yaml"
@@ -138,8 +148,8 @@ def holding(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         yield rig
 
 
-def rerank_request(gateway: Gateway, marker: str, call_id: str) -> bytes:
-    body: Final = json.dumps({"model": MODEL, "query": marker, "documents": ["alpha", "beta"]}).encode()
+def rerank_request(gateway: Gateway, marker: str, call_id: str, model: str, documents: Sequence[str]) -> bytes:
+    body: Final = json.dumps({"model": model, "query": marker, "documents": list(documents)}).encode()
     host: Final = urlsplit(str(gateway.client.base_url)).netloc
     return (
         f"POST /v1/rerank HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {gateway.key}\r\n"
@@ -147,10 +157,12 @@ def rerank_request(gateway: Gateway, marker: str, call_id: str) -> bytes:
     ).encode() + body
 
 
-def hang_up_once_upstream_holds(rig: Rig, marker: str, call_id: str) -> float:
+def hang_up_once_upstream_holds(
+    rig: Rig, marker: str, call_id: str, model: str = MODEL, documents: Sequence[str] = ("alpha", "beta")
+) -> float:
     address: Final = urlsplit(str(rig.gateway.client.base_url))
     with socket.create_connection((address.hostname or "127.0.0.1", address.port or 80)) as client:
-        client.sendall(rerank_request(rig.gateway, marker, call_id))
+        client.sendall(rerank_request(rig.gateway, marker, call_id, model, documents))
         eventually(lambda: rig.times(marker, "arrived"), lambda arrived: len(arrived) == 1, seconds=30)
     return time.monotonic()
 
@@ -162,6 +174,28 @@ def logged_error_codes(rig: Rig, call_id: str) -> frozenset[str]:
         seconds=70,
     )
     return frozenset(error_code(row["metadata"]) for row in rows)
+
+
+def spend_rows(rig: Rig, call_id: str) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: rig.gateway.rows(
+            'SELECT spend, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+
+
+def published_cost_per_query(gateway: Gateway, model_name: str) -> float:
+    deployments: Final = gateway.get("/model/info")["data"]
+    assert isinstance(deployments, list)
+    rates: Final = tuple(
+        JSON_OBJECT.validate_python(deployment["model_info"])["input_cost_per_query"]
+        for deployment in map(JSON_OBJECT.validate_python, deployments)
+        if deployment["model_name"] == model_name
+    )
+    assert len(rates) == 1, rates
+    return float(str(rates[0]))
 
 
 def error_code(metadata: JsonValue) -> str:
@@ -189,16 +223,53 @@ def test_hang_up_after_dispatch_bills_the_sent_query_at_the_deployment_input_rat
     marker: Final = f"rerank-{uuid.uuid4().hex}"
     call_id: Final = str(uuid.uuid4())
     hang_up_once_upstream_holds(cancelling, marker, call_id)
-    rows: Final = eventually(
-        lambda: cancelling.gateway.rows(
-            'SELECT spend, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)
-        ),
-        lambda found: len(found) == 1,
-        seconds=70,
-    )
+    rows: Final = spend_rows(cancelling, call_id)
     prompt_tokens: Final = int(str(rows[0]["prompt_tokens"]))
     assert prompt_tokens > 0, rows
     assert float(str(rows[0]["spend"])) == pytest.approx(prompt_tokens * INPUT_COST_PER_TOKEN)
+
+
+@pytest.mark.timeout(CELL_TIMEOUT)
+def test_hang_up_on_a_per_query_model_bills_the_one_query_at_its_published_rate(cancelling: Rig) -> None:
+    marker: Final = f"rerank-{uuid.uuid4().hex}"
+    call_id: Final = str(uuid.uuid4())
+    hang_up_once_upstream_holds(cancelling, marker, call_id, model=PER_QUERY_MODEL)
+    rate: Final = published_cost_per_query(cancelling.gateway, PER_QUERY_MODEL)
+    rows: Final = spend_rows(cancelling, call_id)
+    assert rate > 0
+    assert float(str(rows[0]["spend"])) == pytest.approx(rate), rows
+
+
+@pytest.mark.timeout(CELL_TIMEOUT)
+def test_hang_up_counts_the_query_and_the_documents_it_sent(cancelling: Rig) -> None:
+    def logged_prompt_tokens(query_padding: str, documents: Sequence[str]) -> int:
+        marker: Final = f"rerank-{uuid.uuid4().hex}{query_padding}"
+        call_id: Final = str(uuid.uuid4())
+        hang_up_once_upstream_holds(cancelling, marker, call_id, documents=documents)
+        return int(str(spend_rows(cancelling, call_id)[0]["prompt_tokens"]))
+
+    padding_words: Final = 800
+    padding: Final = " word" * padding_words
+    short_call: Final = logged_prompt_tokens("", ("alpha",))
+
+    assert logged_prompt_tokens("", ("alpha", padding)) - short_call > padding_words // 2
+    assert logged_prompt_tokens(padding, ("alpha",)) - short_call > padding_words // 2
+
+
+@pytest.mark.timeout(CELL_TIMEOUT)
+def test_hang_up_without_the_flag_logs_one_unbilled_row_as_before(holding: Rig) -> None:
+    marker: Final = f"rerank-{uuid.uuid4().hex}"
+    call_id: Final = str(uuid.uuid4())
+    hang_up_once_upstream_holds(holding, marker, call_id)
+    rows: Final = held(
+        lambda: holding.gateway.rows(
+            'SELECT spend, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s', (f"{call_id}%",)
+        ),
+        lambda found: len(found) == 1,
+        holding=5,
+        seconds=70,
+    )
+    assert (int(str(rows[0]["prompt_tokens"])), float(str(rows[0]["spend"]))) == (0, 0.0), rows
 
 
 @pytest.mark.timeout(CELL_TIMEOUT)

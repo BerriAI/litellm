@@ -83,13 +83,15 @@ async def rerank(
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="rerank")
 
-        logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the except block logs the latest request data
-            original_function=CallTypes.arerank.value,
-            rules_obj=litellm.utils.Rules(),
-            start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
-            **data,
-        )
-        data["litellm_logging_obj"] = logging_obj
+        cancel_on_disconnect: Final = bool(general_settings.get("cancel_on_disconnect", False))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped general_settings
+        if cancel_on_disconnect:
+            logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the except block logs this request data
+                original_function=CallTypes.arerank.value,
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                **data,  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook returns an untyped dict
+            )
+            data["litellm_logging_obj"] = logging_obj
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
@@ -100,7 +102,7 @@ async def rerank(
         )
         response: Final = _DECODED_JSON.validate_python(
             await await_llm_call_cancelling_on_disconnect(request, asyncio.ensure_future(llm_call))
-            if general_settings.get("cancel_on_disconnect", False)  # pyright: ignore[reportUnknownMemberType]  # untyped general_settings
+            if cancel_on_disconnect
             else await llm_call
         )
 
