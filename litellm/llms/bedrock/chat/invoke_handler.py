@@ -1,7 +1,6 @@
-import inspect
 import json
 import types
-from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -30,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported, aiter_bytes_then_close
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -218,26 +218,6 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
-async def aclose_if_supported(stream: object) -> None:
-    aclose = getattr(stream, "aclose", None)
-    if callable(aclose):
-        res = aclose()
-        if inspect.isawaitable(res):
-            await res
-
-
-async def aiter_bytes_then_close(stream: AsyncIterator[bytes], response: object) -> AsyncGenerator[bytes, None]:
-    try:
-        async for chunk in stream:
-            yield chunk
-    finally:
-        aclose = getattr(response, "aclose", None)
-        if callable(aclose):
-            res = aclose()
-            if inspect.isawaitable(res):
-                await res
-
-
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
@@ -304,9 +284,8 @@ async def make_call(
                 sync_stream=False,
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
-            stream: AsyncIterator[bytes] = response.aiter_bytes(chunk_size=stream_chunk_size)
             completion_stream = decoder.aiter_bytes(
-                aiter_bytes_then_close(stream, response), response_headers=response.headers
+                aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
