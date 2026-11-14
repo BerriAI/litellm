@@ -111,11 +111,7 @@ def _chat_build_plan_overridden(callback: CustomLogger) -> bool:
 
 
 def runs_its_own_chat_completion_loop(callback: CustomLogger) -> bool:
-    lineage: Final = type(callback).__mro__
-    return any(
-        "async_should_run_chat_completion_agentic_loop" in vars(ancestor)
-        for ancestor in lineage[: lineage.index(CustomLogger)]
-    )
+    return callback.wants_chat_completion_hooks_on_bridged_chat
 
 
 def _post_hook_overridden(callback: CustomLogger) -> bool:

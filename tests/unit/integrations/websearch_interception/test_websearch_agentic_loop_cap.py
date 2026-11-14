@@ -18,7 +18,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, TypedDict
+from typing import ClassVar, Final, TypedDict
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1846,12 +1846,38 @@ class _AnswersOnBothApis(_AnswersOnTheResponsesApi):
         )
 
 
+class _DeclinesOnTheChatApi(_AnswersOnTheResponsesApi):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return False, {}
+
+
+class _WantsChatHooksOnBridgedChat(_AnswersOnBothApis):
+    wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = True
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("perplexity_search")
-async def test_responses_pinned_openai_chat_completion_runs_the_chat_hook_of_a_callback_with_both_agentic_hooks(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+@pytest.mark.parametrize(
+    ("callback", "answer"),
+    [
+        (_AnswersOnBothApis(), "Handled on the Responses API."),
+        (_DeclinesOnTheChatApi(), "Handled on the Responses API."),
+        (_WantsChatHooksOnBridgedChat(), "Handled on the chat API."),
+    ],
+)
+async def test_responses_pinned_openai_chat_completion_asks_the_chat_hook_only_of_callbacks_that_opt_in(
+    callback: CustomLogger, answer: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ):
-    monkeypatch.setattr(litellm, "callbacks", [_AnswersOnBothApis()])
+    monkeypatch.setattr(litellm, "callbacks", [callback])
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
         side_effect=_responses_reply_asking_for_another_search_until_enough_results
@@ -1864,4 +1890,4 @@ async def test_responses_pinned_openai_chat_completion_runs_the_chat_hook_of_a_c
         api_base=OPENAI_COMPATIBLE_API_BASE,
     )
 
-    assert response.choices[0].message.content == "Handled on the chat API."
+    assert response.choices[0].message.content == answer
