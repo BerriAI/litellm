@@ -80,6 +80,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    TOGETHER_AI_API_KEY_ENV_VARS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -8140,7 +8141,7 @@ def validate_environment(
             else:
                 missing_keys.append("AI21_API_KEY")
         elif custom_llm_provider == "together_ai":
-            if "TOGETHERAI_API_KEY" in os.environ:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
@@ -8412,12 +8413,6 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("AI21_API_KEY")
-        ## together_ai
-        elif model in litellm.together_ai_models:
-            if "TOGETHERAI_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("TOGETHERAI_API_KEY")
         ## aleph_alpha
         elif model in litellm.aleph_alpha_models:
             if "ALEPH_ALPHA_API_KEY" in os.environ:
@@ -8451,6 +8446,12 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
+        ## together_ai
+        elif f"together_ai/{model}" in litellm.together_ai_models:
+            if any(name in os.environ for name in TOGETHER_AI_API_KEY_ENV_VARS):
+                keys_in_environment = True
+            else:
+                missing_keys.append("TOGETHERAI_API_KEY")
 
     def filter_missing_keys(keys: list[str], exclude_pattern: str) -> list[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
@@ -9091,28 +9092,22 @@ _model_cache: Final = AvailableModelsCache()
 _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
+def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    if provider == LlmProviders.TOGETHER_AI:
+        return TOGETHER_AI_API_KEY_ENV_VARS
+    return (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+
+
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: str | None = None,
 ) -> list[str]:
-    valid_providers: Final[list[str]] = []
     environ_keys: Final = os.environ.keys()
-    for provider in litellm.provider_list:
-        if custom_llm_provider and provider != custom_llm_provider:
-            continue
-
-        # edge case litellm has together_ai as a provider, it should be togetherai
-        env_provider_1 = provider.replace("_", "")
-        env_provider_2 = provider
-
-        # litellm standardizes expected provider keys to
-        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-        if expected_provider_key_1 in environ_keys or expected_provider_key_2 in environ_keys:
-            # key is set
-            valid_providers.append(provider)
-
-    return valid_providers
+    return [
+        provider
+        for provider in litellm.provider_list
+        if (not custom_llm_provider or provider == custom_llm_provider)
+        and any(name in environ_keys for name in _provider_api_key_env_vars(provider))
+    ]
 
 
 def _provider_listing_params(
