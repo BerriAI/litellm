@@ -178,6 +178,7 @@ jobs:
 
   windows-sdk:
     name: windows-sdk
+    if: github.event_name != 'pull_request'
     runs-on: windows-2025
     timeout-minutes: 30
     env:
@@ -213,6 +214,7 @@ jobs:
 
   proxy-build-from-pip:
     name: proxy-build-from-pip
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
@@ -363,4 +365,4 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          jq -e 'to_entries | all(.[]; .value.result == "success" or (.value.result == "skipped" and (.key == "windows-sdk" or .key == "proxy-build-from-pip")))' <<< "$NEEDS" > /dev/null
