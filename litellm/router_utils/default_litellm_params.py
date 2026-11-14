@@ -4,6 +4,8 @@ from typing import Final
 
 from litellm.types.router import LiteLLM_Params
 
+_ROUTER_OWNED_LITELLM_PARAMS: Final = frozenset({"max_retries"})
+
 
 def deployment_sets_litellm_param(deployment_params: Mapping[str, object], key: str) -> bool:
     value: Final = deployment_params.get(key)
@@ -20,7 +22,8 @@ def router_defaults_for_deployment(
         {
             key: value
             for key, value in router_defaults.items()
-            if value is not None and not deployment_sets_litellm_param(deployment_params, key)
+            if value is not None
+            and (key in _ROUTER_OWNED_LITELLM_PARAMS or not deployment_sets_litellm_param(deployment_params, key))
         }
     )
 

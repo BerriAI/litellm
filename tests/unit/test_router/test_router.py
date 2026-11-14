@@ -20658,16 +20658,8 @@ def test_text_completion_calls_the_provider_with_the_deployment_model_not_the_gr
     assert json.loads(provider.calls.last.request.content)["model"] == "unit-text-model"
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_router_httpx_transport")
-@pytest.mark.parametrize(
-    ("deployment_params", "provider_hits"),
-    [({"max_retries": 1}, 2), ({"max_retries": 3}, 4)],
-    ids=["deployment-max-retries-1", "deployment-max-retries-3"],
-)
-async def test_aembedding_retries_at_the_provider_as_often_as_the_deployment_sets(
-    deployment_params: Mapping[str, int], provider_hits: int
-) -> None:
+async def _provider_hits_for_a_failing_aembedding(deployment_params: Mapping[str, int]) -> int:
+    litellm.in_memory_llm_clients_cache.flush_cache()
     router: Final = Router(
         model_list=[
             {
@@ -20685,4 +20677,12 @@ async def test_aembedding_retries_at_the_provider_as_often_as_the_deployment_set
         with pytest.raises(litellm.InternalServerError):
             await router.aembedding(model="embed", input=["Say hi"])
 
-    assert len(route.calls) == provider_hits
+    return len(route.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_router_httpx_transport")
+async def test_a_deployment_max_retries_does_not_change_how_often_aembedding_hits_the_provider() -> None:
+    assert await _provider_hits_for_a_failing_aembedding({"max_retries": 3}) == (
+        await _provider_hits_for_a_failing_aembedding({})
+    )
