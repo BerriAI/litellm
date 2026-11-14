@@ -5,7 +5,7 @@ import itertools
 import json
 import re
 import struct
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -927,7 +927,7 @@ def _aws_test_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("response_format", [None, {"type": "json_object"}])
 def test_moonshot_invoke_stream_yields_openai_shaped_chunks(
-    _aws_test_credentials: None, response_format: Mapping[str, str] | None
+    _aws_test_credentials: None, response_format: Mapping[str, object] | None
 ) -> None:
     raw_stream: Final = _MOONSHOT_RAW_STREAM
     response: Final = MagicMock(status_code=200, headers={})
@@ -1885,7 +1885,7 @@ _GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
 _EVENT_STREAM_HEADERS: Final = {"content-type": "application/vnd.amazon.eventstream"}
 
 
-def _guardrailed_claude_invoke_stream(message_stop: Mapping[str, str] | None) -> bytes:
+def _guardrailed_claude_invoke_stream(message_stop: Mapping[str, object] | None) -> bytes:
     events: Final = (
         {
             "type": "message_start",
@@ -1913,9 +1913,39 @@ def _guardrailed_claude_invoke_stream(message_stop: Mapping[str, str] | None) ->
     return b"".join(_bedrock_event_stream_frame(event) for event in (*events, *stop))
 
 
+_INTERVENED: Final = {"amazon-bedrock-guardrailAction": "INTERVENED"}
+_MODEL_RAN_METRICS: Final = {
+    "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 11,
+        "outputTokenCount": 7,
+        "invocationLatency": 412,
+        "firstByteLatency": 380,
+    }
+}
+_BLOCKED_WORD_ASSESSMENT: Final = {
+    "wordPolicy": {"customWords": [{"match": "hexblade", "action": "BLOCKED", "detected": True}]}
+}
+_MASKED_SSN_ASSESSMENT: Final = {
+    "sensitiveInformationPolicy": {
+        "piiEntities": [
+            {"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": True}
+        ]
+    }
+}
+_MASKED_TRACE: Final = {"guardrail": {"input": {"6hbgpnnqoeb1": _MASKED_SSN_ASSESSMENT}}}
+_BLOCKED_AND_MASKED_TRACE: Final = {
+    "guardrail": {"input": {"6hbgpnnqoeb1": {**_BLOCKED_WORD_ASSESSMENT, **_MASKED_SSN_ASSESSMENT}}}
+}
 _GUARDRAIL_STREAM_CASES: Final = [
-    pytest.param({"amazon-bedrock-guardrailAction": "INTERVENED"}, "content_filter", id="guardrail_intervened"),
-    pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, "stop", id="guardrail_passed"),
+    pytest.param(_INTERVENED, "content_filter", id="blocked"),
+    pytest.param({**_INTERVENED, **_MODEL_RAN_METRICS}, "stop", id="masked"),
+    pytest.param({**_INTERVENED, "amazon-bedrock-trace": _MASKED_TRACE}, "stop", id="masked_per_trace"),
+    pytest.param(
+        {**_INTERVENED, **_MODEL_RAN_METRICS, "amazon-bedrock-trace": _BLOCKED_AND_MASKED_TRACE},
+        "content_filter",
+        id="blocked_and_masked_per_trace",
+    ),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE", **_MODEL_RAN_METRICS}, "stop", id="guardrail_passed"),
     pytest.param({}, "stop", id="no_guardrail"),
     pytest.param(None, "stop", id="stream_ends_before_message_stop"),
 ]
@@ -1949,7 +1979,7 @@ def _assert_guardrailed_stream(chunks: Sequence[ModelResponseStream], expected_f
 
 @pytest.mark.parametrize(("message_stop", "expected_finish_reason"), _GUARDRAIL_STREAM_CASES)
 def test_claude_invoke_stream_reports_a_guardrail_block_as_content_filter(
-    message_stop: Mapping[str, str] | None, expected_finish_reason: str
+    message_stop: Mapping[str, object] | None, expected_finish_reason: str
 ) -> None:
     raw: Final = _guardrailed_claude_invoke_stream(message_stop)
     client: Final = HTTPHandler(
@@ -1968,7 +1998,7 @@ def test_claude_invoke_stream_reports_a_guardrail_block_as_content_filter(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("message_stop", "expected_finish_reason"), _GUARDRAIL_STREAM_CASES)
 async def test_async_claude_invoke_stream_reports_a_guardrail_block_as_content_filter(
-    message_stop: Mapping[str, str] | None, expected_finish_reason: str
+    message_stop: Mapping[str, object] | None, expected_finish_reason: str
 ) -> None:
     raw: Final = _guardrailed_claude_invoke_stream(message_stop)
     client: Final = AsyncHTTPHandler(
@@ -1980,10 +2010,71 @@ async def test_async_claude_invoke_stream_reports_a_guardrail_block_as_content_f
     _assert_guardrailed_stream([chunk async for chunk in stream], expected_finish_reason)
 
 
+_HELD_FINISH_CUTS: Final = [
+    pytest.param(httpx.ReadError("upstream closed"), id="upstream_read_error"),
+    pytest.param(_bedrock_event_stream_frame({"type": "content_block_start"}), id="unparseable_event"),
+]
+
+
+def _claude_stream_cut_by(cut: bytes | Exception) -> Iterator[bytes]:
+    yield _guardrailed_claude_invoke_stream(None)
+    if isinstance(cut, Exception):
+        raise cut
+    yield cut
+
+
+async def _async_claude_stream_cut_by(cut: bytes | Exception) -> AsyncIterator[bytes]:
+    for chunk in _claude_stream_cut_by(cut):
+        yield chunk
+
+
+def _until_error(chunks: Iterator[object]) -> Iterator[object]:
+    try:
+        yield from chunks
+    except Exception as error:
+        yield error
+
+
+async def _async_until_error(chunks: AsyncIterator[object]) -> AsyncIterator[object]:
+    try:
+        async for chunk in chunks:
+            yield chunk
+    except Exception as error:
+        yield error
+
+
+def _assert_finish_usage_sent_before_the_error(received: Sequence[object]) -> None:
+    assert isinstance(received[-1], Exception)
+    usage: Final = next(
+        usage for chunk in reversed(received[:-1]) if (usage := getattr(chunk, "usage", None)) is not None
+    )
+    assert (usage.prompt_tokens, usage.completion_tokens) == (11, 7)
+
+
+@pytest.mark.parametrize("cut", _HELD_FINISH_CUTS)
+def test_invoke_stream_sends_the_held_finish_chunk_before_a_stream_error(cut: bytes | Exception) -> None:
+    decoder: Final = AmazonAnthropicClaudeStreamDecoder(model="anthropic.claude-haiku-5-5", sync_stream=True)
+
+    received: Final = tuple(_until_error(decoder.iter_bytes(_claude_stream_cut_by(cut))))
+
+    _assert_finish_usage_sent_before_the_error(received)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cut", _HELD_FINISH_CUTS)
+async def test_async_invoke_stream_sends_the_held_finish_chunk_before_a_stream_error(cut: bytes | Exception) -> None:
+    decoder: Final = AmazonAnthropicClaudeStreamDecoder(model="anthropic.claude-haiku-5-5", sync_stream=False)
+    chunks: Final = decoder.aiter_bytes(_async_claude_stream_cut_by(cut))
+
+    received: Final = tuple([chunk async for chunk in _async_until_error(chunks)])
+
+    _assert_finish_usage_sent_before_the_error(received)
+
+
 _GUARDRAIL_STREAM_USAGE: Final = (11, 7)
 
 
-def _llama_invoke_stream_events(trailing_fields: Mapping[str, str] | None) -> tuple[Mapping[str, object], ...]:
+def _llama_invoke_stream_events(trailing_fields: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
     generation: Final = {
         "generation": _GUARDRAIL_BLOCKED_TEXT,
         "prompt_token_count": 11,
@@ -1996,7 +2087,7 @@ def _llama_invoke_stream_events(trailing_fields: Mapping[str, str] | None) -> tu
     return (generation, {"amazon-bedrock-invocationMetrics": metrics, **trailing_fields})
 
 
-def _nova_invoke_stream_events(trailing_fields: Mapping[str, str] | None) -> tuple[Mapping[str, object], ...]:
+def _nova_invoke_stream_events(trailing_fields: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
     message: Final = (
         {"messageStart": {"role": "assistant"}},
         {"contentBlockDelta": {"delta": {"text": _GUARDRAIL_BLOCKED_TEXT}, "contentBlockIndex": 0}},
@@ -2009,7 +2100,7 @@ def _nova_invoke_stream_events(trailing_fields: Mapping[str, str] | None) -> tup
     return (*message, {"metadata": {"usage": usage, "metrics": {}, "trace": {}}, **trailing_fields})
 
 
-def _kimi_invoke_stream_events(trailing_fields: Mapping[str, str] | None) -> tuple[Mapping[str, object], ...]:
+def _kimi_invoke_stream_events(trailing_fields: Mapping[str, object] | None) -> tuple[Mapping[str, object], ...]:
     message: Final = (
         _openai_stream_chunk({"role": "assistant", "content": ""}),
         _openai_stream_chunk({"content": _GUARDRAIL_BLOCKED_TEXT}),
@@ -2026,7 +2117,7 @@ _GUARDRAIL_STREAM_FAMILIES: Final = [
     pytest.param("bedrock/invoke/us.amazon.nova-2-lite-v1:0", _nova_invoke_stream_events, True, id="nova"),
     pytest.param("bedrock/invoke/moonshotai.kimi-k2.5", _kimi_invoke_stream_events, False, id="kimi"),
 ]
-_InvokeStreamEvents = Callable[[Mapping[str, str] | None], tuple[Mapping[str, object], ...]]
+_InvokeStreamEvents = Callable[[Mapping[str, object] | None], tuple[Mapping[str, object], ...]]
 
 
 def _invoke_event_stream(events: Sequence[Mapping[str, object]]) -> bytes:
@@ -2047,7 +2138,7 @@ def _assert_family_guardrailed_stream(
 
 
 def _expected_family_usage(
-    reports_usage_after_finish: bool, trailing_fields: Mapping[str, str] | None
+    reports_usage_after_finish: bool, trailing_fields: Mapping[str, object] | None
 ) -> tuple[int, int] | None:
     return _GUARDRAIL_STREAM_USAGE if reports_usage_after_finish and trailing_fields is not None else None
 
@@ -2058,7 +2149,7 @@ def test_invoke_stream_reports_a_guardrail_block_as_content_filter(
     model: str,
     stream_events: _InvokeStreamEvents,
     reports_usage_after_finish: bool,
-    trailing_fields: Mapping[str, str] | None,
+    trailing_fields: Mapping[str, object] | None,
     expected_finish_reason: str,
 ) -> None:
     raw: Final = _invoke_event_stream(stream_events(trailing_fields))
@@ -2084,7 +2175,7 @@ async def test_async_invoke_stream_reports_a_guardrail_block_as_content_filter(
     model: str,
     stream_events: _InvokeStreamEvents,
     reports_usage_after_finish: bool,
-    trailing_fields: Mapping[str, str] | None,
+    trailing_fields: Mapping[str, object] | None,
     expected_finish_reason: str,
 ) -> None:
     raw: Final = _invoke_event_stream(stream_events(trailing_fields))
@@ -2104,7 +2195,7 @@ async def test_async_invoke_stream_reports_a_guardrail_block_as_content_filter(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("trailing_fields", "expected_finish_reason"), _GUARDRAIL_STREAM_CASES)
 async def test_invoke_messages_stream_reports_a_guardrail_block_as_refusal(
-    trailing_fields: Mapping[str, str] | None, expected_finish_reason: str
+    trailing_fields: Mapping[str, object] | None, expected_finish_reason: str
 ) -> None:
     raw: Final = _invoke_event_stream(_llama_invoke_stream_events(trailing_fields))
     client: Final = AsyncHTTPHandler(
@@ -2131,8 +2222,14 @@ async def test_invoke_messages_stream_reports_a_guardrail_block_as_refusal(
     ]
 
 
-def _converse_stream_dump(guardrail_fields: Mapping[str, str]) -> list[dict[str, object]]:
-    raw: Final = b"".join(
+_CONVERSE_GUARDRAIL_STREAM_REQUEST: Final = {
+    **_GUARDRAIL_STREAM_REQUEST,
+    "model": "bedrock/converse/us.amazon.nova-2-lite-v1:0",
+}
+
+
+def _converse_stream_with(guardrail_fields: Mapping[str, str]) -> bytes:
+    return b"".join(
         (
             _converse_event_frame("messageStart", {"role": "assistant"}),
             _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "4"}}),
@@ -2141,6 +2238,10 @@ def _converse_stream_dump(guardrail_fields: Mapping[str, str]) -> list[dict[str,
             _converse_event_frame("metadata", {**CONVERSE_METADATA_EVENT, **guardrail_fields}),
         )
     )
+
+
+def _converse_stream_dump(guardrail_fields: Mapping[str, str]) -> list[dict[str, object]]:
+    raw: Final = _converse_stream_with(guardrail_fields)
     client: Final = HTTPHandler(
         client=httpx.Client(
             transport=httpx.MockTransport(
@@ -2148,15 +2249,31 @@ def _converse_stream_dump(guardrail_fields: Mapping[str, str]) -> list[dict[str,
             )
         )
     )
-    stream: Final = litellm.completion(
-        **{**_GUARDRAIL_STREAM_REQUEST, "model": "bedrock/converse/us.amazon.nova-2-lite-v1:0"}, client=client
-    )
+    stream: Final = litellm.completion(**_CONVERSE_GUARDRAIL_STREAM_REQUEST, client=client)
     return [chunk.model_dump(exclude={"id", "created"}) for chunk in stream]
+
+
+async def _async_converse_stream_dump(guardrail_fields: Mapping[str, str]) -> list[dict[str, object]]:
+    raw: Final = _converse_stream_with(guardrail_fields)
+    client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw, headers=_EVENT_STREAM_HEADERS))
+    )
+    stream: Final = await litellm.acompletion(**_CONVERSE_GUARDRAIL_STREAM_REQUEST, client=client)
+    return [chunk.model_dump(exclude={"id", "created"}) async for chunk in stream]
 
 
 def test_converse_stream_output_ignores_the_invoke_guardrail_field() -> None:
     with_field: Final = _converse_stream_dump({"amazon-bedrock-guardrailAction": "INTERVENED"})
 
     assert with_field == _converse_stream_dump({})
+    finish_reasons: Final = [chunk["choices"][0]["finish_reason"] for chunk in with_field if chunk["choices"]]
+    assert [reason for reason in finish_reasons if reason] == ["stop"]
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_output_ignores_the_invoke_guardrail_field() -> None:
+    with_field: Final = await _async_converse_stream_dump({"amazon-bedrock-guardrailAction": "INTERVENED"})
+
+    assert with_field == await _async_converse_stream_dump({})
     finish_reasons: Final = [chunk["choices"][0]["finish_reason"] for chunk in with_field if chunk["choices"]]
     assert [reason for reason in finish_reasons if reason] == ["stop"]

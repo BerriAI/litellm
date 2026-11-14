@@ -4283,9 +4283,51 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
 
 
 _GUARDRAIL_BLOCKED_TEXT: Final = "Sorry, the model cannot answer this question."
+_INTERVENED: Final = {"amazon-bedrock-guardrailAction": "INTERVENED"}
+_MODEL_RAN_USAGE: Final = {"input_tokens": 11, "output_tokens": 7}
+_NO_MODEL_USAGE: Final = {"input_tokens": 0, "output_tokens": 0}
+_MODEL_RAN_METRICS: Final = {
+    "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 11,
+        "outputTokenCount": 7,
+        "invocationLatency": 412,
+        "firstByteLatency": 380,
+    }
+}
+_BLOCKED_WORD_ASSESSMENT: Final = {
+    "wordPolicy": {"customWords": [{"match": "hexblade", "action": "BLOCKED", "detected": True}]}
+}
+_MASKED_SSN_ASSESSMENT: Final = {
+    "sensitiveInformationPolicy": {
+        "piiEntities": [
+            {"type": "US_SOCIAL_SECURITY_NUMBER", "match": "123-45-6789", "action": "ANONYMIZED", "detected": True}
+        ]
+    }
+}
+_MASKED_TRACE: Final = {"amazon-bedrock-trace": {"guardrail": {"input": {"6hbgpnnqoeb1": _MASKED_SSN_ASSESSMENT}}}}
+_BLOCKED_AND_MASKED_TRACE: Final = {
+    "amazon-bedrock-trace": {
+        "guardrail": {"input": {"6hbgpnnqoeb1": {**_BLOCKED_WORD_ASSESSMENT, **_MASKED_SSN_ASSESSMENT}}}
+    }
+}
 _GUARDRAIL_CASES: Final = [
-    pytest.param({"amazon-bedrock-guardrailAction": "INTERVENED"}, "refusal", id="guardrail_intervened"),
-    pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, "end_turn", id="guardrail_passed"),
+    pytest.param(_INTERVENED, _NO_MODEL_USAGE, "refusal", id="blocked"),
+    pytest.param(_INTERVENED, _MODEL_RAN_USAGE, "end_turn", id="masked"),
+    pytest.param({**_INTERVENED, **_MASKED_TRACE}, _NO_MODEL_USAGE, "end_turn", id="masked_per_trace"),
+    pytest.param(
+        {**_INTERVENED, **_BLOCKED_AND_MASKED_TRACE}, _MODEL_RAN_USAGE, "refusal", id="blocked_and_masked_per_trace"
+    ),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, _MODEL_RAN_USAGE, "end_turn", id="guardrail_passed"),
+    pytest.param({}, _MODEL_RAN_USAGE, "end_turn", id="no_guardrail"),
+]
+_GUARDRAIL_STREAM_CASES: Final = [
+    pytest.param(_INTERVENED, "refusal", id="blocked"),
+    pytest.param({**_INTERVENED, **_MODEL_RAN_METRICS}, "end_turn", id="masked"),
+    pytest.param({**_INTERVENED, **_MASKED_TRACE}, "end_turn", id="masked_per_trace"),
+    pytest.param(
+        {**_INTERVENED, **_MODEL_RAN_METRICS, **_BLOCKED_AND_MASKED_TRACE}, "refusal", id="blocked_and_masked_per_trace"
+    ),
+    pytest.param({"amazon-bedrock-guardrailAction": "NONE", **_MODEL_RAN_METRICS}, "end_turn", id="guardrail_passed"),
     pytest.param({}, "end_turn", id="no_guardrail"),
 ]
 _GUARDRAILED_MESSAGE: Final = {
@@ -4296,7 +4338,7 @@ _GUARDRAILED_MESSAGE: Final = {
     "model": "claude-haiku-5-5",
     "stop_reason": "end_turn",
     "stop_sequence": None,
-    "usage": {"input_tokens": 0, "output_tokens": 0},
+    "usage": _NO_MODEL_USAGE,
 }
 
 
@@ -4313,11 +4355,11 @@ async def _guardrailed_anthropic_messages(reply: httpx.Response, stream: bool) -
     )
 
 
-@pytest.mark.parametrize(("guardrail_fields", "expected_stop_reason"), _GUARDRAIL_CASES)
+@pytest.mark.parametrize(("guardrail_fields", "usage", "expected_stop_reason"), _GUARDRAIL_CASES)
 async def test_bedrock_messages_reports_a_guardrail_block_as_refusal(
-    guardrail_fields: Mapping[str, str], expected_stop_reason: str
+    guardrail_fields: Mapping[str, object], usage: Mapping[str, int], expected_stop_reason: str
 ) -> None:
-    body: Final = {**_GUARDRAILED_MESSAGE, **guardrail_fields}
+    body: Final = {**_GUARDRAILED_MESSAGE, "usage": usage, **guardrail_fields}
 
     response: Final = await _guardrailed_anthropic_messages(httpx.Response(200, json=body), stream=False)
 
@@ -4330,9 +4372,9 @@ def _sse_events(stream_bytes: bytes) -> tuple[Mapping[str, object], ...]:
     )
 
 
-@pytest.mark.parametrize(("guardrail_fields", "expected_stop_reason"), _GUARDRAIL_CASES)
+@pytest.mark.parametrize(("guardrail_fields", "expected_stop_reason"), _GUARDRAIL_STREAM_CASES)
 async def test_bedrock_messages_stream_reports_a_guardrail_block_as_refusal(
-    guardrail_fields: Mapping[str, str], expected_stop_reason: str
+    guardrail_fields: Mapping[str, object], expected_stop_reason: str
 ) -> None:
     message_stop: Final = {"type": "message_stop", **guardrail_fields}
     frames: Final = b"".join(
@@ -4358,4 +4400,4 @@ async def test_bedrock_messages_stream_reports_a_guardrail_block_as_refusal(
     assert [event["delta"] for event in events if event["type"] == "message_delta"] == [
         {"stop_reason": expected_stop_reason, "stop_sequence": None}
     ]
-    assert events[-1] == message_stop
+    assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]
