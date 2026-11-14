@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.strict_cache_refill import strict_cache_refill
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 if TYPE_CHECKING:
@@ -153,7 +154,7 @@ class RoutingPrismaWrapper:
         consult this rather than `writer`, and `__getattr__` routes through it
         so the two cannot drift apart.
         """
-        return self._writer if self._reader_unavailable else self._reader
+        return self._writer if self._reader_unavailable or strict_cache_refill() else self._reader
 
     @property
     def reader_unavailable(self) -> bool:
@@ -173,7 +174,7 @@ class RoutingPrismaWrapper:
         self._writer_unavailable = False
 
     def _should_use_reader(self) -> bool:
-        return not self._reader_unavailable
+        return not self._reader_unavailable and not strict_cache_refill()
 
     @staticmethod
     async def _try_connect(client: PrismaWrapper, timeout: int | timedelta | None = None) -> Exception | None:

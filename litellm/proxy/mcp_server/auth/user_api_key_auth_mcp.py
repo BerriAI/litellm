@@ -58,6 +58,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
+from litellm.proxy.common_utils.strict_cache_refill import strict_cache_refill
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
@@ -647,6 +648,13 @@ class DcrBridgeTarget:
 
     requested_name: str
     server: MCPServer
+
+
+def _jwt_teams_from_claim_list() -> bool:
+    """True when JWT auth takes several teams from a claim list, which the policy hash cannot pin to one team."""
+    from litellm.proxy.proxy_server import jwt_handler
+
+    return hasattr(jwt_handler, "litellm_jwtauth") and bool(jwt_handler.litellm_jwtauth.team_ids_jwt_field)
 
 
 class MCPRequestHandler:
@@ -1557,27 +1565,49 @@ class MCPRequestHandler:
     @staticmethod
     async def refresh_catalog_authority(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
         from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+        from litellm.proxy.mcp_server.policy_freshness import (
+            cached_policy_is_current,
+            policy_subject_for,
+            validated_policy_marks,
+        )
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if auth is None:
             return None
-        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": True})
-        if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
+        keyless_user: Final = bool((auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id)
+        virtual_key: Final = bool(
+            not keyless_user
+            and auth.via_virtual_key
+            and auth.api_key
+            and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
+        )
+        subject: Final = policy_subject_for(
+            auth,
+            keyless_user=keyless_user,
+            virtual_key=virtual_key,
+            jwt_teams_from_claim_list=_jwt_teams_from_claim_list(),
+        )
+        fresh: Final = bool(auth.requires_fresh_policy) or not await cached_policy_is_current(
+            subject, prisma_client=prisma_client, cache=user_api_key_cache, marks=validated_policy_marks
+        )
+        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": fresh})
+        if keyless_user and auth.user_id:
             # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
             # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
-            current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=True)
-            refreshed.object_permission = current.object_permission
-            refreshed.object_permission_id = current.object_permission_id
-            refreshed.user_role = current.user_role
-            refreshed.org_id = current.org_id
-        elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
-            current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=True)
-            refreshed.object_permission = current.object_permission
-            refreshed.object_permission_id = current.object_permission_id
-            refreshed.team_id = current.team_id
-            refreshed.org_id = current.org_id
-            refreshed.project_id = current.project_id
-            refreshed.user_id = current.user_id
-            refreshed.access_group_ids = current.access_group_ids
+            user_policy: Final = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=fresh)
+            refreshed.object_permission = user_policy.object_permission
+            refreshed.object_permission_id = user_policy.object_permission_id
+            refreshed.user_role = user_policy.user_role
+            refreshed.org_id = user_policy.org_id
+        elif virtual_key and auth.api_key:
+            key_policy: Final = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=fresh)
+            refreshed.object_permission = key_policy.object_permission
+            refreshed.object_permission_id = key_policy.object_permission_id
+            refreshed.team_id = key_policy.team_id
+            refreshed.org_id = key_policy.org_id
+            refreshed.project_id = key_policy.project_id
+            refreshed.user_id = key_policy.user_id
+            refreshed.access_group_ids = key_policy.access_group_ids
         else:
             return refreshed
         if refreshed.mcp_toolset_id is not None:
@@ -3123,7 +3153,7 @@ class MCPRequestHandler:
                 unreadable="raise",
             )
         except Exception as e:  # noqa: BLE001  # a key naming groups we cannot read must deny, not widen
-            if user_api_key_auth.requires_fresh_policy:
+            if user_api_key_auth.requires_fresh_policy or strict_cache_refill():
                 raise UnloadableEntitlementError(f"key access groups unreadable: {e}") from e
             return _UNREADABLE_KEY_GROUP_TOOLS
         owned: Final = tuple(
@@ -3169,7 +3199,7 @@ class MCPRequestHandler:
                 unreadable="raise",
             )
         except Exception as e:  # noqa: BLE001  # team groups we cannot read grant no tools, they never widen
-            if user_api_key_auth.requires_fresh_policy:
+            if user_api_key_auth.requires_fresh_policy or strict_cache_refill():
                 raise UnloadableEntitlementError(f"team access groups unreadable: {e}") from e
             return ()
         return MCPRequestHandler.access_group_tools_for_server(groups, server_id)
@@ -3824,8 +3854,11 @@ class MCPRequestHandler:
             )
             return list(servers)
         except Exception as e:
-            if isinstance(e, UnloadableEntitlementError) or (
-                require_readable_policy or (user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy)
+            if (
+                isinstance(e, UnloadableEntitlementError)
+                or require_readable_policy
+                or strict_cache_refill()
+                or (user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy)
             ):
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
@@ -4169,7 +4202,7 @@ class MCPRequestHandler:
         except UserNotFoundError:
             return None
         except Exception as e:  # noqa: BLE001  # Legacy callers retain their existing optional user-ceiling behavior
-            if check_db_only:
+            if check_db_only or strict_cache_refill():
                 raise HTTPException(503, "User policy is unavailable") from e
             verbose_logger.warning("MCP user entitlement: link for %r unresolved, no ceiling: %s", user_id, e)
             return None
@@ -4721,7 +4754,7 @@ class MCPRequestHandler:
                 for server in mcp_servers:
                     server_ids.add(server.server_id)
             except Exception as e:
-                if use_writer:
+                if use_writer or strict_cache_refill():
                     raise
                 verbose_logger.debug("Error getting MCP servers from access groups: %s", e)
         return server_ids
@@ -4761,7 +4794,7 @@ class MCPRequestHandler:
 
             return list(server_ids)
         except Exception as e:
-            if requires_fresh_policy:
+            if requires_fresh_policy or strict_cache_refill():
                 raise
             verbose_logger.warning("Failed to get MCP servers from access groups: %s", e)
             return []
