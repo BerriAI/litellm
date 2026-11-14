@@ -401,7 +401,7 @@ class AmazonConverseConfig(BaseConfig):
         return messages_copy
 
     @staticmethod
-    def _has_orphaned_tool_blocks(messages: list[AllMessageValues]) -> bool:
+    def _has_orphaned_tool_blocks(messages: Sequence[AllMessageValues]) -> bool:
         return any(
             (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
             for m in messages
@@ -1681,17 +1681,26 @@ class AmazonConverseConfig(BaseConfig):
             len(messages),
         )
 
-    def _keeps_the_full_input_check(self, messages: Sequence[AllMessageValues], guardrail_active: bool) -> bool:
+    def _keeps_the_full_input_check(
+        self, messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> bool:
         """Bedrock's guardrail checks every message until one carries guardContent, then only those blocks.
 
         A guarded system or assistant part past the system prompt would shrink the check to that part, so it goes as
         text, with the trailing turns left unguarded, when the messages would carry no guardContent without it: no user
-        turn is guarded and no turn that ends the request, a converted system turn included, has text to guard.
+        turn is guarded, no tool result is rewritten into a guarded user turn, and no turn that ends the request, a
+        converted system turn included, has text to guard.
         """
         remaining: Final = messages[_leading_system_count(messages) :]
-        if not guardrail_active or not any(map(_is_guarded_turn_outside_user_turns, remaining)):
+        if "guardrailConfig" not in optional_params or not any(map(_is_guarded_turn_outside_user_turns, remaining)):
             return False
         if any(map(_is_guarded_user_turn, remaining)):
+            return False
+        if (
+            litellm.bedrock_neutralize_orphaned_tool_blocks
+            and not optional_params.get("tools")
+            and self._has_orphaned_tool_blocks(messages)
+        ):
             return False
         reordered: Final = chain.from_iterable(
             self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
@@ -2345,7 +2354,9 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(messages, "guardrailConfig" in optional_params)
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(
+            messages, _JSON_OBJECT.validate_python(optional_params)
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
             if can_send_guarded_text
@@ -2437,7 +2448,9 @@ class AmazonConverseConfig(BaseConfig):
         can_send_guarded_text: Final = "guardrailConfig" in optional_params or drops_unsupported_params(
             litellm_params.get("drop_params")
         )
-        keeps_full_input_check: Final = self._keeps_the_full_input_check(messages, "guardrailConfig" in optional_params)
+        keeps_full_input_check: Final = self._keeps_the_full_input_check(
+            messages, _JSON_OBJECT.validate_python(optional_params)
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(_guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages)
             if can_send_guarded_text

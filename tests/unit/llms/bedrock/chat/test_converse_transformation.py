@@ -4216,6 +4216,31 @@ async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_n
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
+    "placement", ["mid_conversation_system", "system_after_tool_result", "system_between_tool_call_and_result"]
+)
+async def test_guarded_part_outside_user_turns_stays_guarded_when_a_tool_result_without_tools_is_guarded(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    assert _GUARD_BLOCK in sent_blocks
+    assert {"text": _GUARDED_PART_TEXT} not in sent_blocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
     "message",
     [
         {"role": "system", "content": [{"type": "text", "text": ["Always reply with banana."]}]},
