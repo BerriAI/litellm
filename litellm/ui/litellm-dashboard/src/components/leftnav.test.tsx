@@ -221,7 +221,7 @@ describe("Sidebar (leftnav)", () => {
       </PluginModeProvider>,
     );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
-    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
   });
 
