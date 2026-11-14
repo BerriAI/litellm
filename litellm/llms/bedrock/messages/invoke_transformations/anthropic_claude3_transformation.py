@@ -30,7 +30,11 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+from litellm.llms.bedrock.chat.invoke_handler import (
+    AWSEventStreamDecoder,
+    aclose_if_supported,
+    aiter_bytes_then_close,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
     bedrock_invoke_guardrail_headers,
@@ -859,7 +863,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+            aiter_bytes_then_close(httpx_response.aiter_bytes(), httpx_response),
+            response_headers=httpx_response.headers,
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
@@ -941,69 +946,72 @@ class AmazonAnthropicClaudeMessagesConfig(
         pending_delta: dict[str, Any] | None = None
         start_usage_snapshot: Mapping[str, object] | None = None
 
-        async for chunk in completion_stream:
-            if not isinstance(chunk, dict):
+        try:
+            async for chunk in completion_stream:
+                if not isinstance(chunk, dict):
+                    if pending_delta is not None:
+                        yield pending_delta
+                        pending_delta = None
+                    yield chunk
+                    continue
+
+                chunk_type = chunk.get("type")
+
+                if chunk_type == "message_start":
+                    msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
+                    u = msg.get("usage")
+                    if isinstance(u, dict):
+                        start_usage_snapshot = dict(u)
+                    if pending_delta is not None:
+                        yield pending_delta
+                        pending_delta = None
+                    yield chunk
+                    continue
+
+                if chunk_type == "message_delta":
+                    pending_delta = cast(dict[str, Any], chunk)
+                    continue
+
+                if chunk_type == "message_stop" and pending_delta is not None:
+                    stop_usage = dict(chunk.get("usage") or {})
+                    delta_usage = dict(pending_delta.get("usage") or {})
+
+                    for field in _CACHE_FIELDS:
+                        if field in stop_usage:
+                            delta_usage[field] = stop_usage[field]
+
+                    raw_input = stop_usage.get("input_tokens")
+                    if raw_input is not None:
+                        delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
+
+                    AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
+                        delta_usage, start_usage_snapshot
+                    )
+
+                    if delta_usage:
+                        pending_delta["usage"] = delta_usage
+
+                    yield pending_delta
+                    pending_delta = None
+                    yield chunk
+                    continue
+
                 if pending_delta is not None:
                     yield pending_delta
                     pending_delta = None
+
                 yield chunk
-                continue
 
-            chunk_type = chunk.get("type")
-
-            if chunk_type == "message_start":
-                msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
-                u = msg.get("usage")
-                if isinstance(u, dict):
-                    start_usage_snapshot = dict(u)
-                if pending_delta is not None:
-                    yield pending_delta
-                    pending_delta = None
-                yield chunk
-                continue
-
-            if chunk_type == "message_delta":
-                pending_delta = cast(dict[str, Any], chunk)
-                continue
-
-            if chunk_type == "message_stop" and pending_delta is not None:
-                stop_usage = dict(chunk.get("usage") or {})
+            if pending_delta is not None:
                 delta_usage = dict(pending_delta.get("usage") or {})
-
-                for field in _CACHE_FIELDS:
-                    if field in stop_usage:
-                        delta_usage[field] = stop_usage[field]
-
-                raw_input = stop_usage.get("input_tokens")
-                if raw_input is not None:
-                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
-
                 AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
                     delta_usage, start_usage_snapshot
                 )
-
                 if delta_usage:
                     pending_delta["usage"] = delta_usage
-
                 yield pending_delta
-                pending_delta = None
-                yield chunk
-                continue
-
-            if pending_delta is not None:
-                yield pending_delta
-                pending_delta = None
-
-            yield chunk
-
-        if pending_delta is not None:
-            delta_usage = dict(pending_delta.get("usage") or {})
-            AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
-                delta_usage, start_usage_snapshot
-            )
-            if delta_usage:
-                pending_delta["usage"] = delta_usage
-            yield pending_delta
+        finally:
+            await aclose_if_supported(completion_stream)
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
