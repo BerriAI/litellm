@@ -27,6 +27,7 @@ DEEPSEEK_EFFORT_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xh
 
 @dataclass(frozen=True, slots=True)
 class _InvalidEffort:
+    field: str
     effort: object
 
 
@@ -41,15 +42,17 @@ def _with_output_config_effort(
     if output_config is not None and not isinstance(output_config, dict):
         return params
     fields: Final = _FIELDS.validate_python(output_config or {})
-    effort: Final = fields.get("effort", alias_effort)
-    if effort is None:
+    caller_effort: Final = fields.get("effort")
+    if caller_effort is None and alias_effort is None:
         return params
-    if effort in DEEPSEEK_EFFORT_LEVELS:
-        return {**params, "output_config": {**fields, "effort": effort}}
-    if not drop_params:
-        return _InvalidEffort(effort=effort)
-    remaining: Final = _without(fields, "effort")
-    return {**_without(params, "output_config"), **({"output_config": remaining} if remaining else {})}
+    alias_decides: Final = caller_effort not in DEEPSEEK_EFFORT_LEVELS
+    if alias_decides and caller_effort is not None and not drop_params:
+        return _InvalidEffort(field="output_config.effort", effort=caller_effort)
+    effort: Final = alias_effort if alias_decides else caller_effort
+    remaining: Final = {**_without(fields, "effort"), **({} if effort is None else {"effort": effort})}
+    alias_clears_thinking: Final = alias_decides and effort == "none"
+    kept: Final = _without(params, "thinking") if alias_clears_thinking else params
+    return {**_without(kept, "output_config"), **({"output_config": remaining} if remaining else {})}
 
 
 def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
@@ -59,7 +62,7 @@ def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> 
     if alias in DEEPSEEK_EFFORT_LEVELS:
         return _with_output_config_effort(_without(params, "reasoning_effort"), alias, drop_params)
     if not drop_params:
-        return _InvalidEffort(effort=alias)
+        return _InvalidEffort(field="reasoning_effort", effort=alias)
     return _with_output_config_effort(_without(params, "reasoning_effort"), None, drop_params)
 
 
@@ -101,13 +104,10 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     thinking blocks in assistant history, but rejects Anthropic's explicit
     custom-tool discriminator (`{"type": "custom"}`).
 
-    Its reasoning models read `thinking` and `output_config.effort` natively
-    (ignoring `budget_tokens`) and accept any `temperature`, so for them and
-    for models the cost map does not list yet the Claude-specific effort and
-    temperature reshaping is skipped, the `reasoning_effort` alias becomes
-    `output_config.effort`, and a level DeepSeek does not accept is a 400, or
-    dropped under `drop_params`. Models the cost map lists without reasoning
-    keep the base handling unchanged.
+    Its reasoning models read `output_config.effort` natively, ignore
+    `budget_tokens`, and accept any `temperature`, so the Claude-specific
+    effort and temperature reshaping only applies to models the cost map
+    lists without reasoning.
     """
 
     @property
@@ -235,7 +235,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         if isinstance(effort_params, _InvalidEffort):
             raise AnthropicError(
                 message=(
-                    f"Invalid effort: {effort_params.effort!r}. DeepSeek accepts one of: "
+                    f"Invalid {effort_params.field}: {effort_params.effort!r}. DeepSeek accepts one of: "
                     f"{', '.join(repr(level) for level in DEEPSEEK_EFFORT_LEVELS)}"
                 ),
                 status_code=400,

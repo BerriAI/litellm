@@ -250,19 +250,21 @@ def test_deepseek_anthropic_messages_prefers_output_config_effort_over_reasoning
 
 
 @pytest.mark.parametrize(
-    "optional_params",
+    ("optional_params", "field"),
     [
-        {"output_config": {"effort": "turbo"}},
-        {"reasoning_effort": "turbo"},
-        {"output_config": {"effort": "high"}, "reasoning_effort": "turbo"},
+        ({"output_config": {"effort": "turbo"}}, "output_config.effort"),
+        ({"reasoning_effort": "turbo"}, "reasoning_effort"),
+        ({"output_config": {"effort": "high"}, "reasoning_effort": "turbo"}, "reasoning_effort"),
     ],
 )
-def test_deepseek_anthropic_messages_rejects_unknown_effort_with_400(optional_params: Mapping[str, object]) -> None:
+def test_deepseek_anthropic_messages_rejects_unknown_effort_with_400(
+    optional_params: Mapping[str, object], field: str
+) -> None:
     with pytest.raises(AnthropicError) as error:
         _deepseek_messages_request(optional_params)
 
     assert error.value.status_code == 400
-    assert "turbo" in error.value.message
+    assert f"Invalid {field}: 'turbo'" in error.value.message
 
 
 @pytest.mark.parametrize(
@@ -292,6 +294,32 @@ def test_deepseek_anthropic_messages_adds_reasoning_effort_beside_other_output_c
     request: Final = _deepseek_messages_request({"output_config": {"format": output_format}, "reasoning_effort": "max"})
 
     assert request["output_config"] == {"format": output_format, "effort": "max"}
+
+
+def test_deepseek_anthropic_messages_falls_back_to_reasoning_effort_when_dropping_unknown_effort() -> None:
+    request: Final = _deepseek_messages_request(
+        {"output_config": {"effort": "turbo"}, "reasoning_effort": "low"}, drop_params=True
+    )
+
+    assert request["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("thinking", [{"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}])
+def test_deepseek_anthropic_messages_reasoning_effort_none_clears_thinking(thinking: Mapping[str, object]) -> None:
+    request: Final = _deepseek_messages_request({"thinking": thinking, "reasoning_effort": "none"})
+
+    assert request["output_config"] == {"effort": "none"}
+    assert "thinking" not in request
+
+
+def test_deepseek_anthropic_messages_keeps_thinking_with_output_config_effort_none() -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024}
+    request: Final = _deepseek_messages_request(
+        {"thinking": thinking, "output_config": {"effort": "none"}, "reasoning_effort": "none"}
+    )
+
+    assert request["output_config"] == {"effort": "none"}
+    assert request["thinking"] == thinking
 
 
 def test_deepseek_anthropic_messages_drops_unknown_reasoning_effort_but_keeps_output_config_effort() -> None:
