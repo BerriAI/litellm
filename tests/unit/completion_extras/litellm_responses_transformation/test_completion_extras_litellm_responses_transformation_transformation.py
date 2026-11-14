@@ -338,16 +338,15 @@ async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
     response_body: Final = _searched_responses_body(model)
     request: Final = _bridged_request(model, provider_kwargs, stream=False)
 
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
         if caller == "acompletion":
-            await litellm.acompletion(**request)
+            await litellm.acompletion(**request, success_callback=[recorder])
         else:
-            litellm.completion(**request)
+            litellm.completion(**request, success_callback=[recorder])
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
 
     assert (logged.call_type, logged.payload["call_type"]) == (caller, caller)

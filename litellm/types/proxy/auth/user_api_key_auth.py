@@ -6,13 +6,14 @@ from typing import (
     TypeAlias,
 )
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
+
+
+_BILLING_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_jwt(token: str | None) -> bool:
@@ -138,6 +142,49 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     api_key: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+    _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
+    _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
+    _dashboard_session_model: str | None = PrivateAttr(default=None)
+
+    @property
+    def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
+        return self._dashboard_session_origin
+
+    @property
+    def dashboard_session_billing_team_id(self) -> str | None:
+        return self._dashboard_session_billing_team_id
+
+    @property
+    def dashboard_session_model(self) -> str | None:
+        return self._dashboard_session_model
+
+    def bind_dashboard_session(self, origin: "UserAPIKeyAuth", *, model: str | None = None) -> None:
+        self._dashboard_session_origin = origin
+        self._dashboard_session_billing_team_id = self.team_id
+        self._dashboard_session_model = model
+
+    def dashboard_model_access_auth(self) -> "UserAPIKeyAuth":
+        if self._dashboard_session_origin is None:
+            return self
+        origin: Final = self._dashboard_session_origin
+        fields: Final = frozenset(
+            name
+            for name in UserAPIKeyAuth.model_fields
+            if name.startswith(("team_", "organization_")) or name == "org_id"
+        )
+        values: Final = _BILLING_FIELDS_ADAPTER.validate_python(origin.model_dump(include=set(fields)))
+        return self.model_copy(update=values)
+
+    _customer_model_scopes: tuple[tuple[str, ...], ...] = PrivateAttr(default=())
+
+    @property
+    def customer_model_scopes(self) -> tuple[tuple[str, ...], ...]:
+        return self._customer_model_scopes
+
+    def with_customer_model_scopes(self, scopes: tuple[tuple[str, ...], ...]) -> "UserAPIKeyAuth":
+        scoped: Final = self.model_copy()
+        scoped._customer_model_scopes = scopes
+        return scoped
 
     @property
     def access_group_rule_grants(self) -> frozenset[str]:
@@ -219,6 +266,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
+    budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)

@@ -425,6 +425,208 @@ def test_interaction_by_id_naming_a_model_the_key_cannot_call_is_refused_before_
     assert not respx_mock.calls
 
 
+_DEEP_RESEARCH_USAGE: Final = {
+    "total_input_tokens": 1000,
+    "total_cached_tokens": 200,
+    "total_output_tokens": 300,
+    "total_thought_tokens": 100,
+    "total_tokens": 1400,
+    "input_tokens_by_modality": [{"modality": "text", "tokens": 1000}],
+    "output_tokens_by_modality": [{"modality": "text", "tokens": 300}],
+    "grounding_tool_count": [{"type": "google_search", "count": 3}],
+}
+
+
+def _deep_research_cost_from_the_vertex_row() -> float:
+    row: Final = litellm.model_cost[f"vertex_ai/{_DEEP_RESEARCH_AGENT}"]
+    return (
+        (1000 - 200) * row["input_cost_per_token"]
+        + 200 * row["cache_read_input_token_cost"]
+        + (300 + 100) * row["output_cost_per_token"]
+        + 3 * row["search_context_cost_per_query"]["search_context_size_medium"]
+    )
+
+
+def _deep_research_create(model_group: str) -> Mapping[str, str]:
+    return {"model": model_group, "agent": _DEEP_RESEARCH_AGENT, "input": "Compare grid-scale storage options."}
+
+
+def _completed_deep_research(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(_VERTEX_COLLECTION_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": _INTERACTION_ID,
+                "object": "interaction",
+                "agent": _DEEP_RESEARCH_AGENT,
+                "status": "completed",
+                "usage": _DEEP_RESEARCH_USAGE,
+            },
+        )
+    )
+
+
+def test_routed_create_with_an_agent_sends_the_agent_with_the_deployment_credentials_and_bills_the_agent(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = _completed_deep_research(respx_mock)
+
+    response: Final = interactions_proxy.post(
+        "/v1beta/interactions", json=_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP)
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "agent": _DEEP_RESEARCH_AGENT,
+        "input": "Compare grid-scale storage options.",
+    }
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer deployment-token"
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        _deep_research_cost_from_the_vertex_row()
+    )
+
+
+def test_routed_create_with_an_agent_on_another_models_deployment_is_refused_before_any_upstream_call(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter, google_oauth: responses.RequestsMock
+) -> None:
+    response: Final = interactions_proxy.post("/v1beta/interactions", json=_deep_research_create(_VERTEX_GROUP))
+
+    assert response.status_code == 400, response.text
+    assert _DEEP_RESEARCH_AGENT in response.text
+    assert not respx_mock.calls
+    assert not google_oauth.calls
+
+
+@pytest.mark.parametrize(
+    "create",
+    (
+        pytest.param(
+            {**_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP), "extra_body": {"agent": "other-agent"}},
+            id="nested-other-agent",
+        ),
+        pytest.param(
+            {**_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP), "extra_body": {"model": "gemini-4-argon"}},
+            id="nested-model-beside-the-agent",
+        ),
+        pytest.param(
+            {
+                "model": _VERTEX_GROUP,
+                "input": "Compare grid-scale storage options.",
+                "extra_body": {"agent": _DEEP_RESEARCH_AGENT},
+            },
+            id="nested-agent-on-a-model-deployment",
+        ),
+    ),
+)
+def test_routed_create_with_extra_body_that_changes_the_agent_or_model_is_refused_before_any_upstream_call(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    google_oauth: responses.RequestsMock,
+    create: Mapping[str, object],
+) -> None:
+    response: Final = interactions_proxy.post("/v1beta/interactions", json=create)
+
+    assert response.status_code == 400, response.text
+    assert "extra_body" in response.text
+    assert not respx_mock.calls
+    assert not google_oauth.calls
+
+
+def test_routed_create_with_extra_body_repeating_the_agent_sends_it_once_with_the_other_extras(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = _completed_deep_research(respx_mock)
+
+    response: Final = interactions_proxy.post(
+        "/v1beta/interactions",
+        json={
+            **_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP),
+            "extra_body": {"agent": _DEEP_RESEARCH_AGENT, "custom_flag": 1},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "agent": _DEEP_RESEARCH_AGENT,
+        "input": "Compare grid-scale storage options.",
+        "custom_flag": 1,
+    }
+
+
+def test_a_key_allowed_the_agent_deployment_runs_the_agent(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = _completed_deep_research(respx_mock)
+
+    with _cached_key(UserAPIKeyAuth(models=[_VERTEX_DEEP_RESEARCH_GROUP])) as authorization:
+        response: Final = interactions_proxy.post(
+            "/v1beta/interactions",
+            json=_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP),
+            headers={"authorization": authorization},
+        )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content)["agent"] == _DEEP_RESEARCH_AGENT
+
+
+@pytest.mark.parametrize(
+    ("key", "teams", "model_group", "status_code"),
+    (
+        pytest.param(
+            UserAPIKeyAuth(models=[_VERTEX_GROUP]), (), _VERTEX_GROUP, 400, id="own-group-cannot-run-another-agent"
+        ),
+        pytest.param(
+            UserAPIKeyAuth(models=[_VERTEX_GROUP]), (), _VERTEX_DEEP_RESEARCH_GROUP, 403, id="agent-group-not-on-key"
+        ),
+        pytest.param(
+            UserAPIKeyAuth(models=[_VERTEX_DEEP_RESEARCH_GROUP]),
+            (),
+            _VERTEX_GROUP,
+            403,
+            id="other-group-not-on-key",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(team_id="team-without-deep-research"),
+            (LiteLLM_TeamTableCachedObj(team_id="team-without-deep-research", models=[_VERTEX_GROUP]),),
+            _VERTEX_DEEP_RESEARCH_GROUP,
+            403,
+            id="agent-group-not-on-team",
+        ),
+    ),
+)
+def test_a_restricted_key_cannot_run_an_agent_it_was_not_given_the_deployment_for(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    google_oauth: responses.RequestsMock,
+    key: UserAPIKeyAuth,
+    teams: tuple[LiteLLM_TeamTableCachedObj, ...],
+    model_group: str,
+    status_code: int,
+) -> None:
+    with _cached_key(key, *teams) as authorization:
+        response: Final = interactions_proxy.post(
+            "/v1beta/interactions", json=_deep_research_create(model_group), headers={"authorization": authorization}
+        )
+
+    assert response.status_code == status_code, response.text
+    assert not respx_mock.calls
+    assert not google_oauth.calls
+
+
+def test_routed_create_without_an_agent_still_sends_the_deployment_model(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post(_VERTEX_COLLECTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": _INTERACTION_ID, "object": "interaction", "status": "completed"})
+    )
+
+    response: Final = interactions_proxy.post("/v1beta/interactions", json={"model": _VERTEX_GROUP, "input": "Hi"})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {"model": "gemini-4-argon", "input": "Hi"}
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer deployment-token"
+
+
 def _project_url(project: str) -> str:
     return f"https://aiplatform.googleapis.com/v1beta1/projects/{project}/locations/global/interactions"
 

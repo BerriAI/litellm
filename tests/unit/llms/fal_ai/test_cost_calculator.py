@@ -11,6 +11,86 @@ from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "8", "resolution": "720p"}, 0.6),
+        ({"duration": 5, "resolution": "540p"}, 0.1),
+        ({"resolution": "720p"}, None),
+        ({"duration": 8}, None),
+        ({"duration": 8, "resolution": "1080p"}, None),
+        ({"duration": "invalid", "resolution": "720p"}, None),
+    ],
+)
+def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float | None) -> None:
+    litellm.register_model(
+        {
+            "fal_ai/test-clip": {
+                "output_cost_per_video_clip": {
+                    "8s": {"720p": 0.6},
+                    "5s": {"720p": 0.3, "540p": 0.1},
+                }
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip", body) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "5", "resolution": "360p"}, 0.17),
+        ({"resolution": "360p"}, None),
+        ({"duration": "8", "resolution": "360p"}, None),
+    ],
+)
+def test_router_preserves_passthrough_clip_pricing_without_a_billable_unit_rate(
+    body: dict[str, object], expected: float | None
+) -> None:
+    prices: Final = {"5s": {"360p": 0.17}}
+    litellm.register_model(
+        {
+            "fal_ai/fal-ai/router-clip": {
+                "litellm_provider": "fal_ai",
+                "mode": "video_generation",
+                "output_cost_per_video_clip": prices,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    _router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "configured-clip",
+                "litellm_params": {"model": "fal_ai/fal-ai/router-clip", "api_key": "test-key"},
+                "model_info": {"mode": "video_generation", "output_cost_per_video_clip": prices},
+            }
+        ],
+        num_retries=0,
+    )
+    assert fal_ai_passthrough_cost("fal-ai/router-clip", body) == expected
+
+
+@pytest.mark.parametrize(
+    ("fallback", "expected"),
+    [
+        ({}, None),
+        ({"output_cost_per_video": 0.0}, 0.0),
+        ({"output_cost_per_video": 0.37}, 0.37),
+        ({"output_cost_per_image": 0.11}, 0.11),
+    ],
+)
+def test_passthrough_missing_duration_uses_existing_fallback(
+    fallback: dict[str, float], expected: float | None
+) -> None:
+    litellm.register_model(
+        {"fal_ai/test-clip-fallback": {"output_cost_per_video_clip": {"5s": {"720p": 0.3}}, **fallback}},
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip-fallback", {"resolution": "720p"}) == expected
+
+
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -37,13 +117,19 @@ def _image_response_with_dimensions(dimensions: tuple[tuple[int, int], ...]) -> 
 
 
 @pytest.mark.parametrize("duration", [0.0, 8.0])
+@pytest.mark.parametrize("clip_prices", [None, {"5s": {"720p": 0.19}}])
 def test_catalog_flat_video_price_reaches_both_video_calculators(
-    monkeypatch: pytest.MonkeyPatch, duration: float
+    monkeypatch: pytest.MonkeyPatch, duration: float, clip_prices: dict[str, dict[str, float]] | None
 ) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "fal_ai/fal-ai/test-flat-video",
-        {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "video_generation",
+            "output_cost_per_video": 0.37,
+            "output_cost_per_video_clip": clip_prices,
+        },
     )
     assert video_generation_cost("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)
     assert default_video_cost_calculator("fal-ai/test-flat-video", duration, "fal_ai") == pytest.approx(0.37)

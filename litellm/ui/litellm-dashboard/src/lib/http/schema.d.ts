@@ -1408,6 +1408,7 @@ export interface paths {
          *     (``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an
          *     anonymous or bad-flow request just 400s. The native-client consent page adds
          *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
+         *     Each ``server`` field is the id of a server the connect page shows as on.
          */
         post: operations["authorize_complete_authorize_complete_post"];
         delete?: never;
@@ -2186,11 +2187,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * New Budget
+         * New Budget Endpoint
          * @description Create a new budget object. Can apply this to teams, orgs, end-users, keys.
          *
          *     Parameters:
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+         *     - budget_limits: Optional[list] - Concurrent budget windows with independent caps and reset times.
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
@@ -2203,7 +2205,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_budget_new_post"];
+        post: operations["new_budget_endpoint_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2245,11 +2247,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Update Budget
+         * Update Budget Endpoint
          * @description Update an existing budget object.
          *
          *     Parameters:
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+         *     - budget_limits: Optional[list] - Replace concurrent budget windows. Null or an empty list clears them.
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
@@ -2262,7 +2265,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_budget_update_post"];
+        post: operations["update_budget_endpoint_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9584,6 +9587,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/customer_budget_increase_requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Budget Increase Requests
+         * @description The admin review queue. Proxy admins only.
+         */
+        get: operations["list_budget_increase_requests_management_v1_customer_budget_increase_requests_get"];
+        put?: never;
+        /**
+         * Request Budget Increase
+         * @description File a temporary increase for a member whose budget is set to pause_allow_increase. Waits for an admin.
+         */
+        post: operations["request_budget_increase_management_v1_customer_budget_increase_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Budget Increase Request
+         * @description One request. Proxy admins only.
+         */
+        get: operations["get_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Budget Increase Request
+         * @description Grant the increase: the member's override takes the requested cap until the request's expiry. Proxy admins only.
+         *
+         *     The claim and the override land in one transaction, so a racing reject sees ``request_not_pending`` instead of
+         *     leaving a rejected request with the cap still granted.
+         */
+        put: operations["approve_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_budget_increase_requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Budget Increase Request
+         * @description Decline the increase and leave the member paused, with optional review notes. Proxy admins only.
+         */
+        put: operations["reject_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__reject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/customer_members": {
         parameters: {
             query?: never;
@@ -9622,6 +9712,26 @@ export interface paths {
         get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_members/upsert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert Customer Member
+         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
+         */
+        post: operations["upsert_customer_member_management_v1_customer_members_upsert_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9709,11 +9819,31 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/customer_organizations/upsert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert Customer Organization
+         * @description Create or update a customer org by customer_org_id, or by alias when no ID is supplied. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Supplied default_budgets are merged by template name, preserving existing template IDs and omitted templates. A single supplied template becomes the default; multiple templates require default_budget_template to name one. Omitted fields retain their values. Conflicting or ambiguous aliases return 409. Proxy admins only.
+         */
+        post: operations["upsert_customer_organization_management_v1_customer_organizations_upsert_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9736,7 +9866,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Customer Organization
-         * @description Delete a customer organization and its owned budgets. Parents with children return 409. Proxy admins only.
+         * @description Delete a customer organization and its owned budgets. Set cascade=true to also delete its customer teams and members; otherwise parents with children return 409. Proxy admins only.
          */
         delete: operations["delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete"];
         options?: never;
@@ -9765,7 +9895,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Configure Customer Budget Groups
+         * @description Atomically configure budget groups and their default. Requires the current budget_groups_revision. Existing groups retain omitted settings and window reset dates. Stale revisions and referenced deletions return 409 without applying changes. Proxy admins only.
+         */
+        patch: operations["configure_customer_budget_groups_management_v1_customer_organizations__customer_org_id__default_budgets_patch"];
         trace?: never;
     };
     "/management/v1/customer_organizations/{customer_org_id}/default_budgets/{budget_id}": {
@@ -9790,6 +9924,26 @@ export interface paths {
          * @description Edit a budget template in place. Members inherit the updated values. Proxy admins only.
          */
         patch: operations["update_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_portal/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Portal Limits
+         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         */
+        get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/management/v1/customer_teams": {
@@ -9852,7 +10006,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Customer Team
-         * @description Delete a customer team and its owned budgets. Parents with children return 409. Proxy admins only.
+         * @description Delete a customer team and its owned budgets. Set cascade=true to also delete its customer members; otherwise parents with children return 409. Proxy admins only.
          */
         delete: operations["delete_customer_team_management_v1_customer_teams__customer_team_id__delete"];
         options?: never;
@@ -26640,6 +26794,8 @@ export interface components {
              * @default []
              */
             access_vector_store_ids: string[];
+            /** Access Vector Stores */
+            access_vector_stores: components["schemas"]["AccessGroupResource"][];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -29081,6 +29237,11 @@ export interface components {
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /**
+             * Server
+             * @default []
+             */
+            server: string[];
             /** Team Id */
             team_id?: string | null;
         };
@@ -29444,6 +29605,13 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -29477,6 +29645,121 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** BudgetGroupChange */
+        BudgetGroupChange: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /**
+             * Budget Id
+             * @description Existing template ID. Omit to create a template.
+             */
+            budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** BudgetGroupsUpdate */
+        BudgetGroupsUpdate: {
+            /**
+             * Default Budget Template
+             * @description Final name of the default group, or null for no default.
+             */
+            default_budget_template: string | null;
+            /**
+             * Default Budgets
+             * @description Complete retained group list. Existing groups patch only supplied fields. Omitted groups are deleted.
+             */
+            default_budgets: components["schemas"]["BudgetGroupChange"][];
+            /** Expected Revision */
+            expected_revision: string;
+        };
+        /** BudgetIncreaseRejection */
+        BudgetIncreaseRejection: {
+            /** Review Notes */
+            review_notes?: string | null;
+        };
+        /** BudgetIncreaseRequest */
+        BudgetIncreaseRequest: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Request Id */
+            request_id: string;
+            /** Requested Max Budget */
+            requested_max_budget: number;
+            /** Review Notes */
+            review_notes?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending_review" | "approved" | "rejected";
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Submitted By */
+            submitted_by: string;
+        };
+        /** BudgetIncreaseRequestCreate */
+        BudgetIncreaseRequestCreate: {
+            /** Customer Member Id */
+            customer_member_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the granted cap ends; a temporary increase always has one
+             */
+            expires_at: string;
+            /** Reason */
+            reason?: string | null;
+            /** Requested Max Budget */
+            requested_max_budget: number;
+        };
+        /** BudgetLimit */
+        BudgetLimit: {
+            /**
+             * Budget Duration
+             * @enum {string}
+             */
+            budget_duration: "1mo" | "12mo";
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+        };
         /**
          * BudgetLimitEntry
          * @description A single budget window with its own limit and independent reset schedule.
@@ -29502,6 +29785,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -29525,8 +29810,45 @@ export interface components {
              */
             updated_at: string;
         };
-        /** BudgetNewRequest */
-        BudgetNewRequest: {
+        /** BudgetRequest */
+        BudgetRequest: {
+            /** Budgets */
+            budgets: string[];
+        };
+        /** BudgetTemplate */
+        BudgetTemplate: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Name */
+            name: string;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /** BudgetWriteRequest */
+        BudgetWriteRequest: {
             /**
              * Budget Duration
              * @description Max duration budget should be set for (e.g. '1hr', '1d', '28d')
@@ -29537,6 +29859,11 @@ export interface components {
              * @description The unique budget id.
              */
             budget_id?: string | null;
+            /**
+             * Budget Limits
+             * @description Independent budget windows. Omit to preserve, or pass null or an empty list to clear.
+             */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Budget Reset At
              * @description Datetime when the budget is reset
@@ -29592,41 +29919,6 @@ export interface components {
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
              */
-            tpm_limit?: number | null;
-        };
-        /** BudgetRequest */
-        BudgetRequest: {
-            /** Budgets */
-            budgets: string[];
-        };
-        /** BudgetTemplate */
-        BudgetTemplate: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /**
-             * Is Default
-             * @default false
-             */
-            is_default: boolean;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Name */
-            name: string;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tpm Limit */
             tpm_limit?: number | null;
         };
         /**
@@ -31610,7 +31902,7 @@ export interface components {
             allow_unmanaged_response_ids?: boolean | null;
             /**
              * Allowed Client Side S3 Buckets
-             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed
              */
             allowed_client_side_s3_buckets?: string[] | null;
             /**
@@ -32097,8 +32389,8 @@ export interface components {
             proxy_config_reload_interval_seconds: number;
             /**
              * Redact Tokens In Spend Logs
-             * @description Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.
-             * @default true
+             * @description Set True to mask token-shaped secrets in stored spend log request and response content. Default is False.
+             * @default false
              */
             redact_tokens_in_spend_logs: boolean;
             /**
@@ -33144,19 +33436,49 @@ export interface components {
              */
             type: "custom";
         };
+        /** CustomerBudgetUsage */
+        CustomerBudgetUsage: {
+            /** Budget Duration */
+            budget_duration: string | null;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "scalar" | "window";
+            /** Spend */
+            spend: number | null;
+            /** Window Start */
+            window_start?: string | null;
+        };
         /**
          * CustomerHierarchyAuth
          * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
          */
         CustomerHierarchyAuth: {
+            /** Customer Member Alias */
+            customer_member_alias?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
+            /** Customer Org Alias */
+            customer_org_alias?: string | null;
             /** Customer Org Id */
             customer_org_id: string;
+            /** Customer Team Alias */
+            customer_team_alias?: string | null;
             /** Customer Team Id */
             customer_team_id?: string | null;
             /** Scopes */
             scopes: components["schemas"]["CustomerScopeAuth"][];
+            /**
+             * Team Scopes
+             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
+             * @default []
+             */
+            team_scopes: components["schemas"]["CustomerScopeAuth"][];
         };
         /** CustomerMember */
         CustomerMember: {
@@ -33172,6 +33494,11 @@ export interface components {
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -33181,8 +33508,10 @@ export interface components {
             /** Customer Member Id */
             customer_member_id: string;
             effective_budget: components["schemas"]["Budget"];
-            /** Parent Team Id */
-            parent_team_id: string;
+            /** Parent Org Id */
+            parent_org_id: string;
+            /** Parent Team Ids */
+            parent_team_ids: string[];
             /**
              * Spend
              * @default 0
@@ -33195,6 +33524,30 @@ export interface components {
             updated_at: string;
             /** Updated By */
             updated_by: string;
+        };
+        /** CustomerPortalLimits */
+        CustomerPortalLimits: {
+            /** Any Limit Reached */
+            any_limit_reached: boolean;
+            /** Limits Apply */
+            limits_apply: boolean;
+            /**
+             * Members Per Team Limit
+             * @default 5
+             */
+            members_per_team_limit: number;
+            /** Organization Count */
+            organization_count: number;
+            /**
+             * Organization Limit
+             * @default 5
+             */
+            organization_limit: number;
+            /**
+             * Teams Per Organization Limit
+             * @default 5
+             */
+            teams_per_organization_limit: number;
         };
         /**
          * CustomerResponse
@@ -33234,8 +33587,19 @@ export interface components {
          * @description One level of the customer hierarchy a request runs under, with the limits its budget row grants.
          */
         CustomerScopeAuth: {
+            /** Alias */
+            alias?: string | null;
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /**
+             * Budget Limits
+             * @default []
+             */
+            budget_limits: components["schemas"]["BudgetLimit"][];
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Cap Policy */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Entity Id */
             entity_id: string;
             /**
@@ -36252,6 +36616,13 @@ export interface components {
             /** Prompts */
             prompts: components["schemas"]["PromptSpec"][];
         };
+        /** ListResponse[BudgetIncreaseRequest] */
+        ListResponse_BudgetIncreaseRequest_: {
+            /** Data */
+            data: components["schemas"]["BudgetIncreaseRequest"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[BudgetListItem] */
         ListResponse_BudgetListItem_: {
             /** Data */
@@ -37767,6 +38138,12 @@ export interface components {
             output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video */
             output_cost_per_video?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -40476,8 +40853,16 @@ export interface components {
             budget_override_expires_at?: string | null;
             /** Customer Member Id */
             customer_member_id?: string | null;
-            /** Parent Team Id */
-            parent_team_id: string;
+            /**
+             * Parent Org Id
+             * @description Must match the parent teams' organization when set
+             */
+            parent_org_id?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Teams the member belongs to, first is default
+             */
+            parent_team_ids: string[];
         };
         /** MemberPatch */
         MemberPatch: {
@@ -40488,6 +40873,71 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+        };
+        /** MemberUpsert */
+        MemberUpsert: {
+            /** Alias */
+            alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Customer Member Id */
+            customer_member_id: string;
+            /** Customer Org Alias */
+            customer_org_alias?: string | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /** Parent Team Id */
+            parent_team_id?: string | null;
+        };
+        /** MemberUpsertResponse */
+        MemberUpsertResponse: {
+            /** Alias */
+            alias?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Created */
+            created: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget: components["schemas"]["Budget"];
+            /** Parent Org Id */
+            parent_org_id: string;
+            /** Parent Team Ids */
+            parent_team_ids: string[];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
@@ -42356,10 +42806,17 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time
@@ -42369,8 +42826,8 @@ export interface components {
             created_by: string;
             /** Customer Org Id */
             customer_org_id: string;
-            /** Default Budget Id */
-            default_budget_id?: string | null;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
             /**
              * Default Budgets
              * @default []
@@ -42412,11 +42869,13 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id: string;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
-             * Is Default
-             * @default false
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
              */
-            is_default: boolean;
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -42443,6 +42902,8 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
+            /** Default Budget Template */
+            default_budget_template?: string | null;
             /**
              * Default Budgets
              * @default []
@@ -42484,6 +42945,8 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
         };
         /** OrganizationRequest */
         OrganizationRequest: {
@@ -42524,6 +42987,74 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** OrganizationUpsert */
+        OrganizationUpsert: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Customer Org Id */
+            customer_org_id?: string | null;
+            /** Default Budget Template */
+            default_budget_template?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["BudgetTemplate"][];
+        };
+        /** OrganizationUpsertResponse */
+        OrganizationUpsertResponse: {
+            /** Alias */
+            alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Created */
+            created: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Org Id */
+            customer_org_id: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+            /**
+             * Member Count
+             * @description Current registered members across all customer teams
+             * @default 0
+             */
+            member_count: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /**
          * OutcomeExit
@@ -44279,11 +44810,8 @@ export interface components {
         };
         /** PromptTokensDetails */
         PromptTokensDetails: {
-            /**
-             * Modality
-             * @enum {string}
-             */
-            modality: "TEXT" | "AUDIO" | "IMAGE" | "VIDEO";
+            /** Modality */
+            modality: string;
             /** Tokencount */
             tokenCount: number;
         };
@@ -49299,8 +49827,18 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded spend for each independent effective budget. Excludes pending reservations and updates after accounting flushes. Window boundaries follow the configured reset timezone and time.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
             /**
              * Created At
              * Format: date-time
@@ -49310,6 +49848,7 @@ export interface components {
             created_by: string;
             /** Customer Team Id */
             customer_team_id: string;
+            effective_budget: components["schemas"]["Budget"];
             /** Parent Org Id */
             parent_org_id: string;
             /**
@@ -49453,6 +49992,9 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
             /** Customer Team Id */
             customer_team_id?: string | null;
             /** Parent Org Id */
@@ -49942,6 +50484,9 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            budget_override?: components["schemas"]["Budget"] | null;
+            /** Budget Override Expires At */
+            budget_override_expires_at?: string | null;
         };
         /** TeamUserSpendResponse */
         TeamUserSpendResponse: {
@@ -50071,8 +50616,13 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
-            /** Is Default */
-            is_default?: boolean | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
+            /**
+             * Cap Policy
+             * @description What a paused member can do at the cap: wait for the reset (default) or request a temporary increase
+             */
+            cap_policy?: ("pause_until_reset" | "pause_allow_increase") | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -50320,14 +50870,20 @@ export interface components {
             }[] | null;
             /** Model */
             model: string;
+            parallel_tool_calls?: components["schemas"]["JsonValue"];
             /** Prompt */
             prompt?: string | null;
+            reasoning_effort?: components["schemas"]["JsonValue"];
+            response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            thinking?: components["schemas"]["JsonValue"];
+            tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {
                 [key: string]: unknown;
             }[] | null;
+            web_search_options?: components["schemas"]["JsonValue"];
         };
         /** TokenCountResponse */
         TokenCountResponse: {
@@ -54280,6 +54836,12 @@ export interface components {
             output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video */
             output_cost_per_video?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -57923,7 +58485,7 @@ export interface operations {
             };
         };
     };
-    new_budget_budget_new_post: {
+    new_budget_endpoint_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -57932,7 +58494,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {
@@ -57987,7 +58549,7 @@ export interface operations {
             };
         };
     };
-    update_budget_budget_update_post: {
+    update_budget_endpoint_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -57996,7 +58558,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetNewRequest"];
+                "application/json": components["schemas"]["BudgetWriteRequest"];
             };
         };
         responses: {
@@ -68175,12 +68737,177 @@ export interface operations {
             };
         };
     };
+    list_budget_increase_requests_management_v1_customer_budget_increase_requests_get: {
+        parameters: {
+            query?: {
+                status?: ("pending_review" | "approved" | "rejected") | null;
+                customer_member_id?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_BudgetIncreaseRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_budget_increase_management_v1_customer_budget_increase_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_budget_increase_request_management_v1_customer_budget_increase_requests__request_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BudgetIncreaseRejection"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetIncreaseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_customer_members_management_v1_customer_members_get: {
         parameters: {
             query?: {
                 page?: number;
                 page_size?: number;
                 parent_team_id?: string | null;
+                parent_org_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -68266,6 +68993,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_customer_member_management_v1_customer_members_upsert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberUpsertResponse"];
                 };
             };
             /** @description Validation Error */
@@ -68487,7 +69247,9 @@ export interface operations {
                 /** @description Last UTC calendar day, YYYY-MM-DD, inclusive, at most 400 days after start */
                 end_date: string;
                 /** @description Comma-separated IDs for up to 100 visible customer organizations */
-                customer_org_ids: string;
+                customer_org_ids?: string | null;
+                /** @description One exact customer organization ID, without splitting or trimming */
+                customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
             };
@@ -68504,6 +69266,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_customer_organization_management_v1_customer_organizations_upsert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationUpsertResponse"];
                 };
             };
             /** @description Validation Error */
@@ -68550,7 +69345,10 @@ export interface operations {
     };
     delete_customer_organization_management_v1_customer_organizations__customer_org_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete this customer organization's teams and members. */
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 customer_org_id: string;
@@ -68647,6 +69445,41 @@ export interface operations {
             };
         };
     };
+    configure_customer_budget_groups_management_v1_customer_organizations__customer_org_id__default_budgets_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_customer_budget_template_management_v1_customer_organizations__customer_org_id__default_budgets__budget_id__delete: {
         parameters: {
             query?: never;
@@ -68709,6 +69542,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_portal_limits_management_v1_customer_portal_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerPortalLimits"];
                 };
             };
         };
@@ -68850,7 +69703,10 @@ export interface operations {
     };
     delete_customer_team_management_v1_customer_teams__customer_team_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete this customer team's members. */
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 customer_team_id: string;

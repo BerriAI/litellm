@@ -101,6 +101,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    video_clip_cost,
     video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
@@ -126,6 +127,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
+from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1205,6 +1207,8 @@ def _get_response_model(completion_response: object) -> str | None:
     if completion_response is None:
         return None
 
+    if isinstance(completion_response, InteractionsAPIResponse):
+        return completion_response.model or completion_response.agent
     if isinstance(completion_response, BaseModel):
         return getattr(completion_response, "model", None)
     elif isinstance(completion_response, dict):
@@ -3149,6 +3153,9 @@ def default_image_cost_calculator(
     return cost
 
 
+_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
+
+
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
@@ -3210,6 +3217,10 @@ def default_video_cost_calculator(
 
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
+
+    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
 
     video_cost: Final = cost_info.get("output_cost_per_video")
     if video_cost is not None:

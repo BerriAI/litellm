@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi, type Mock } from "vitest";
@@ -8,6 +8,21 @@ vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
     <button type="button" onClick={() => onChange(["gpt-5.2"])}>
       set-models
+    </button>
+  ),
+}));
+vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
+  default: ({
+    id,
+    onChange,
+    "aria-describedby": describedBy,
+  }: {
+    id?: string;
+    onChange: (values: string[]) => void;
+    "aria-describedby"?: string;
+  }) => (
+    <button type="button" id={id} aria-describedby={describedBy} onClick={() => onChange(["store-a"])}>
+      set-vector-stores
     </button>
   ),
 }));
@@ -120,6 +135,24 @@ describe("AccessGroupCreateDialog", () => {
       access_group_name: "mcp-group",
       access_mcp_server_ids: ["srv-1"],
       access_agent_ids: ["agent-1"],
+    });
+  });
+
+  it("sends the vector stores picked on the Vector Stores tab", async () => {
+    const user = userEvent.setup();
+    const { createAccessGroup } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText("Group Name"), { target: { value: "kb-readers" } });
+    await user.click(screen.getByRole("tab", { name: "Vector Stores" }));
+    const picker = screen.getByLabelText("Allowed Vector Stores");
+    expect(picker).toHaveAccessibleDescription(/adding one here limits a team or key that has no limit today/);
+    await user.click(picker);
+    await user.click(screen.getByRole("button", { name: "Create Group" }));
+
+    await waitFor(() => expect(createAccessGroup).toHaveBeenCalledTimes(1));
+    expect(createAccessGroup.mock.calls[0][0]).toStrictEqual({
+      access_group_name: "kb-readers",
+      access_vector_store_ids: ["store-a"],
     });
   });
 

@@ -976,7 +976,8 @@
         "providerRequired": "Please select a provider",
         "vectorStoreIdRequired": "Please input the vector store ID from your api provider",
         "selectField": "Please select the {{field}}",
-        "inputField": "Please input the {{field}}"
+        "inputField": "Please input the {{field}}",
+        "hybridSearchNeedsPipeline": "Hybrid search needs a search pipeline with a normalization-processor"
       },
       "toasts": {
         "invalidMetadata": "Invalid JSON in metadata field",
@@ -1062,6 +1063,8 @@
         "opensearchEndpoint": "OpenSearch Endpoint",
         "awsRegionOptional": "AWS Region (optional)",
         "indexNameOptional": "Index Name (optional)",
+        "searchPipelineOptional": "Search Pipeline (optional)",
+        "hybridSearch": "Hybrid Search",
         "vectorBucketName": "Vector Bucket Name",
         "indexName": "Index Name",
         "awsRegion": "AWS Region"
@@ -1114,7 +1117,9 @@
           "embeddingModel": "The embedding model on this proxy that created the vectors already stored in your index. LiteLLM embeds every search query with it, so it must be the same model. Add it under Models first if it is not listed",
           "embeddingField": "The top-level knn_vector field in your index mapping that holds each document's embedding (default: embedding)",
           "textField": "The top-level field in each document that holds its readable text. LiteLLM returns this text in search results (default: text)",
-          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs"
+          "indexName": "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+          "searchPipeline": "The name of a search pipeline in your OpenSearch cluster. LiteLLM runs every search through it. Hybrid search needs one with a normalization-processor, since OpenSearch returns unnormalized hybrid scores without one",
+          "hybridSearch": "Turn on to combine a BM25 keyword match on the Text Field with the k-NN vector search. Needs a Search Pipeline with a normalization-processor"
         },
         "s3Vectors": {
           "bucketName": "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
@@ -2914,7 +2919,8 @@
     },
     "vectorStorePermissions": {
       "title": "Vector Stores",
-      "empty": "No vector stores configured"
+      "empty": "No vector stores configured",
+      "accessGroupSuffix": " (access group)"
     },
     "inheritedGrants": {
       "anAccessGroup": "an access group",
@@ -3381,7 +3387,8 @@
       "cells": {
         "notApplicable": "n/a",
         "notSet": "Not set",
-        "unlimited": "Unlimited"
+        "unlimited": "Unlimited",
+        "windowLimit": "${{amount}} {{period}}"
       },
       "rowActions": {
         "open": "Open budget actions",
@@ -3401,18 +3408,26 @@
     },
     "form": {
       "errors": {
-        "budgetIdRequired": "Enter a budget ID"
+        "budgetIdRequired": "Enter a budget ID",
+        "invalidBudgetLimit": "Enter a non-negative budget limit"
       },
       "resetOptions": {
         "inTotal": "in total",
         "perDay": "per day",
         "perWeek": "per week",
         "perMonth": "per month",
-        "perYear": "per year"
+        "perYear": "per year",
+        "perMonthAndYear": "per month and year"
       },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
+      "additionalSpendLimit": "Additional spend limit",
+      "additionalResetPeriod": "Additional reset period",
+      "additionalLimitHint": "This limit also applies alongside the calendar limits.",
+      "monthlyLimit": "Monthly limit (USD)",
+      "annualLimit": "Annual limit (USD)",
+      "calendarLimitsHint": "Monthly and annual limits apply independently. Zero stops spending.",
       "resetPeriod": "Reset period",
       "budgetId": "Budget ID",
       "budgetIdLocked": "Budget ID cannot be changed after creation",
@@ -5214,6 +5229,13 @@
         "managedByConfig": "Managed by the deployment configuration."
       },
       "settings": {
+        "ariaInternalUserAccess": {
+          "label": "Aria access for internal users",
+          "description": "Choose whether internal users can ask Aria about their own usage or permitted team usage. Admins and proxy-wide viewers are unaffected. Active dashboards check for changes every 30 seconds.",
+          "none": "No access",
+          "own_usage": "Own usage only",
+          "own_and_team_usage": "Own and team usage"
+        },
         "disableAria": {
           "label": "Hide Aria Agent for everyone",
           "description": "Hides Aria from navigation, Usage, and its workspace for all users, including admins. Active dashboards check for changes every 30 seconds.",
@@ -6419,7 +6441,8 @@
         "models": "{{count}} Models",
         "mcpServers": "{{count}} MCP Servers",
         "agents": "{{count}} Agents",
-        "skills": "{{count}} Skills"
+        "skills": "{{count}} Skills",
+        "vectorStores": "{{count}} Vector Stores"
       },
       "rowActions": {
         "open": "Open access group actions",
@@ -6447,13 +6470,15 @@
         "models": "Models",
         "mcpServers": "MCP Servers",
         "agents": "Agents",
-        "skills": "Skills"
+        "skills": "Skills",
+        "vectorStores": "Vector Stores"
       },
       "empty": {
         "models": "No models assigned to this group",
         "mcpServers": "No MCP servers assigned to this group",
         "agents": "No agents assigned to this group",
-        "skills": "No skills assigned to this group"
+        "skills": "No skills assigned to this group",
+        "vectorStores": "No vector stores assigned to this group"
       },
       "toolPermissions": {
         "label": "MCP tool permissions",
@@ -6467,7 +6492,8 @@
         "models": "Models",
         "mcpServers": "MCP Servers",
         "agents": "Agents",
-        "skills": "Skills"
+        "skills": "Skills",
+        "vectorStores": "Vector Stores"
       },
       "name": {
         "label": "Group Name",
@@ -6493,6 +6519,11 @@
         "label": "Allowed Skills",
         "description": "Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here.",
         "placeholder": "Select skills (optional)"
+      },
+      "vectorStores": {
+        "label": "Allowed Vector Stores",
+        "description": "Teams and keys in this group can use these vector stores, as if they were on their own list. A team or key with any allowed vector store can use only its allowed ones, so adding one here limits a team or key that has no limit today.",
+        "placeholder": "Select vector stores (optional)"
       }
     },
     "create": {
@@ -8183,7 +8214,7 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "Customers"
+        "customers": "$t(customerPortal.entities.organizations)"
       },
       "homeLink": "LiteLLM home"
     },
@@ -9357,11 +9388,15 @@
       "toolsLoadFailed": "Could not load tools for {{serverName}}",
       "empty": {
         "connectMode": "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access.",
+        "loadFailed": "Could not load your MCP servers. Reload the page to try again.",
         "noServers": "No MCP servers configured. Add servers in Tools -> MCP Servers.",
         "noneConnected": "No servers connected yet.",
         "noMatch": "No servers match your search."
       },
       "authorized": "Authorized",
+      "signInToUse": "Sign in to use",
+      "requiredByClient": "Required by this client",
+      "useServer": "Include {{serverName}} in this connection",
       "disconnect": "Disconnect",
       "back": "Back",
       "defaultDescription": "MCP server",
@@ -9371,13 +9406,15 @@
         "transport": "Transport",
         "status": "Status",
         "connected": "Connected",
-        "notConnected": "Not connected"
+        "notConnected": "Not connected",
+        "on": "On",
+        "off": "Off"
       },
       "availableTools": "Available Tools",
       "noTools": "No tools available",
       "title": "MCP Servers",
       "beta": "Beta",
-      "connectModeSubtitle": "Click a server to see its tools and connect",
+      "connectModeSubtitle": "Turn off any server this connection should not use. Click a server to see its tools or sign in",
       "subtitle": "Browse tools, authenticate once, use in chat",
       "loadingTools": "Loading tools...",
       "toolsAvailable_one": "{{count}} tool available",
@@ -9385,7 +9422,8 @@
       "searchPlaceholder": "Search servers...",
       "tabs": {
         "all": "All",
-        "connected": "Connected"
+        "connected": "Connected",
+        "on": "On"
       }
     },
     "connectFlowBanner": {
@@ -9397,7 +9435,8 @@
       },
       "unscoped": {
         "title": "Connect your MCP servers to {{client}}",
-        "description": "Authorize the servers you want to use below, then click Finish connecting to return to {{client}}."
+        "description": "{{client}} gets every server that is on. Turn off the ones it should not use, sign in where needed, then click Finish connecting.",
+        "fixed": "{{client}} will get every server you can reach. Sign in to the ones that need it below, then click Finish connecting to return to {{client}}."
       },
       "multi": {
         "title": "Allow {{client}} to use {{servers}}",
@@ -9411,6 +9450,7 @@
       },
       "connectServer": "Connect {{server}}",
       "finish": "Finish connecting",
+      "nothingOn": "Turn on at least one server to finish connecting.",
       "cancel": "Cancel",
       "manualDelivery": "My client is on a remote or SSH machine"
     },
@@ -14382,6 +14422,16 @@
         "imagePlaceholder": "[Image]",
         "filePlaceholder": "[File]",
         "audioPlaceholder": "[Audio]"
+      },
+      "customer": {
+        "title": "Customer",
+        "org": "Customer org",
+        "team": "Customer team",
+        "member": "Customer member",
+        "recognized": "Recognized",
+        "asserted": "Asserted",
+        "view": "View",
+        "viewEntity": "View {{entity}}"
       },
       "drawer": {
         "secondsSuffix": "s",
@@ -20601,17 +20651,33 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "budgetGroups": {
+      "atCap": "At the cap",
+      "atCapLabel": "Group {{index}} at the cap",
+      "pauseUntilReset": "Pause until reset",
+      "pauseAllowIncrease": "Pause, they can request more",
+      "title": "Budget groups",
+      "discard": "Discard edits and reload"
+    },
+    "limits": {
+      "byline": "Free tier: up to 5 customers, 5 teams per customer, 5 members per team. LiteLLM <enterprise>Enterprise</enterprise> removes these limits.",
+      "reachedTitle": "Free customer portal limit reached",
+      "reachedDescription": "New customers, teams and members can't be created. Requests from new customers or members still go through but are not tracked in the customer portal.",
+      "upgrade": "Upgrade to Enterprise"
+    },
     "hierarchy": {
       "customerNavigation": "Customer navigation",
       "usage": "Usage",
       "manage": "Manage",
       "title": "Customer management",
-      "subtitle": "Manage teams, members, and settings for this customer.",
-      "organization": "Organization",
-      "team": "Team",
-      "member": "Member",
-      "teams": "Teams",
-      "members": "Members",
+      "subtitle": "Manage customer teams, customer members, and settings for this customer organization.",
+      "teamSubtitle": "Manage customer members and settings for this customer team.",
+      "memberSubtitle": "Manage settings and budget for this customer member.",
+      "organization": "$t(customerPortal.entities.organization)",
+      "team": "$t(customerPortal.entities.team)",
+      "member": "$t(customerPortal.entities.member)",
+      "teams": "$t(customerPortal.entities.teams)",
+      "members": "$t(customerPortal.entities.members)",
       "settings": "Settings",
       "viewUsage": "View usage",
       "edit": "Edit",
@@ -20620,21 +20686,23 @@
       "spend": "Recorded spend",
       "budget": "Budget",
       "noBudget": "No budget",
-      "teamsHint": "Choose a team to manage its members and settings.",
-      "membersHint": "Choose a member to manage their settings and budget.",
-      "emptyTeams": "No teams in this organization.",
-      "emptyMembers": "No members in this team.",
+      "organizationMembersHint": "Customer members across this customer organization. Open a customer team to create a customer member.",
+      "chooseTeam": "Choose a customer team",
+      "teamsHint": "Choose a customer team to manage its customer members and settings.",
+      "membersHint": "Choose a customer member to manage their settings and budget.",
+      "emptyTeams": "No customer teams in this customer organization.",
+      "emptyMembers": "No customer members in this customer team.",
       "error": "Unable to load customer",
-      "scopeMismatch": "This team or member does not belong to the selected customer.",
+      "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "missingOrganization": "Choose a customer organization to manage.",
-      "backToCustomers": "Back to customers",
-      "adminOnly": "Only proxy admins can manage customer organizations, teams, and members.",
+      "backToCustomers": "Back to customer organizations",
+      "adminOnly": "Only proxy admins can manage customer organizations, customer teams, and customer members.",
       "previous": "Previous",
       "next": "Next",
       "pagination": "Page {{page}} of {{pages}}",
       "loading": "Loading customer…",
-      "teamsLoadError": "Unable to load teams",
-      "membersLoadError": "Unable to load members",
+      "teamsLoadError": "Unable to load customer teams",
+      "membersLoadError": "Unable to load customer members",
       "settingsTitle": "Settings",
       "profileTitle": "General",
       "profileHint": "Update the display name without changing its identifier or parent.",
@@ -20642,6 +20710,7 @@
       "identifier": "Identifier",
       "budgetTitle": "Budget and limits",
       "budgetHint": "Leave a limit blank for no limit. Zero is a valid limit.",
+      "memberBudgetHint": "Blank limits inherit from the selected budget template. Without a template, blank limits add no restriction. Zero is a valid limit.",
       "budgetEnabled": "Set a budget and limits",
       "maxBudget": "Spend limit (USD)",
       "softBudget": "Soft budget (USD)",
@@ -20650,13 +20719,13 @@
       "tpm": "Tokens per minute",
       "rpm": "Requests per minute",
       "allowedModels": "Allowed models",
-      "allowedModelsHint": "One model per line. Leave blank to allow all models.",
+      "allowedModelsHint": "By default, use the gateway key’s model permissions. Selected models add a further restriction for this customer; they cannot grant access beyond the gateway key or parent customer permissions.",
       "template": "Budget template",
       "noTemplate": "No template",
       "unknownTemplate": "Unavailable template ({{id}})",
       "defaultTemplate": "{{name}} (default)",
       "overrideEnabled": "Override the template budget",
-      "overrideHint": "An override replaces the selected template budget while it is active.",
+      "overrideHint": "An active override changes only the fields you set. Other limits continue to come from the selected budget template.",
       "overrideExpiry": "Override expires",
       "overrideExpiryHint": "Uses your local time. Leave blank for no expiry.",
       "save": "Save changes",
@@ -20665,7 +20734,7 @@
       "reset": "Reset changes",
       "deleteTitle": "Delete {{kind}}",
       "deleteHint": "Delete this record and its owned budget.",
-      "deleteParentHint": "Remove child teams or members first. Deleting a parent does not delete its children.",
+      "deleteParentHint": "Remove child customer teams or customer members first. Deleting a parent does not delete its children.",
       "deleteConfirmTitle": "Delete {{name}}?",
       "deleteConfirmHint": "This permanently deletes this {{kind}}. This action cannot be undone.",
       "deleteConfirm": "Delete {{kind}}",
@@ -20673,7 +20742,29 @@
       "cancel": "Cancel",
       "invalidNumber": "Enter finite, non-negative limits. Rate limits must be whole numbers.",
       "invalidExpiry": "Enter a valid expiry date and time.",
-      "budgetRequired": "Select a budget template or enable an override for this member."
+      "budgetRequired": "Select a budget template or enable an override for this customer member.",
+      "createTeam": "Create customer team",
+      "createMember": "Create customer member",
+      "createTeamHint": "Create a customer team within {{organization}}.",
+      "createMemberHint": "Create a customer member within {{team}}.",
+      "create": "Create",
+      "creating": "Creating…",
+      "created": "Created {{kind}}",
+      "customIdentifier": "Custom identifier (optional)",
+      "identifierAutoGenerated": "Leave blank to generate an identifier.",
+      "searchModels": "Search gateway models",
+      "unavailableModel": "Unavailable gateway model",
+      "modelsLoadError": "Gateway models could not be loaded.",
+      "retryModels": "Retry",
+      "invalidTemplate": "Choose a budget template from this customer organization.",
+      "invalidIdentifier": "Use up to 256 characters and avoid commas, slashes, or the identifiers \".\" and \"..\".",
+      "createFailed": "The customer record could not be created. Please try again.",
+      "inheritModels": "Use gateway key permissions",
+      "deleteWarning": "This action cannot be undone.",
+      "deleteOrganizationMessage": "This deletes this customer organization and its customer teams and customer members.",
+      "deleteTeamMessage": "This deletes this customer team and its customer members.",
+      "deleteMemberMessage": "This deletes this customer member.",
+      "deleteInformationTitle": "{{kind}} details"
     },
     "switcher": {
       "label": "Customer Portal",
@@ -20700,35 +20791,40 @@
       "unblocked": "Customer unblocked",
       "created": "Created {{name}}",
       "updated": "Customer updated",
-      "createFailed": "Failed to create customer: {{error}}",
+      "createFailed": "Failed to create customer organization: {{error}}",
       "updateFailed": "Failed to update customer: {{error}}"
     },
     "list": {
-      "title": "Customers",
-      "subtitle": "Usage across each customer organization's teams and members.",
-      "create": "Create Customer",
-      "searchPlaceholder": "Search by customer id or alias",
+      "title": "$t(customerPortal.entities.organizations)",
+      "subtitle": "Usage across each customer organization’s customer teams and customer members.",
+      "create": "Create customer organization",
+      "searchPlaceholder": "Search by customer organization ID or alias",
+      "overallUsage": "Overall customer usage",
+      "overallUsageHelp": "Usage across all external customer organizations for the selected dates.",
+      "newestFirst": "Newest first",
+      "budgetAndShareHelp": "Budget spend follows each configured reset period. Share of overall spend uses the current UTC calendar month across all customer organizations, regardless of search or pagination. Status reflects all configured budget limits. The date picker controls the summary above.",
       "columns": {
-        "customer": "Customer",
+        "customer": "$t(customerPortal.entities.organization)",
+        "overallSpendShare": "Share of overall spend",
         "spend": "Spend",
         "requests": "Requests",
         "tokens": "Tokens",
-        "members": "Members",
+        "members": "$t(customerPortal.entities.members)",
         "budget": "Budget",
         "keys": "Keys",
         "status": "Status"
       },
-      "loading": "Loading customers...",
+      "loading": "Loading customer organizations…",
       "empty": "No customer organizations yet. Create one to get started.",
       "noMatches": "No customer organizations match your search.",
       "error": "Could not load customer organization usage.",
-      "attribution": "Usage is attributed to the customer organization and team recorded for each member request. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
+      "attribution": "Usage is attributed to the customer organization and customer team recorded for each customer member request. Dates are inclusive UTC calendar days. Tokens include input and output tokens.",
       "budgetUsage": "{{spend}} / {{max}}",
-      "currentBudget": "Current budget {{budget}}",
+      "currentBudget": "Recorded budget spend {{budget}}",
       "budgetUsed": "{{percentage}} used",
       "noMaxBudget": "No max budget",
       "zeroBudgetPercentage": "Percentage unavailable for a $0 budget",
-      "budgetAndMembersHelp": "Spend, requests and tokens use the selected dates. Budget percentages use the current budget period, shown under Spend when it differs. Members includes all currently registered members, even those with no usage."
+      "budgetAndMembersHelp": "Spend, requests, and tokens use the selected dates. Budget percentages compare recorded spend with the configured budget, shown under Spend when it differs. The customer member count includes all currently registered customer members, even those with no usage."
     },
     "detail": {
       "spendThisMonth": "Spend this month",
@@ -20755,18 +20851,48 @@
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "Create a customer organization. Usage from its registered team members is included in the customer totals.",
+      "description": "Set up a customer organization and its member budgets.",
+      "name": "Customer name",
+      "namePlaceholder": "e.g. Example customer",
       "customerId": "Customer organization id",
       "customerIdPlaceholder": "e.g. customer-001",
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
-      "maxBudget": "Monthly budget (USD)",
+      "customerIdHelp": "Optional customer ID for the API. Leave blank to generate one.",
+      "maxBudget": "Customer monthly budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
-      "submit": "Create"
+      "budgetHelp": "Total monthly cap across all teams and members.",
+      "groups": "Member budget groups",
+      "groupsHelp": "Reusable budget profiles. Limits are in USD per member. Leave an amount blank for no limit.",
+      "groupName": "Group name",
+      "groupNameLabel": "Group {{index}} name",
+      "monthly": "Monthly budget",
+      "yearly": "Yearly budget",
+      "monthlyLabel": "Group {{index}} monthly budget (USD)",
+      "yearlyLabel": "Group {{index}} yearly budget (USD)",
+      "default": "Default",
+      "defaultGroup": "Default budget group for new members",
+      "useDefault": "Use {{name}} as default",
+      "removeGroup": "Remove {{name}}",
+      "addGroup": "Add budget group",
+      "defaultHelp": "The selected default group is assigned to new members automatically.",
+      "resetHelp": "Each group's At the cap setting decides what happens when a member reaches either cap.",
+      "advanced": "Advanced limits",
+      "creating": "Creating customer...",
+      "errors": {
+        "nameRequired": "Enter a customer name.",
+        "groupNameRequired": "Give each budget group a name.",
+        "duplicateGroups": "Use a unique name for each budget group.",
+        "groupLimitRequired": "Set at least one monthly or yearly limit for each budget group.",
+        "invalidBudget": "Enter budget amounts of zero or more.",
+        "invalidRateLimit": "Rate limits must be whole numbers of zero or more.",
+        "defaultRequired": "Choose a default budget group."
+      },
+      "submit": "Create customer"
     },
     "editDialog": {
       "title": "Edit customer",
@@ -20782,14 +20908,14 @@
     },
     "analytics": {
       "title": "Customer usage",
-      "customers": "Customers",
+      "customers": "$t(customerPortal.entities.organizations)",
       "breadcrumb": "Customer hierarchy",
       "selectOrganization": "Open a customer organization to explore its usage.",
-      "backToCustomers": "Back to customers",
-      "organizationUsage": "Organization usage",
-      "teamUsage": "Team usage",
-      "memberUsage": "Member usage",
-      "subtitle": "Understand where usage goes, from your organization to each member.",
+      "backToCustomers": "Back to customer organizations",
+      "organizationUsage": "Customer organization usage",
+      "teamUsage": "Customer team usage",
+      "memberUsage": "Customer member usage",
+      "subtitle": "Understand usage across your customer organization, customer teams, and customer members.",
       "trend": "Usage over time",
       "trendHint": "Daily activity, broken down by {{dimension}}.",
       "metric": "Usage metric",
@@ -20806,45 +20932,74 @@
       "models": "Models",
       "keys": "API keys",
       "useCases": "Use cases",
-      "teams": "Teams",
-      "members": "Members",
+      "teams": "$t(customerPortal.entities.teams)",
+      "members": "$t(customerPortal.entities.members)",
       "sortedBy": "Ranked by {{metric}}",
       "search": "Search breakdown",
       "rank": "Rank",
       "share": "Share",
-      "rankingHint": "Share of the selected metric across this customer scope. Click a team or member to explore its usage.",
+      "rankingHint": "Share of the selected metric across this customer scope. Click a customer team or customer member to explore its usage.",
       "useCaseHint": "Use cases recorded with requests. Unattributed activity appears as Unassigned.",
       "noMatches": "No results match your search.",
       "noBreakdown": "No usage recorded for this breakdown.",
       "pagination": "{{from}}–{{to}} of {{total}}",
       "previous": "Previous",
       "next": "Next",
-      "allOrganizationUsage": "View all organization usage",
-      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Customer budgets are managed separately.",
-      "scopeMismatch": "This team or member does not belong to the selected organization.",
+      "allOrganizationUsage": "View all customer organization usage",
+      "freshness": "Usage appears after accounting completes. Date ranges use UTC. Budget resets follow the configured period.",
+      "scopeMismatch": "This customer team or customer member does not belong to the selected customer organization.",
       "invalidIdentifier": "Select a valid customer identifier.",
       "incompletePages": "Could not load the complete usage range. Please choose fewer days.",
-      "unassignedTeam": "Unassigned or removed team",
-      "unassignedMember": "Unassigned or removed member",
+      "unassignedTeam": "Unassigned or removed customer team",
+      "unassignedMember": "Unassigned or removed customer member",
       "unnamedKey": "Unnamed key",
       "currentSpend": "Budget spend",
+      "budgetSummary": "Current budget",
+      "editBudget": "Edit budget",
+      "setBudget": "Set budget",
+      "budgetPeriod": "Recorded budget spend",
+      "budgetResets": "Configured reset: {{date}} UTC",
       "noBudget": "No budget set",
       "breakDownBy": "Break down by",
       "topModels": "Top models",
       "topKeys": "Top API keys",
-      "topTeams": "Top teams",
-      "topMembers": "Top members",
-      "memberSpend": "Member spend",
-      "memberSpendHint": "Usage in the selected date range. Cap status uses each member’s recorded budget spend.",
-      "searchMembers": "Search members",
-      "member": "Member",
-      "currentBudget": "Spend / cap",
+      "topTeams": "Top customer teams",
+      "topMembers": "Top customer members",
+      "memberSpend": "Customer member spend",
+      "memberSpendHint": "Budget spend follows each configured reset period. Share and tokens use the current UTC calendar month. These values are independent of the chart date range.",
+      "searchMembers": "Search customer members",
+      "member": "$t(customerPortal.entities.member)",
+      "currentBudget": "Spend / limit",
       "status": "Status",
-      "noCap": "No cap",
+      "noLimit": "No limit",
+      "limitConfigured": "Limit configured",
+      "monthlySpend": "Spend this month / monthly limit",
+      "yearlySpend": "Yearly spend / yearly limit",
+      "customerSpendShare": "Share of customer spend",
+      "noMonthlyLimit": "No monthly limit",
+      "noYearlyLimit": "No yearly limit",
+      "reachedLimit": "Reached limit",
+      "withinMonthlyBudget": "Within monthly limit",
+      "monthlyLimitAmount": "Monthly limit: {{amount}}",
+      "yearlyLimitAmount": "Yearly limit: {{amount}}",
+      "budgetRemaining": "{{amount}} remains",
+      "budgetOver": "{{amount}} over",
+      "calendarMonth": "Current UTC calendar month",
+      "budgetUsageHint": "Recorded spend updates after accounting completes. Pending requests are excluded.",
+      "budgetUsageUnavailable": "Budget usage unavailable",
+      "unknownSpend": "Unavailable",
       "atBudget": "At budget",
       "withinBudget": "Within budget",
-      "noMembers": "No members in this customer scope.",
+      "noMembers": "No customer members in this customer scope.",
       "overBudget": "Over budget"
+    },
+    "entities": {
+      "organization": "Customer organization",
+      "organizations": "Customer organizations",
+      "team": "Customer team",
+      "teams": "Customer teams",
+      "member": "Customer member",
+      "members": "Customer members"
     }
   }
 }
