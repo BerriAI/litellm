@@ -72,11 +72,14 @@ async def async_completion_with_fallbacks(**kwargs):
                 litellm_logging_obj=litellm_logging_obj,
             )
 
-            if response is not None:
-                return add_fallback_headers_to_response(
-                    response=response,
-                    attempted_fallbacks=attempted_fallbacks,
-                )
+            if response is None:
+                continue
+            if attempted_fallbacks > 0 and isinstance(litellm_logging_obj, Logging):
+                litellm_logging_obj.stop_attributing_to_a2a_agent()
+            return add_fallback_headers_to_response(
+                response=response,
+                attempted_fallbacks=attempted_fallbacks,
+            )
 
         except Exception as e:
             verbose_logger.exception("Fallback attempt failed for model %s: %s", model, e)

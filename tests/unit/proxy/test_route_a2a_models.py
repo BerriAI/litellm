@@ -32,6 +32,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_
 from litellm.proxy.common_request_processing import cost_headers
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.types.agents import AgentResponse
 from litellm.types.utils import ModelResponse
 
@@ -1142,7 +1143,7 @@ FALLBACK_REPLY: Final = {
     [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
     ids=["bridge", "url"],
 )
-async def test_route_a2a_agent_call_answered_by_an_unpriced_fallback_bills_the_fallback_at_its_own_price(
+async def test_route_a2a_agent_call_answered_by_an_unpriced_fallback_is_billed_and_attributed_as_the_fallback(
     httpx_transport: None, monkeypatch: pytest.MonkeyPatch, agent: AgentResponse
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
@@ -1164,6 +1165,7 @@ async def test_route_a2a_agent_call_answered_by_an_unpriced_fallback_bills_the_f
     assert response.choices[0].message.content == "pong"
     assert cost == pytest.approx(0.5 * (response.usage.prompt_tokens + response.usage.completion_tokens))
     assert "agent_id" not in logging_obj.model_call_details
+    assert "agent_id" not in _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
 
 
 @respx.mock

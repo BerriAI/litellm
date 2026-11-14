@@ -1508,6 +1508,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details.pop("agent_id", None)
         self.a2a_agent_cost_per_query = None
 
+    def stop_attributing_to_a2a_agent(self) -> None:
+        self.a2a_agent_id = None
+
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
 
