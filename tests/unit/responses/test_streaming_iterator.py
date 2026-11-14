@@ -3,25 +3,33 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
-import asyncio, importlib
+import asyncio
 import functools
+import importlib
 import json
 import threading
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from pydantic_core import PydanticSerializationError
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses.streaming_iterator import(
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
+from litellm.responses import streaming_iterator as streaming_module
+from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
@@ -35,11 +43,9 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from contextlib import suppress
-from litellm.responses import streaming_iterator as streaming_module
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from types import SimpleNamespace
 
 
 def _sse_event(payload: dict) -> bytes:
@@ -450,6 +456,67 @@ class _LoopRecordingLogger(CustomLogger):
         await asyncio.sleep(0.05)
         self.hook_finished = True
         return None
+
+
+class _NativeStreamSpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.successes: tuple[object, ...] = ()
+        self.failures: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.successes = (*self.successes, kwargs["standard_logging_object"])
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.failures = (*self.failures, kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+async def test_guardrail_rejected_native_stream_bills_one_failure_row(monkeypatch) -> None:
+    recorder: Final = _NativeStreamSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    logging_obj: Final = _real_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={"aresponses": True},
+        custom_llm_provider="openai",
+    )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    user: Final = UserAPIKeyAuth(request_route="/v1/responses")
+    data: Final = {"model": "gpt-4o-mini", "litellm_logging_obj": logging_obj}
+    iterator: Final = _make_iterator(sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=logging_obj)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor._arm_deferred_stream_dispatch(iterator, "aresponses", user, logging_obj)
+    error: Final = HTTPException(status_code=400, detail="blocked by end-of-stream guardrail")
+
+    async def rejected_stream():
+        async for event in iterator:
+            yield event
+        raise error
+
+    with pytest.raises(HTTPException):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(rejected_stream(), user, data):
+            pass
+    completed: Final = iterator.completed_response.response
+    expected_cost: Final = logging_obj.response_cost_calculator(result=completed)
+    await proxy_logging.post_call_failure_hook(data, error, user, route="aresponses")
+    await asyncio.sleep(0)
+
+    assert len(recorder.failures) == 1
+    assert recorder.successes == ()
+    row: Final = recorder.failures[0]
+    assert row["status"] == "failure"
+    assert row["prompt_tokens"] == completed.usage.input_tokens
+    assert row["completion_tokens"] == completed.usage.output_tokens
+    assert row["total_tokens"] == completed.usage.total_tokens
+    assert expected_cost is not None and expected_cost > 0
+    assert row["response_cost"] == pytest.approx(expected_cost)
 
 
 class _SyncOnlyRecordingLogger(CustomLogger):

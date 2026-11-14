@@ -157,7 +157,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4955,11 +4955,18 @@ class ProxyLogging:
             return False
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         assembled: Final = _args[0] if _args else None
-        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(assembled, ModelResponse):
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
+        match assembled:
+            case ModelResponse():
+                logging_obj.record_assembled_response_for_failure(assembled)
+            case BilledRoundsDispatch():
+                assembled.dispatch.close()
+                logging_obj.record_billed_rounds_for_failure(assembled.spend)
+            case _:
+                return False
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
-        logging_obj.record_assembled_response_for_failure(assembled)
         return True
 
     async def arelease_max_parallel_requests_on_disconnect(
