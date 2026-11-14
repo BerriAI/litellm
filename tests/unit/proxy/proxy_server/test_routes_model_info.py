@@ -2479,6 +2479,23 @@ def test_model_info_hides_api_base_from_non_admin_callers(
                 },
                 "model_info": {"id": "hf-deployment"},
             },
+            {
+                "model_name": "wx-url-model",
+                "litellm_params": {
+                    "model": "watsonx/ibm/granite-13b-chat-v2",
+                    "url": "https://example.invalid/wx?cred=CANARY-SECRET-WX-URL",
+                    "wx_credentials": {
+                        "url": "https://example.invalid/wx?cred=CANARY-SECRET-WX-CREDS",
+                        "apikey": "placeholder",
+                    },
+                    "watsonx_credentials": {
+                        "url": "https://example.invalid/wx?cred=CANARY-SECRET-WX-CREDS2",
+                        "apikey": "placeholder",
+                    },
+                    "api_key": "placeholder",
+                },
+                "model_info": {"id": "wx-deployment"},
+            },
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -2495,7 +2512,7 @@ def test_model_info_hides_api_base_from_non_admin_callers(
             assert response.status_code == 200, response.text
             assert "CANARY-SECRET" not in response.text
             rows: Final = rows_by_name(response.json())
-            assert set(rows) == {"cred-model", "hf-url-model"}
+            assert set(rows) == {"cred-model", "hf-url-model", "wx-url-model"}
             params: Final = rows["cred-model"]["litellm_params"]
             assert "api_key" not in params
             assert params["model"] == "openai/gpt-4o"
@@ -2503,6 +2520,10 @@ def test_model_info_hides_api_base_from_non_admin_callers(
                 assert field not in params
             assert "model" not in rows["hf-url-model"]["litellm_params"]
             assert "key" not in rows["hf-url-model"]["model_info"]
+            wx_params: Final = rows["wx-url-model"]["litellm_params"]
+            assert "url" not in wx_params
+            assert "url" not in wx_params["wx_credentials"]
+            assert "url" not in wx_params["watsonx_credentials"]
         single: Final = client.get("/v1/model/info", params={"litellm_model_id": "cred-deployment"})
         assert single.status_code == 200, single.text
         assert "CANARY-SECRET" not in single.text
@@ -2523,3 +2544,7 @@ def test_model_info_hides_api_base_from_non_admin_callers(
                 assert params[field] == value
             assert rows["hf-url-model"]["litellm_params"]["model"] == url_model
             assert rows["hf-url-model"]["model_info"]["key"] == url_model
+            wx_params: Final = rows["wx-url-model"]["litellm_params"]
+            assert wx_params["url"] == "https://example.invalid/wx?cred=CANARY-SECRET-WX-URL"
+            assert wx_params["wx_credentials"]["url"] == "https://example.invalid/wx?cred=CANARY-SECRET-WX-CREDS"
+            assert wx_params["watsonx_credentials"]["url"] == "https://example.invalid/wx?cred=CANARY-SECRET-WX-CREDS2"
