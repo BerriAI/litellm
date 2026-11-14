@@ -20,7 +20,6 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -1201,9 +1200,6 @@ def infer_protocol_value(
 
 
 def _gemini_function_call(name: str, arguments: object) -> VertexFunctionCall:
-    already_parsed: Final = as_str_mapping(arguments)
-    if already_parsed is not None:
-        return VertexFunctionCall(name=name, args=dict(already_parsed))
     text: Final = arguments.decode() if isinstance(arguments, (bytes, bytearray)) else arguments
     if text == "":  # pass empty dict, if arguments is empty string - prevents call from failing
         return VertexFunctionCall(name=name, args={"type": "object"})
@@ -1330,6 +1326,7 @@ def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: str | None = None,
     forward_function_call_id: bool = False,
+    custom_llm_provider: str | None = None,
 ) -> list[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1435,7 +1432,7 @@ def convert_to_gemini_tool_call_invoke(
         raise litellm.BadRequestError(
             message=f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}",
             model=model or "",
-            llm_provider="vertex_ai",
+            llm_provider=custom_llm_provider or "vertex_ai",
         ) from e
 
 

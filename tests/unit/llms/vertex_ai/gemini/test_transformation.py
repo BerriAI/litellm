@@ -1,6 +1,7 @@
 
 import json
 import uuid
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
@@ -469,3 +470,51 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+@pytest.mark.parametrize("custom_llm_provider, expected_provider", [("gemini", "gemini"), (None, "vertex_ai")])
+def test_tool_call_conversion_error_names_the_calling_provider(
+    custom_llm_provider: str | None, expected_provider: str
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ["Boston"]}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        transformation.gemini_convert_messages_with_history(messages, custom_llm_provider=custom_llm_provider)
+
+    assert exc_info.value.llm_provider == expected_provider
+
+
+def test_gemini_completion_reports_a_tool_call_it_cannot_convert_as_a_gemini_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            api_key="test-key",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": {"location": "Boston"}},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ],
+        )
+
+    assert exc_info.value.llm_provider == "gemini"
+    assert "must be a JSON string, got dict" in str(exc_info.value)
