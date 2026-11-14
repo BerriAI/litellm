@@ -2187,6 +2187,7 @@ class _BlockedResponsePayload(TypedDict):
     model: ReadOnly[str]
     output: ReadOnly[tuple[GenericResponseOutputItem, ...]]
     status: ReadOnly[str]
+    incomplete_details: ReadOnly[dict[str, str]]
     usage: ReadOnly[ResponseAPIUsage]
 
 
@@ -2218,6 +2219,9 @@ def _blocked_response(
         "model": model,
         "output": (output_item if output_item is not None else _blocked_output_item(exc),),
         "status": "completed",
+        # Like finish_reason="content_filter" on chat completions: tells the client the
+        # output is a guardrail's message, not the model's answer
+        "incomplete_details": {"reason": "content_filter"},
         "usage": blocked_responses_stream_usage(exc.original_response),
     }
     return ResponsesAPIResponse.model_validate(payload)

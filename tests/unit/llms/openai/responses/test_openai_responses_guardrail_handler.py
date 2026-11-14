@@ -5568,3 +5568,40 @@ class TestRefusalPartsReachTextGuardrails:
         )
 
         assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)
+
+
+class TestBlockedResponseIsMarkedAsContentFilter:
+    """A guardrail block on /v1/responses carries incomplete_details.reason=content_filter,
+    the Responses API equivalent of finish_reason="content_filter" on chat completions, so a
+    client can tell the guardrail's message from the model's answer."""
+
+    @staticmethod
+    def _exc():
+        from litellm.exceptions import ModifyResponseException
+
+        return ModifyResponseException(
+            message="Blocked by policy.", model="gpt-5.4-mini", request_data={}, guardrail_name="test"
+        )
+
+    def test_blocked_response_is_marked(self):
+        from openai.types.responses import Response
+
+        from litellm.llms.openai.responses.guardrail_translation.handler import build_blocked_response
+
+        dumped = build_blocked_response(self._exc()).model_dump(exclude_none=True)
+
+        assert dumped["incomplete_details"] == {"reason": "content_filter"}
+        assert dumped["output"][0]["content"][0]["text"] == "Blocked by policy."
+        # What the OpenAI SDK reads from it (a pre-call block has no token details)
+        dumped.pop("usage", None)
+        parsed = Response.model_validate(dumped | {"parallel_tool_calls": False, "tool_choice": "auto", "tools": []})
+        assert parsed.incomplete_details is not None
+        assert parsed.incomplete_details.reason == "content_filter"
+        assert parsed.output_text == "Blocked by policy."
+
+    def test_streamed_block_completed_event_is_marked(self):
+        chunks = OpenAIResponsesHandler().build_block_sse_chunks(self._exc(), stream_started=False)
+        payloads = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in chunks]
+
+        completed = next(p for p in payloads if p["type"] == "response.completed")
+        assert completed["response"]["incomplete_details"] == {"reason": "content_filter"}
