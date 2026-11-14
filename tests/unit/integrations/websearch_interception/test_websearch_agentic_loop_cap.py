@@ -14,7 +14,7 @@ config.yaml through to the settings the loop actually reads.
 import asyncio
 import json
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -1252,46 +1252,54 @@ def _round_input_tokens(searches_done: int) -> int:
     return 10 + 1000 * searches_done
 
 
-def _responses_reply_asking_for_another_search_until_enough_results(request: httpx.Request) -> httpx.Response:
-    request_input: Final = json.loads(request.content)["input"]
-    searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
-    output_item: Final = (
-        {
-            "type": "message",
-            "id": f"msg_{searches_done}",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": "Argentina won the 2022 World Cup.", "annotations": []}],
-        }
-        if searches_done >= SEARCHES_THE_MODEL_ASKS_FOR
-        else {
-            "type": "function_call",
-            "id": f"fc_{searches_done}",
-            "call_id": f"call_{searches_done}",
-            "name": INTERNAL_TOOL_NAME,
-            "arguments": json.dumps({"query": f"world cup winner, source {searches_done}"}),
-            "status": "completed",
-        }
-    )
-    return httpx.Response(
-        200,
-        json={
-            "id": f"resp_{searches_done}",
-            "object": "response",
-            "created_at": 0,
-            "status": "completed",
-            "model": "gpt-5.6",
-            "output": [output_item],
-            "parallel_tool_calls": True,
-            "tool_choice": "auto",
-            "tools": [],
-            "usage": {
-                "input_tokens": _round_input_tokens(searches_done),
-                "output_tokens": 5,
-                "total_tokens": _round_input_tokens(searches_done) + 5,
+def _responses_reply_asking_for_searches_until(searches_wanted: int) -> Callable[[httpx.Request], httpx.Response]:
+    def reply(request: httpx.Request) -> httpx.Response:
+        request_input: Final = json.loads(request.content)["input"]
+        searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
+        output_item: Final = (
+            {
+                "type": "message",
+                "id": f"msg_{searches_done}",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Argentina won the 2022 World Cup.", "annotations": []}],
+            }
+            if searches_done >= searches_wanted
+            else {
+                "type": "function_call",
+                "id": f"fc_{searches_done}",
+                "call_id": f"call_{searches_done}",
+                "name": INTERNAL_TOOL_NAME,
+                "arguments": json.dumps({"query": f"world cup winner, source {searches_done}"}),
+                "status": "completed",
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": f"resp_{searches_done}",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [output_item],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": {
+                    "input_tokens": _round_input_tokens(searches_done),
+                    "output_tokens": 5,
+                    "total_tokens": _round_input_tokens(searches_done) + 5,
+                },
             },
-        },
-    )
+        )
+
+    return reply
+
+
+_responses_reply_asking_for_another_search_until_enough_results: Final = _responses_reply_asking_for_searches_until(
+    SEARCHES_THE_MODEL_ASKS_FOR
+)
 
 
 @pytest.mark.asyncio
@@ -1891,3 +1899,37 @@ async def test_responses_pinned_openai_chat_completion_asks_the_chat_hook_only_o
     )
 
     assert response.choices[0].message.content == answer
+
+
+async def _answer_text(response: litellm.ModelResponse | litellm.CustomStreamWrapper) -> str | None:
+    if isinstance(response, litellm.CustomStreamWrapper):
+        return "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk.choices])
+    return response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streamed", "streamed"])
+async def test_responses_pinned_openai_chat_completion_runs_the_search_its_web_search_options_ask_for(
+    stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_searches_until(1)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        web_search_options={},
+        allowed_openai_params=["web_search_options"],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        stream=stream,
+    )
+
+    assert perplexity_search.call_count == 1
+    assert await _answer_text(response) == "Argentina won the 2022 World Cup."
