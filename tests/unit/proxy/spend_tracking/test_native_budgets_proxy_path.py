@@ -776,6 +776,11 @@ FAMILIES: Final[Mapping[str, Family]] = {
         {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
         call_type="agenerate_content",
     ),
+    "google_stream": Family(
+        "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="agenerate_content_stream",
+    ),
 }
 
 
