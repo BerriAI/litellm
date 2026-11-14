@@ -1,4 +1,5 @@
 import base64
+import bisect
 import copy
 import hashlib
 import itertools
@@ -2924,6 +2925,11 @@ def _without_repeated_thinking(
     )
 
 
+def _without_trailing_empty_text(blocks: Sequence[_Replayed]) -> tuple[_Replayed, ...]:
+    trailing_empty: Final = sum(1 for _ in itertools.takewhile(_is_empty_text_block, reversed(blocks)))
+    return tuple(blocks[: len(blocks) - trailing_empty])
+
+
 def _interleave(
     content: Sequence[_Replayed],
     before: Mapping[int, Sequence[_Replayed]],
@@ -2990,6 +2996,15 @@ def _text_breakpoints(parts: Sequence[_PlainTextPart], message: AllMessageValues
     return from_parts or ((ends[-1] if ends else 0, message),)
 
 
+def _breakpoint_ending_in(
+    text_breakpoints: Sequence[_TextBreakpoint], start: int, end: int
+) -> Mapping[str, JsonValue] | AllMessageValues | None:
+    last: Final = bisect.bisect_right(text_breakpoints, end, key=lambda text_breakpoint: text_breakpoint[0]) - 1
+    if last < 0 or text_breakpoints[last][0] <= start:
+        return None
+    return text_breakpoints[last][1]
+
+
 def _block_field(block: Mapping[str, object], key: str) -> object:
     return block.get(key)
 
@@ -3014,9 +3029,11 @@ def _recorded_block(
             return tuple(_replayable_thinking_blocks([thinking_blocks[thinking_seen - 1]], drop_params=drop_params))
         case AnthropicContentBlockOrderEntry(type="text", length=int() as length) if length:
             text_block: Final = AnthropicMessagesTextParam(type="text", text=text[text_end - length : text_end])
-            held: Final = tuple(source for end, source in text_breakpoints if text_end - length < end <= text_end)
-            if held:
-                add_cache_control_to_content(anthropic_content_element=text_block, original_content_element=held[-1])
+            breakpoint_source: Final = _breakpoint_ending_in(text_breakpoints, text_end - length, text_end)
+            if breakpoint_source is not None:
+                add_cache_control_to_content(
+                    anthropic_content_element=text_block, original_content_element=breakpoint_source
+                )
             return (text_block,)
         case AnthropicContentBlockOrderEntry(id=str() as block_id) if block_id in tool_uses:
             return (tool_uses[block_id],)
@@ -3661,12 +3678,10 @@ def anthropic_messages_pt(
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
-            for content in new_messages[-1]["content"]:
+            new_messages[-1]["content"] = list(_without_trailing_empty_text(new_messages[-1]["content"]))
+            for content in new_messages[-1]["content"][-1:]:
                 if isinstance(content, dict) and content["type"] == "text":
                     content["text"] = content["text"].rstrip()  # no trailing whitespace for final assistant message
-            new_messages[-1]["content"] = [
-                block for block in new_messages[-1]["content"] if not _is_empty_text_block(block)
-            ]
 
     return new_messages
 

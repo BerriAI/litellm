@@ -9056,6 +9056,36 @@ def test_anthropic_messages_pt_sends_no_empty_text_block_when_a_recorded_search_
     assert [block["signature"] for block in content if block["type"] == "thinking"] == ["sig_1", "sig_2", "sig_3"]
 
 
+def test_anthropic_messages_pt_trims_only_the_end_of_a_recorded_search_turn_that_ends_the_conversation():
+    turn: Final = _recorded_search_turn(content="Plan first. The answer is 42. \n")
+    fields: Final = turn["provider_specific_fields"]
+    order: Final = [
+        {"type": "thinking"},
+        {"type": "text", "length": 12},
+        {"type": "thinking"},
+        {"type": "server_tool_use", "id": "srvtoolu_01ONLY"},
+        {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01ONLY"},
+        {"type": "thinking"},
+        {"type": "text", "length": 4},
+        {"type": "text", "length": 14},
+        {"type": "text", "length": 1},
+    ]
+    replayed: Final = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "What is the answer?"},
+            {**turn, "provider_specific_fields": {**fields, "content_block_order": order}},
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert [block["text"] for block in replayed[-1]["content"] if block["type"] == "text"] == [
+        "Plan first. ",
+        "The ",
+        "answer is 42.",
+    ]
+
+
 def test_anthropic_messages_pt_adds_tool_calls_missing_from_the_block_order_at_the_end():
     turn: Final = _recorded_search_turn()
     weather_call: Final = {
@@ -9353,6 +9383,41 @@ def test_anthropic_messages_pt_paused_turn_resent_without_search_results_runs_on
         "input": {"query": "Adelaide sister cities"},
     }
     assert [block["type"] for block in replayed if block["type"] == "thinking"] == []
+
+
+def test_anthropic_messages_pt_paused_turn_replays_the_same_with_or_without_a_block_order():
+    paused_turn: Final = _paused_web_search_turn(
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
+            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
+        ]
+    )
+    fields: Final = paused_turn["provider_specific_fields"]
+    order: Final = [
+        {"type": "thinking"},
+        {"type": "server_tool_use", "id": "srvtoolu_01Done"},
+        {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Done"},
+        {"type": "thinking"},
+        {"type": "server_tool_use", "id": "srvtoolu_02Done"},
+        {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_02Done"},
+        {"type": "thinking"},
+        {"type": "text", "length": len("Step 1 is Tokyo.")},
+        {"type": "thinking"},
+        {"type": "server_tool_use", "id": "srvtoolu_01Paused"},
+    ]
+    with_order: Final = {**paused_turn, "provider_specific_fields": {**fields, "content_block_order": order}}
+
+    assert anthropic_messages_pt(
+        [{"role": "user", "content": "Play the sister city chain game."}, with_order],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    ) == anthropic_messages_pt(
+        [{"role": "user", "content": "Play the sister city chain game."}, paused_turn],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
