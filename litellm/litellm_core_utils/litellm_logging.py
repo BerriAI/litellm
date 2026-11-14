@@ -6764,6 +6764,7 @@ def build_custom_logger_compatible_class(
         from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
             PROXY_DynamicRateLimitHandlerV3,
         )
+        from litellm.proxy.hooks.model_capacity_native import native_dynamic_rate_limiter
 
         for callback in _in_memory_loggers:
             if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
@@ -6771,6 +6772,10 @@ def build_custom_logger_compatible_class(
 
         if internal_usage_cache is None:
             raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
+
+        native: Final = native_dynamic_rate_limiter(internal_usage_cache, llm_router)
+        if native is not None:
+            return native  # pyright: ignore[reportReturnType]  # a native V2 callback takes the legacy entry's place
 
         dynamic_rate_limiter_obj_v3: Final = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=internal_usage_cache)
 
@@ -7374,10 +7379,13 @@ def get_custom_logger_compatible_class(
             from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
                 PROXY_DynamicRateLimitHandlerV3,
             )
+            from litellm.proxy.hooks.model_capacity_native import registered_native_dynamic_rate_limiter
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
                     return callback
+            if (native := registered_native_dynamic_rate_limiter()) is not None:
+                return native  # pyright: ignore[reportReturnType]  # a native V2 callback takes the legacy entry's place
 
         elif logging_integration == "langtrace":
             from litellm.integrations.opentelemetry import OpenTelemetry

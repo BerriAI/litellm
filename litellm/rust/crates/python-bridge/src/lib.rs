@@ -1,5 +1,6 @@
 mod cache;
 mod callable;
+mod callbacks_model_capacity;
 mod coercion;
 mod credentials;
 mod db;
@@ -25,6 +26,8 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
     use crate::db::NativeDatabase;
     #[cfg(feature = "panic-test")]
@@ -201,6 +204,8 @@ mod tests {
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeModelCapacity",
+                "NativeModelCapacityState",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

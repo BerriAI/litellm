@@ -6,6 +6,7 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.integrations.custom_logger_v2.rust import RustHandle
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
@@ -625,6 +626,31 @@ def amessages(
 ) -> Execution: ...
 
 @final
+class NativeModelCapacityState:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+
+@final
+class NativeModelCapacity:
+    def __new__(cls, delegate: object) -> NativeModelCapacity: ...
+    def callback(self) -> RustHandle: ...
+    def request_state(self) -> NativeModelCapacityState: ...
+    def handle(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        state: NativeModelCapacityState | None,
+        /,
+    ) -> Future[object]: ...
+    def post_call_headers(self, key: Mapping[str, object]) -> list[list[object]]: ...
+    def fallback_target_allowed(
+        self, state: NativeModelCapacityState, key: Mapping[str, object], model: str, commit: bool
+    ) -> Future[dict[str, object]]: ...
+    def enforce_frame(
+        self, connection: NativeModelCapacityState | None, key: Mapping[str, object], model: str
+    ) -> Future[dict[str, object]]: ...
+
+@final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @classmethod
@@ -767,6 +793,8 @@ __all__ = [
     "NativeFetchPolicy",
     "NativeFetched",
     "NativeInstalled",
+    "NativeModelCapacity",
+    "NativeModelCapacityState",
     "NativeModelCostMap",
     "NativeModelCostMapState",
     "NativePending",

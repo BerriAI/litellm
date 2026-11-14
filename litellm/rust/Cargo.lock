@@ -3713,6 +3713,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-model-capacity"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-python-compat",
+ "parking_lot",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-callbacks-python"
 version = "0.1.0"
 dependencies = [
@@ -4435,7 +4450,10 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-callbacks",
  "litellm-callbacks-legacy-python",
+ "litellm-callbacks-model-capacity",
+ "litellm-callbacks-python",
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
