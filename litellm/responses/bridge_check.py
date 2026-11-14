@@ -14,6 +14,7 @@ from litellm.llms.azure_ai.common_utils import (
     foundry_chat_rejects_function_tools_while_reasoning,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
@@ -117,6 +118,9 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    if custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model):
+        model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"

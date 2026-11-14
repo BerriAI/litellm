@@ -28,7 +28,7 @@ Use `litellm.aresponses` for async calls and `stream=True` for streaming. Chat
 Completions calls use LiteLLM's existing Responses bridge.
 
 Requests are stateless. LiteLLM defaults to `store=False` and rejects
-`store=True`. Send the conversation context in `input` on each request instead
+`store=True`, or sends `store=False` instead when `drop_params=True`. Send the conversation context in `input` on each request instead
 of using `previous_response_id` or a stored conversation.
 
 Vertex Muse currently accepts only automatic tool selection. With `drop_params=True`,
