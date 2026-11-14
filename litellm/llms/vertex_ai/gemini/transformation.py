@@ -795,6 +795,8 @@ def gemini_convert_messages_with_history(
     tool_call_responses = []
     vertex_project = None
     vertex_credentials = None
+    request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
+    drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
@@ -946,6 +948,7 @@ def gemini_convert_messages_with_history(
                         model=model,
                         forward_function_call_id=forward_function_call_id,
                         custom_llm_provider=custom_llm_provider,
+                        drop_params=drop_params,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
