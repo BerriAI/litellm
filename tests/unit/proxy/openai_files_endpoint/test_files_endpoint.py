@@ -1,3 +1,4 @@
+import gzip
 import itertools
 import json
 from typing import Final, List, Optional
@@ -2366,6 +2367,51 @@ def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_ro
     assert int(response.headers["content-length"]) == len(response.content)
     assert upstream_filename in response.headers["content-disposition"]
     assert response.headers["x-request-id"] == upstream_request_id
+
+
+@respx.mock
+def test_get_file_content_gzipped_upstream_is_served_decoded_without_content_encoding(
+    monkeypatch, llm_router: Router, httpx_transport: None
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    body: Final = b'<!DOCTYPE html>\n<html lang="de"><body>' + b"<p>hello</p>" * 200 + b"</body></html>\n"
+    compressed: Final = gzip.compress(body)
+    upstream_route: Final = respx.get("https://api.anthropic.com/v1/files/file_generated123/content").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            content=compressed,
+            headers={"content-type": "text/html", "content-encoding": "gzip"},
+        )
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    try:
+        response: Final = client.get(
+            "/anthropic/v1/files/file_generated123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert upstream_route.call_count == 1
+    assert "content-encoding" not in response.headers, response.headers
+    assert response.content == body
+    assert int(response.headers["content-length"]) == len(body) != len(compressed)
+    assert response.headers["content-type"] == "text/html"
 
 
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(
