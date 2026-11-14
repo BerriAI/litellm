@@ -9,7 +9,16 @@ from litellm.litellm_core_utils.served_output_texts import (
     served_output_texts,
     served_stream_output_texts,
 )
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 RAW = "Card: 4111 1111 1111 1111"
 MASKED = "Card: <CREDIT_CARD>"
@@ -81,6 +90,30 @@ def test_served_stream_output_texts_joins_chat_chunks_and_reads_anthropic_sse():
 def test_served_stream_output_texts_keeps_every_choice_index_when_chunks_carry_one_choice_each():
     chunks = [_stream_chunk("first ", 0), _stream_chunk(MASKED, 1), _stream_chunk("choice", 0)]
     assert served_stream_output_texts(chunks) == ("first choice", MASKED)
+
+
+def _text_completion_chunk(text: str | None, index: int = 0) -> TextCompletionResponse:
+    return TextCompletionResponse(object="text_completion", choices=[TextChoices(index=index, text=text)])
+
+
+def test_served_stream_output_texts_joins_text_completion_chunks_per_choice():
+    chunks = [
+        _text_completion_chunk("Card: ", 0),
+        _text_completion_chunk("second", 1),
+        _text_completion_chunk("<CREDIT_CARD>", 0),
+        _text_completion_chunk(None, 1),
+        TextCompletionResponse(object="text_completion", choices=[]),
+    ]
+    assert served_stream_output_texts(chunks) == (MASKED, "second")
+
+
+def test_overlay_replaces_text_completion_choice_text_with_served_text():
+    logged = {"id": "x", "object": "text_completion", "choices": [{"index": 0, "text": RAW}, {"index": 1, "text": RAW}]}
+    assert overlay_served_output_texts(logged, (MASKED,)) == {
+        "id": "x",
+        "object": "text_completion",
+        "choices": [{"index": 0, "text": MASKED}, {"index": 1, "text": RAW}],
+    }
 
 
 @pytest.mark.parametrize("content", (None, "", "first"))

@@ -9,6 +9,7 @@ public exception contract.
 
 import asyncio
 import hashlib
+import hmac
 import json
 import re
 import threading
@@ -291,8 +292,12 @@ def _cache_key(spec: TokenExchangeSpec) -> str:
 def _shares_one_assertion_across_workers(spec: TokenExchangeSpec) -> bool:
     """The store exists so the workers reading one projected token file don't each spend that file's
     single-use ``jti``. A source that mints its own assertion per exchange shares nothing with another
-    worker, so it never reads the store, never finds a hit there, and keeps its minted token off disk."""
-    return spec.assertion_source is None
+    worker, and a Google metadata-server token carries no ``jti`` (Anthropic only enforces single use on
+    assertions that do), so a stored token would only hand a mandatory refresh back the token it is
+    replacing. Neither reads the store, finds a hit there, or puts its minted token on disk."""
+    from litellm.secret_managers.main import GOOGLE_OIDC_SECRET_PREFIX
+
+    return spec.assertion_source is None and not spec.assertion_ref.startswith(GOOGLE_OIDC_SECRET_PREFIX)
 
 
 def _assertion_digest(assertion: SecretStr) -> str:
@@ -538,10 +543,22 @@ class _Entry:
     """Single-flight state for one cache key; mutable by design, confined to the
     engine, and only ever mutated under the engine lock."""
 
-    __slots__ = ("backoff_until", "done", "force_refresh", "in_flight", "last_error", "lifetime_seconds", "token")
+    __slots__ = (
+        "backoff_until",
+        "done",
+        "force_refresh",
+        "in_flight",
+        "last_error",
+        "lifetime_seconds",
+        "previous_token",
+        "spec",
+        "token",
+    )
 
-    def __init__(self, force_refresh: bool = False) -> None:
+    def __init__(self, spec: TokenExchangeSpec, force_refresh: bool = False) -> None:
+        self.spec: Final = spec
         self.token: MintedToken | None = None
+        self.previous_token: MintedToken | None = None
         self.lifetime_seconds: float | None = None
         self.in_flight: bool = False
         self.done: Final = threading.Event()
@@ -562,7 +579,14 @@ class _Entry:
         self.in_flight = False
         self.done.set()
 
+    def issued(self, access_token: str) -> bool:
+        return any(
+            minted is not None and hmac.compare_digest(minted.access_token.get_secret_value(), access_token)
+            for minted in (self.token, self.previous_token)
+        )
+
     def _store(self, token: MintedToken, now: float) -> None:
+        self.previous_token = self.token
         self.token = token
         self.lifetime_seconds = None if token.expires_at is None else max(token.expires_at - now, 0.0)
         self.last_error = None
@@ -684,11 +708,17 @@ class JwtBearerTokenExchangeEngine:
     async def aget_token(self, spec: TokenExchangeSpec) -> ExchangeResult:
         return await asyncio.to_thread(self.get_token, spec)
 
+    def spec_for_access_token(self, access_token: str) -> TokenExchangeSpec | None:
+        """Finds the identity a bearer was minted for, so resending an already built request can swap in
+        the current token instead of one that expired while the first attempt was in flight."""
+        with self._lock:
+            return next((entry.spec for entry in self._entries.values() if entry.issued(access_token)), None)
+
     def invalidate(self, spec: TokenExchangeSpec) -> None:
         key: Final = _cache_key(spec)
         with self._lock:
             if key in self._entries:
-                self._entries[key] = _Entry(force_refresh=True)
+                self._entries[key] = _Entry(spec, force_refresh=True)
         if self._shared_store is not None:
             self._shared_store.delete(key)
 
@@ -699,7 +729,7 @@ class JwtBearerTokenExchangeEngine:
             return existing
         if len(self._entries) >= self._max_entries:
             self._evict_locked()
-        created: Final = _Entry()
+        created: Final = _Entry(spec)
         self._entries[key] = created
         return created
 

@@ -7,11 +7,104 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoFrameImage, VideoInputReference
 from litellm.types.videos.utils import decode_video_id_with_provider, id_safe_name
 
 _FIELDS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_FRAME_IMAGES_ADAPTER: Final = TypeAdapter(tuple[VideoFrameImage, ...])
+_INPUT_REFERENCES_ADAPTER: Final = TypeAdapter(tuple[VideoInputReference, ...])
+OPENROUTER_VIDEO_FIELDS: Final = frozenset(
+    {"duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"}
+)
+
+
+def unsupported_video_fields(
+    params: VideoCreateOptionalRequestParams,
+    model: str,
+    provider: str,
+    drop_params: bool,
+    supported_native: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    unsupported: Final = tuple(
+        key for key, value in params.items() if key in OPENROUTER_VIDEO_FIELDS - supported_native and value is not None
+    )
+    if unsupported and not drop_params:
+        raise UnsupportedParamsError(
+            message=f"{provider} video generation does not support {', '.join(unsupported)}, set drop_params=True to ignore them",
+            model=model,
+            llm_provider=provider,
+        )
+    return frozenset(unsupported)
+
+
+def video_image_params(
+    params: Mapping[str, object], model: str, provider: str, drop_params: bool
+) -> Mapping[str, object]:
+    frames: Final = params.get("frame_images")
+    references: Final = params.get("input_references")
+    conflict: Final = (
+        "content cannot be combined with frame_images or input_references"
+        if params.get("content") is not None and (frames is not None or references is not None)
+        else "frame_images cannot be combined with input_references or input_reference"
+        if frames is not None and (references is not None or params.get("input_reference") is not None)
+        else "input_references cannot be combined with input_reference"
+        if references is not None and params.get("input_reference") is not None
+        else None
+    )
+    if conflict is not None and not drop_params:
+        raise UnsupportedParamsError(
+            message=f"{conflict}, set drop_params=True to ignore it", model=model, llm_provider=provider
+        )
+    try:
+        parsed_frames: Final = _FRAME_IMAGES_ADAPTER.validate_python(() if frames is None else frames)
+        parsed_references: Final = _INPUT_REFERENCES_ADAPTER.validate_python(
+            () if references is None or frames is not None else references
+        )
+    except ValidationError as e:
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=f"Invalid video image items, set drop_params=True to ignore them. {e}",
+                model=model,
+                llm_provider=provider,
+            ) from e
+        return _mapped_video_image_params(
+            {k: v for k, v in params.items() if k not in {"frame_images", "input_references"}},
+            (),
+        )
+    roles: Final = tuple(item["frame_type"] for item in parsed_frames)
+    first_indices: Final = {role: roles.index(role) for role in frozenset(roles)}
+    if len(roles) != len(frozenset(roles)) and not drop_params:
+        raise UnsupportedParamsError(
+            message="Duplicate frame_type, set drop_params=True to ignore it", model=model, llm_provider=provider
+        )
+    frame_items: Final = tuple(
+        {"type": item["type"], "image_url": item["image_url"], "role": item["frame_type"]}
+        for index, item in enumerate(parsed_frames)
+        if index == first_indices[item["frame_type"]]
+    )
+    reference_items: Final = tuple(
+        {"type": item["type"], "image_url": item["image_url"], "role": "reference_image"} for item in parsed_references
+    )
+    media: Final = frame_items if frames is not None else reference_items
+    return _mapped_video_image_params(params, media)
+
+
+def _mapped_video_image_params(
+    params: Mapping[str, object], media: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object]:
+    frames: Final = params.get("frame_images")
+    references: Final = params.get("input_references")
+    excluded: Final[frozenset[str]] = frozenset({"frame_images", "input_references", "aspect_ratio"}) | (
+        frozenset({"content", "input_reference"}) if frames is not None or references is not None else frozenset[str]()
+    )
+    return {
+        **{key: value for key, value in params.items() if key not in excluded},
+        **({"ratio": params["aspect_ratio"]} if params.get("aspect_ratio") is not None else {}),
+        **({"content": list(media)} if frames is not None or references is not None else {}),
+    }
 
 
 def _fields(value: object) -> Mapping[str, object] | None:

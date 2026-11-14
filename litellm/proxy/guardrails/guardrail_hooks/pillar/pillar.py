@@ -8,6 +8,7 @@
 # Standard library imports
 import json
 import os
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import quote
 
@@ -26,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.common_utils import message_dict_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -70,6 +72,12 @@ class _PillarProtectHTTPClient(Protocol):
         json: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> _PillarProtectHTTPResponse: ...
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def _encode_json_for_header(data: object) -> str:
@@ -205,6 +213,7 @@ class PillarGuardrail(CustomGuardrail):
         include_evidence: bool | None = None,
         fallback_on_error: str | None = None,
         timeout: float | None = None,
+        async_handler: _PillarProtectHTTPClient | None = None,
         **kwargs,
     ) -> None:
         """
@@ -223,8 +232,10 @@ class PillarGuardrail(CustomGuardrail):
             LiteLLM virtual key context (user_id, team_id, key_alias, etc.) is always
             automatically passed as X-LiteLLM-* headers to enable application/user tracking.
         """
-        self.async_handler: _PillarProtectHTTPClient = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+        self.async_handler: _PillarProtectHTTPClient = (
+            async_handler
+            if async_handler is not None
+            else get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         )
         self.api_key = api_key or os.environ.get("PILLAR_API_KEY")
 
@@ -430,7 +441,9 @@ class PillarGuardrail(CustomGuardrail):
         # Extract response messages in the format Pillar expects
         response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
         response_messages: Final = [
-            choice.get("message") for choice in response_dict.get("choices", []) if choice.get("message")
+            message_dict_with_server_tool_calls(choice["message"])
+            for choice in response_dict.get("choices", [])
+            if choice.get("message")
         ]
 
         if not response_messages:
@@ -719,7 +732,7 @@ class PillarGuardrail(CustomGuardrail):
         )
         return payload
 
-    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, Any]) -> _PillarProtectResponse:
+    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, object]) -> _PillarProtectResponse:
         """
         Call the Pillar API and return the response.
 
@@ -731,7 +744,7 @@ class PillarGuardrail(CustomGuardrail):
             Pillar API response as dictionary
         """
         verbose_proxy_logger.debug(
-            "Pillar Guardrail: Scanning %s messages for security threats", len(payload.get("messages", []))
+            "Pillar Guardrail: Scanning %s messages for security threats", _json_len(payload.get("messages", []))
         )
         response: Final = await self.async_handler.post(
             url=f"{self.api_base}/api/v1/protect",

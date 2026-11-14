@@ -7,8 +7,10 @@ from typing import Final
 import pytest
 
 from litellm.proxy.client.cli.commands import claude_settings
+from litellm.proxy.client.cli.commands.agents import run_agent
 
 REAL_CLAUDE_SETTINGS: Final = Path(os.path.expanduser("~")) / ".claude" / "settings.json"
+LAUNCH_PROXY: Final = "http://localhost:4000"
 
 
 def _current_bytes() -> bytes | None:
@@ -78,3 +80,32 @@ def isolated_claude_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ite
         f"this test wrote the developer's real {REAL_CLAUDE_SETTINGS}; the original bytes were restored. "
         "Resolve the Claude settings path at call time (never Path.home() at import) and point the test at tmp_path"
     )
+
+
+@pytest.fixture
+def launch_claude(isolated_claude_home: Path) -> Callable[[bool], Path]:
+    """Launch `lite claude` over a `lite login --pkce --config-claude` setup and return the `--settings` file it
+    wrote, which holds the launch key. Claude Code's config dir is read at call time, so a test can move it first."""
+
+    def launch(subscription: bool) -> Path:
+        launched: Final[dict[str, tuple[str, ...]]] = {}
+        run_agent(
+            LAUNCH_PROXY,
+            "sk-launch",
+            ["claude"],
+            subscription=subscription,
+            base_env={"CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"]},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *args: None,
+            verify_subscription=lambda *args: None,
+            launcher=lambda path, args, env: launched.update(args=tuple(args)),
+            read_settings=lambda path: {
+                "apiKeyHelper": f"/usr/local/bin/lite --base-url {LAUNCH_PROXY} auth print-token",
+                "env": {"ANTHROPIC_AUTH_TOKEN": ""},
+            },
+            project_dir=isolated_claude_home / "repo",
+        )
+        args: Final = launched["args"]
+        return Path(args[args.index("--settings") + 1])
+
+    return launch

@@ -1,8 +1,9 @@
 import types
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 from openai.types.image import Image
+from typing_extensions import TypedDict
 
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.llms.bedrock import (
@@ -17,6 +18,10 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageResponse,
 )
 from litellm.types.utils import ImageResponse
+
+
+class _NovaCanvasTaskFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class AmazonNovaCanvasConfig:
@@ -82,10 +87,12 @@ class AmazonNovaCanvasConfig:
 
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
-            text_to_image_params: dict[str, Any] = image_generation_config.pop("textToImageParams", {})
+            text_to_image_params: Mapping[str, object] = image_generation_config.pop("textToImageParams", {})
             text_to_image_params = {"text": text, **text_to_image_params}
             try:
-                text_to_image_params_typed: Final = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
+                text_to_image_params_typed: Final = AmazonNovaCanvasTextToImageParams(
+                    **_NovaCanvasTaskFields(**text_to_image_params)
+                )
             except Exception as e:
                 raise ValueError(
                     f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}"
@@ -104,7 +111,7 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "COLOR_GUIDED_GENERATION":
-            color_guided_generation_params: dict[str, Any] = image_generation_config.pop(
+            color_guided_generation_params: Mapping[str, object] = image_generation_config.pop(
                 "colorGuidedGenerationParams", {}
             )
             color_guided_generation_params = {
@@ -113,7 +120,7 @@ class AmazonNovaCanvasConfig:
             }
             try:
                 color_guided_generation_params_typed: Final = AmazonNovaCanvasColorGuidedGenerationParams(
-                    **color_guided_generation_params
+                    **_NovaCanvasTaskFields(**color_guided_generation_params)
                 )
             except Exception as e:
                 raise ValueError(
@@ -133,10 +140,12 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "INPAINTING":
-            inpainting_params: dict[str, Any] = image_generation_config.pop("inpaintingParams", {})
+            inpainting_params: Mapping[str, object] = image_generation_config.pop("inpaintingParams", {})
             inpainting_params = {"text": text, **inpainting_params}
             try:
-                inpainting_params_typed: Final = AmazonNovaCanvasInpaintingParams(**inpainting_params)
+                inpainting_params_typed: Final = AmazonNovaCanvasInpaintingParams(
+                    **_NovaCanvasTaskFields(**inpainting_params)
+                )
             except Exception as e:
                 raise ValueError(
                     f"Error transforming inpainting params: {e}. Got params: {inpainting_params}, Expected params: {AmazonNovaCanvasInpaintingParams.__annotations__}"

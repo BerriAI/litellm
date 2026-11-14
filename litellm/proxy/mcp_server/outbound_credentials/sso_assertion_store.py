@@ -30,6 +30,7 @@ from pydantic import ConfigDict, SecretStr, TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE, MCP_SSO_ASSERTION_CACHE_TTL_SECONDS
+from litellm.repositories.table_repositories import MCPServerRepository, PrismaTableRepository
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -68,14 +69,18 @@ class _MCPServerTable(Protocol):
     async def find_first(self, *, where: Mapping[str, str]) -> object | None: ...
 
 
+class _SSOAssertionRepository(PrismaTableRepository["LiteLLM_SSOIdentityAssertion"]):
+    table_name = "litellm_ssoidentityassertion"
+
+
 def _assertion_table(prisma_client: PrismaClient) -> _SSOAssertionTable:
     """The SSO assertion table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_ssoidentityassertion
+    return _SSOAssertionRepository(prisma_client).table
 
 
 def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
     """The MCP server table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_mcpservertable
+    return MCPServerRepository(prisma_client).table
 
 
 class SSOIdentityAssertion(LiteLLMBaseModel):

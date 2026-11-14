@@ -1,4 +1,5 @@
 from abc import ABC
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -7,7 +8,7 @@ if TYPE_CHECKING:
 
 class BaseLLMObsOTELAttributes(ABC):
     @staticmethod
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
         pass
 
     @staticmethod
@@ -15,7 +16,7 @@ class BaseLLMObsOTELAttributes(ABC):
         pass
 
 
-def cast_as_primitive_value_type(value) -> str | bool | int | float:
+def cast_as_primitive_value_type(value: object) -> str | bool | int | float:
     """
     Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
     """

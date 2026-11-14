@@ -18,7 +18,8 @@ from pydantic import JsonValue
 
 import litellm
 from litellm.rust_bridge import _native as native
-from litellm.rust_bridge.host.secret_manager import capture_secret_manager, native_secret_manager_config
+from litellm.rust_bridge.host.secret_manager import native_secret_manager_config
+from litellm.secret_managers.native_config import capture_secret_manager
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager

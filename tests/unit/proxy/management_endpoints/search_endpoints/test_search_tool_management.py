@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,9 +21,21 @@ from litellm.proxy._types import (
 
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
+from litellm.router import Router
 from litellm.types.search import SearchToolInfoResponse
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
+
+
+def test_dashboard_discovers_webiq_with_its_display_name() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "webiq"] == [
+        {"provider_name": "webiq", "ui_friendly_name": "Microsoft Web IQ"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -990,8 +1003,7 @@ def _live_router_and_db(db_rows: list):
 
     proxy_config = ProxyConfig()
     proxy_config.update_config_state({})
-    fake_router = MagicMock()
-    fake_router.search_tools = list(db_rows)
+    router = Router(model_list=[], search_tools=list(db_rows))
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(
@@ -1001,7 +1013,7 @@ def _live_router_and_db(db_rows: list):
             patch("litellm.proxy.proxy_server.proxy_config", proxy_config)
         )  # test-quality-ok: proxy globals are the only seam; see the module note above
         stack.enter_context(
-            patch("litellm.proxy.proxy_server.llm_router", fake_router)
+            patch("litellm.proxy.proxy_server.llm_router", router)
         )  # test-quality-ok: proxy globals are the only seam; see the module note above
         stack.enter_context(
             patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
@@ -1019,7 +1031,7 @@ def _live_router_and_db(db_rows: list):
             user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
         )
         try:
-            yield fake_router
+            yield router
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -1027,7 +1039,7 @@ def _live_router_and_db(db_rows: list):
 @pytest.mark.asyncio
 async def test_create_search_tool_reaches_the_router_before_the_response():
     """A UI-created tool must be usable immediately, not only after the next config reload tick."""
-    with _live_router_and_db([]) as fake_router:
+    with _live_router_and_db([]) as router:
         response = TestClient(app).post(
             "/search_tools",
             json={
@@ -1039,12 +1051,12 @@ async def test_create_search_tool_reaches_the_router_before_the_response():
         )
 
     assert response.status_code == 200
-    assert [tool["search_tool_name"] for tool in fake_router.search_tools] == ["tavily-search"]
+    assert [tool["search_tool_name"] for tool in router.settings().search_tools] == ["tavily-search"]
 
 
 @pytest.mark.asyncio
 async def test_update_search_tool_reaches_the_router_before_the_response():
-    with _live_router_and_db([_search_tool_row("tavily-search", provider="tavily")]) as fake_router:
+    with _live_router_and_db([_search_tool_row("tavily-search", provider="tavily")]) as router:
         response = TestClient(app).put(
             "/search_tools/tavily-search-id",
             json={
@@ -1056,17 +1068,17 @@ async def test_update_search_tool_reaches_the_router_before_the_response():
         )
 
     assert response.status_code == 200
-    assert fake_router.search_tools[0]["litellm_params"]["search_provider"] == "exa_ai"
+    assert router.settings().search_tools[0]["litellm_params"]["search_provider"] == "exa_ai"
 
 
 @pytest.mark.asyncio
 async def test_delete_search_tool_removes_it_from_the_router():
     """Deleting the last tool must clear the router; the old empty-list guard left it live."""
-    with _live_router_and_db([_search_tool_row("tavily-search")]) as fake_router:
+    with _live_router_and_db([_search_tool_row("tavily-search")]) as router:
         response = TestClient(app).delete("/search_tools/tavily-search-id")
 
     assert response.status_code == 200
-    assert fake_router.search_tools == []
+    assert list(router.settings().search_tools) == []
 
 
 @pytest.mark.asyncio
@@ -1573,7 +1585,7 @@ async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(
             "api_base": "https://api.perplexity.ai",
         },
     }
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.search_tools = [loaded_tool]
 
     with (

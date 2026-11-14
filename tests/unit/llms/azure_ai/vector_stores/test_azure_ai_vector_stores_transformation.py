@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -180,3 +181,38 @@ def test_transform_requires_embedding_model():
 
     with pytest.raises(ValueError, match="litellm_embedding_model is required"):
         AzureAIVectorStoreConfig().transform_search_vector_store_request(**transform_kwargs)
+
+
+class _SearchLogging:
+    def __init__(self, query: str) -> None:
+        self.model_call_details = {"input": query}
+
+
+def test_search_response_keeps_document_fields_as_attributes_without_search_internals() -> None:
+    body: Final = {
+        "value": [
+            {
+                "@search.score": 0.8,
+                "id": "doc-1",
+                "content": "Run litellm --config config.yaml",
+                "contentVector": [0.5, -0.25],
+                "title": "Proxy setup",
+                "tags": ["proxy", "setup"],
+            }
+        ]
+    }
+
+    response: Final = AzureAIVectorStoreConfig().transform_search_vector_store_response(
+        httpx.Response(200, json=body), _SearchLogging("how do I start the proxy")
+    )
+
+    assert response["search_query"] == "how do I start the proxy"
+    assert response["data"] == [
+        {
+            "score": 0.8,
+            "content": [{"text": "Run litellm --config config.yaml", "type": "text"}],
+            "file_id": "doc-1",
+            "filename": "Document doc-1",
+            "attributes": {"title": "Proxy setup", "tags": ["proxy", "setup"], "document_id": "doc-1"},
+        }
+    ]

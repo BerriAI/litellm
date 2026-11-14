@@ -51,11 +51,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         "request_tags": "[]",
         "custom_llm_provider": "openai",
         "status": "success",
+        "request_duration_ms": None,
         **overrides,
     }
 
 
-def _transaction(model: str, spend: float, successful: bool = True) -> ModelUsageTransaction:
+def _transaction(
+    model: str, spend: float, successful: bool = True, duration_ms: int | None = None
+) -> ModelUsageTransaction:
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date="2026-09-28", model_group=model, model=model, custom_llm_provider="openai", task_type="debugging"
@@ -64,6 +67,7 @@ def _transaction(model: str, spend: float, successful: bool = True) -> ModelUsag
         prompt_tokens=10,
         completion_tokens=5,
         successful=successful,
+        duration_ms=duration_ms,
     )
 
 
@@ -128,10 +132,10 @@ async def test_flush_aggregates_each_rollup_row_into_one_upsert() -> None:
     await flush_model_usage_transactions(
         prisma_client=prisma,
         transactions=[
-            _transaction("gpt-5", 0.5),
+            _transaction("gpt-5", 0.5, duration_ms=200),
             _transaction("claude", 1.0),
             _transaction("gpt-5", 0.25, successful=False),
-            _transaction("gpt-5", 0.25),
+            _transaction("gpt-5", 0.25, duration_ms=400),
         ],
     )
 
@@ -154,8 +158,39 @@ async def test_flush_aggregates_each_rollup_row_into_one_upsert() -> None:
         "request_count": {"increment": 3},
         "successful_requests": {"increment": 2},
         "failed_requests": {"increment": 1},
+        "total_response_time_ms": {"increment": 600},
+        "timed_requests": {"increment": 2},
     }
     assert upserts["claude"]["create"]["request_count"] == 1
+    assert (upserts["claude"]["create"]["total_response_time_ms"], upserts["claude"]["create"]["timed_requests"]) == (
+        0,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    (
+        ({"request_duration_ms": 250}, 250),
+        ({"request_duration_ms": 0}, 0),
+        ({"request_duration_ms": 250, "status": "failure"}, None),
+        ({"request_duration_ms": None}, None),
+        ({"request_duration_ms": -1}, None),
+        (
+            {
+                "request_duration_ms": 250,
+                "metadata": json.dumps({INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}),
+            },
+            None,
+        ),
+    ),
+)
+def test_only_successful_caller_requests_with_a_duration_count_toward_response_time(
+    overrides: dict[str, Any], expected: int | None
+) -> None:
+    transaction = build_model_usage_transaction(_payload(**overrides))
+    assert transaction is not None
+    assert transaction.duration_ms == expected
 
 
 @pytest.mark.asyncio
@@ -166,7 +201,10 @@ async def test_a_background_response_billing_row_adds_spend_but_no_request() -> 
     prisma = _prisma(MagicMock(return_value=batcher))
     create = build_model_usage_transaction(_payload(spend=0.0))
     billing = build_model_usage_transaction(
-        _payload(spend=0.5, metadata=json.dumps({INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}))
+        _payload(
+            spend=0.5,
+            metadata=json.dumps({INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}),
+        )
     )
     assert create is not None and billing is not None
 

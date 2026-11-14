@@ -117,6 +117,9 @@ class TestCreate:
         assert b'name="model"\r\n\r\n' + SELLER_MODEL.encode() in request.content
         assert b'name="seconds"\r\n\r\n4' in request.content
 
+    def test_seed_zero_survives_drop_params(self):
+        assert EdenAIVideoConfig().map_openai_params({"seed": 0}, SELLER_MODEL, True) == {"seed": 0}
+
     def test_a_reference_image_url_stays_in_the_json_body(self, eden_key, respx_mock):
         respx_mock.post(EDEN_VIDEOS_URL).mock(return_value=httpx.Response(200, json=_eden_video()))
 

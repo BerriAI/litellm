@@ -16,6 +16,7 @@ from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
     bind,
+    native_acall_hook,
     native_call,
     native_call_hook,
     optional_sequence,
@@ -131,7 +132,7 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
         _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ACOMPLETION,
-        native=native_call_hook,
+        native=native_acall_hook,
     )
 
 

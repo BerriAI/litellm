@@ -131,7 +131,7 @@ async def search_skills(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
 ) -> SkillSearchOutcome:
-    if embedding_model is None:
+    if embedding_model is None or not embedding_model.strip():
         return SkillSearchNotConfigured(
             reason="skill search needs litellm_settings.skill_search_embedding_model set to an embedding model from model_list"
         )

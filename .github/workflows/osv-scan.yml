@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
@@ -37,7 +40,7 @@ jobs:
       - name: Scan lockfiles
         run: |
           "$RUNNER_TEMP/osv-scanner" scan source \
-            --config osv-scanner.toml \
+            --config .github/osv-scanner.toml \
             -L uv.lock \
-            -L ui/litellm-dashboard/package-lock.json \
-            -L vscode-extension/package-lock.json
+            -L litellm/ui/litellm-dashboard/package-lock.json \
+            -L litellm/vscode-extension/package-lock.json

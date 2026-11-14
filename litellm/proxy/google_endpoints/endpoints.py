@@ -1,15 +1,16 @@
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -22,19 +23,72 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
-from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 
+def _google_repeated_field(value: JsonValue) -> JsonValue:
+    match value:
+        case None:
+            return []
+        case dict():
+            return [value]
+        case list():
+            return [item for item in value if item is not None]
+        case _:
+            return value
+
+
+def _google_content(value: JsonValue) -> JsonValue:
+    match value:
+        case {"parts": parts}:
+            return {**value, "parts": _google_repeated_field(parts)}
+        case _:
+            return value
+
+
+def _google_contents(value: JsonValue) -> JsonValue:
+    match _google_repeated_field(value):
+        case list() as contents:
+            return [_google_content(content) for content in contents]
+        case other:
+            return other
+
+
+_GOOGLE_PART_TEXT_AND_METADATA_FIELDS: Final = frozenset(
+    {"text", "thought", "thoughtSignature", "thought_signature", "partMetadata", "part_metadata"}
+)
+
+
+def _google_part_has_non_text_content(part: Mapping[str, JsonValue]) -> bool:
+    return any(field is not None for key, field in part.items() if key not in _GOOGLE_PART_TEXT_AND_METADATA_FIELDS)
+
+
+def _google_system_part(value: JsonValue) -> JsonValue:
+    match value:
+        case dict() if value.get("text") is None and _google_part_has_non_text_content(value):
+            return {key: field for key, field in value.items() if key != "text"}
+        case dict():
+            return {"text": None, **value}
+        case _:
+            return value
+
+
+_GOOGLE_REPEATED_FIELD: Final = BeforeValidator(_google_repeated_field)
+
+
 class _GoogleCountTokensTextPart(BaseModel):
     model_config = ConfigDict(frozen=True)
-    text: str
+    text: str | None
 
 
 class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
-    parts: tuple[_GoogleCountTokensTextPart, ...]
+    parts: Annotated[
+        tuple[Annotated[_GoogleCountTokensTextPart, BeforeValidator(_google_system_part)], ...],
+        _GOOGLE_REPEATED_FIELD,
+    ] = ()
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
@@ -47,16 +101,16 @@ class _GoogleCountTokensFunctionDeclaration(BaseModel):
 
 class _GoogleCountTokensTool(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
-    function_declarations: tuple[_GoogleCountTokensFunctionDeclaration, ...] = Field(
+    function_declarations: Annotated[tuple[_GoogleCountTokensFunctionDeclaration, ...], _GOOGLE_REPEATED_FIELD] = Field(
         default=(), alias="functionDeclarations"
     )
 
 
 class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
-    contents: tuple[Mapping[str, JsonValue], ...] = ()
+    contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
-    tools: tuple[_GoogleCountTokensTool, ...] = ()
+    tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
 
 
 router: Final = APIRouter(
@@ -112,7 +166,11 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
-        [{"type": "text", "text": part.text} for part in validated_data.system_instruction.parts]
+        [
+            {"type": "text", "text": part.text}
+            for part in validated_data.system_instruction.parts
+            if part.text is not None
+        ]
         if validated_data.system_instruction is not None
         else None
     )
@@ -270,7 +328,7 @@ async def google_stream_generate_content(
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
-async def google_count_tokens(request: Request, model_name: str):
+async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
     """
     ```json
     return {
@@ -285,10 +343,18 @@ async def google_count_tokens(request: Request, model_name: str):
     }
     ```
     """
-    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-    from litellm.proxy.proxy_server import token_counter as internal_token_counter
-
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, request, fastapi_response
+    )
+
+
+async def _google_count_tokens(
+    request: Request, model_name: str, litellm_call_id: str
+) -> JSONResponse | TokenCountDetailsResponse:
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import count_request_tokens
+
     data: Final = await read_request_body(request=request)
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
@@ -308,7 +374,7 @@ async def google_count_tokens(request: Request, model_name: str):
         )
 
     try:
-        token_response: Final = await internal_token_counter(
+        token_response: Final = await count_request_tokens(
             request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
         )
     except ProxyException as error:
@@ -422,6 +488,10 @@ async def create_interaction(
         )
 
 
+def _interaction_model_group(request: Request) -> str | None:
+    return request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
+
+
 @router.get(
     "/v1beta/interactions/{interaction_id}",
     dependencies=[Depends(user_api_key_auth)],
@@ -459,7 +529,8 @@ async def get_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -473,7 +544,7 @@ async def get_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -527,7 +598,8 @@ async def delete_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -541,7 +613,7 @@ async def delete_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -595,7 +667,8 @@ async def cancel_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    model: Final = _interaction_model_group(request)
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -609,7 +682,7 @@ async def cancel_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Final
 
-from litellm._logging import print_startup_message, verbose_logger
+from litellm._logging import print_startup_message, print_startup_warning, verbose_logger
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -63,7 +63,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             run_prisma,
         )
     except ImportError as e:
-        print_startup_message(
+        print_startup_warning(
             f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}",
         )
         return False, []
@@ -96,14 +96,14 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         else:
             return False, []
     except subprocess.TimeoutExpired:
-        print_startup_message(
+        print_startup_warning(
             f"Timed out after {timeout}s generating the migration diff. "
             f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer.",
         )
         return False, []
     except subprocess.CalledProcessError as e:
         error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
-        print_startup_message(error_message)
+        print_startup_warning(error_message)
         return False, []
 
 

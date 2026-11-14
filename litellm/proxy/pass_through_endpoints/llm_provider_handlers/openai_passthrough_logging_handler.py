@@ -10,7 +10,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +21,8 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.openai.common_utils import is_openai_agents_api_path
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -31,6 +33,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
@@ -38,7 +41,13 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, PassthroughCallTypes
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    LlmProviders,
+    PassthroughCallTypes,
+    StandardPassThroughResponseObject,
+)
 from litellm.utils import ModelResponse, TextCompletionResponse, convert_to_model_response_object
 
 # Hostnames that route to OpenAI-compatible APIs.
@@ -115,10 +124,61 @@ def _is_finished_background_response(response_body: Mapping[str, object]) -> boo
     return is_background_response(response_body) and response_body.get("usage") is not None
 
 
+def _settles_background_response(terminal_response: ResponsesAPIResponse) -> bool:
+    return is_background_response(terminal_response) and terminal_response.usage is not None
+
+
 def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
     return None if anchor is None else tuple(segments[anchor + 1 :])
+
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _AgentConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+
+
+class _AgentsApiBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agent: _AgentConfig
+
+
+class _AgentsApiSessionEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    session: _AgentsApiBody
+
+
+_AGENTS_API_BODY: Final = TypeAdapter(_AgentsApiBody | _AgentConfig)
+
+
+def _agent_model(body: Mapping[str, object]) -> str | None:
+    try:
+        parsed: Final = _AGENTS_API_BODY.validate_python(body)
+    except ValidationError:
+        return None
+    return parsed.agent.model if isinstance(parsed, _AgentsApiBody) else parsed.model
+
+
+def _session_event_model(chunk: str) -> str | None:
+    event: Final = BaseModelResponseIterator.string_to_dict_parser(str_line=chunk)
+    if event is None:
+        return None
+    try:
+        return _AgentsApiSessionEvent.model_validate(event).session.agent.model
+    except ValidationError:
+        return None
+
+
+def _streamed_agent_model(all_chunks: Sequence[str]) -> str | None:
+    return next((model for chunk in all_chunks if (model := _session_event_model(chunk)) is not None), None)
 
 
 def _is_remote_high_detail_image(part: object) -> bool:
@@ -207,7 +267,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def openai_responses_call_billing(
-        method: str, url_route: str, response_body: Mapping[str, object]
+        method: str, url_route: str, response_body: Mapping[str, object], settled_before: bool = False
     ) -> ResponsesCallBilling:
         if not OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route):
             return "unbilled"
@@ -215,19 +275,90 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
                 return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                return "background_settlement" if _is_finished_background_response(response_body) else "unbilled"
+                settles: Final = not settled_before and _is_finished_background_response(response_body)
+                return "background_settlement" if settles else "unbilled"
             case _:
                 return "billed"
 
     @staticmethod
-    def _label_unbilled_responses_call(
+    def background_response_settled_by_call(
+        method: str, url_route: str, response_body: Mapping[str, object]
+    ) -> str | None:
+        response_id: Final = response_body.get("id")
+        billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(method, url_route, response_body)
+        return response_id if billing == "background_settlement" and isinstance(response_id, str) else None
+
+    @staticmethod
+    def stream_may_settle_background_response(url_route: str, request_body: Mapping[str, object]) -> bool:
+        sub_route: Final = _responses_sub_route(urlparse(url_route).path)
+        creates_in_background: Final = sub_route == () and request_body.get("background") is True
+        resumes_a_response: Final = sub_route is not None and len(sub_route) == 1
+        return OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and (
+            creates_in_background or resumes_a_response
+        )
+
+    @staticmethod
+    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> str | None:
+        terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks)
+        if terminal_response is None or not _settles_background_response(terminal_response):
+            return None
+        return terminal_response.id
+
+    @staticmethod
+    def is_openai_agents_route(url_route: str) -> bool:
+        return is_openai_compatible_url(url_route) and is_openai_agents_api_path(urlparse(url_route).path)
+
+    @staticmethod
+    def is_openai_decisions_route(url_route: str) -> bool:
+        return is_openai_compatible_url(url_route) and urlparse(url_route).path.rstrip("/").endswith("/v1/decisions")
+
+    @staticmethod
+    def handles_route(url_route: str) -> bool:
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_decisions_route(url_route)
+        )
+
+    @staticmethod
+    def _unbilled_call_model(
+        url_route: str, request_body: Mapping[str, object], response_body: Mapping[str, object]
+    ) -> str | None:
+        if OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route):
+            return _agent_model(response_body) or _agent_model(request_body)
+        response_model: Final = response_body.get("model")
+        if OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and isinstance(response_model, str):
+            return response_model
+        return None
+
+    @staticmethod
+    def _label_model(logging_obj: LiteLLMLoggingObj, model: str | None) -> None:
+        if model is not None:
+            logging_obj.model_call_details["model"] = model  # rebind-ok: spend rows read the model from here
+
+    @staticmethod
+    def _label_unbilled_call(
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
+        request_body: Mapping[str, object],
         response_body: Mapping[str, object],
     ) -> None:
-        model: Final = response_body.get("model")
-        if OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and isinstance(model, str):
-            logging_obj.model_call_details["model"] = model  # rebind-ok: spend rows read the model from here
+        OpenAIPassthroughLoggingHandler._label_model(
+            logging_obj, OpenAIPassthroughLoggingHandler._unbilled_call_model(url_route, request_body, response_body)
+        )
+
+    @staticmethod
+    def _log_agents_stream(
+        litellm_logging_obj: LiteLLMLoggingObj, request_body: Mapping[str, object], all_chunks: Sequence[str]
+    ) -> PassThroughEndpointLoggingTypedDict:
+        OpenAIPassthroughLoggingHandler._label_model(
+            litellm_logging_obj, _streamed_agent_model(all_chunks) or _agent_model(request_body)
+        )
+        return {"result": StandardPassThroughResponseObject(response="\n".join(all_chunks)), "kwargs": {}}
 
     @staticmethod
     def is_openai_embeddings_route(url_route: str) -> bool:
@@ -381,6 +512,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         end_time: datetime,
         cache_hit: bool,
         request_body: dict,
+        background_response_settled_before: bool = False,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -392,12 +524,28 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_image_generation: Final = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
         is_image_editing: Final = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         responses_billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(
-            httpx_response.request.method, url_route, response_body
+            httpx_response.request.method, url_route, response_body, background_response_settled_before
         )
         is_responses: Final = responses_billing != "unbilled"
+        is_decisions: Final = (
+            httpx_response.request.method == "POST"
+            and OpenAIPassthroughLoggingHandler.is_openai_decisions_route(url_route)
+        )
 
-        if not (is_chat_completions or is_embeddings or is_image_generation or is_image_editing or is_responses):
-            OpenAIPassthroughLoggingHandler._label_unbilled_responses_call(logging_obj, url_route, response_body)
+        if not (
+            is_chat_completions
+            or is_embeddings
+            or is_image_generation
+            or is_image_editing
+            or is_responses
+            or is_decisions
+        ):
+            OpenAIPassthroughLoggingHandler._label_unbilled_call(
+                logging_obj,
+                url_route,
+                request_body=_STR_MAPPING.validate_python(request_body),
+                response_body=_STR_MAPPING.validate_python(response_body),
+            )
             return {
                 "result": None,
                 "kwargs": kwargs,
@@ -423,12 +571,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         try:
             response_cost = 0.0
             litellm_model_response: (
-                ModelResponse | TextCompletionResponse | EmbeddingResponse | ImageResponse | ResponsesAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | EmbeddingResponse
+                | ImageResponse
+                | ResponsesAPIResponse
+                | OpenAIDecisionResponse
+                | None
             ) = None
             handler_instance: Final = OpenAIPassthroughLoggingHandler()
 
+            logged_custom_llm_provider: Final = _DECODED_JSON.validate_python(
+                logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            )
             custom_llm_provider: Final = TypeAdapter(str).validate_python(
-                kwargs.get("custom_llm_provider", logging_obj.model_call_details.get("custom_llm_provider", "openai"))
+                kwargs.get("custom_llm_provider", logged_custom_llm_provider)
             )
 
             if is_chat_completions:
@@ -475,11 +632,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     response_body=response_body,
                     request_body=request_body,
                 )
-                # Mark call type for downstream image-aware logic/metrics
-                try:
-                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
-                except Exception:
-                    pass
+                logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
@@ -494,11 +647,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     response_body=response_body,
                     request_body=request_body,
                 )
-                # Mark call type for downstream image-aware logic/metrics
-                try:
-                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
-                except Exception:
-                    pass
+                logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
@@ -519,6 +668,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     httpx_response=httpx_response,
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
+                )
+            elif is_decisions:
+                litellm_model_response = OpenAIDecisionResponse.model_validate(response_body)  # rebind-ok: elif-chain
+                response_cost = litellm.completion_cost(  # rebind-ok: elif-chain
+                    completion_response=litellm_model_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="decisions",
                 )
 
             # Update kwargs with cost information
@@ -567,6 +724,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 if is_image_generation
                 else "image_editing"
                 if is_image_editing
+                else "decisions"
+                if is_decisions
                 else "responses"
             )
             verbose_proxy_logger.debug(
@@ -672,16 +831,26 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         start_time: datetime,
         all_chunks: list[str],
         end_time: datetime,
+        background_response_settled_before: bool = False,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle logging for collected OpenAI streaming chunks with cost tracking.
         """
+        if OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route):
+            return OpenAIPassthroughLoggingHandler._log_agents_stream(
+                litellm_logging_obj, _STR_MAPPING.validate_python(request_body), all_chunks
+            )
         try:
             is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            terminal_response: Final = (
+            parsed_terminal_response: Final = (
                 OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks=all_chunks)
                 if is_responses
                 else None
+            )
+            terminal_response: Final = (
+                parsed_terminal_response.model_copy(update={"usage": None})
+                if background_response_settled_before and parsed_terminal_response is not None
+                else parsed_terminal_response
             )
             requested_model: Final[object] = request_body.get("model")
             model: Final = (
@@ -713,7 +882,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             custom_llm_provider: Final = litellm_logging_obj.model_call_details.get("custom_llm_provider", "openai")
             # Calculate cost using LiteLLM's cost calculator
             response_cost: Final = (
-                litellm.completion_cost(
+                0.0
+                if background_response_settled_before
+                else litellm.completion_cost(
                     completion_response=complete_response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -729,9 +900,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             settles_background_response: Final = (
                 BackgroundResponseSettlement.SETTLES
-                if terminal_response is not None
-                and is_background_response(terminal_response)
-                and terminal_response.usage is not None
+                if not background_response_settled_before
+                and terminal_response is not None
+                and _settles_background_response(terminal_response)
                 else None
             )
 

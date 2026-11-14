@@ -27,7 +27,7 @@ def ensure_nova_canvas_image_edit_model_cost_flags(monkeypatch):
     Full ``model_prices_and_context_window.json`` includes these flags, but CI or
     alternate cost maps may omit them—merge minimal entries so tests match production.
     """
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     for key in (
         "amazon.nova-canvas-v1:0",
@@ -46,11 +46,11 @@ def ensure_nova_canvas_image_edit_model_cost_flags(monkeypatch):
                 "supports_nova_canvas_image_edit": True,
             },
         )
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
     yield
 
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_get_config_class_nova_canvas():

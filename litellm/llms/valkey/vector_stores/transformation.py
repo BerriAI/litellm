@@ -15,6 +15,7 @@ import httpx
 from pydantic import ConfigDict
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import attribute_items
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -33,7 +34,6 @@ from litellm.types.vector_stores import (
 if TYPE_CHECKING:
     from redis import Redis
     from redis.asyncio import Redis as AsyncRedis
-    from redis.commands.search.document import Document
     from redis.commands.search.query import Query
     from redis.commands.search.result import Result
 
@@ -185,7 +185,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         return query_cls(knn_expr).return_fields(text_field, DISTANCE_FIELD_NAME).paging(0, k).dialect(2)
 
     @staticmethod
-    def _to_result(doc: "Document", text_field: str) -> VectorStoreSearchResult:
+    def _to_result(doc: object, text_field: str) -> VectorStoreSearchResult:
         content: Final = [VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")]
         return VectorStoreSearchResult(
             score=1.0 - float(getattr(doc, DISTANCE_FIELD_NAME)),
@@ -196,7 +196,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
 
     @classmethod
     def _to_response(cls, search_result: "Result", query_text: str, text_field: str) -> VectorStoreSearchResponse:
-        docs: Final = getattr(search_result, "docs", None) or ()
+        docs: Final = attribute_items(search_result, "docs")
         data: Final = sorted(
             (cls._to_result(doc, text_field) for doc in docs),
             key=lambda result: result.get("score") or 0.0,

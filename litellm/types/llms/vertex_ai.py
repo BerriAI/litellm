@@ -1,8 +1,9 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from typing_extensions import (
+    NotRequired,
     ReadOnly,
     Required,
     TypedDict,
@@ -140,7 +141,7 @@ class Schema(TypedDict, total=False):
     title: str
     description: str
     nullable: bool
-    default: Any
+    default: ReadOnly[object]
     items: "Schema"
     minItems: str
     maxItems: str
@@ -155,7 +156,7 @@ class Schema(TypedDict, total=False):
     minLength: str
     maxLength: str
     pattern: str
-    example: Any
+    example: ReadOnly[object]
     anyOf: list["Schema"]
 
 
@@ -312,8 +313,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
@@ -376,7 +377,7 @@ class RequestBody(TypedDict, total=False):
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: Tools
+    tools: Tools | None
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
@@ -591,6 +592,7 @@ class Instance(TypedDict, total=False):
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: Required[list[Instance]]
     parameters: dict
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class VideoEmbedding(TypedDict):
@@ -738,6 +740,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    labels: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):
@@ -794,9 +797,9 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: dict[str, Any]
-    metadata: dict[str, Any]
-    error: dict[str, Any]
+    response: ReadOnly[dict[str, object]]
+    metadata: ReadOnly[dict[str, object]]
+    error: ReadOnly[dict[str, object]]
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]

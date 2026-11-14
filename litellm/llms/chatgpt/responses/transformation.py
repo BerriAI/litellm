@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -27,7 +28,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
+from ..authenticator import Authenticator, get_chatgpt_auth_file, resolve_chatgpt_authenticator
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
@@ -63,10 +64,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
-    def _resolve_authenticator(self, litellm_params: GenericLiteLLMParams | None) -> Authenticator:
-        auth_file: Final = get_chatgpt_auth_file(litellm_params)
-        return get_cached_authenticator(auth_file) if auth_file else self.authenticator
-
     def validate_environment(
         self,
         headers: dict[str, str],
@@ -80,7 +77,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 **get_chatgpt_default_headers(client_credential.access_token, client_credential.account_id, session_id),
                 **strip_chatgpt_client_credential_headers(headers),
             }
-        authenticator: Final = self._resolve_authenticator(litellm_params)
+        authenticator: Final = resolve_chatgpt_authenticator(litellm_params, self.authenticator)
         safe_headers: Final = strip_chatgpt_client_credential_headers(headers)
         configured_api_key: Final = litellm_params.api_key if litellm_params is not None else None
         if configured_api_key and not get_chatgpt_auth_file(litellm_params):
@@ -146,6 +143,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            "text",
+            "max_output_tokens",
         }
 
         filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
@@ -221,7 +220,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ):
                 # Real OUTPUT_ITEM_DONE events take precedence at any given
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
@@ -295,3 +297,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_REASONING_FIELD_VALUES

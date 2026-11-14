@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -37,7 +37,15 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def translate_developer_role_to_system_role(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         O-series models support `developer` role.
         """
@@ -114,6 +122,15 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
         return super()._map_openai_params(non_default_params, optional_params, model, drop_params)
 
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        keeps_system_messages: Final = supports_system_messages(model, "openai")
+        return tuple(
+            message
+            if keeps_system_messages or message["role"] != "system"
+            else ChatCompletionUserMessage(content=message["content"], role="user")
+            for message in messages
+        )
+
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
         return (
@@ -144,13 +161,8 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-        _supports_system_messages: Final = supports_system_messages(model, "openai")
-        for i, message in enumerate(messages):
-            if message["role"] == "system" and not _supports_system_messages:
-                new_message = ChatCompletionUserMessage(content=message["content"], role="user")
-                messages[i] = new_message  # Replace the old message with the new one
-
+        transformed_messages: Final = list(self._with_provider_roles(messages, model))
         if is_async:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[True], True))
         else:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[False], False))

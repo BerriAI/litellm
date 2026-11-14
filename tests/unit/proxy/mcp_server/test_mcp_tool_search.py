@@ -21,7 +21,7 @@ from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from mcp.types import Tool
+from mcp.types import ListToolsResult, Tool
 from pydantic import JsonValue
 
 import litellm
@@ -67,6 +67,10 @@ SAMPLE_TOOLS = _make_tools(
         ("notion-create_page", "Create a new page in Notion"),
     ]
 )
+
+
+def _listing_client() -> SimpleNamespace:
+    return SimpleNamespace(discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"))
 
 
 @pytest.mark.parametrize(
@@ -1417,8 +1421,8 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
     with (
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
         patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
-        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=_listing_client())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=ListToolsResult(tools=upstream))),
     ):
         try:
             result = await handle_mcp_tool_search(query="echo", top_k=1, user_api_key_dict=user)

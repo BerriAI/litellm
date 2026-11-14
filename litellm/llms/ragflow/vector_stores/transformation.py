@@ -41,6 +41,11 @@ class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
+class _RAGFlowStatus(TypedDict):
+    code: ReadOnly[NotRequired[int]]
+    message: ReadOnly[NotRequired[str]]
+
+
 _RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
 
 
@@ -197,7 +202,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final[_RAGFlowStatus] = response.json()
 
             # Check for RAGFlow error response
             if response_json.get("code") != 0:

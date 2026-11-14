@@ -19,7 +19,7 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, generate_private_key
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -786,13 +786,20 @@ def test_dcr_bridge_relays_client_registration_and_advertises_gateway_endpoints(
         assert "S256" in issuer.json()["code_challenge_methods_supported"]
 
 
-def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
-    claims: Final = {"user_id": user_id, "login_method": "username_password", "exp": int(time.time()) + 600}
-    return {"token": jwt.encode(claims, gateway.key, algorithm="HS256")}
+def _ui_session_cookie(scenario: Scenario, user_id: str) -> dict[str, str]:
+    session_key: Final = scenario.key(user_id=user_id, duration="10m")
+    claims: Final = {
+        "user_id": user_id,
+        "key": session_key,
+        "login_method": "username_password",
+        "exp": int(time.time()) + 600,
+    }
+    return {"token": jwt.encode(claims, scenario.gateway.key, algorithm="HS256")}
 
 
 def _gateway_session_sign_in(
     gateway: Gateway,
+    scenario: Scenario,
     user_id: str,
     resource: str | None = None,
     *,
@@ -806,7 +813,7 @@ def _gateway_session_sign_in(
     assert registered.status_code in (200, 201), registered.text
     client_id: Final = str(_response_object(registered)["client_id"])
     pkce: Final = _Pkce(secrets.token_urlsafe(48))
-    cookies: Final = _ui_session_cookie(gateway, user_id)
+    cookies: Final = _ui_session_cookie(scenario, user_id)
     started: Final = gateway.client.get(
         authorization_endpoint,
         params={
@@ -843,8 +850,8 @@ def _gateway_session_sign_in(
     return _response_object(issued), client_id
 
 
-def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
-    issued, _ = _gateway_session_sign_in(gateway, user_id, resource)
+def _gateway_session_bearer(gateway: Gateway, scenario: Scenario, user_id: str, resource: str | None = None) -> str:
+    issued, _ = _gateway_session_sign_in(gateway, scenario, user_id, resource)
     return _issued_token(issued)
 
 
@@ -887,7 +894,7 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(48))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         started: Final = gateway.client.get(
             authorization_endpoint,
             params={
@@ -997,7 +1004,7 @@ def test_per_server_resource_scopes_the_session_bearer_to_the_named_server(gatew
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(48))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         started: Final = gateway.client.get(
             "/authorize/mcp-session",
             params={
@@ -1110,7 +1117,7 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
         alias: Final = "rt6" + uuid.uuid4().hex[:10]
         identity: Final = register_mcp(scenario, peer, alias)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_servers": [identity]}))
-        issued, client_id = _gateway_session_sign_in(gateway, member)
+        issued, client_id = _gateway_session_sign_in(gateway, scenario, member)
         r1: Final = str(issued["refresh_token"])
         a1: Final = str(issued["access_token"])
         assert r1.startswith("llm_srefresh_"), r1
@@ -1207,7 +1214,7 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(64))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         consent: Final = gateway.client.get(
             str(contract["authorization_endpoint"]),
             params={
@@ -1362,6 +1369,7 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         token_endpoint: Final = str(authorization_body["token_endpoint"])
         issued, client_id = _gateway_session_sign_in(
             gateway,
+            scenario,
             member,
             resource,
             registration_endpoint=str(authorization_body["registration_endpoint"]),
@@ -1413,7 +1421,7 @@ def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_a
         inside_id: Final = create_toolset(scenario, ((inside_server, "add"),), toolset_name=inside_name)
         outside_id: Final = create_toolset(scenario, ((outside_server, "add"),), toolset_name=outside_name)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [inside_id, outside_id]}))
-        bearer: Final = _gateway_session_bearer(gateway, member, resource=f"{_base(gateway)}/{inside}/mcp")
+        bearer: Final = _gateway_session_bearer(gateway, scenario, member, resource=f"{_base(gateway)}/{inside}/mcp")
         assert bearer.startswith("llm_session_"), bearer[:16]
         listed: Final = _toolset_rpc(gateway, bearer, inside_name, "tools/list", {})
         assert listed.tools == (f"{inside}-add",), listed.raw
@@ -1430,7 +1438,6 @@ def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_a
 
 _PROBE: Final = "catalog-probe"
 _ECHO: Final = "catalog-echo"
-_UNLISTED: Final = ""
 _GUARDRAIL_CODE: Final = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
@@ -1466,8 +1473,22 @@ def _echoed_description(outcome: Outcome) -> str:
     return found.group(1)
 
 
+def _add_described_for_the_exchanged_subject(auth: AuthorizationServer) -> ScriptedTool:
+    def described(headers: Mapping[str, str]) -> str:
+        token: Final = headers.get("authorization", "").removeprefix("Bearer ")
+        with auth.lock:
+            grant: Final = auth.access_tokens.get(token, {})
+        return "Add for " + grant.get("subject", "nobody")
+
+    return ScriptedTool("add", lambda _: text_result("must not run"), description=described)
+
+
 def test_token_exchange_callers_with_different_subject_tokens_own_separate_listings(echo_rig: Gateway) -> None:
-    with mcp_peer() as peer, oauth_server() as auth, echo_rig.scenario() as scenario:
+    with (
+        oauth_server() as auth,
+        scripted_peer(_add_described_for_the_exchanged_subject(auth)) as peer,
+        echo_rig.scenario() as scenario,
+    ):
         alias: Final = "te" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(
             scenario,
@@ -1479,19 +1500,20 @@ def test_token_exchange_callers_with_different_subject_tokens_own_separate_listi
         )
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         first_subject: Final = "subject-" + uuid.uuid4().hex
+        second_subject: Final = "subject-" + uuid.uuid4().hex
         first: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {first_subject}"})
-        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": "Bearer subject-" + uuid.uuid4().hex})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {second_subject}"})
         auth.drain()
         assert first.list_tools().ok
         assert [request["subject_token"] for request in auth.token_requests()] == [first_subject]
         probe: Final = {"probe": _PROBE}
         own: Final = _echoed_description(first.call(f"{alias}-add", probe))
         other: Final = _echoed_description(second.call(f"{alias}-add", probe))
-        assert (own, other) == ("Add two integers", _UNLISTED), (
+        assert (own, other) == (f"Add for exchanged:{first_subject}", f"Add for exchanged:{second_subject}"), (
             "the caller bearer is part of the identity on a token-exchange server: one subject, one slot"
         )
         assert second.list_tools().ok
-        assert _echoed_description(second.call(f"{alias}-add", probe)) == "Add two integers"
+        assert _echoed_description(second.call(f"{alias}-add", probe)) == f"Add for exchanged:{second_subject}"
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
 
 
