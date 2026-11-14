@@ -767,6 +767,16 @@ def _callback_control_params(litellm_params: object) -> dict[str, object]:
     return litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else {}
 
 
+def callback_disabled_dynamically(
+    callback: object, litellm_params: object, standard_callback_dynamic_params: StandardCallbackDynamicParams
+) -> bool:
+    return EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+        callback=callback,
+        litellm_params=_callback_control_params(litellm_params),
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+
+
 LOGGING_KEYS: Final[Mapping[Field, str]] = MappingProxyType(
     {
         Field.model: "model",
@@ -3280,9 +3290,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
-        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+        if callback_disabled_dynamically(
             callback=callback,
-            litellm_params=_callback_control_params(litellm_params),
+            litellm_params=litellm_params,
             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
         ):
             verbose_logger.debug(

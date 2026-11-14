@@ -23,9 +23,10 @@ from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.secret_managers.main import get_secret
+from litellm.llms.bedrock.web_identity_session_policy import S3_LOGGING_SESSION_POLICY, session_policy_document
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
-from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeS3Log
@@ -50,26 +51,28 @@ class _Host:
         return litellm.cold_storage_custom_logger == "s3_v2"
 
     def region_from_environment(self) -> str | None:
-        region_name: Final = get_secret("AWS_REGION_NAME", None)
-        region: Final = get_secret("AWS_REGION", None)
-        if isinstance(region, str):
-            return region
-        return region_name if isinstance(region_name, str) else None
+        region_name: Final = get_secret_str("AWS_REGION_NAME", None)
+        region: Final = get_secret_str("AWS_REGION", None)
+        return region if region is not None else region_name
 
     def web_identity_token(self, reference: str) -> str:
         if reference.startswith("os.environ/") or reference in os.environ:
             raise ValueError("Invalid web identity token reference.")
-        token: Final = get_secret(reference)
+        token: Final = get_secret_str(reference)
         if token is None:
             raise ValueError("OIDC token could not be retrieved from secret manager.")
-        return str(token)
+        return token
 
 
 def _resolved_params(params_source: Mapping[str, object] | None) -> dict[str, object]:  # mutable-ok: handed to Rust
-    source: Final = params_source if params_source is not None else (litellm.s3_callback_params or {})
+    configured: Final[Mapping[object, object] | None] = getattr(litellm, "s3_callback_params", None)
+    source: Final[Mapping[str, object] | Mapping[object, object]] = (
+        params_source if params_source is not None else (configured or {})
+    )
     return {
         key: (litellm.get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value)
         for key, value in source.items()
+        if isinstance(key, str)
     }
 
 
@@ -81,7 +84,7 @@ def _constants() -> Mapping[str, object]:
         "upload_attempt_timeout_seconds": S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS,
         "download_read_timeout_seconds": COMPLETION_HTTP_FALLBACK_SECONDS,
         "download_connect_timeout_seconds": HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
-        "web_identity_session_policy": S3Logger._web_identity_session_policy_document(),
+        "web_identity_session_policy": session_policy_document(S3_LOGGING_SESSION_POLICY),
     }
 
 
@@ -89,7 +92,12 @@ def _flush_interval() -> float:
     return DEFAULT_S3_FLUSH_INTERVAL_SECONDS or litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
 
 
-_STRIPPER: Final = CustomLogger()
+class _Base64Stripper(CustomLogger):
+    def strip(self, payload: StandardLoggingPayload) -> None:
+        _ = self._strip_base64_from_messages_sync(payload)
+
+
+_STRIPPER: Final = _Base64Stripper()
 
 
 def legacy_should_log(kwargs: Mapping[str, object]) -> bool:
@@ -101,10 +109,9 @@ def legacy_should_log(kwargs: Mapping[str, object]) -> bool:
     lookup: Final = getattr(litellm_params, "get", None)
     if callable(lookup) and lookup("no-log", False) is True:
         return False
-    controls: Final = litellm_logging.EnterpriseCallbackControls
-    return controls is None or not controls.is_callback_disabled_dynamically(
+    return not litellm_logging.callback_disabled_dynamically(
         callback=CALLBACK_NAME,
-        litellm_params=litellm_logging._callback_control_params(litellm_params),
+        litellm_params=litellm_params,
         standard_callback_dynamic_params=kwargs.get("standard_callback_dynamic_params") or {},  # pyright: ignore[reportArgumentType]  # the dynamic params dict the legacy path hands the same check
     )
 
@@ -138,7 +145,7 @@ class S3LoggerV3(RustLogger):
             return self._failed(AttributeError(f"'{type(payload).__name__}' object has no attribute 'get'"))  # pyright: ignore[reportUnknownArgumentType]  # any non-mapping payload
         try:
             if self.sink.strip_base64_files and isinstance(payload, Mapping):
-                _ = _STRIPPER._strip_base64_from_messages_sync(payload)  # pyright: ignore[reportArgumentType]  # the shared StandardLoggingPayload, stripped in place as S3Logger does
+                _STRIPPER.strip(payload)  # pyright: ignore[reportArgumentType]  # the shared StandardLoggingPayload, stripped in place as S3Logger does
             return await super().run_rust(hook, reads, view, ctx)
         except Exception as e:  # noqa: BLE001  # S3Logger counts a failure to build the element and moves on
             return self._failed(e)

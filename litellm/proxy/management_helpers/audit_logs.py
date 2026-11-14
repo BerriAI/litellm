@@ -4,9 +4,9 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import json
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,7 +21,10 @@ from litellm.proxy._types import (
 from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
-_audit_log_callback_cache: Final[dict[str, CustomLogger]] = {}
+if TYPE_CHECKING:
+    from litellm.integrations.s3_v3 import S3LoggerV3
+
+_audit_log_callback_cache: Final[dict[str, "CustomLogger | S3LoggerV3"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 
 
@@ -62,7 +65,7 @@ def get_audit_log_changed_by(
     return user_api_key_dict.user_id or litellm_proxy_admin_name
 
 
-def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
+def _resolve_audit_log_callback(name: str) -> "CustomLogger | S3LoggerV3 | None":
     """Resolve a string callback name to a CustomLogger instance, with caching.
 
     For "s3_v2" with `litellm.s3_audit_callback_params` set, constructs a
@@ -72,11 +75,12 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
     if name in _audit_log_callback_cache:
         return _audit_log_callback_cache[name]
 
-    instance: CustomLogger | None
-    if name == "s3_v2" and getattr(litellm, "s3_audit_callback_params", None) is not None:
+    instance: CustomLogger | S3LoggerV3 | None
+    audit_params: Final[Mapping[str, object] | None] = getattr(litellm, "s3_audit_callback_params", None)
+    if name == "s3_v2" and audit_params is not None:
         from litellm.integrations.s3_v3 import new_s3_v2_logger
 
-        instance = new_s3_v2_logger(s3_callback_params_override=litellm.s3_audit_callback_params)
+        instance = new_s3_v2_logger(s3_callback_params_override=audit_params)
     else:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
@@ -91,12 +95,6 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
     if instance is not None:
         _audit_log_callback_cache[name] = instance
     return instance
-
-
-def _is_native_s3_v2(resolved: object) -> bool:
-    from litellm.integrations.s3_v3 import S3LoggerV3
-
-    return isinstance(resolved, S3LoggerV3)
 
 
 def reset_audit_log_callback_cache() -> None:
@@ -202,14 +200,14 @@ async def _dispatch_audit_log_to_callbacks(
 
     for callback in litellm.audit_log_callbacks:
         try:
-            resolved: CustomLogger | None = callback if isinstance(callback, CustomLogger) else None
+            resolved: CustomLogger | S3LoggerV3 | None = callback if isinstance(callback, CustomLogger) else None
             if isinstance(callback, str):
                 resolved = _resolve_audit_log_callback(callback)
                 if resolved is None:
                     verbose_proxy_logger.warning("Could not resolve audit log callback: %s", callback)
                     continue
 
-            if isinstance(resolved, CustomLogger) or _is_native_s3_v2(resolved):
+            if resolved is not None:
                 track_audit_task(
                     asyncio.create_task(
                         resolved.async_log_audit_log_event(payload),

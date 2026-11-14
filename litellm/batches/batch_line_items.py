@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import accumulate, chain, count
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +22,9 @@ from litellm.types.utils import (
     StandardBatchLineItemsPayload,
     StandardBatchLineItemUsage,
 )
+
+if TYPE_CHECKING:
+    from litellm.integrations.s3_v3 import S3LoggerV3
 
 BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
 
@@ -238,7 +241,7 @@ async def _deliver(
         )
 
 
-def _resolve_logger(callback: litellm.CALLBACK_TYPES) -> CustomLogger | None:
+def _resolve_logger(callback: "litellm.CALLBACK_TYPES | S3LoggerV3") -> "CustomLogger | S3LoggerV3 | None":
     from litellm.integrations.s3_v3 import S3LoggerV3
 
     match callback:
@@ -250,7 +253,7 @@ def _resolve_logger(callback: litellm.CALLBACK_TYPES) -> CustomLogger | None:
             return None
 
 
-def _logger_turned_off_message_logging(logger: CustomLogger) -> bool:
+def _logger_turned_off_message_logging(logger: object) -> bool:
     return (
         getattr(logger, "turn_off_message_logging", False) is True
         or getattr(logger, "message_logging", True) is not True
