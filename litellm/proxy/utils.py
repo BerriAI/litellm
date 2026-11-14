@@ -2605,6 +2605,7 @@ class ProxyLogging:
             "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
             "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
             "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
+            "requester_ip_address": kwargs.get("client_ip"),
         }
 
         # Create synthetic LLM data that guardrails can process
@@ -2625,6 +2626,11 @@ class ProxyLogging:
             # synthetic call_mcp_tool payload (otherwise a key with
             # mcp_rpm_limit could exceed it via the MCP path).
             "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
+            "mcp_server_id": kwargs.get("mcp_server_id"),
+            "mcp_server_url": kwargs.get("mcp_server_url"),
+            "mcp_server_transport": kwargs.get("mcp_server_transport"),
+            "mcp_server_auth_type": kwargs.get("mcp_server_auth_type"),
+            "mcp_server_is_byok": kwargs.get("mcp_server_is_byok"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
@@ -2633,6 +2639,11 @@ class ProxyLogging:
         }
         user_api_key_auth: Final = kwargs.get("user_api_key_auth")
         if isinstance(user_api_key_auth, UserAPIKeyAuth):
+            synthetic_metadata.update(
+                LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_auth)
+            )
+            synthetic_metadata["actor_agent_id"] = user_api_key_auth.agent_id
+            synthetic_metadata["target_agent_id"] = user_api_key_auth.invoked_agent_id
             add_guardrails_from_auth_metadata(
                 user_api_key_dict=user_api_key_auth,
                 data=synthetic_data,

@@ -5427,6 +5427,18 @@ class PriorityReservationSettings(LiteLLMBaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class GenericGuardrailAPIMCPToolCall(TypedDict, total=False):
+    mcp_server_id: ReadOnly[str | None]
+    mcp_server_name: ReadOnly[str | None]
+    mcp_server_url: ReadOnly[str | None]
+    mcp_server_transport: ReadOnly[str | None]
+    mcp_server_auth_type: ReadOnly[str | None]
+    mcp_server_is_byok: ReadOnly[bool | None]
+    tool_name: ReadOnly[str]
+    tool_description: ReadOnly[str | None]
+    arguments: ReadOnly[Mapping[str, JsonValue]]
+
+
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: list[str]  # extracted text from the LLM response - for basic text guardrails
     images: list[str]  # extracted images from the LLM response - for image guardrails
@@ -5436,6 +5448,7 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: str | None  # the model being used for the LLM call
+    mcp_tool_call: ReadOnly[GenericGuardrailAPIMCPToolCall]
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)

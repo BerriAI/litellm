@@ -424,8 +424,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
-        return_inputs: Final[GenericGuardrailAPIInputs] = {}
-        return_inputs.update(inputs)
+        return_inputs: Final[GenericGuardrailAPIInputs] = {**inputs}
         return return_inputs
 
     def _build_request_headers(self) -> Mapping[str, str]:
@@ -603,6 +602,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tools=([GuardrailToolParam.model_validate(t) for t in tools] if tools else None),
                 structured_messages=None if self.forward_messages_as_sent else structured_messages,
                 tool_calls=tool_calls,
+                mcp_tool_call=inputs.get("mcp_tool_call"),
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
                 model=model,
