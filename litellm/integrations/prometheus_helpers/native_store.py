@@ -68,6 +68,7 @@ NativeOp: TypeAlias = Literal[
     "budget",
     "team_members",
     "counts",
+    "router_remaining",
 ]
 
 NATIVE_PROMETHEUS_ENV: Final = "LITELLM_NATIVE_PROMETHEUS"

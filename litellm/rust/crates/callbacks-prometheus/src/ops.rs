@@ -123,6 +123,8 @@ pub enum OpName {
     TeamMembers,
     #[strum(serialize = "counts")]
     Counts,
+    #[strum(serialize = "router_remaining")]
+    RouterRemaining,
 }
 
 type OpResult = Result<(), OpError>;
@@ -535,6 +537,19 @@ impl Ops<'_> {
         self.factory(metric, &values_of(self.facts), Op::Inc(1.0), true)
     }
 
+    fn router_remaining(&self) -> OpResult {
+        let values = values_of(self.facts);
+        for (key, metric) in [
+            ("tokens", "litellm_remaining_tokens_metric"),
+            ("requests", "litellm_remaining_requests_metric"),
+        ] {
+            if !field(self.facts, key).is_null() {
+                self.factory_with(metric, &values, || Ok(Op::Set(self.number(key)?)), false)?;
+            }
+        }
+        Ok(())
+    }
+
     fn proxy_failure(&self) -> OpResult {
         let values = values_of(self.facts);
         self.factory(
@@ -686,6 +701,7 @@ impl Ops<'_> {
             OpName::Budget => self.budget(),
             OpName::TeamMembers => self.team_members(),
             OpName::Counts => self.counts(),
+            OpName::RouterRemaining => self.router_remaining(),
         }
     }
 }

@@ -3774,6 +3774,17 @@ class PrometheusLogger(CustomLogger):
             remaining_tokens: Final = remaining_usage.get("x-ratelimit-remaining-tokens")
             remaining_requests: Final = remaining_usage.get("x-ratelimit-remaining-requests")
 
+            if self._native_store is not None:
+                self._native_store.op(
+                    "router_remaining",
+                    {
+                        "values": enum_values.model_dump(),
+                        "tokens": None if already_have_tokens else remaining_tokens,
+                        "requests": None if already_have_requests else remaining_requests,
+                    },
+                )
+                return
+
             if not already_have_tokens and remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
