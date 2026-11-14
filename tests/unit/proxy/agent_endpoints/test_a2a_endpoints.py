@@ -87,6 +87,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     # Mock agent
     mock_agent = MagicMock()
     mock_agent.agent_id = "test-agent"
+    mock_agent.agent_name = "test-agent-name"
     mock_agent.agent_card_params = {
         "url": "http://backend-agent:10001",
         "name": "Test Agent",
@@ -219,10 +220,10 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         mock_add_data.assert_called_once()
 
         # Verify model and custom_llm_provider were set
-        assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/Test Agent"
-        assert captured_data["metadata"]["model_group"] == "a2a_agent/Test Agent"
+        assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/test-agent-name"
+        assert captured_data["metadata"]["model_group"] == "a2a_agent/test-agent-name"
         assert captured_data["metadata"]["model_info"] == {"id": mock_agent.agent_id}
-        assert captured_data.get("model") == "a2a_agent/Test Agent"
+        assert captured_data.get("model") == "a2a_agent/test-agent-name"
         assert captured_data.get("custom_llm_provider") == "a2a_agent"
 
         # Verify proxy_server_request was added
@@ -655,13 +656,27 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
-async def test_message_methods_name_url_agents_by_their_configured_name(method: str):
-    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+@pytest.mark.parametrize(
+    "card_params",
+    [
+        pytest.param({"url": "http://backend-agent:10001", "name": "agent"}, id="discovered-card-name"),
+        pytest.param({"url": "http://backend-agent:10001", "name": None}, id="null-card-name"),
+        pytest.param({"url": "http://backend-agent:10001"}, id="no-card-name"),
+    ],
+)
+async def test_message_methods_name_url_agents_by_their_registered_name(
+    method: str, card_params: Mapping[str, object]
+):
+    mock_request: Final = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+    agent: Final = _make_agent_mock()
+    agent.agent_id = "9f1c2d6e-agent-id"
+    agent.agent_name = "research-bot"
+    agent.agent_card_params = card_params
 
-    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+    captured: Final = await _invoke_message_method(method, mock_request, user_api_key_dict, agent=agent)
 
-    assert captured.agent_name == "Test Agent"
+    assert captured.agent_name == "research-bot"
 
 
 @pytest.mark.asyncio
@@ -1852,21 +1867,6 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
         }
     )
     assert result.message.role.value == "user"
-
-
-@pytest.mark.asyncio
-async def test_message_stream_names_the_agent_by_its_card_name():
-    agent: Final = _make_agent_mock()
-    agent.agent_card_params = {"url": "http://backend-agent:10001", "name": "trip-planner"}
-
-    captured: Final = await _invoke_message_method(
-        "message/stream",
-        _make_request_mock("message/stream", _HELLO_MESSAGE_PARAMS),
-        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
-        agent=agent,
-    )
-
-    assert captured.agent_name == "trip-planner"
 
 
 class _StreamedSpend(BaseModel):
@@ -3217,7 +3217,7 @@ _EXPECTED_REJECTIONS: Final = (
         403,
         "Agent 'denied-agent' is not allowed for your key/team. Contact proxy admin for access.",
         "registered-denied-id",
-        "a2a_agent/Test Agent",
+        "a2a_agent/denied-agent",
         id="not-granted",
     ),
     pytest.param(
