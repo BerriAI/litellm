@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vitest";
 import Sidebar from "@/components/leftnav";
+import { createMobileSidebarHandle } from "@/components/shared/MobileSidebar";
 import AppSidebar from "./AppSidebar";
 
 const { getSettings } = vi.hoisted(() => ({
@@ -18,14 +19,15 @@ vi.mock("@/components/leftnav", () => ({
 
 it("reuses loaded navigation settings immediately when the mobile sidebar mounts again", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const handle = createMobileSidebarHandle();
   const shell = (mobileOpen: boolean) => (
     <QueryClientProvider client={client}>
       <section aria-label="Desktop navigation">
-        <AppSidebar />
+        <AppSidebar mobileNavigationHandle={handle} />
       </section>
       {mobileOpen && (
         <section aria-label="Mobile navigation">
-          <AppSidebar />
+          <AppSidebar mobileNavigationHandle={handle} />
         </section>
       )}
     </QueryClientProvider>

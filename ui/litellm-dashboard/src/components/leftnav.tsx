@@ -1,5 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
-import { ShellSidebar } from "@/components/shared/MobileSidebar";
+import { type MobileSidebarHandle, ShellSidebar } from "@/components/shared/MobileSidebar";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -97,6 +97,7 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 const ICON = { strokeWidth: 1.75 } as const;
 
 interface SidebarProps {
+  mobileNavigationHandle: MobileSidebarHandle;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
@@ -604,7 +605,13 @@ export const getBreadcrumb = (pathname: string): { section: string | null; title
   return { section: null, title: prettify(route) };
 };
 
+const groupsOpenFor = (route: string) => {
+  const parent = findParentKey(route);
+  return new Set(parent ? [parent] : []);
+};
+
 const Sidebar_: React.FC<SidebarProps> = ({
+  mobileNavigationHandle,
   enabledPagesInternalUsers,
   enableProjectsUI,
   disableAgentsForInternalUsers,
@@ -620,7 +627,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
-  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
+  const { state, isMobile, openMobile, setOpen, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed" && !isMobile;
   const closeMobileSidebarOnLinkClick = (event: MouseEvent) => {
     if (event.target instanceof Element && event.target.closest("a[href]")) setOpenMobile(false);
@@ -629,10 +636,15 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const currentRoute = routeForPathname(usePathname());
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const parent = findParentKey(currentRoute);
-    return new Set(parent ? [parent] : []);
-  });
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
+  const [drawerOpenGroups, setDrawerOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
+  const [drawerWasOpen, setDrawerWasOpen] = useState(openMobile);
+  if (openMobile !== drawerWasOpen) {
+    setDrawerWasOpen(openMobile);
+    if (openMobile) setDrawerOpenGroups(groupsOpenFor(currentRoute));
+  }
+  const shownGroups = isMobile ? drawerOpenGroups : openGroups;
+  const setShownGroups = isMobile ? setDrawerOpenGroups : setOpenGroups;
 
   // Keep the active page's parent group expanded as the user navigates, using the
   // "adjust state during render" pattern rather than an effect (avoids a
@@ -679,10 +691,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const setGroupOpen = (key: string, open: boolean) => {
     if (collapsed) {
       setOpen(true);
-      setOpenGroups((prev) => new Set(prev).add(key));
+      setShownGroups((prev) => new Set(prev).add(key));
       return;
     }
-    setOpenGroups((prev) => {
+    setShownGroups((prev) => {
       const next = new Set(prev);
       if (open) next.add(key);
       else next.delete(key);
@@ -720,7 +732,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       );
     }
 
-    const open = openGroups.has(item.key);
+    const open = shownGroups.has(item.key);
     return (
       <Collapsible
         key={item.key}
@@ -760,7 +772,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   return (
-    <ShellSidebar sheetTitle={t("shell.dashboardShell.navigation")}>
+    <ShellSidebar handle={mobileNavigationHandle} sheetTitle={t("shell.dashboardShell.navigation")}>
       <div className="contents" onClickCapture={closeMobileSidebarOnLinkClick}>
         <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 

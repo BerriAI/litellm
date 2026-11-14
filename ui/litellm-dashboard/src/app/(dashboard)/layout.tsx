@@ -27,7 +27,11 @@ import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext"
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { MobileSidebarTrigger, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import {
+  createMobileSidebarHandle,
+  MobileSidebarTrigger,
+  useCloseMobileSidebarOn,
+} from "@/components/shared/MobileSidebar";
 import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { cn } from "@/lib/cva.config";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
@@ -139,6 +143,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
+  const [mobileNavigationHandle] = useState(createMobileSidebarHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
@@ -182,12 +187,17 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         className={cn("h-screen overflow-hidden bg-background max-md:h-dvh", sidebarProviderClassName)}
       >
         <CloseMobileSidebarOnNavigation navigationKey={navigationKey} />
-        <AppSidebar />
+        <AppSidebar mobileNavigationHandle={mobileNavigationHandle} />
         <CommandPaletteProvider>
           <SidebarInset className="min-w-0 overflow-hidden">
             <DashboardHeader
               accessToken={accessToken}
-              navigationTrigger={<MobileSidebarTrigger label={t("shell.dashboardShell.openNavigation")} />}
+              navigationTrigger={
+                <MobileSidebarTrigger
+                  handle={mobileNavigationHandle}
+                  label={t("shell.dashboardShell.openNavigation")}
+                />
+              }
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
               deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />

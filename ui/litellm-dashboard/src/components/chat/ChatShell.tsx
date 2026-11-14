@@ -33,7 +33,12 @@ import {
   SidebarProvider,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { MobileSidebarTrigger, ShellSidebar, useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import {
+  createMobileSidebarHandle,
+  MobileSidebarTrigger,
+  ShellSidebar,
+  useCloseMobileSidebarOn,
+} from "@/components/shared/MobileSidebar";
 import {
   navMenuButtonClassName,
   navMenuClassName,
@@ -120,6 +125,7 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const collapsed = state === "collapsed" && !isMobile;
   useCloseMobileSidebarOn();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileNavigationHandle] = useState(createMobileSidebarHandle);
   const shortcut = useShortcutLabel();
   const openSearch = () => {
     if (isMobile) setOpenMobile(true);
@@ -252,6 +258,7 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <ShellSidebar
+        handle={mobileNavigationHandle}
         label={t("chat.shell.chatNavigation")}
         sheetTitle={t("chat.shell.sheetTitle")}
         sheetDescription={t("chat.shell.sheetDescription")}
@@ -264,7 +271,9 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
           accessToken={accessToken}
           title={title}
           workspace="chat"
-          navigationTrigger={<MobileSidebarTrigger label={t("chat.shell.openChatNavigation")} />}
+          navigationTrigger={
+            <MobileSidebarTrigger handle={mobileNavigationHandle} label={t("chat.shell.openChatNavigation")} />
+          }
         />
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </SidebarInset>

@@ -1,3 +1,4 @@
+import type { MobileSidebarHandle } from "@/components/shared/MobileSidebar";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
 import { usePathname } from "next/navigation";
@@ -46,10 +47,10 @@ vi.mock("@/app/(dashboard)/components/AppSidebar", async () => {
   const { useSidebar } = await import("@/components/ui/sidebar");
   const { ShellSidebar } = await import("@/components/shared/MobileSidebar");
   return {
-    default: function FakeAppSidebar() {
+    default: function FakeAppSidebar({ mobileNavigationHandle }: { mobileNavigationHandle: MobileSidebarHandle }) {
       const { state, toggleSidebar } = useSidebar();
       return (
-        <ShellSidebar sheetTitle="Navigation">
+        <ShellSidebar handle={mobileNavigationHandle} sheetTitle="Navigation">
           <div data-testid="sidebar" data-collapsed={String(state === "collapsed")}>
             <button onClick={toggleSidebar}>Close navigation</button>
           </div>

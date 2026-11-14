@@ -1,23 +1,24 @@
 "use client";
 
 import { type ReactNode, useEffect } from "react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 
-export function MobileSidebarTrigger({ label }: { label: string }) {
-  const { setOpenMobile } = useSidebar();
+export type MobileSidebarHandle = DialogPrimitive.Handle<unknown>;
+
+export const createMobileSidebarHandle = (): MobileSidebarHandle => DialogPrimitive.createHandle();
+
+export function MobileSidebarTrigger({ label, handle }: { label: string; handle: MobileSidebarHandle }) {
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-11 md:hidden"
-      aria-label={label}
-      onClick={() => setOpenMobile(true)}
+    <SheetTrigger
+      handle={handle}
+      render={<Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label={label} />}
     >
       <Menu />
-    </Button>
+    </SheetTrigger>
   );
 }
 
@@ -29,6 +30,7 @@ export function useCloseMobileSidebarOn(navigationKey?: string) {
 }
 
 interface ShellSidebarProps {
+  handle: MobileSidebarHandle;
   label?: string;
   sheetTitle: string;
   sheetDescription?: string;
@@ -36,7 +38,14 @@ interface ShellSidebarProps {
   children: ReactNode;
 }
 
-export function ShellSidebar({ label, sheetTitle, sheetDescription, sheetInitialFocus, children }: ShellSidebarProps) {
+export function ShellSidebar({
+  handle,
+  label,
+  sheetTitle,
+  sheetDescription,
+  sheetInitialFocus,
+  children,
+}: ShellSidebarProps) {
   const { isMobile, openMobile, setOpenMobile } = useSidebar();
   if (!isMobile) {
     return (
@@ -46,7 +55,7 @@ export function ShellSidebar({ label, sheetTitle, sheetDescription, sheetInitial
     );
   }
   return (
-    <Sheet open={openMobile} onOpenChange={setOpenMobile}>
+    <Sheet handle={handle} open={openMobile} onOpenChange={setOpenMobile}>
       <SheetContent
         side="left"
         initialFocus={sheetInitialFocus}

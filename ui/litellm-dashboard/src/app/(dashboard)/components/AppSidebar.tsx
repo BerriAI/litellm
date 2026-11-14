@@ -1,14 +1,16 @@
 "use client";
 
 import Sidebar from "@/components/leftnav";
+import type { MobileSidebarHandle } from "@/components/shared/MobileSidebar";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
-const AppSidebar = () => {
+const AppSidebar = ({ mobileNavigationHandle }: { mobileNavigationHandle: MobileSidebarHandle }) => {
   const { data: settings } = useUISettings();
   const values = settings?.values;
 
   return (
     <Sidebar
+      mobileNavigationHandle={mobileNavigationHandle}
       enabledPagesInternalUsers={values?.enabled_ui_pages_internal_users ?? null}
       enableProjectsUI={Boolean(values?.enable_projects_ui)}
       disableAgentsForInternalUsers={Boolean(values?.disable_agents_for_internal_users)}

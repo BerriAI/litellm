@@ -5,14 +5,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { MobileSidebarTrigger } from "@/components/shared/MobileSidebar";
+import { createMobileSidebarHandle, MobileSidebarTrigger } from "@/components/shared/MobileSidebar";
 import LeftNav, { menuGroups, getBreadcrumb } from "./leftnav";
 
-const Sidebar = ({ collapsed = false, ...props }: ComponentProps<typeof LeftNav> & { collapsed?: boolean }) => (
+type LeftNavProps = Omit<ComponentProps<typeof LeftNav>, "mobileNavigationHandle">;
+
+const Sidebar = ({ collapsed = false, ...props }: LeftNavProps & { collapsed?: boolean }) => (
   <SidebarProvider defaultOpen={!collapsed}>
-    <LeftNav {...props} />
+    <LeftNav mobileNavigationHandle={createMobileSidebarHandle()} {...props} />
   </SidebarProvider>
 );
+
+const PhoneShell = () => {
+  const handle = createMobileSidebarHandle();
+  return (
+    <SidebarProvider>
+      <MobileSidebarTrigger handle={handle} label="Open navigation" />
+      <LeftNav mobileNavigationHandle={handle} />
+    </SidebarProvider>
+  );
+};
 
 vi.mock("../utils/roles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/roles")>();
@@ -684,12 +696,7 @@ describe("Sidebar (leftnav)", () => {
     vi.stubGlobal("innerWidth", 390);
     navState.pathname = "/ui/api-keys";
     health.version = "1.2.3";
-    renderWithProviders(
-      <SidebarProvider>
-        <MobileSidebarTrigger label="Open navigation" />
-        <LeftNav />
-      </SidebarProvider>,
-    );
+    renderWithProviders(<PhoneShell />);
     for (const page of ["Virtual Keys", "Playground", "v1.2.3"]) {
       fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
       fireEvent.click(
@@ -697,6 +704,39 @@ describe("Sidebar (leftnav)", () => {
       );
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
     }
+  });
+
+  it("announces the phone navigation button as a dialog trigger that reflects the drawer state", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    renderWithProviders(<PhoneShell />);
+    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Navigation" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("reopens the phone drawer with only the current page's group expanded", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<PhoneShell />);
+    const group = (drawer: HTMLElement, name: string) => within(drawer).getByRole("button", { name });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+    const drawer = await screen.findByRole("dialog", { name: "Navigation" });
+    expect(group(drawer, "Tools")).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(group(drawer, "Tools"));
+    fireEvent.click(group(drawer, "Agentic"));
+    expect(group(drawer, "Tools")).toHaveAttribute("aria-expanded", "false");
+    expect(group(drawer, "Agentic")).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(within(drawer).getByRole("link", { name: "Virtual Keys" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    const reopened = await screen.findByRole("dialog", { name: "Navigation" });
+    expect(group(reopened, "Tools")).toHaveAttribute("aria-expanded", "true");
+    expect(group(reopened, "Agentic")).toHaveAttribute("aria-expanded", "false");
   });
 
   it("marks Home active at the dashboard root", () => {
