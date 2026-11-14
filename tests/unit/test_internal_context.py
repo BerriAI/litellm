@@ -73,6 +73,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/proxy/mcp_server/outbound_credentials/sso_assertion_store.py",
         "litellm/proxy/mcp_server/outbound_credentials/token_endpoint.py",
         "litellm/proxy/agent_endpoints/databricks_oauth.py",
+        "litellm/proxy/common_utils/frozen_model_cache.py",
         "litellm/proxy/common_utils/registry_read_through.py",
         "litellm/proxy/container_endpoints/ownership.py",
         "litellm/proxy/discovery_endpoints/agent_skills_endpoints.py",
