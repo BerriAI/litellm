@@ -324,7 +324,7 @@ def _openai_messages_may_need_sync_media_fetch(
             if msg.get("role") in ("tool", "function") and gemini_tool_media_needs_download(source):
                 return True
             if source.url.startswith(("http://", "https://")) and (
-                _ai_studio_inlines
+                inlines_unless_gemini_file
                 if nested_inline_only and msg.get("role") in ("tool", "function")
                 else _vertex_inlines
             )(RemoteMedia(source.url, {"format": source.format}, "file")):
@@ -1396,7 +1396,7 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
     return hint if isinstance(hint, str) else None
 
 
-def _ai_studio_inlines(media: RemoteMedia) -> bool:
+def inlines_unless_gemini_file(media: RemoteMedia) -> bool:
     return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
 
 
@@ -1409,7 +1409,7 @@ def _vertex_inlines(media: RemoteMedia) -> bool:
 
 
 def should_inline_remote_media(custom_llm_provider: str) -> Callable[[RemoteMedia], bool]:
-    return _ai_studio_inlines if custom_llm_provider == "gemini" else _vertex_inlines
+    return inlines_unless_gemini_file if custom_llm_provider == "gemini" else _vertex_inlines
 
 
 async def async_transform_request_body(

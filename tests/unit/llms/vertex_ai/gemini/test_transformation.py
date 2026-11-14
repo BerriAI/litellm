@@ -1,5 +1,6 @@
 
 import asyncio
+import base64
 import json
 import logging
 import queue
@@ -15,8 +16,13 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents
+from litellm.llms.vertex_ai.context_caching.transformation import (
+    async_transform_openai_messages_to_gemini_context_caching,
+    transform_openai_messages_to_gemini_context_caching,
+)
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -24,6 +30,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
+from tests.unit.conftest import ONE_PIXEL_PNG
 
 
 @pytest.mark.asyncio
@@ -773,15 +780,37 @@ async def test_the_cache_lives_as_long_as_the_longest_marked_ttl(sync_mode):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Which section mentions watchlists?",
+                        "text": "Answer from the document above.",
                         "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"},
-                    }
+                    },
+                    {"type": "text", "text": "Which section mentions watchlists?"},
                 ],
             },
         ],
     )
 
     assert sent["cache"]["ttl"] == "43200s"
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marks", _CACHE_MARKS)
+@pytest.mark.asyncio
+async def test_a_mark_on_the_newest_turn_sends_the_request_uncached_so_gemini_caches_it_implicitly(sync_mode, marks):
+    sent: Final = await _sent_bodies(
+        sync_mode,
+        [
+            {"role": "system", "content": _REFERENCE_DOCUMENT},
+            {"role": "user", "content": "My favourite colour is blue."},
+            {"role": "assistant", "content": "OK"},
+            {"role": "user", "content": [{"type": "text", "text": "What is my favourite colour?", **marks}]},
+        ],
+    )
+
+    assert list(sent) == ["generate"]
+    assert "cachedContent" not in sent["generate"]
+    assert _REFERENCE_DOCUMENT in json.dumps(sent["generate"])
+    assert _sent_texts(sent["generate"]) == ("My favourite colour is blue.", "OK", "What is my favourite colour?")
 
 
 _PDF_BASE64: Final = "JVBERi0xLjQKJSBsaXRlbGxtIGNhY2hlIHRlc3QK"
@@ -842,6 +871,59 @@ async def test_an_async_call_downloads_a_remote_image_for_the_cache_without_bloc
     assert async_only_image_fetch.fetched == [image_url]
     assert async_only_image_fetch.base64_png in json.dumps(sent["cache"])
     assert sent["generate"]["cachedContent"] == _BREAKPOINT_CACHE_NAME
+
+
+@pytest.fixture
+def served_png(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    fetched: Final[list[str]] = []  # mutable-ok: the test asserts on the URLs fetched
+
+    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetched.append(url)
+        return httpx.Response(
+            200, content=ONE_PIXEL_PNG, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
+
+    async def async_serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        return serve(client, url, **kwargs)
+
+    monkeypatch.setattr(image_handling, "safe_get", serve)
+    monkeypatch.setattr(image_handling, "async_safe_get", async_serve)
+    return fetched
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.asyncio
+async def test_a_cache_holds_an_https_image_inline_since_the_cache_api_rejects_web_urls(
+    served_png, sync_mode, custom_llm_provider
+):
+    image_url: Final = f"https://img.example/{uuid.uuid4()}.png"
+    request: Final = {
+        "model": "gemini-2.5-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                    {"type": "text", "text": _REFERENCE_DOCUMENT, "cache_control": {"type": "ephemeral"}},
+                ],
+            }
+        ],
+        "custom_llm_provider": custom_llm_provider,
+        "cache_key": "inline-image",
+        "vertex_project": "project",
+        "vertex_location": "us-central1",
+    }
+
+    body: Final = (
+        transform_openai_messages_to_gemini_context_caching(**request)
+        if sync_mode
+        else await async_transform_openai_messages_to_gemini_context_caching(**request)
+    )
+
+    assert served_png == [image_url]
+    assert image_url not in json.dumps(body)
+    assert base64.b64encode(ONE_PIXEL_PNG).decode() in json.dumps(body)
 
 
 def _conversation_with_a_marked_tool_result() -> list[dict[str, object]]:

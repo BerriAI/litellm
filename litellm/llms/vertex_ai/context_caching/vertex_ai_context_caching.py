@@ -126,11 +126,17 @@ def _prompt_cache_min_tokens(models: Sequence[str], custom_llm_provider: str) ->
 
 def _context_caching_skip_reason(
     cached_messages: Sequence[AllMessageValues],
+    uncached_messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
     deployment_model: str,
     cache_model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> str | None:
+    if not uncached_messages:
+        return (
+            "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache "
+            "only serves that exact prefix, so implicit caching serves it without a storage fee."
+        )
     if not cached_messages_end_on_supported_turn(cached_messages):
         return (
             "Vertex AI context caching: cached message block ends on a model turn once "
@@ -450,7 +456,7 @@ class ContextCachingEndpoints(VertexBase):
         tools: Final = optional_params.get("tools")
         tool_choice: Final = optional_params.get("tool_choice")
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, tools, model, target.model, custom_llm_provider
+            cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
@@ -599,7 +605,7 @@ class ContextCachingEndpoints(VertexBase):
         tools: Final = optional_params.get("tools")
         tool_choice: Final = optional_params.get("tool_choice")
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, tools, model, target.model, custom_llm_provider
+            cached_messages, non_cached_messages, tools, model, target.model, custom_llm_provider
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)

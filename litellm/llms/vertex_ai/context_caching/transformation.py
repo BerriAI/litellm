@@ -13,7 +13,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media, inline_remote_media
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -21,7 +21,7 @@ from litellm.utils import is_cached_message
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     gemini_convert_messages_with_history,
-    should_inline_remote_media,
+    inlines_unless_gemini_file,
     transform_system_message,
 )
 
@@ -171,7 +171,8 @@ def transform_openai_messages_to_gemini_context_caching(
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
     transformed_system_messages, new_messages = transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
+        supports_system_message=supports_system_message,
+        messages=inline_remote_media(messages, should_inline=inlines_unless_gemini_file),
     )
 
     transformed_messages: Final = gemini_convert_messages_with_history(
@@ -209,9 +210,7 @@ async def async_transform_openai_messages_to_gemini_context_caching(
     vertex_project: str | None,
     vertex_location: str | None,
 ) -> CachedContentRequestBody:
-    inlined_messages: Final = await async_inline_remote_media(
-        list(messages), should_inline=should_inline_remote_media(custom_llm_provider)
-    )
+    inlined_messages: Final = await async_inline_remote_media(list(messages), should_inline=inlines_unless_gemini_file)
     return await asyncify(transform_openai_messages_to_gemini_context_caching)(
         model=model,
         messages=inlined_messages,
