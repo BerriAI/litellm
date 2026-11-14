@@ -3,11 +3,14 @@ Google GenAI generateContent handler for Unified Guardrails.
 
 Request text comes from every system instruction the request carries
 (systemInstruction and system_instruction, top level and inside config) and from
-contents[].parts[]: text parts, plain-string parts, and every string of a
-functionResponse.response, which is left out when the guardrail skips tool
-messages. A response nested past DEFAULT_MAX_RECURSE_DEPTH is blocked with a 400
-rather than sent unscanned. Request functionCall parts reach the guardrail as chat-shaped
-tool_calls, and arguments the guardrail changed are written back into args.
+contents[].parts[]: text parts, plain-string parts, executableCode code, toolCall
+args, and the tool results (codeExecutionResult output, functionResponse and
+toolResponse response), which are left out when the guardrail skips tool messages.
+Structured values are scanned as one JSON text, the way chat scans a tool message,
+and a changed text is decoded back into the part, or blocked with a 400 when it no
+longer decodes. Request functionCall parts reach the guardrail as chat-shaped
+tool_calls under the call's own id (or a per-position one), and arguments the
+guardrail changed are written back into args when it returns every call.
 Response text comes from candidates[].content.parts[].text. Guardrailed text is
 written back in place, so the provider gets the caller's wire shape. Requests and
 responses may be dicts (wire format) or google-genai SDK objects; streaming
@@ -25,8 +28,7 @@ from typing import TYPE_CHECKING, Final, Optional
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
@@ -47,7 +49,24 @@ _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
 _FUNCTION_CALL_KEYS: Final = ("functionCall", "function_call")
-_FUNCTION_RESPONSE_KEYS: Final = ("functionResponse", "function_response")
+
+
+@dataclass(frozen=True, slots=True)
+class _PartField:
+    keys: tuple[str, str]
+    name: str
+    is_json: bool
+
+
+_MODEL_PART_FIELDS: Final = (
+    _PartField(keys=("executableCode", "executable_code"), name="code", is_json=False),
+    _PartField(keys=("toolCall", "tool_call"), name="args", is_json=True),
+)
+_TOOL_RESULT_PART_FIELDS: Final = (
+    _PartField(keys=("codeExecutionResult", "code_execution_result"), name="output", is_json=False),
+    _PartField(keys=("functionResponse", "function_response"), name="response", is_json=True),
+    _PartField(keys=("toolResponse", "tool_response"), name="response", is_json=True),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,11 +74,13 @@ class _TextSlot:
     container: object
     key: str | int
     text: str
+    is_json: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class _FunctionCallSlot:
     call: object
+    call_id: str | None
     name: str
     arguments: str
 
@@ -104,60 +125,48 @@ def _string_slot(container: object, key: str | int, value: object) -> tuple[_Tex
     return (_TextSlot(container=container, key=key, text=value),) if isinstance(value, str) and value else ()
 
 
-def _children(value: object) -> Iterable[tuple[str | int, object]]:
-    fields: Final = _json_object(value)
-    if fields is not None:
-        return fields.items()
-    items: Final = as_object_list(value)
-    return enumerate(items) if items is not None else ()
+def _json_slot(container: object, key: str | int, value: object) -> tuple[_TextSlot, ...]:
+    if not value:
+        return ()
+    text: Final = json.dumps(value, ensure_ascii=False, default=str)
+    return (_TextSlot(container=container, key=key, text=text, is_json=True),)
 
 
-def _too_deeply_nested_function_response() -> "HTTPException":
-    from fastapi import HTTPException
-
-    return HTTPException(
-        status_code=400,
-        detail={
-            "error": f"Content blocked: functionResponse.response is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} "
-            "levels and cannot be scanned by the configured guardrail"
-        },
-    )
-
-
-def _nested_string_slots(container: object, key: str | int, value: object, depth: int = 0) -> tuple[_TextSlot, ...]:
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise _too_deeply_nested_function_response()
-    if isinstance(value, str):
-        return _string_slot(container, key, value)
+def _part_field_slots(part: object, part_field: _PartField) -> tuple[_TextSlot, ...]:
+    slot: Final = _json_slot if part_field.is_json else _string_slot
     return tuple(
         chain.from_iterable(
-            _nested_string_slots(value, child_key, child, depth + 1) for child_key, child in _children(value)
+            slot(container, part_field.name, _field(container, part_field.name))
+            for container in _present_fields(part, part_field.keys)
         )
     )
 
 
-def _function_response_slots(part: object) -> tuple[_TextSlot, ...]:
-    return tuple(
-        chain.from_iterable(
-            _nested_string_slots(function_response, "response", _field(function_response, "response"))
-            for function_response in _present_fields(part, _FUNCTION_RESPONSE_KEYS)
-        )
-    )
-
-
-def _part_text_slots(parts: Sequence[object], index: int, include_tool_results: bool) -> tuple[_TextSlot, ...]:
+def _part_text_slots(parts: Sequence[object], index: int) -> tuple[_TextSlot, ...]:
     part: Final = parts[index]
-    text_slots: Final = (
+    return (
         _string_slot(parts, index, part) if isinstance(part, str) else _string_slot(part, "text", _field(part, "text"))
     )
-    return (*text_slots, *_function_response_slots(part)) if include_tool_results else text_slots
 
 
-def _content_text_slots(content: object, include_tool_results: bool) -> tuple[_TextSlot, ...]:
+def _request_part_slots(parts: Sequence[object], index: int, include_tool_results: bool) -> tuple[_TextSlot, ...]:
+    part_fields: Final = (
+        (*_MODEL_PART_FIELDS, *_TOOL_RESULT_PART_FIELDS) if include_tool_results else _MODEL_PART_FIELDS
+    )
+    field_slots: Final = chain.from_iterable(_part_field_slots(parts[index], part_field) for part_field in part_fields)
+    return (*_part_text_slots(parts, index), *field_slots)
+
+
+def _content_request_slots(content: object, include_tool_results: bool) -> tuple[_TextSlot, ...]:
     parts: Final = _repeated_field(_field(content, "parts"))
     return tuple(
-        chain.from_iterable(_part_text_slots(parts, index, include_tool_results) for index in range(len(parts)))
+        chain.from_iterable(_request_part_slots(parts, index, include_tool_results) for index in range(len(parts)))
     )
+
+
+def _content_text_slots(content: object) -> tuple[_TextSlot, ...]:
+    parts: Final = _repeated_field(_field(content, "parts"))
+    return tuple(chain.from_iterable(_part_text_slots(parts, index) for index in range(len(parts))))
 
 
 def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
@@ -169,15 +178,19 @@ def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
 
 def _request_text_slots(data: Mapping[str, object], include_tool_results: bool) -> tuple[_TextSlot, ...]:
     return tuple(
-        chain.from_iterable(_content_text_slots(content, include_tool_results) for content in _request_contents(data))
+        chain.from_iterable(
+            _content_request_slots(content, include_tool_results) for content in _request_contents(data)
+        )
     )
 
 
 def _function_call_slot(call: object) -> _FunctionCallSlot:
+    call_id: Final = _field(call, "id")
     name: Final = _field(call, "name")
     args: Final = _field(call, "args")
     return _FunctionCallSlot(
         call=call,
+        call_id=call_id if isinstance(call_id, str) and call_id else None,
         name=name if isinstance(name, str) else "",
         arguments=json.dumps({} if args is None else args),
     )
@@ -198,11 +211,7 @@ def _response_text_slots(response: object) -> tuple[_TextSlot, ...]:
     candidates: Final = _field(response, "candidates")
     if not isinstance(candidates, (list, tuple)):
         return ()
-    return tuple(
-        chain.from_iterable(
-            _content_text_slots(_field(candidate, "content"), include_tool_results=False) for candidate in candidates
-        )
-    )
+    return tuple(chain.from_iterable(_content_text_slots(_field(candidate, "content")) for candidate in candidates))
 
 
 def _slot_texts(text_slots: Sequence[_TextSlot]) -> tuple[str, ...]:
@@ -217,7 +226,7 @@ def _texts_payload(
 
 def _tool_call_chunk(index: int, slot: _FunctionCallSlot) -> ChatCompletionToolCallChunk:
     return ChatCompletionToolCallChunk(
-        id=f"call_{slot.name or 'unknown'}",
+        id=slot.call_id or f"call_{index}_{slot.name or 'unknown'}",
         type="function",
         function=ChatCompletionToolCallFunctionChunk(name=slot.name, arguments=slot.arguments),
         index=index,
@@ -238,11 +247,32 @@ def _guardrail_inputs(
     return {**with_model, "tool_calls": [_tool_call_chunk(index, slot) for index, slot in enumerate(function_calls)]}
 
 
+def _unwritable_guardrail_change(key: str | int) -> "HTTPException":
+    from fastapi import HTTPException
+
+    return HTTPException(
+        status_code=400,
+        detail={"error": f"Content blocked: the guardrail rewrote a part's {key} into text that is not valid JSON"},
+    )
+
+
+def _written_value(slot: _TextSlot, text: str) -> object:
+    if not slot.is_json:
+        return text
+    try:
+        return _DECODED_JSON.validate_python(json.loads(text))
+    except json.JSONDecodeError:
+        raise _unwritable_guardrail_change(slot.key) from None
+
+
 def _write_back_texts(text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None) -> None:
     if not guardrailed_texts or len(guardrailed_texts) != len(text_slots):
         return
-    for slot, text in zip(text_slots, guardrailed_texts):
-        _write_field(slot.container, slot.key, text)
+    writes: Final = tuple(
+        (slot, _written_value(slot, text)) for slot, text in zip(text_slots, guardrailed_texts) if text != slot.text
+    )
+    for slot, value in writes:
+        _write_field(slot.container, slot.key, value)
 
 
 def _guardrailed_args(slot: _FunctionCallSlot, tool_call: object) -> Mapping[str, object] | None:
@@ -255,9 +285,11 @@ def _guardrailed_args(slot: _FunctionCallSlot, tool_call: object) -> Mapping[str
 def _write_back_function_calls(
     function_calls: Sequence[_FunctionCallSlot], guardrailed_tool_calls: Sequence[object] | None
 ) -> None:
+    if guardrailed_tool_calls is None or len(guardrailed_tool_calls) != len(function_calls):
+        return
     rewrites: Final = tuple(
         (slot.call, args)
-        for slot, tool_call in zip(function_calls, guardrailed_tool_calls or ())
+        for slot, tool_call in zip(function_calls, guardrailed_tool_calls)
         if (args := _guardrailed_args(slot, tool_call)) is not None
     )
     for call, args in rewrites:

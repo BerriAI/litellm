@@ -6,21 +6,23 @@ import copy
 import functools
 import json
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
     GoogleGenAIGenerateContentHandler,
 )
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
-from litellm.types.guardrails import BlockedWord, ContentFilterAction
-from litellm.types.utils import CallTypes
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFilterPattern
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 _MASKED: Final = "[KEYWORD_REDACTED]"
+_DEEPER_THAN_ANY_SCAN_CAP: Final = 150
 
 
 def _one_part_request(role: str, part: dict[str, object]) -> dict[str, object]:
@@ -71,7 +73,7 @@ _REQUESTS_CARRYING_THE_WORD: Final = {
             {
                 "functionResponse": {
                     "name": "lookup",
-                    "response": {"zebrafruit": f"{_MASKED} facts", "hits": [{"title": f"a {_MASKED}"}, 3]},
+                    "response": {_MASKED: f"{_MASKED} facts", "hits": [{"title": f"a {_MASKED}"}, 3]},
                 }
             },
         ),
@@ -83,6 +85,44 @@ _REQUESTS_CARRYING_THE_WORD: Final = {
     "function-call": (
         _one_part_request("model", {"functionCall": {"name": "lookup", "args": {"q": "zebrafruit", "limit": 3}}}),
         _one_part_request("model", {"functionCall": {"name": "lookup", "args": {"q": _MASKED, "limit": 3}}}),
+    ),
+    "executable-code": (
+        _one_part_request("model", {"executableCode": {"language": "PYTHON", "code": "print('zebrafruit')"}}),
+        _one_part_request("model", {"executableCode": {"language": "PYTHON", "code": f"print('{_MASKED}')"}}),
+    ),
+    "snake-executable-code": (
+        _one_part_request("model", {"executable_code": {"language": "PYTHON", "code": "print('zebrafruit')"}}),
+        _one_part_request("model", {"executable_code": {"language": "PYTHON", "code": f"print('{_MASKED}')"}}),
+    ),
+    "code-execution-result": (
+        _one_part_request("user", {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "zebrafruit"}}),
+        _one_part_request("user", {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": _MASKED}}),
+    ),
+    "snake-code-execution-result": (
+        _one_part_request("user", {"code_execution_result": {"outcome": "OUTCOME_OK", "output": "zebrafruit"}}),
+        _one_part_request("user", {"code_execution_result": {"outcome": "OUTCOME_OK", "output": _MASKED}}),
+    ),
+    "tool-call": (
+        _one_part_request("model", {"toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"query": "zebrafruit"}}}),
+        _one_part_request("model", {"toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"query": _MASKED}}}),
+    ),
+    "snake-tool-call": (
+        _one_part_request("model", {"tool_call": {"tool_type": "GOOGLE_SEARCH_WEB", "args": {"query": "zebrafruit"}}}),
+        _one_part_request("model", {"tool_call": {"tool_type": "GOOGLE_SEARCH_WEB", "args": {"query": _MASKED}}}),
+    ),
+    "tool-response": (
+        _one_part_request(
+            "user", {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {"hits": ["zebrafruit"]}}}
+        ),
+        _one_part_request("user", {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {"hits": [_MASKED]}}}),
+    ),
+    "snake-tool-response": (
+        _one_part_request(
+            "user", {"tool_response": {"tool_type": "GOOGLE_SEARCH_WEB", "response": {"hits": ["zebrafruit"]}}}
+        ),
+        _one_part_request(
+            "user", {"tool_response": {"tool_type": "GOOGLE_SEARCH_WEB", "response": {"hits": [_MASKED]}}}
+        ),
     ),
     "snake-function-call": (
         _one_part_request("model", {"function_call": {"name": "lookup", "args": {"filter": {"term": "zebrafruit"}}}}),
@@ -99,6 +139,47 @@ def _mock_guardrail(returned_texts):
     guardrail = MagicMock()
     guardrail.apply_guardrail = AsyncMock(return_value={"texts": returned_texts})
     return guardrail
+
+
+class _LastToolCallMaskingGuardrail(CustomGuardrail):
+    def __init__(self, return_every_call: bool) -> None:
+        super().__init__(guardrail_name="last-tool-call-masker")
+        self.return_every_call = return_every_call
+        self.seen_tool_call_ids: tuple[object, ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls: Final = list(inputs.get("tool_calls", []))
+        self.seen_tool_call_ids = tuple(tool_call["id"] for tool_call in tool_calls)
+        masked_last: Final = {
+            **tool_calls[-1],
+            "function": {**tool_calls[-1]["function"], "arguments": '{"q": "[MASKED]"}'},
+        }
+        kept: Final = tool_calls[:-1] if self.return_every_call else []
+        return GenericGuardrailAPIInputs(texts=inputs.get("texts", []), tool_calls=[*kept, masked_last])
+
+
+class _TruncatingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="truncator")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=[text[:-1] for text in inputs.get("texts", [])])
+
+
+def _lookup_calls(*calls: dict[str, object]) -> dict[str, object]:
+    return {"contents": [{"role": "model", "parts": [{"functionCall": {"name": "lookup", **call}} for call in calls]}]}
 
 
 def _zebrafruit_filter(action: ContentFilterAction) -> ContentFilterGuardrail:
@@ -157,23 +238,83 @@ async def test_a_masked_word_reaches_the_provider_masked_in_the_callers_wire_sha
 
 
 @pytest.mark.asyncio
-async def test_a_function_response_string_at_the_scan_depth_cap_is_still_masked() -> None:
+async def test_a_clean_function_response_nested_deeper_than_any_scan_cap_reaches_the_provider_unchanged() -> None:
+    sent: Final = _function_response_with_rows(_nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, "plums"))
+
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data=_function_response_with_rows(_nested_in_lists(DEFAULT_MAX_RECURSE_DEPTH - 1, "zebrafruit")),
+        data=copy.deepcopy(sent),
+        guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.BLOCK),
+    )
+
+    assert _sent_request(guardrailed) == sent
+
+
+@pytest.mark.asyncio
+async def test_a_masked_word_deep_in_a_function_response_is_masked_where_it_sits() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows(_nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, "zebrafruit")),
         guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
     )
 
     assert _sent_request(guardrailed) == _function_response_with_rows(
-        _nested_in_lists(DEFAULT_MAX_RECURSE_DEPTH - 1, _MASKED)
+        _nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, _MASKED)
     )
 
 
 @pytest.mark.asyncio
-async def test_a_function_response_nested_past_the_scan_depth_cap_is_blocked_rather_than_sent_unscanned() -> None:
+async def test_a_card_number_sent_as_a_json_number_in_a_function_response_is_blocked() -> None:
+    card_filter: Final = ContentFilterGuardrail(
+        guardrail_name="card-filter",
+        patterns=[
+            ContentFilterPattern(
+                pattern_type="regex", pattern=r"\b4\d{15}\b", name="card", action=ContentFilterAction.BLOCK
+            )
+        ],
+    )
+
     with pytest.raises(HTTPException) as blocked:
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=_function_response_with_rows(_nested_in_lists(DEFAULT_MAX_RECURSE_DEPTH, "plums")),
-            guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+            data=_function_response_with_rows([{"card": 4111111111111111}]),
+            guardrail_to_apply=card_filter,
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_non_ascii_blocked_word_in_a_function_response_is_blocked() -> None:
+    accented_filter: Final = ContentFilterGuardrail(
+        guardrail_name="accented-filter",
+        blocked_words=[BlockedWord(keyword="crème brûlée", action=ContentFilterAction.BLOCK)],
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=_function_response_with_rows(["order the crème brûlée"]),
+            guardrail_to_apply=accented_filter,
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_the_guardrail_leaves_alone_keeps_the_callers_object() -> None:
+    response: Final = {"rows": [1, 2.5, None, "plums"]}
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_one_part_request("user", {"functionResponse": {"name": "lookup", "response": response}}),
+        guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+    )
+
+    assert guardrailed["contents"][0]["parts"][0]["functionResponse"]["response"] is response
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_that_breaks_a_tool_result_json_blocks_the_request_instead_of_sending_it() -> None:
+    with pytest.raises(HTTPException) as blocked:
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=_function_response_with_rows(["plums"]),
+            guardrail_to_apply=_TruncatingGuardrail(),
         )
 
     assert blocked.value.status_code == 400
@@ -204,16 +345,48 @@ async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> N
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_skipping_tool_messages_leaves_function_responses_alone_but_masks_the_rest() -> None:
+async def test_each_function_call_reaches_the_guardrail_under_its_own_id() -> None:
+    guardrail: Final = _LastToolCallMaskingGuardrail(return_every_call=True)
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_lookup_calls({"id": "fc-7", "args": {"q": "plums"}}, {"args": {"q": "figs"}}, {"args": {"q": "kiwis"}}),
+        guardrail_to_apply=guardrail,
+    )
+
+    assert guardrail.seen_tool_call_ids[0] == "fc-7"
+    assert len(set(guardrail.seen_tool_call_ids)) == 3
+    assert _sent_request(guardrailed) == _lookup_calls(
+        {"id": "fc-7", "args": {"q": "plums"}}, {"args": {"q": "figs"}}, {"args": {"q": "[MASKED]"}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_returning_fewer_tool_calls_than_it_got_changes_no_function_call() -> None:
+    sent: Final = _lookup_calls({"args": {"q": "plums"}}, {"args": {"q": "zebrafruit"}})
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=copy.deepcopy(sent),
+        guardrail_to_apply=_LastToolCallMaskingGuardrail(return_every_call=False),
+    )
+
+    assert _sent_request(guardrailed) == sent
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_skipping_tool_messages_leaves_tool_results_alone_but_masks_the_rest() -> None:
     guardrail: Final = _zebrafruit_filter(ContentFilterAction.MASK)
     guardrail.skip_tool_message_in_guardrail = True
-    tool_result: Final = {"functionResponse": {"name": "lookup", "response": {"word": "zebrafruit"}}}
+    tool_results: Final = [
+        {"functionResponse": {"name": "lookup", "response": {"word": "zebrafruit"}}},
+        {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {"hits": ["zebrafruit"]}}},
+        {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "zebrafruit"}},
+    ]
 
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
         data={
             "contents": [
                 {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"q": "zebrafruit"}}}]},
-                {"role": "user", "parts": [copy.deepcopy(tool_result), {"text": "now say zebrafruit"}]},
+                {"role": "user", "parts": [*copy.deepcopy(tool_results), {"text": "now say zebrafruit"}]},
             ]
         },
         guardrail_to_apply=guardrail,
@@ -222,7 +395,7 @@ async def test_a_guardrail_skipping_tool_messages_leaves_function_responses_alon
     assert _sent_request(guardrailed) == {
         "contents": [
             {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"q": _MASKED}}}]},
-            {"role": "user", "parts": [tool_result, {"text": f"now say {_MASKED}"}]},
+            {"role": "user", "parts": [*tool_results, {"text": f"now say {_MASKED}"}]},
         ]
     }
 
