@@ -31,6 +31,20 @@ class ProxyRouterHost(RouterHost):
             vertex_credentials=vertex_credentials,
         )
 
+    def remove_vertex_pass_through_credentials(
+        self,
+        project_id: str,
+        location: str,
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            passthrough_endpoint_router,
+        )
+
+        passthrough_endpoint_router.remove_vertex_credentials(
+            project_id=project_id,
+            location=location,
+        )
+
     async def authorize_strategy_inference(
         self,
         deployment: Mapping[str, object] | None,

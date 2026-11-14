@@ -306,6 +306,26 @@ def test_vertex_deployment_resolves_from_inline_litellm_params():
     assert resolved.vertex_credentials == '{"type": "service_account", "project_id": "proj-inline"}'
 
 
+def test_vertex_deployment_credentials_removed_on_delete():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live",
+                "vertex_ai/gemini-live-2.5-flash",
+                vertex_project="proj-cleanup",
+                vertex_location="us-central1",
+                vertex_credentials='{"type": "service_account"}',
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+    assert "proj-cleanup-us-central1" in passthrough_router.deployment_key_to_vertex_credentials
+
+    deployment_id = llm_router.model_list[0]["model_info"]["id"]
+    llm_router.delete_deployment(deployment_id)
+    assert "proj-cleanup-us-central1" not in passthrough_router.deployment_key_to_vertex_credentials
+
+
 def _two_vertex_deployments_router() -> litellm.Router:
     return litellm.Router(
         model_list=[

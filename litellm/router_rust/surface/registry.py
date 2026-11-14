@@ -1425,6 +1425,33 @@ class HostRegistry(HostModelInfo):
             vertex_credentials=credentials,  # pyright: ignore[reportArgumentType]  # the configured credentials
         )
 
+    def _remove_vertex_pass_through_credentials(self, item: UntypedEntry) -> None:
+        """Unregister vertex credentials for a pass-through deployment being removed (mirrors ``_initialize_deployment_for_pass_through``)."""
+        params: Final = item.get("litellm_params") if isinstance(item, dict) else {}
+        if not isinstance(params, dict):
+            return
+        if params.get("use_in_pass_through") is not True:
+            return
+        custom_llm_provider: Final = params.get("custom_llm_provider")
+        if custom_llm_provider != "vertex_ai":
+            return
+        credential_name: Final = params.get("litellm_credential_name")
+        credential_values: dict | None = None
+        if credential_name is not None:
+            credential_values = CredentialAccessor.get_credential_values(credential_name)  # type: ignore[arg-type]
+        project: Final = credential_values.get("vertex_project") if isinstance(credential_values, dict) else None  # type: ignore[union-attr]
+        location: Final = credential_values.get("vertex_location") if isinstance(credential_values, dict) else None  # type: ignore[union-attr]
+        project = project if project is not None else params.get("vertex_project")
+        location = location if location is not None else params.get("vertex_location")
+        if project is None or location is None:
+            return
+        from litellm.router_host import router_host
+
+        router_host().remove_vertex_pass_through_credentials(
+            project_id=str(project),
+            location=str(location),
+        )
+
     # -- writes -----------------------------------------------------------------------------------
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
@@ -1454,7 +1481,10 @@ class HostRegistry(HostModelInfo):
                 and deployment.model_info == on_router.model_info
             ):
                 return None
+            if on_router is not None:
+                self._remove_vertex_pass_through_credentials(on_router.to_json(exclude_none=True))
             self._install_deployment(deployment, replace_existing=True)
+
             if on_router is not None:
                 withdraw_shared_capabilities(
                     self._host,
@@ -1635,6 +1665,8 @@ class HostRegistry(HostModelInfo):
                 if deployment_idx is None:
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
+                self._remove_vertex_pass_through_credentials(item)
+
                 self._remove(id)
                 withdraw_shared_capabilities(self._host, item, None, self._served_by_live_routers())
             if self.checks is not None:
