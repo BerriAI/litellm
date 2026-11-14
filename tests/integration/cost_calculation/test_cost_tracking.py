@@ -72,6 +72,19 @@ def _wav_bytes(seconds: float) -> bytes:
     return output.getvalue()
 
 
+def _unsized_flac_bytes() -> bytes:
+    """A FLAC whose STREAMINFO total-samples field is 0 (unknown), as an encoder writing to a pipe leaves it."""
+    sample_rate: Final = 16000
+    bits_per_sample: Final = 16
+    streaminfo: Final = (
+        struct.pack(">HH", 4096, 4096)
+        + bytes(6)
+        + ((sample_rate << 44) | ((bits_per_sample - 1) << 36)).to_bytes(8, "big")
+        + bytes(16)
+    )
+    return b"fLaC" + b"\x80" + len(streaminfo).to_bytes(3, "big") + streaminfo
+
+
 def _png_bytes() -> bytes:
     def chunk(kind: bytes, payload: bytes) -> bytes:
         return (
@@ -97,6 +110,8 @@ def _multipart_request(gateway: Gateway, case: CostTrackingTestCase, model_name:
     }
     if case.upload.kind == "wav":
         files: Final = {"file": ("audio.wav", _wav_bytes(case.upload.seconds), "audio/wav")}
+    elif case.upload.kind == "unsized_flac":
+        files = {"file": ("audio.flac", _unsized_flac_bytes(), "audio/flac")}
     else:
         files = {"image": ("image.png", _png_bytes(), "image/png")}
     return gateway.request_multipart(case.endpoint, fields, files, key=key)

@@ -13,7 +13,6 @@ from typing import IO, ClassVar, Final, Protocol, TypeAlias
 from urllib.parse import quote
 
 import httpx
-import soundfile
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -29,6 +28,7 @@ from litellm.constants import (
     TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
     TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS,
 )
+from litellm.litellm_core_utils.audio_utils.utils import LIBSNDFILE_UNKNOWN_FRAME_COUNT
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -521,9 +521,14 @@ async def write_media_within_limit(response: httpx.Response, media_file: IO[byte
 
 
 def media_file_seconds(path: Path) -> float | None:
+    import soundfile
+
     try:
         with soundfile.SoundFile(str(path)) as audio:
-            return len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            return frames / audio.samplerate
     except (RuntimeError, ValueError, OSError) as e:
         verbose_proxy_logger.warning("Transcribe media could not be decoded for its duration: %s", e)
         return None

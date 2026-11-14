@@ -83,9 +83,18 @@ from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.common_utils import is_openai_agents_api_path, openai_api_resource
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    VERTEX_REQUEST_LABELS_MAX,
+    is_vertex_labels_header,
+    resolve_vertex_request_labels,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
+from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
@@ -93,6 +102,7 @@ from litellm.proxy.auth.auth_checks import (
     key_model_aliases_for_auth_check,
     team_model_aliases_for_auth_check,
 )
+from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
@@ -131,6 +141,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_provider_token_count,
     rejected_token_count,
@@ -145,6 +156,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
+    UpstreamRequest,
     WebsocketFrameModelAllowed,
     WebsocketFrameModelGate,
     WebsocketFrameModelRefused,
@@ -174,7 +186,9 @@ from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJ
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    DeploymentPricingResolver,
     WebSocketSessionMeter,
 )
 from litellm.types.passthrough_endpoints.tinyfish import (
@@ -185,7 +199,12 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import (
+    DEPLOYMENT_SCOPED_PRICING_FIELDS,
+    SERVER_DERIVED_PRICING_FIELDS,
+    CallTypes,
+    LlmProviders,
+)
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 from litellm.utils import ProviderConfigManager, with_named_credential
 
@@ -243,6 +262,58 @@ def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> fro
     return frozenset(
         _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
+
+
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_PRICING_FIELDS: Final[frozenset[str]] = SERVER_DERIVED_PRICING_FIELDS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+
+
+def _object_mapping(value: object) -> Mapping[str, object]:
+    return _OBJECT_MAPPING.validate_python(value if isinstance(value, Mapping) else {})
+
+
+def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[str, object] | None:
+    fields: Final = _object_mapping(deployment)
+    params: Final = _object_mapping(fields.get("litellm_params"))
+    backend: Final = params.get("model")
+    provider_override: Final = params.get("custom_llm_provider")
+    if not isinstance(backend, str):
+        return None
+    try:
+        backend_model, provider, _, _ = get_llm_provider(
+            model=backend, custom_llm_provider=provider_override if isinstance(provider_override, str) else None
+        )
+    except litellm.BadRequestError:
+        return None
+    if provider != LlmProviders.ANTHROPIC.value or model not in (backend_model, backend.removeprefix(f"{provider}/")):
+        return None
+    return {
+        **_object_mapping(fields.get("model_info")),
+        **{field: value for field in _DEPLOYMENT_PRICING_FIELDS if (value := params.get(field)) is not None},
+    }
+
+
+def anthropic_deployment_pricing_model_info(
+    llm_router: litellm.Router | None, request_body: Mapping[str, object], team_id: str | None
+) -> Mapping[str, object] | None:
+    """
+    The pass-through selects no deployment, so ``request_body`` is the body it forwards. Only a single deployment in
+    that model's group serving that exact Anthropic model can say what it costs: with several, any pick could bill
+    another deployment's negotiated price.
+    """
+    model: Final = request_body.get("model")
+    if llm_router is None or not isinstance(model, str) or not model:
+        return None
+    candidates: Final = tuple(
+        model_info
+        for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
+        if llm_router.registry().includes(deployment, team_id=team_id)
+        and (model_info := _anthropic_deployment_model_info(deployment, model)) is not None
+    )
+    if len(candidates) != 1:
+        return None
+    (only_match,) = candidates
+    return only_match if any(only_match.get(field) is not None for field in _DEPLOYMENT_PRICING_FIELDS) else None
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -1233,6 +1304,16 @@ async def anthropic_proxy_route(
     ## check for streaming
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
+    from litellm.proxy.proxy_server import llm_router
+
+    setattr(
+        request.state,
+        LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
+        DeploymentPricingResolver(
+            resolve=partial(anthropic_deployment_pricing_model_info, llm_router, team_id=user_api_key_dict.team_id)
+        ),
+    )
+
     ## CREATE PASS-THROUGH
     auth_header: Final = await AnthropicModelInfo.aget_auth_header(
         anthropic_api_key or None, allow_workload_identity=True
@@ -1422,6 +1503,12 @@ async def bedrock_passthrough_error_response(
         raise
 
 
+def _bedrock_pass_through_headers(request: Request) -> Mapping[str, str]:
+    from litellm.proxy.litellm_pre_call_utils import without_credential_headers
+
+    return without_credential_headers(BasePassthroughUtils.pass_through_prefixed_headers(request.headers))
+
+
 async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
@@ -1477,6 +1564,7 @@ async def handle_bedrock_passthrough_router_model(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
+        "request_headers": _bedrock_pass_through_headers(request),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(bedrock_payload),
@@ -1517,7 +1605,7 @@ async def handle_bedrock_count_tokens(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_body: dict[str, object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """
     Handle AWS Bedrock CountTokens API requests.
 
@@ -1525,11 +1613,22 @@ async def handle_bedrock_count_tokens(
     - /v1/messages/count_tokens
     - /v1/messages/count-tokens
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id),
+        litellm_call_id,
+        request,
+        fastapi_response,
+    )
+
+
+async def _bedrock_count_tokens(
+    user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
+) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
-    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     try:
         # Initialize the handler
         handler: Final = BedrockCountTokensHandler()
@@ -1683,6 +1782,7 @@ async def bedrock_llm_proxy_route(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
+        "request_headers": _bedrock_pass_through_headers(request),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(passthrough_payload),
@@ -2500,21 +2600,23 @@ async def _relay_router_model(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
     try:
-        result: Final = await llm_router.allm_passthrough_route(
-            model=model,
-            method=request.method,
-            endpoint=endpoint,
-            request_query_params=request.query_params,
-            request_headers=safe_get_request_headers(request),
-            stream=is_streaming_request,
-            content=None,
-            data=None,
-            files=None,
-            json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
-            params=None,
-            headers=None,
-            cookies=None,
-            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
+        result: Final = _DECODED_JSON.validate_python(
+            await llm_router.allm_passthrough_route(
+                model=model,
+                method=request.method,
+                endpoint=endpoint,
+                request_query_params=request.query_params,
+                request_headers=safe_get_request_headers(request),
+                stream=is_streaming_request,
+                content=None,
+                data=None,
+                files=None,
+                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+                params=None,
+                headers=None,
+                cookies=None,
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
+            )
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
@@ -2913,6 +3015,86 @@ def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]
     if not _is_vertex_anthropic_count_tokens_route(endpoint):
         return headers
     return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
+
+
+_VERTEX_BODY_LABELLED_METHODS: Final = frozenset(
+    {"generateContent", "streamGenerateContent", "predict", "predictLongRunning", "batchPredictionJobs"}
+)
+_VERTEX_HEADER_LABELLED_METHODS: Final = frozenset({"rawPredict", "streamRawPredict"})
+_VERTEX_HEADER_LABELLED_PUBLISHERS: Final = frozenset({"anthropic", "mistralai"})
+
+VertexLabelPlacement: TypeAlias = Literal["header", "body", "caller_body"]
+
+
+def _vertex_publisher(segments: tuple[str, ...]) -> str | None:
+    match segments[-4:]:
+        case ("publishers", publisher, "models", _):
+            return publisher
+        case _:
+            return None
+
+
+def _vertex_label_placement(http_method: str, endpoint: str) -> VertexLabelPlacement | None:
+    if http_method != "POST":
+        return None
+    segments: Final = tuple(endpoint.strip("/").split("/"))
+    method: Final = segments[-1].partition(":")[2] or segments[-1]
+    if method in _VERTEX_HEADER_LABELLED_METHODS:
+        return "header" if _vertex_publisher(segments) in _VERTEX_HEADER_LABELLED_PUBLISHERS else None
+    return "body" if method in _VERTEX_BODY_LABELLED_METHODS else "caller_body"
+
+
+def _without_vertex_labels_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
+
+
+def _with_vertex_body_labels(
+    allowed_fields: tuple[str, ...],
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    resolved: Final = resolve_vertex_request_labels(
+        allowed_fields, body.get("labels"), litellm_params, VERTEX_REQUEST_LABELS_MAX
+    )
+    unlabelled: Final = {key: value for key, value in body.items() if key != "labels"}
+    labelled_body: Final = {**unlabelled, "labels": dict(resolved)} if resolved else unlabelled
+    return _without_vertex_labels_header(headers), labelled_body
+
+
+def _with_vertex_labels_header(
+    allowed_fields: tuple[str, ...],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    caller_labels: Final = body.get("labels") if body is not None else None
+    labels_header: Final = vertex_partner_labels_header(allowed_fields, caller_labels, headers, litellm_params)
+    unlabelled_headers: Final = _without_vertex_labels_header(headers)
+    unlabelled_body: Final = None if body is None else {key: value for key, value in body.items() if key != "labels"}
+    if labels_header is None:
+        return unlabelled_headers, unlabelled_body
+    return {**unlabelled_headers, VERTEX_LABELS_HEADER: labels_header}, unlabelled_body
+
+
+def _with_vertex_request_labels(
+    placement: VertexLabelPlacement | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return headers, body
+    match placement:
+        case "header":
+            return _with_vertex_labels_header(allowed_fields, headers, body, litellm_params)
+        case "body" if body is not None:
+            return _with_vertex_body_labels(allowed_fields, headers, body, litellm_params)
+        case "caller_body" if body is not None and "labels" in body:
+            return _with_vertex_body_labels(allowed_fields, headers, body, litellm_params)
+        case _:
+            return headers, body
 
 
 def get_vertex_pass_through_handler(
@@ -3353,6 +3535,9 @@ async def _base_vertex_proxy_route(
         is_streaming_request=is_streaming_request,
         upstream_headers_filter=partial(
             _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
+        ),
+        upstream_request_filter=partial(
+            _with_vertex_request_labels, _vertex_label_placement(request.method, updated_url.path)
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
@@ -4241,6 +4426,10 @@ VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
     "Vertex AI auth failed: set a use_in_pass_through vertex model, default_vertex_config, or DEFAULT_VERTEXAI_* env"
 )
 
+VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON: Final = (
+    "Rejected Request: vertex_project must come from the proxy's configuration, see allow_client_side_credentials"
+)
+
 VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
 
 VERTEX_PUBLISHERS_SEGMENT: Final = "publishers/"
@@ -4265,11 +4454,25 @@ def _get_llm_router() -> Router | None:
     return llm_router
 
 
-def _resolve_vertex_live_credentials(
+@dataclass(frozen=True, slots=True)
+class _ConfiguredVertexLiveTarget:
+    credentials: VertexPassThroughCredentials | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DeploymentVertexLiveTarget:
+    credentials: VertexPassThroughCredentials
+    deployment_params: LiteLLMParamsTypedDict
+
+
+_VertexLiveTarget = _ConfiguredVertexLiveTarget | _DeploymentVertexLiveTarget
+
+
+def _resolve_vertex_live_target(
     vertex_project: str | None,
     vertex_location: str | None,
     model: str | None,
-) -> VertexPassThroughCredentials | None:
+) -> _VertexLiveTarget:
     """
     Resolution order: an explicit project/location registration, then ``default_vertex_config`` (which the proxy
     fills from the ``DEFAULT_VERTEXAI_*`` env vars whenever the yaml leaves it out), then any DB model entry
@@ -4283,36 +4486,133 @@ def _resolve_vertex_live_credentials(
         location=vertex_location,
     )
     if keyed is not None and keyed.vertex_project is not None:
-        return keyed
-    from_deployments: Final = passthrough_endpoint_router.get_vertex_credentials_from_router_deployments(model=model)
+        return _ConfiguredVertexLiveTarget(credentials=keyed)
+    from_deployments: Final = passthrough_endpoint_router.get_vertex_deployment_from_router(model=model)
     if from_deployments is not None:
-        return from_deployments
+        deployment, credentials = from_deployments
+        return _DeploymentVertexLiveTarget(credentials=credentials, deployment_params=deployment["litellm_params"])
     if keyed is not None:
-        return keyed
+        return _ConfiguredVertexLiveTarget(credentials=keyed)
     passthrough_endpoint_router.set_default_vertex_config()
-    return passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
+    return _ConfiguredVertexLiveTarget(
+        credentials=passthrough_endpoint_router.get_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+        )
     )
+
+
+def _requested_vertex_live_target(
+    credentials: VertexPassThroughCredentials, vertex_project: str | None, vertex_location: str | None
+) -> tuple[tuple[str, str | None, str | None], ...]:
+    return (
+        ("vertex_project", vertex_project, credentials.vertex_project),
+        ("vertex_location", vertex_location, credentials.vertex_location),
+    )
+
+
+def _proxy_configured_vertex_projects() -> frozenset[str]:
+    return frozenset(
+        project
+        for project in (
+            litellm.vertex_project,
+            get_secret_str("VERTEXAI_PROJECT"),
+            get_secret_str("DEFAULT_VERTEXAI_PROJECT"),
+        )
+        if project
+    )
+
+
+def _names_an_unconfigured_project(
+    credentials: VertexPassThroughCredentials | None, vertex_project: str | None
+) -> bool:
+    return (
+        bool(vertex_project)
+        and (credentials is None or credentials.vertex_project is None)
+        and vertex_project not in _proxy_configured_vertex_projects()
+    )
+
+
+def _live_target_override_reason(
+    target: _VertexLiveTarget,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    allow_client_side_credentials: bool,
+) -> str | None:
+    if allow_client_side_credentials:
+        return None
+    match target:
+        case _ConfiguredVertexLiveTarget(credentials=credentials) if _names_an_unconfigured_project(
+            credentials, vertex_project
+        ):
+            return VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON
+        case _ConfiguredVertexLiveTarget(credentials=VertexPassThroughCredentials() as credentials):
+            configured_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and pinned and asked != pinned
+                ),
+                None,
+            )
+            if configured_field is None:
+                return None
+            return (
+                f"Rejected Request: {configured_field} is pinned by default_vertex_config, "
+                "see allow_client_side_credentials"
+            )
+        case _ConfiguredVertexLiveTarget():
+            return None
+        case _DeploymentVertexLiveTarget(credentials=credentials, deployment_params=deployment_params):
+            opted_in: Final = deployment_clientside_auth_params(deployment_params) or ()
+            deployment_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and asked != pinned and name not in opted_in
+                ),
+                None,
+            )
+            if deployment_field is None:
+                return None
+            return (
+                f"Rejected Request: {deployment_field} is pinned by the deployment, "
+                "see configurable_clientside_auth_params"
+            )
+
+
+_VERTEX_RESOURCE_PROJECT_AND_LOCATION: Final = re.compile(r"projects/[^/]+/locations/(?P<location>[^/]+)/")
 
 
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
+    configured_location: str | None,
     llm_router: Router | None,
+    keeps_caller_resource_path: bool,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
 
     Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
-    that is not a ``projects/...`` path as a project name and closes the socket
+    that is not a ``projects/...`` path as a project name and closes the socket. A ``projects/...`` path
+    picks the project the proxy's token is spent on, so it is moved onto the connection's project, and onto its
+    region when one is configured, unless ``allow_client_side_credentials`` lets callers choose them
     """
     if vertex_project is None or vertex_location is None:
         return None
 
     def rewrite(setup_model: str) -> str:
         if setup_model.startswith("projects/"):
-            return setup_model
+            resource_prefix: Final = _VERTEX_RESOURCE_PROJECT_AND_LOCATION.match(setup_model)
+            if keeps_caller_resource_path or resource_prefix is None:
+                return setup_model
+            location: Final = configured_location or resource_prefix.group("location")
+            return f"projects/{vertex_project}/locations/{location}/{setup_model[resource_prefix.end() :]}"
         aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
         return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
 
@@ -4366,11 +4666,22 @@ async def vertex_ai_live_websocket_passthrough(
     await websocket.accept()
 
     incoming_headers: Final = dict(websocket.headers)
-    vertex_credentials_config: Final = _resolve_vertex_live_credentials(
+    live_target: Final = _resolve_vertex_live_target(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         model=model,
     )
+    allow_client_side_credentials: Final = _proxy_general_settings().get("allow_client_side_credentials") is True
+    override_reason: Final = _live_target_override_reason(
+        live_target,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        allow_client_side_credentials=allow_client_side_credentials,
+    )
+    if override_reason is not None:
+        await websocket.close(code=1008, reason=override_reason)
+        return
+    vertex_credentials_config: Final = live_target.credentials
 
     configured_project: Final = vertex_project or (
         vertex_credentials_config.vertex_project if vertex_credentials_config is not None else None
@@ -4452,7 +4763,9 @@ async def vertex_ai_live_websocket_passthrough(
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
+            configured_location=configured_location,
             llm_router=_get_llm_router(),
+            keeps_caller_resource_path=allow_client_side_credentials,
         ),
     )
 

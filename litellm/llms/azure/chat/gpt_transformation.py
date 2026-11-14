@@ -1,17 +1,12 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Final,
-    cast,  # noqa: TID251  # non_default_params reaches the mapper as an untyped dict
-)
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
-from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
+from litellm.litellm_core_utils.allowed_tools_tool_choice import azure_api_version_takes_tool_choice
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
@@ -250,17 +245,11 @@ class AzureOpenAIConfig(BaseConfig):
                 if api_version_year is None or api_version_month is None or api_version_day is None:
                     optional_params["tool_choice"] = value
                 else:
-                    if (
-                        api_version_year < "2023"
-                        or (api_version_year == "2023" and api_version_month < "12")
-                        or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
-                    ):
-                        if is_allowed_tools_tool_choice(
-                            cast(object, value)  # cast-ok: widening an untyped dict value to object is always sound
-                        ) or not (litellm.drop_params is True or (drop_params is not None and drop_params is True)):
+                    if not azure_api_version_takes_tool_choice(api_version):
+                        if not (litellm.drop_params is True or drop_params is True):
                             raise UnsupportedParamsError(
                                 status_code=400,
-                                message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. drop_params never drops an allowed_tools tool_choice, since that would let the model call tools the request excluded. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                                message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
                             )
                     elif value == "required" and (
                         api_version_year == "2024" and api_version_month <= "05"

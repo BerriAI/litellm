@@ -30,6 +30,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -164,6 +165,10 @@ class _UserInfoResponse(Protocol):
     def json(self) -> dict[str, object]: ...
 
 
+class _JWKSResponse(Protocol):
+    def json(self) -> object: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JWTIdentity:
     user_id: str | None
@@ -215,6 +220,10 @@ def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
 
 def _userinfo_document(response: _UserInfoResponse) -> dict[str, object]:
     """Decode an OIDC UserInfo response body into its JSON object form."""
+    return response.json()
+
+
+def _jwks_document(response: _JWKSResponse) -> object:
     return response.json()
 
 
@@ -960,12 +969,12 @@ class JWTHandler:
             )
 
         try:
-            response_json: Final = response.json()
+            response_json: Final = _jwks_document(response)
         except Exception as e:
             verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
             raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
 
-        keys: Final = response_json["keys"] if "keys" in response_json else response_json
+        keys: Final = subscript(response_json, "keys") if json_contains(response_json, "keys") else response_json
         return cast(JWKKeyValue, keys)  # cast-ok: JWTKeyItem declares only `kid`, validating would drop key material
 
     async def _get_public_key_from_jwks_url(self, jwks_url: str, kid: str | None) -> JWTKeyItem:
@@ -2268,12 +2277,13 @@ class JWTAuthManager:
     ) -> None:
         """Attach team context from x-litellm-team-id to an admin result.
 
-        Only applies on LLM API routes so team TPM/RPM limits and attribution
-        are enforced when admins act on behalf of a team. Admin management
-        routes ignore the header to preserve pre-existing bypass behavior.
+        Only applies on inference routes (LLM API routes and the queued chat
+        route) so team TPM/RPM limits and attribution are enforced when admins
+        act on behalf of a team. Admin management routes ignore the header to
+        preserve pre-existing bypass behavior.
         """
         header_team_id: Final = request_headers.get("x-litellm-team-id") if request_headers else None
-        if not header_team_id or not RouteChecks.is_llm_api_route(route=route):
+        if not header_team_id or not RouteChecks.runs_inference_checks(route=route):
             return
         try:
             team_object: Final = await get_team_object(

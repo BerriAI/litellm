@@ -34,7 +34,12 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    MidStreamFallbackError,
+    ModifyResponseException,
+    RequestOverDeploymentTpmError,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -101,7 +106,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
@@ -387,11 +392,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await deployment_callback.cache.async_set_cache(
-            key=cache_key,
-            value={"model_id": "deployment-a"},
-            ttl=60,
-        )
+        await deployment_callback.pins.set(cache_key, {"model_id": "deployment-a"}, 60)
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
@@ -7968,6 +7969,172 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     assert batch_route.call_count == 20
 
 
+def _ordered(deployment: dict[str, object], order: int) -> dict[str, object]:
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+_AZURE_FILE_CREATED: Final = {
+    "id": "file-batch-input",
+    "object": "file",
+    "bytes": 1,
+    "created_at": 0,
+    "filename": "input.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("purpose", "uploaded_to"), [("batch", "batch-deployment"), ("fine-tune", "chat-deployment")])
+async def test_batch_file_upload_reaches_the_batch_deployment_when_the_chat_deployment_has_a_lower_order(
+    monkeypatch: pytest.MonkeyPatch, purpose: str, uploaded_to: str
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            deployment_id: respx_mock.post(host=f"{sku_host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+            )
+            for deployment_id, sku_host in (("chat-deployment", "chat-sku"), ("batch-deployment", "batch-sku"))
+        }
+        uploaded: Final = await router.acreate_file(
+            model="gpt-mixed", purpose=purpose, file=BytesIO(json.dumps(batch_row).encode())
+        )
+
+    assert {deployment_id: route.call_count for deployment_id, route in routes.items()} == {
+        "chat-deployment": int(uploaded_to == "chat-deployment"),
+        "batch-deployment": int(uploaded_to == "batch-deployment"),
+    }
+    assert uploaded._hidden_params["model_file_id_mapping"] == {uploaded_to: "file-batch-input"}
+
+
+_AZURE_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-mixed",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (500, openai.InternalServerError)])
+async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert batch_upload.call_count == 1
+    assert chat_completions.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (401, openai.AuthenticationError)])
+async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_and_leaves_chat_serving(
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=2,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(raised, match="upload refused"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (batch_upload.call_count, chat_upload.call_count, chat_completions.call_count) == (1, 0, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_file_upload_whose_batch_deployment_cools_down_after_the_pick_stays_off_chat(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+
+    class _ConcurrentBatchFailure(CustomLogger):
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            _cool_down(router, "batch-deployment")
+
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with (
+        patch.object(litellm, "callbacks", [_ConcurrentBatchFailure()]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+
+    assert (batch_upload.call_count, chat_upload.call_count) == (0, 0)
+
+
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
     return {
         "model_name": "mixed-wild/*",
@@ -14204,6 +14371,29 @@ class TestAutoRouterTraceProvenance:
         assert retry.attributes["litellm.retry.count"] == 1
         assert "private-error-text" not in str(retry.attributes)
 
+    @pytest.mark.asyncio
+    async def test_retry_records_name_the_over_tpm_refusal_as_its_logs_do(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+        )
+        request: Final = {"metadata": {}}
+        refusal: Final = RequestOverDeploymentTpmError(message="over tpm", model="answer", llm_provider="openai")
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, refusal)
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == refusal.logged_error_class
+        assert request["metadata"]["previous_models"][-1]["exception_type"] == refusal.logged_error_class
+
 
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
@@ -19938,11 +20128,13 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.router import AllowedFailsPolicy
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr("time.time", lambda: 1767225600.0)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
 
     def upstream(request: httpx.Request) -> httpx.Response:
         credential: Final = request.headers.get("authorization", request.headers.get("x-api-key", ""))

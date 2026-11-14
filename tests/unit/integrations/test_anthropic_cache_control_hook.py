@@ -19,7 +19,7 @@ from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
@@ -5864,3 +5864,24 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
         _search_conversation_with(well_formed)
     )
+
+
+def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_non_string_keys_alone() -> None:
+    unmarked_part: Final = {"type": "text", "text": "Context", 1: "ignored"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "user",
+            "content": [
+                unmarked_part,
+                {"type": "text", "text": "Stable prefix", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    )  # cast-ok: a chat caller passing a Python dict may use keys JSON cannot carry
+
+    renamed: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+
+    assert renamed["content"] == [
+        unmarked_part,
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
