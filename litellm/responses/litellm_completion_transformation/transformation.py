@@ -3055,6 +3055,29 @@ class LiteLLMCompletionResponsesConfig:
             )
 
     @staticmethod
+    def _chat_user_location(user_location: object) -> OpenAIWebSearchUserLocation | None:
+        """
+        Reshape a Responses web search ``user_location`` into the Chat Completions shape.
+
+        The Responses API puts the location fields at the top level
+        (``{"type": "approximate", "country": "FR"}``), while Chat Completions nests them under
+        ``approximate`` (``{"type": "approximate", "approximate": {"country": "FR"}}``). Provider
+        mappers read the nested form, so a flat location copied across unchanged was silently
+        dropped. A location that is already nested is kept as sent.
+        """
+        if not isinstance(user_location, Mapping) or not user_location:
+            return None
+        if "approximate" in user_location:
+            return cast(OpenAIWebSearchUserLocation, dict(user_location))
+        approximate: Final = {key: value for key, value in user_location.items() if key != "type" and value is not None}
+        if not approximate:
+            return None
+        return cast(
+            OpenAIWebSearchUserLocation,
+            {"type": "approximate", "approximate": approximate},
+        )
+
+    @staticmethod
     def _responses_tool_to_chat_form(tool: Mapping[str, object]) -> ResponsesToolChatForm:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
@@ -3063,10 +3086,7 @@ class LiteLLMCompletionResponsesConfig:
             _search_context_size: Final[Literal["low", "medium", "high"]] = cast(
                 Literal["low", "medium", "high"], tool.get("search_context_size")
             )
-            _user_location: Final[OpenAIWebSearchUserLocation | None] = cast(
-                OpenAIWebSearchUserLocation | None,
-                tool.get("user_location") or None,
-            )
+            _user_location: Final = LiteLLMCompletionResponsesConfig._chat_user_location(tool.get("user_location"))
             return ResponsesToolChatForm(
                 chat_tools=(),
                 web_search_options=OpenAIWebSearchOptions(
