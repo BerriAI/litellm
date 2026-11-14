@@ -1,6 +1,9 @@
 import asyncio
 import importlib
 import os
+from collections.abc import Mapping
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -144,3 +147,44 @@ def _mcp_request_ctx():
         return ServerRequestContext(**kwargs)
 
     return _mcp_request_ctx
+
+
+class _UserCredentialsTable:
+    """The prisma actions the per-user credential helpers call, over rows kept in memory."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], SimpleNamespace] = {}
+        self.writes = 0
+
+    async def find_unique(self, where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
+        pair: Final = where["user_id_server_id"]
+        return self.rows.get((pair["user_id"], pair["server_id"]))
+
+    async def upsert(
+        self, where: Mapping[str, Mapping[str, str]], data: Mapping[str, Mapping[str, str]]
+    ) -> SimpleNamespace:
+        pair: Final = where["user_id_server_id"]
+        self.writes += 1
+        row: Final = SimpleNamespace(**data["create"], updated_at=self.writes)
+        self.rows = {**self.rows, (pair["user_id"], pair["server_id"]): row}
+        return row
+
+    async def update_many(self, data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        key: Final = (where["user_id"], where["server_id"])
+        existing: Final = self.rows.get(key)
+        if existing is None or existing.credential_b64 != where["credential_b64"]:
+            return 0
+        self.writes += 1
+        self.rows = {**self.rows, key: SimpleNamespace(**{**vars(existing), "updated_at": self.writes, **data})}
+        return 1
+
+
+@pytest.fixture
+def credentials_prisma(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """The proxy's prisma client, with the per-user credentials table kept in memory."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "per-user-credential-test-salt")
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpusercredentials=_UserCredentialsTable()))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    return prisma

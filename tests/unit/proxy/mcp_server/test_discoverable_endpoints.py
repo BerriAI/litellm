@@ -15083,20 +15083,25 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, scope, expected",
+    "prior_scopes, waiting, scope, expected",
     [
-        (["tools.read"], "tools.write", "tools.read tools.write"),
-        (None, "tools.write", "tools.write"),
-        ([], "tools.write", "tools.write"),
-        (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
-        (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
-        (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+        (["tools.read"], None, "tools.write", "tools.read tools.write"),
+        (None, None, "tools.write", "tools.write"),
+        ([], None, "tools.write", "tools.write"),
+        (["logs_read_data", "dashboards_read"], None, "mcp_all", "mcp_all"),
+        (["logs_read_data", "dashboards_read"], None, "openid mcp_all", "openid mcp_all"),
+        (["tools.read"], None, "mcp_allowed", "tools.read mcp_allowed"),
+        (["repo"], ["gist", "notifications"], "repo", "repo gist notifications"),
+        (["repo"], ["gist"], "repo", "repo gist"),
+        (["repo"], [""], "repo", "repo"),
+        (["logs_read_data"], ["admin"], "mcp_all", "admin mcp_all"),
     ],
 )
 async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     prior_scopes: list[str] | None,
+    waiting: list[str] | None,
     scope: str,
     expected: str,
 ) -> None:
@@ -15113,7 +15118,14 @@ async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcar
     server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
     global_mcp_server_manager.registry[server.server_id] = server
     credential = db.encrypt_value_helper(
-        json.dumps({"type": "oauth2", "access_token": "old-access", "scopes": prior_scopes})
+        json.dumps(
+            {
+                "type": "oauth2",
+                "access_token": "old-access",
+                "scopes": prior_scopes,
+                **({"needs_scopes": waiting} if waiting is not None else {}),
+            }
+        )
     )
     table = proxy_server.prisma_client.db.litellm_mcpusercredentials
     table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
@@ -15369,158 +15381,41 @@ async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "granted, required, expected",
+    "reply_scopes",
     [
-        (["tools.read"], ("tools.write",), "absent"),
-        (["tools.read", "tools.write"], ("tools.write",), "present"),
-        (None, ("tools.write",), "absent"),
-        (["tools.read"], (), "present"),
-        (["channels:read,chat:write"], ("channels:read", "chat:write"), "present"),
-        (["channels:read,chat:write"], ("channels:read", "files:write"), "absent"),
-        (["channels:read"], ("channels:read", "chat:write"), "absent"),
+        ["repo", "read:org", "read:user", "user:email", "write:packages", "project", "gist", "notifications"],
+        ["repo,write:packages,gist"],
+        ["logs_read_data", "dashboards_read", "mcp_read", "mcp_write"],
+        [],
+        None,
     ],
 )
-async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
+async def test_connect_is_present_for_a_usable_grant_whatever_scopes_the_provider_replied_with(
+    credentials_prisma: SimpleNamespace, reply_scopes: list[str] | None
+) -> None:
     from litellm.proxy.mcp_server import db
     from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
 
-    credential = {**_stored_grant(), "scopes": granted}
-    read = AsyncMock(return_value=credential)
-    prisma = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
-    monkeypatch.setattr(db, "get_user_oauth_credential", read)
-    assert await endpoints._vendor_credential_state("owner", "server", required) == expected
-    read.assert_awaited_once_with(prisma, "owner", "server")
-
-
-_SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
-_DATADOG_EXPANSION: Final = ("logs_read_index_data", "dashboards_read", "mcp_read", "mcp_write")
-_COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
-
-
-@pytest.mark.parametrize(
-    ("granted", "requested", "known", "expected"),
-    [
-        (("channels:read,chat:write",), ("channels:read", "chat:write"), _SLACK_SCOPES, True),
-        (("channels:read,chat:write",), ("channels:read", "files:write"), _SLACK_SCOPES, False),
-        (("channels:read,chat:write,files:read",), ("channels:read",), _SLACK_SCOPES, False),
-        (("x:unknown,chat:write",), ("chat:write",), _SLACK_SCOPES, False),
-        (("files:read,write",), ("files:read",), _COMMA_NAMED_SCOPES, False),
-        (("files:read,write",), ("files:read,write",), _COMMA_NAMED_SCOPES, True),
-        (("channels:read,chat:write",), ("read",), _SLACK_SCOPES | {"read"}, False),
-        (("read", "write,admin"), ("admin",), frozenset(("read", "write", "admin")), False),
-        (("write,admin", "read"), ("admin",), frozenset(("read", "write", "admin")), False),
-        (("read", "write"), ("read", "write"), frozenset[str](), True),
-        ((), ("read",), frozenset(("read",)), False),
-        ((), (), frozenset[str](), True),
-        (_DATADOG_EXPANSION, ("mcp_all",), frozenset[str](), True),
-        (("channels:read,chat:write",), ("mcp_all", "channels:read"), _SLACK_SCOPES, True),
-        ((), ("mcp_all",), frozenset[str](), False),
-        (_DATADOG_EXPANSION, ("mcp_all", "admin"), frozenset[str](), False),
-    ],
-)
-def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(
-    granted: tuple[str, ...], requested: tuple[str, ...], known: frozenset[str], expected: bool
-) -> None:
-    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
-
-    assert grant_covers_scopes(granted, requested, lambda: known) is expected
-
-
-@pytest.mark.parametrize(
-    ("granted", "requested", "expected"),
-    [
-        (("channels:read",), ("channels:read",), True),
-        (("read", "write"), ("read", "write"), True),
-        (("read", "write"), ("admin",), False),
-        (("read",), ("admin",), False),
-        ((), (), True),
-    ],
-)
-def test_grant_covers_scopes_answers_like_a_subset_check_without_reading_server_scopes(
-    granted: tuple[str, ...], requested: tuple[str, ...], expected: bool
-) -> None:
-    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
-
-    def unreachable_server_scopes() -> frozenset[str]:
-        raise AssertionError("server scopes read for a grant with no comma token")
-
-    assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
-
-
-def test_server_scope_names_joins_configured_and_published_scopes() -> None:
-    from litellm.proxy.mcp_server.oauth_utils import server_scope_names
-
-    server: Final = _cimd_oauth_server().model_copy(
-        update={
-            "scopes": ["channels:read"],
-            "authorization_server_metadata": {
-                "issuer": "https://idp.example.com",
-                "authorization_endpoint": "https://idp.example.com/authorize",
-                "token_endpoint": "https://idp.example.com/token",
-                "response_types_supported": ["code"],
-                "scopes_supported": ["chat:write", "files:write"],
-            },
-        }
-    )
-    assert server_scope_names(server) == frozenset(("channels:read", "chat:write", "files:write"))
-    assert server_scope_names(_cimd_oauth_server()) == frozenset[str]()
-    assert server_scope_names(None) == frozenset[str]()
-
-
-_PUBLISHED_SLACK_METADATA: Final = {
-    "issuer": "https://idp.example.com",
-    "authorization_endpoint": "https://idp.example.com/authorize",
-    "token_endpoint": "https://idp.example.com/token",
-    "response_types_supported": ["code"],
-    "scopes_supported": ["channels:read", "chat:write", "files:read"],
-}
-
-
-def _in_memory_credentials_table(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setenv("LITELLM_SALT_KEY", "connect-check-test-salt")
-    prisma: Final = MagicMock()
-    rows: Final = prisma.db.litellm_mcpusercredentials
-
-    async def upsert(where: "Mapping[str, Mapping[str, str]]", data: "Mapping[str, Mapping[str, str]]") -> None:
-        key: Final = where["user_id_server_id"]
-        rows.find_unique.return_value = SimpleNamespace(
-            credential_b64=data["create"]["credential_b64"], user_id=key["user_id"], server_id=key["server_id"]
-        )
-
-    rows.find_unique = AsyncMock(return_value=None)
-    rows.upsert = AsyncMock(side_effect=upsert)
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    return prisma
+    await db.store_user_oauth_credential(credentials_prisma, "owner", "server", "vendor-token", scopes=reply_scopes)
+    assert await endpoints._vendor_credential_state("owner", "server") == "present"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "server_update",
-    [
-        {"scopes": ["channels:read", "chat:write", "files:read"]},
-        {"authorization_server_metadata": _PUBLISHED_SLACK_METADATA},
-    ],
-)
-async def test_connect_reads_a_comma_grant_against_the_server_scopes(
-    monkeypatch: pytest.MonkeyPatch, server_update: "Mapping[str, object]"
+@pytest.mark.parametrize("refused_scope", ["gist", ""])
+async def test_connect_is_absent_while_a_refused_scope_waits_until_the_grant_is_saved_again(
+    credentials_prisma: SimpleNamespace, refused_scope: str
 ) -> None:
     from litellm.proxy.mcp_server import db
     from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
-    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    server: Final = _cimd_oauth_server().model_copy(update=server_update)
-    prisma: Final = _in_memory_credentials_table(monkeypatch)
-    await db.store_user_oauth_credential(
-        prisma, "owner", server.server_id, "vendor-token", scopes=["channels:read,chat:write,files:read"]
-    )
-    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "absent"
-    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
-    assert await endpoints._vendor_credential_state("owner", server.server_id, ("channels:read",)) == "present"
-    assert await endpoints._vendor_credential_state("owner", server.server_id, ("files:write",)) == "absent"
-    assert await endpoints._vendor_credential_state("owner", server.server_id, ()) == "present"
+    for user_id, server_id in (("owner", "server"), ("other", "server"), ("owner", "other-server")):
+        await db.store_user_oauth_credential(credentials_prisma, user_id, server_id, "vendor-token", scopes=["repo"])
+    await db.record_oauth_scope_refusal(credentials_prisma, "owner", "server", refused_scope)
+    assert await endpoints._vendor_credential_state("owner", "server") == "absent"
+    assert await endpoints._vendor_credential_state("other", "server") == "present"
+    assert await endpoints._vendor_credential_state("owner", "other-server") == "present"
+    await db.store_user_oauth_credential(credentials_prisma, "owner", "server", "new-token", scopes=["repo"])
+    assert await endpoints._vendor_credential_state("owner", "server") == "present"
 
 
 @pytest.mark.parametrize(
