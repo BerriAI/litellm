@@ -1067,6 +1067,10 @@ class BaseResponsesAPIStreamingIterator:
         Trigger failure handlers before bubbling the exception.
         Only calls handlers once even if called multiple times.
         """
+        if not getattr(exception, "litellm_response_headers", None):
+            req_headers = provider_request_id_headers(self._raw_response_headers)
+            if req_headers:
+                setattr(exception, "litellm_response_headers", req_headers)
         # Prevent double-calling failure handlers
         if self._failure_handled:
             return
@@ -1179,7 +1183,11 @@ class BaseResponsesAPIStreamingIterator:
             self._output_started = True
 
     def _fallback_error(self, original: Exception) -> MidStreamFallbackError:
-        return MidStreamFallbackError(
+        existing_headers = getattr(original, "litellm_response_headers", None)
+        req_headers = existing_headers or provider_request_id_headers(self._raw_response_headers)
+        if req_headers and not existing_headers:
+            setattr(original, "litellm_response_headers", req_headers)
+        fb_err = MidStreamFallbackError(
             message=str(original),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
@@ -1187,6 +1195,9 @@ class BaseResponsesAPIStreamingIterator:
             generated_content="",
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
+        if req_headers:
+            setattr(fb_err, "litellm_response_headers", req_headers)
+        return fb_err
 
     def _stream_ended_early_error(self) -> litellm.APIConnectionError:
         return litellm.APIConnectionError(
