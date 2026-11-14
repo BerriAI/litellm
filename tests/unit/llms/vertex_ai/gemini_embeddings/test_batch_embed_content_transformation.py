@@ -1161,8 +1161,17 @@ async def test_gemini_batch_embedding_cache_hits_give_a_videos_extracted_audio_t
         pytest.param({"audio_track_extraction": True}, (100, 100), id="named-param"),
         pytest.param({"audio_track_extraction": "true"}, (100, 100), id="named-param-as-a-string"),
         pytest.param({"audio_track_extraction": "false"}, (200, 0), id="named-param-false-as-a-string"),
+        pytest.param({"audio_track_extraction": "Yes"}, (100, 100), id="named-param-yes"),
+        pytest.param({"audio_track_extraction": "y"}, (100, 100), id="named-param-y"),
+        pytest.param({"audio_track_extraction": "T"}, (100, 100), id="named-param-t"),
+        pytest.param({"audio_track_extraction": "no"}, (200, 0), id="named-param-no"),
         pytest.param(
             {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}}, (100, 100), id="extra-body"
+        ),
+        pytest.param(
+            {"extra_body": {"embedContentConfig": {"audioTrackExtraction": 1.0}}},
+            (100, 100),
+            id="extra-body-float-one",
         ),
         pytest.param(
             {"extra_body": {"embedContentConfig": {"audio_track_extraction": 1}}},
@@ -1213,6 +1222,24 @@ def test_gemini_batch_embedding_gives_a_videos_extracted_audio_tokens_to_the_vid
     )
 
     assert tuple(usage.prompt_tokens_details.audio_tokens for usage in response.item_usage) == expected_audio_tokens
+
+
+def test_gemini_batch_embedding_with_an_unreadable_embed_content_config_fails_before_calling_google(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]}))
+
+    with pytest.raises(litellm.APIConnectionError, match="validation error"):
+        litellm.embedding(
+            model="gemini/gemini-embedding-2",
+            input=["hello"],
+            api_key="gemini-test-key",
+            extra_body={"embedContentConfig": {1: True}},
+        )
+
+    assert route.call_count == 0
 
 
 @pytest.mark.parametrize("use_embed_content", [False, True])

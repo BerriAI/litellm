@@ -384,7 +384,7 @@ _GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), 
 _EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
 _EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_content_config")
 _AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = ("audioTrackExtraction", "audio_track_extraction")
-_GOOGLE_TRUE_VALUES: Final = frozenset({"true", "1"})
+_GOOGLE_TRUE_VALUES: Final = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _EMBED_CONTENT_CONFIG_FIELD_BY_PARAM: Final = MappingProxyType(
     {
