@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
 from typing import Final, TypeAlias
 
 import pytest
@@ -96,6 +100,35 @@ def _comparable(value: object) -> object:
     if isinstance(value, float) and math.isnan(value):
         return "nan"
     return (type(value), value)
+
+
+def jsonable(value: object) -> object:
+    match value:
+        case type():
+            return f"{value.__module__}.{value.__qualname__}"
+        case Enum():
+            return jsonable(value.value)
+        case datetime():
+            return value.isoformat()
+        case float() if math.isnan(value):
+            return "nan"
+        case float() if math.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        case bool() | int() | float() | str() | None:
+            return value
+        case Mapping():
+            return {str(key): jsonable(item) for key, item in value.items()}
+        case tuple() | list():
+            return [jsonable(item) for item in value]
+        case _:
+            return repr(value)
+
+
+def outcome_record(outcome: Outcome) -> object:
+    return jsonable({"error": outcome.error, "alerts": outcome.alerts, "throttle_pct": outcome.throttle_pct})
+
+
+GOLDEN: Final = Path(__file__).parent / "native_budgets_golden" / "native_budget_checks.json"
 
 
 async def _outcome(store: SpendCounterStore, case: Case, native: bool) -> Outcome:
@@ -412,9 +445,9 @@ CASES: Final[Mapping[str, Case]] = {
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("name", "case"), CASES.items(), ids=CASES.keys())
 async def test_native_check_decides_like_python(store: SpendCounterStore, name: str, case: Case) -> None:
-    python: Final = await _outcome(store, case, native=False)
+    python: Final = json.loads(GOLDEN.read_text())["python"][name]
     native: Final = await _outcome(store, case, native=True)
 
-    refused: Final = isinstance(python.error, tuple) and python.error[0] is litellm.BudgetExceededError
-    assert refused == ("_refuses" in name), f"the Python reference did not do what {name} says: {python.error}"
-    assert native == python
+    refused: Final = isinstance(python["error"], list) and python["error"][0] == jsonable(litellm.BudgetExceededError)
+    assert refused == ("_refuses" in name), f"the Python reference did not do what {name} says: {python['error']}"
+    assert outcome_record(native) == python
