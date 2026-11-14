@@ -8,6 +8,7 @@ Covers:
 - Response processing with correct indices
 """
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Final
@@ -17,6 +18,8 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -28,6 +31,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -334,13 +338,14 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
-    def test_multimodal_image_preserves_usage_metadata(self):
+    @pytest.mark.parametrize("details_key", ["promptTokensDetails", "promptTokenDetails"])
+    def test_multimodal_image_preserves_usage_metadata(self, details_key: str):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
             "usageMetadata": {
                 "promptTokenCount": 258,
                 "totalTokenCount": 258,
-                "promptTokensDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+                details_key: [{"modality": "IMAGE", "tokenCount": 258}],
             },
         }
         result = process_embed_content_response(
@@ -770,6 +775,7 @@ def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
         4 * prices["input_cost_per_token"] + 330 * prices[media_price_key]
     )
 
+
 @pytest.mark.parametrize(
     "usage_metadata",
     [
@@ -827,3 +833,72 @@ async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_with
         258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
     )
 
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}, {"values": [0.5, 0.6]}],
+                "usageMetadata": {
+                    "promptTokenCount": 267,
+                    "promptTokenDetails": [
+                        {"modality": "TEXT", "tokenCount": 9},
+                        {"modality": "IMAGE", "tokenCount": 258},
+                    ],
+                },
+            },
+        )
+    )
+
+    async def embed(input: list[str]) -> EmbeddingResponse:
+        return await litellm.aembedding(model="gemini/gemini-embedding-2", input=input, api_key="gemini-test-key")
+
+    await embed(["a red apple", IMAGE_DATA_URI, "a green pear"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    text_hit: Final = await embed(["a red apple"])
+    image_hit: Final = await embed([IMAGE_DATA_URI])
+
+    assert route.call_count == 1
+    assert [
+        (
+            hit.usage.prompt_tokens,
+            hit.usage.prompt_tokens_details.text_tokens,
+            hit.usage.prompt_tokens_details.image_tokens,
+        )
+        for hit in (text_hit, image_hit)
+    ] == [(5, 5, 0), (258, 0, 258)]
+
+
+@pytest.mark.parametrize("use_embed_content", [False, True])
+def test_a_malformed_usage_detail_entry_keeps_googles_prompt_count(use_embed_content: bool) -> None:
+    usage_metadata: Final = {
+        "promptTokenCount": 258,
+        "promptTokenDetails": [{"modality": "TEXT"}, {"modality": "IMAGE", "tokenCount": 258}],
+    }
+    response: Final = (
+        process_embed_content_response(
+            input=[IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            response_json={"embedding": {"values": [0.1]}, "usageMetadata": usage_metadata},
+        )
+        if use_embed_content
+        else process_response(
+            input=[IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions={"embeddings": [{"values": [0.1]}], "usageMetadata": usage_metadata},
+        )
+    )
+
+    assert response.usage.prompt_tokens == 258
+    assert response.usage.prompt_tokens_details.image_tokens == 258
