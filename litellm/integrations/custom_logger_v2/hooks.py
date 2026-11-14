@@ -160,6 +160,7 @@ HOOK_SPECS: Final[Mapping[Hook, HookSpec]] = MappingProxyType(
             ),
             request_path=False,
         ),
+        # Not dispatched: the five ports settle on attempt_ended and none needs a once-per-call end event.
         Hook.call_ended: HookSpec(legacy_methods=(), request_path=False),
         Hook.router_event: HookSpec(
             legacy_methods=(

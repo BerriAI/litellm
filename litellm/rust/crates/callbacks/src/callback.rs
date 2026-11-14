@@ -47,6 +47,7 @@ pub trait Callback: Send + Sync + 'static {
         self.handle(input, state)
     }
 
+    // No caller yet: a port that queues (s3_v2) loses unsent rows at shutdown until the host calls this.
     fn flush(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }

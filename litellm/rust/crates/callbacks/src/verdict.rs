@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::field::Field;
 
+// Respond and Reroute are left out: the five ports (budgets, both limiters, prometheus, s3_v2) only patch or abort.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
