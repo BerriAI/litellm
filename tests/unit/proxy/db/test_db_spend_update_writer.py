@@ -2006,6 +2006,40 @@ async def test_endpoint_field_maps_retrieve_batch_spend_row_to_batches_endpoint(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "endpoint"),
+    [
+        ("agenerate_content", "/models/{model_name}:generateContent"),
+        ("agenerate_content_stream", "/models/{model_name}:streamGenerateContent"),
+    ],
+)
+async def test_native_gemini_spend_rows_count_under_their_generate_content_route(call_type: str, endpoint: str):
+    writer: Final = DBSpendUpdateWriter()
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_user_transaction(
+        payload={
+            "request_id": "req-native-gemini",
+            "user": "test-user",
+            "call_type": call_type,
+            "startTime": "2026-11-14T12:00:00",
+            "api_key": "test-key",
+            "model": "gemini-2.5-flash",
+            "custom_llm_provider": "gemini",
+            "model_group": "gemini-native",
+            "prompt_tokens": 60,
+            "completion_tokens": 565,
+            "spend": 0.00577,
+            "metadata": '{"usage_object": {}}',
+        },
+        prisma_client=MagicMock(get_request_status=MagicMock(return_value="success")),
+    )
+
+    update: Final = writer.daily_spend_update_queue.add_update.call_args[1]["update"]
+    assert [transaction["endpoint"] for transaction in update.values()] == [endpoint]
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     """
     Test that when batch upsert fails, detailed error information is logged.

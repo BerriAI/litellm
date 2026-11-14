@@ -199,6 +199,8 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "aget_skill": "/skills/{skill_id}",
     "adelete_skill": "/skills/{skill_id}",
     "aingest": "/rag/ingest",
+    "agenerate_content": "/models/{model_name}:generateContent",
+    "agenerate_content_stream": "/models/{model_name}:streamGenerateContent",
     # Google Interactions API routes
     "acreate_interaction": "/interactions",
     "aget_interaction": "/interactions/{interaction_id}",
