@@ -21,6 +21,7 @@ import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_azure_openai_messages
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_media,
@@ -166,7 +167,9 @@ def _cloudflare_gateway_request(
 ) -> dict[str, object]:  # mutable-ok: acompletion and async_streaming take the request dict
     return {
         "model": None,
-        "messages": inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+        "messages": convert_to_azure_openai_messages(
+            inline_remote_media(messages, should_inline=inline_remote_pdf_files)
+        ),
         **optional_params,
     }
 
@@ -177,7 +180,9 @@ async def _async_cloudflare_gateway_request(
 ) -> dict[str, object]:  # mutable-ok: acompletion and async_streaming take the request dict
     return {
         "model": None,
-        "messages": await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files),
+        "messages": convert_to_azure_openai_messages(
+            await async_inline_remote_media(messages, should_inline=inline_remote_pdf_files)
+        ),
         **optional_params,
     }
 

@@ -834,6 +834,7 @@ async def test_cloudflare_gateway_azure_call_sends_a_pdf_link_as_the_pdf_itself(
         await litellm.acompletion(**request)
 
     sent_file: Final = json.loads(gateway.calls.last.request.content)["messages"][0]["content"][1]["file"]
-    assert "file_id" not in sent_file
-    assert sent_file["file_data"] == f"data:application/pdf;base64,{base64.b64encode(pdf_body).decode()}"
-    assert sent_file["filename"] == "q3.pdf"
+    assert sent_file == {
+        "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_body).decode()}",
+        "filename": "q3.pdf",
+    }
