@@ -599,8 +599,42 @@ def test_untrusted_analytics_values_never_block_the_charge(
         item.table for item in contributions
     }
     assert "LiteLLM_DailyUserSpend" in {item.table for item in contributions}
-    assert all(len(text.encode()) <= 2000 for text in texts)
+    assert {*_tags_of(untrusted), untrusted.get("end_user")} - {None} <= set(texts)
     assert all(abs(number) <= 2**40 for number in numbers)
+
+
+def _tags_of(untrusted: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(json.loads(untrusted.get("request_tags", "[]")))
+
+
+@pytest.mark.parametrize(
+    "identifier", ["x" * 3072, "\u00e9" * 1500, "\U0001f600" * 700], ids=["ascii", "latin", "emoji"]
+)
+def test_long_identifiers_keep_every_contribution_they_name(identifier: str) -> None:
+    contributions: Final = project(
+        {
+            "request_id": "long-identifiers",
+            "startTime": _NOW,
+            "api_key": "key",
+            "user": "user",
+            "model": "unpriced-projection-test",
+            "model_group": identifier,
+            "custom_llm_provider": "openai",
+            "spend": 0.5,
+            "request_tags": json.dumps([identifier]),
+            "end_user": identifier,
+            "metadata": {"accounting_entities": {"api_key": "key", "user": "user", "end_user": identifier}},
+        }
+    )
+    by_table: Final = {item.table: item for item in contributions}
+
+    assert by_table["LiteLLM_EndUserTable"].key == (("user_id", identifier),)
+    assert by_table["LiteLLM_EndUserTable"].increments == (("spend", 0.5),)
+    assert by_table["LiteLLM_TagTable"].key == (("tag_name", identifier),)
+    assert dict(by_table["LiteLLM_DailyEndUserSpend"].key)["end_user_id"] == identifier
+    assert dict(by_table["LiteLLM_DailyTagSpend"].key)["tag"] == identifier
+    assert dict(by_table["LiteLLM_DailyUserSpend"].values)["model_group"] == identifier
+    assert dict(by_table["LiteLLM_DailyUserSpend"].increments)["spend"] == 0.5
 
 
 def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> None:

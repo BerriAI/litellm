@@ -28,7 +28,6 @@ _STRINGS: Final = TypeAdapter(tuple[str, ...])
 _VALUES: Final = TypeAdapter(tuple[object, ...])
 _ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _TASK_TYPES: Final = frozenset(load_model_insight_tasks())
-_MAX_INDEXED_TEXT_BYTES: Final = 2000
 _MAX_COUNTER: Final = 2**40
 
 
@@ -250,12 +249,7 @@ def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
     )
-    return tuple(_capped(contribution) for contribution in contributions if _indexable(contribution))
-
-
-def _indexable(contribution: Contribution) -> bool:
-    texts: Final = (value for _, value in (*contribution.key, *contribution.values) if value is not None)
-    return all(len(text.encode("utf-8", "surrogatepass")) <= _MAX_INDEXED_TEXT_BYTES for text in texts)
+    return tuple(_capped(contribution) for contribution in contributions)
 
 
 def _capped(contribution: Contribution) -> Contribution:
