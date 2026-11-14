@@ -874,6 +874,50 @@ def schema_budget_errors_as_context_window_errors(model: str, llm_provider: str)
         raise litellm.ContextWindowExceededError(message=str(e), model=model, llm_provider=llm_provider) from e
 
 
+_FIELDS_INLINING_READS: Final = frozenset({"$ref", "$defs", "definitions"})
+_FIELDS_ONLY_PRESENCE_MATTERS: Final = frozenset({"oneOf", "allOf"})
+
+
+def _schema_field_gemini_receives(key: str, value: JsonValue, valid_fields: frozenset[str], depth: int) -> JsonValue:
+    match key, value:
+        case ("properties" | "$defs" | "definitions", dict()):
+            return {
+                name: _schema_gemini_receives(subschema, valid_fields, depth + 1) for name, subschema in value.items()
+            }
+        case ("items", _):
+            return _schema_gemini_receives(value, valid_fields, depth + 1)
+        case ("anyOf", list()):
+            return [_schema_gemini_receives(item, valid_fields, depth + 1) for item in value]
+        case ("oneOf" | "allOf", _):
+            return []
+        case _:
+            return value
+
+
+def _schema_object_gemini_receives(
+    schema: Mapping[str, JsonValue], valid_fields: frozenset[str], depth: int = 0
+) -> dict[str, JsonValue]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    return {
+        key: _schema_field_gemini_receives(key, value, valid_fields, depth)
+        for key, value in schema.items()
+        if key in valid_fields or key in _FIELDS_INLINING_READS or key in _FIELDS_ONLY_PRESENCE_MATTERS
+    }
+
+
+def _schema_gemini_receives(schema: JsonValue, valid_fields: frozenset[str], depth: int) -> JsonValue:
+    match schema:
+        case True:
+            return {}
+        case dict():
+            return _schema_object_gemini_receives(schema, valid_fields, depth)
+        case _:
+            return schema
+
+
 def build_vertex_schema(
     parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
@@ -916,13 +960,23 @@ def build_vertex_schema_within_budget(
             status_code=400,
             message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas.",
         )
+    all_defs: Final = cast(Mapping[str, JsonValue], {**dollar_defs, **definitions})  # cast-ok: tool schemas are JSON
+    parameters_json: Final = cast(Mapping[str, JsonValue], parameters)  # cast-ok: tool schemas are JSON request data
+    parameters_gemini_receives: Final = _schema_object_gemini_receives(parameters_json, valid_schema_fields)
+    parameters.clear()
+    parameters.update(parameters_gemini_receives)
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     try:
         inlined_bytes: Final = unpack_defs(
-            parameters, {**dollar_defs, **definitions}, max_inlined_bytes=max_inlined_bytes
+            parameters,
+            {
+                name: _schema_gemini_receives(definition, valid_schema_fields, 1)
+                for name, definition in all_defs.items()
+            },
+            max_inlined_bytes=max_inlined_bytes,
         )
     except DefsInliningBudgetExceededError as e:
         raise DefsInliningBudgetExceededError(

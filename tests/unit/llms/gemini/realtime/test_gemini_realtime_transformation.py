@@ -2519,7 +2519,7 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
     [
         ({"Shared": {"type": "string", "description": "x" * 5_000_000}}, "tool 'shared_tree'"),
         ([{"Shared": {"type": "string"}}], "must be JSON objects"),
-        ({"Shared": True}, "points at a bool"),
+        ({"Shared": False}, "points at a bool"),
     ],
     ids=("over-the-inlining-budget", "non-object-defs", "non-object-def"),
 )

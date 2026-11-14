@@ -932,6 +932,8 @@ def _estimate_json_bytes(obj: object) -> int:
 
 _DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
 _DEFS_KEYS: Final = ("$defs", "definitions")
+_SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "dependentSchemas", *_DEFS_KEYS})
+_INSTANCE_KEYWORDS: Final = frozenset({"const", "default", "enum", "example", "examples"})
 
 
 def _is_json_object(
@@ -967,6 +969,14 @@ def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) 
 
 def _resolve_in_scope(scope: _DefsScope, name: str) -> object:
     return next((defs[name] for defs in scope if name in defs), None)
+
+
+def _inlinable_target(ref: str, target: object) -> Mapping[str, object] | None:
+    if target is None or _is_json_object(target):
+        return target
+    if target is True:
+        return {}
+    raise MalformedDefsError(f"$ref {ref!r} points at a {type(target).__name__}, not a schema")
 
 
 class DefsInliningBudgetExceededError(ValueError):
@@ -1029,12 +1039,10 @@ def unpack_defs(
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = _resolve_in_scope(active_defs, ref_name)
+                target_schema = _inlinable_target(ref, _resolve_in_scope(active_defs, ref_name))
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
-                if not _is_json_object(target_schema):
-                    raise MalformedDefsError(f"$ref {ref!r} points at a {type(target_schema).__name__}, not a schema")
 
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(target_schema)
@@ -1077,8 +1085,12 @@ def unpack_defs(
             # Update defs with any nested $defs/definitions present *here*.
             current_defs = _scope_with_local_defs(active_defs, _local_defs(node))
 
-            # Add all dict values to queue
             for k, v in node.items():
+                if k in _INSTANCE_KEYWORDS:
+                    continue
+                if k in _SCHEMA_MAP_KEYWORDS and _is_json_object(v):
+                    queue.extend((subschema, v, name, current_defs, ref_chain) for name, subschema in v.items())
+                    continue
                 queue.append((v, node, k, current_defs, ref_chain))
 
         # ---------------------------- list ------------------------------

@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from functools import reduce
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -707,6 +708,20 @@ def test_build_vertex_schema():
     }
 
     assert build_vertex_schema(parameters) == expected_output
+
+
+def test_build_vertex_schema_answers_far_too_deep_nesting_with_the_depth_error() -> None:
+    deep: Final = reduce(
+        lambda inner, _: {"type": "object", "properties": {"nested": inner}},
+        range(DEFAULT_MAX_RECURSE_DEPTH * 20),
+        {"type": "object"},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
+    ):
+        build_vertex_schema(deep)
 
 
 def test_process_items_with_excessive_nesting():
