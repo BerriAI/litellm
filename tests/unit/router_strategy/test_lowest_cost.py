@@ -1,5 +1,7 @@
 import asyncio, copy, importlib, os, time
+import logging
 from datetime import datetime
+from typing import Final
 
 import pytest
 
@@ -34,6 +36,37 @@ def _recorded_minute_counters(cache: DualCache) -> dict[str, int]:
     minute_buckets = cached.get(DEPLOYMENT_ID, {})
     assert len(minute_buckets) == 1, f"expected one minute bucket, got {minute_buckets}"
     return next(iter(minute_buckets.values()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "deployment_params",
+    [{}, {"model_info": None}, {"model_info": {}}, {"model_info": {"id": None}}],
+    ids=["omitted", "null", "empty", "null-id"],
+)
+async def test_success_without_a_deployment_id_skips_cost_accounting_without_errors(
+    caplog: pytest.LogCaptureFixture,
+    use_async: bool,
+    deployment_params: dict[str, dict[str, str | None] | None],
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache)
+    call_args: Final = {
+        "kwargs": {"litellm_params": {"metadata": {"model_group": "gpt-5.5-pool"}, **deployment_params}},
+        "response_obj": _chat_response_with_no_completion_tokens(),
+        "start_time": datetime(2026, 1, 1, 12, 0, 0),
+        "end_time": datetime(2026, 1, 1, 12, 0, 2),
+    }
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        if use_async:
+            await handler.async_log_success_event(**call_args)
+        else:
+            handler.log_success_event(**call_args)
+
+    assert cache.get_cache(key=COST_KEY) is None
+    assert caplog.record_tuples == []
 
 
 def test_log_success_event_counts_a_response_with_no_completion_tokens():
