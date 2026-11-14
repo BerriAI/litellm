@@ -18654,10 +18654,12 @@ class TestTierParamsTheTargetAccepts:
             (["reasoning_effort", 3], {"reasoning_effort"}),
             ("reasoning_effort", {"reasoning_effort"}),
             ("seed, reasoning_effort", {"seed", "reasoning_effort"}),
+            ("seed reasoning_effort", {"seed", "reasoning_effort"}),
+            ('["reasoning_effort"]', {"reasoning_effort"}),
             ({"reasoning_effort": True}, {"reasoning_effort"}),
             (None, set()),
         ],
-        ids=["list", "bare-string", "comma-separated", "dict", "unset"],
+        ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict", "unset"],
     )
     def test_declared_param_allowlist_reads_names_from_any_allowlist_shape(self, allowlist, expected):
         assert litellm.Router._declared_param_allowlist({"allowed_openai_params": allowlist}) == frozenset(expected)
