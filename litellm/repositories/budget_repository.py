@@ -3,28 +3,32 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-class _BudgetDb(Protocol):
-    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
-
-    @property
-    def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
+_Row: Final = TypeVar("_Row")
 
 
-class _PrismaClientView(Protocol):
-    """The one attribute this repository reads off the untyped Prisma client wrapper."""
+async def create_budget_row(table: TableActions[_Row], data: Mapping[str, object], actor: str) -> _Row:
+    return await table.create(data={**data, "created_by": actor, "updated_by": actor})
 
-    @property
-    def db(self) -> _BudgetDb: ...
+
+async def update_budget_row(
+    table: TableActions[_Row], budget_id: str, data: Mapping[str, object], actor: str
+) -> _Row | None:
+    return await table.update(where={"budget_id": budget_id}, data={**data, "updated_by": actor})
+
+
+class _BudgetTable(PrismaTableRepository["prisma_models.LiteLLM_BudgetTable"]):
+    table_name = "litellm_budgettable"
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
@@ -32,8 +36,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.db.litellm_budgettable
+        return _BudgetTable(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_BudgetTable]:
@@ -76,7 +79,10 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         if allowed_models is not None:
             data["allowed_models"] = allowed_models
 
-        return await self.create(data)
+        record: Final = await create_budget_row(self.table, data, created_by)
+        model: Final = self._to_model(record)
+        assert model is not None
+        return model
 
     async def update_budget(
         self,
@@ -110,7 +116,8 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         if allowed_models is not None:
             data["allowed_models"] = allowed_models
 
-        return await self.update(budget_id, data, id_field="budget_id")
+        record: Final = await update_budget_row(self.table, budget_id, data, updated_by)
+        return self._to_model(record)
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""
