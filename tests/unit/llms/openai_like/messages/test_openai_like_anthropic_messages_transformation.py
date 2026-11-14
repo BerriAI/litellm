@@ -539,3 +539,47 @@ def test_safeguards_reach_an_openai_like_host_with_only_the_client_betas(
         api_base="https://host/v1",
     )
     assert headers.get("anthropic-beta") == expected_beta, headers
+
+
+def test_passthrough_keeps_adaptive_thinking_and_effort(
+    config: OpenAILikeAnthropicMessagesConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression #40890: native /v1/messages passthrough must forward
+    thinking/output_config/temperature verbatim, not strip them via cost-map
+    capability checks for a model the cost map does not know."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        payload = config.transform_anthropic_messages_request(
+            model="my-model",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"},
+                "temperature": 0.5,
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "high"}
+    assert payload["temperature"] == 0.5
+    assert "Dropping adaptive" not in caplog.text
+
+
+def test_passthrough_keeps_legacy_thinking_shape(
+    config: OpenAILikeAnthropicMessagesConfig,
+) -> None:
+    payload = config.transform_anthropic_messages_request(
+        model="my-model",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert payload["max_tokens"] == 4096
