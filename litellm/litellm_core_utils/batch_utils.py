@@ -260,7 +260,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str, keep_li
 
 def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: str, output_file: IO[bytes]) -> FileTypes:
     source: Final = file_content[1] if isinstance(file_content, tuple) else file_content
-    if model == new_model or isinstance(source, PathLike) or not (isinstance(source, bytes) or source.seekable()):
+    if model == new_model or isinstance(source, PathLike) or not _rewound(source):
         return file_content
     spellings: Final = _json_spellings(model)
     renamed_rows: Final = (
@@ -274,6 +274,16 @@ def rewrite_rows_naming_model(file_content: FileTypes, model: str, new_model: st
         return file_content
     output_file.seek(0)
     return output_file
+
+
+def _rewound(source: IO[bytes] | bytes) -> bool:
+    if isinstance(source, bytes):
+        return True
+    try:
+        source.seek(0)
+    except OSError:
+        return False
+    return True
 
 
 def _lines(source: IO[bytes] | bytes) -> Iterator[bytes]:

@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 import json
-from io import BytesIO
+from io import BytesIO, UnsupportedOperation
 from typing import Dict, Final, List
 
 import pytest
@@ -413,8 +413,8 @@ def test_rewrite_rows_naming_model_copies_nothing_when_no_line_names_the_model()
 
 def test_rewrite_rows_naming_model_leaves_a_stream_it_cannot_reread_untouched():
     class Unseekable(BytesIO):
-        def seekable(self) -> bool:
-            return False
+        def seek(self, offset: int, whence: int = 0) -> int:
+            raise UnsupportedOperation("not seekable")
 
     content: Final = _compact_row("a", "alias") + b"\n"
     stream: Final = Unseekable(content)
@@ -423,6 +423,22 @@ def test_rewrite_rows_naming_model_leaves_a_stream_it_cannot_reread_untouched():
 
     assert result is stream
     assert stream.read() == content
+
+
+def test_rewrite_rows_naming_model_rewrites_an_upload_whose_file_has_no_seekable_method():
+    class SpooledFileWithoutSeekable(BytesIO):
+        def __getattribute__(self, name: str) -> object:
+            if name == "seekable":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    output: Final = BytesIO()
+    upload: Final = SpooledFileWithoutSeekable(_compact_row("a", "alias") + b"\n")
+
+    result: Final = rewrite_rows_naming_model(("batch.jsonl", upload, "application/jsonl"), "alias", "real", output)
+
+    assert result is output
+    assert output.read() == _compact_row("a", "real") + b"\n"
 
 
 def test_replace_model_in_jsonl_with_embedded_newlines():
