@@ -2801,3 +2801,53 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+@pytest.mark.parametrize(
+    "build_parent",
+    [
+        pytest.param(lambda shared: {"properties": {"to": shared, "cc": shared}}, id="properties"),
+        pytest.param(
+            lambda shared: {"properties": {"to": shared, "cc": {"type": "array", "items": shared}}}, id="items"
+        ),
+        pytest.param(
+            lambda shared: {"properties": {"to": shared, "cc": {"anyOf": [shared, {"type": "integer"}]}}}, id="anyOf"
+        ),
+    ],
+)
+def test_build_vertex_schema_filters_a_reused_sub_schema_everywhere(build_parent):
+    shared = {"type": "string", "description": "email", "examples": ["a@b.c"], "$comment": "reused"}
+    schema = build_vertex_schema({"type": "object", **build_parent(shared)})
+
+    assert "examples" not in str(schema)
+    assert "$comment" not in str(schema)
+
+
+def test_filter_schema_fields_still_stops_at_a_cycle():
+    from litellm.llms.vertex_ai.common_utils import filter_schema_fields
+
+    node = {"type": "object", "examples": [], "properties": {"name": {"type": "string", "examples": ["x"]}}}
+    node["properties"]["child"] = node
+
+    filtered = filter_schema_fields(node, {"type", "properties"})
+
+    assert filtered["properties"]["name"] == {"type": "string"}
+    assert filtered["properties"]["child"] is node
+
+
+def test_gemini_tool_declaration_filters_a_parameter_schema_used_twice():
+    email = {"type": "string", "description": "email", "examples": ["a@b.c"], "$comment": "reused"}
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "send", "parameters": {"type": "object", "properties": {"to": email, "cc": email}}},
+        }
+    ]
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    declaration = VertexGeminiConfig()._map_function(tools, {})[0]["function_declarations"][0]
+    properties = declaration["parameters"]["properties"]
+
+    assert properties["cc"] == properties["to"]
+    assert not {"examples", "$comment"} & properties["cc"].keys()
