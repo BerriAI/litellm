@@ -11,7 +11,7 @@ import traceback
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from unittest.mock import patch
@@ -22,7 +22,8 @@ from PIL import Image
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
@@ -31,6 +32,11 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
 
 """
 - Given 2 deployments, make sure it's shuffling deployments correctly.
@@ -48,8 +54,8 @@ def restore_verbose_logger_level() -> Iterator[None]:
 def test_tpm_rpm_updated():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/gpt-4.1-mini"
@@ -89,11 +95,11 @@ def test_tpm_rpm_updated():
     )
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
+    tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
+    rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
 
-    assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(key=tpm_count_api_key)
-    assert 1 == test_cache.get_cache(key=rpm_count_api_key)
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_local(tpm_counter)
+    assert 1 == test_cache.get_local(rpm_counter)
 
 
 # test_tpm_rpm_updated()
@@ -103,7 +109,7 @@ def test_tpm_rpm_updated():
 def test_get_available_deployments():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
-    test_cache = DualCache()
+    test_cache = _memory_usage()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -116,7 +122,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
@@ -570,8 +576,8 @@ def test_return_potential_deployments():
     Assert deployment at limit is filtered out
     """
 
-    test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
 
     args: Dict = {
         "healthy_deployments": [

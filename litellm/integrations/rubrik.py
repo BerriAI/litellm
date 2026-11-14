@@ -675,8 +675,6 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         else:
             tools = optional_params.get("tools")
 
-        # The response moderation service consumes only messages/model/tools
-        # (plus metadata.rac_agent_id when set).
         # Don't forward proxy_server_request -- in litellm >=1.83 its ``body``
         # snapshot carries a UserAPIKeyAuth instance that breaks json.dumps,
         # silently fail-opening the guardrail.

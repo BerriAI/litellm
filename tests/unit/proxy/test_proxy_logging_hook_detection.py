@@ -1295,3 +1295,60 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+class _TagsRequestBeforeCall(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        data["tagged_by"] = type(self).__name__
+        return data
+
+
+class _InheritsPreCallHook(_TagsRequestBeforeCall):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_hook_inherited_from_intermediate_base(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_InheritsPreCallHook()])
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+
+    assert result["tagged_by"] == "_InheritsPreCallHook"
+
+
+class _RewritesSuccessResponse(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        return {"rewritten_by": type(self).__name__}
+
+
+class _InheritsSuccessHook(_RewritesSuccessResponse):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_awaits_only_loggers_whose_class_overrides_it(monkeypatch):
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    calls: list[str] = []
+
+    async def _instance_level_hook(data, user_api_key_dict, response):
+        calls.append("instance")
+        return {"rewritten_by": "instance"}
+
+    default_logger = CustomLogger()
+    default_logger.async_post_call_success_hook = _instance_level_hook
+    monkeypatch.setattr(litellm, "callbacks", [_InheritsSuccessHook(), default_logger])
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))])
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+    )
+
+    assert calls == []
+    assert result == {"rewritten_by": "_InheritsSuccessHook"}

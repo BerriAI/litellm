@@ -21,6 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.constants import REDIS_SPEND_LOGS_BUFFER_KEY
+from litellm.proxy.db.autorouter_session_rollup import (
+    UPSERT_AUTOROUTER_SESSION_SQL,
+    UPSERT_AUTOROUTER_USER_SESSION_SQL,
+    AutoRouterTurnTransaction,
+)
 from litellm.proxy.utils import (
     MAX_SPEND_LOG_DRAIN_ITERATIONS,
     drain_spend_logs_queue,
@@ -1001,6 +1006,12 @@ def _postgres_restarting() -> Exception:
     )
 
 
+def _client_not_connected() -> Exception:
+    from prisma.errors import ClientNotConnectedError
+
+    return ClientNotConnectedError()
+
+
 def _postgres_unreachable() -> Exception:
     from prisma.errors import DataError
 
@@ -1257,7 +1268,11 @@ async def test_model_usage_flush_requeues_and_stops_the_job_when_postgres_is_out
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [_postgres_restarting(), _postgres_unreachable()], ids=["57P03", "P1001"])
+@pytest.mark.parametrize(
+    "error",
+    [_postgres_restarting(), _postgres_unreachable(), _client_not_connected()],
+    ids=["57P03", "P1001", "client-not-connected"],
+)
 async def test_rollups_requeue_and_stop_the_job_while_postgres_cannot_take_writes(
     error: Exception,
     mock_prisma_client: MagicMock,
@@ -1282,6 +1297,72 @@ async def test_rollups_requeue_and_stop_the_job_while_postgres_cannot_take_write
         "queue_after": mock_prisma_client.tool_usage_transactions,
         "autorouter_queue_after": len(mock_prisma_client.autorouter_turn_transactions),
     } == {"queue_after": [first, second], "autorouter_queue_after": 1}
+
+
+def _autorouter_turn(second: int) -> AutoRouterTurnTransaction:
+    return AutoRouterTurnTransaction(
+        api_key="k1",
+        session_id="s1",
+        router_name="live-auto",
+        router_type="complexity",
+        model="bedrock/haiku",
+        turn_at=datetime(2026, 10, 2, 12, 0, second),
+        total_tokens=10,
+        spend=0.01,
+        saved_spend=0.0,
+        classifier_cost=0.0,
+        covered=False,
+        cache_hit=False,
+        cache_ttl_seconds=None,
+        cache_touched=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unsent_autorouter_turns_go_back_ahead_of_newer_turns_and_stop_the_job(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """A turn the client could not send is kept with the session turns after it, ahead of a turn
+    queued while the flush ran, and the turn already written is not queued again."""
+    written, unsent, dependent, newer = (_autorouter_turn(second) for second in range(4))
+    error: Final = _client_not_connected()
+    turn_statements: Final = frozenset({UPSERT_AUTOROUTER_SESSION_SQL, UPSERT_AUTOROUTER_USER_SESSION_SQL})
+
+    async def execute_raw(sql: str, *params: object) -> int:
+        if sql not in turn_statements:
+            return 0
+        if params[5] == unsent.turn_at.isoformat():
+            raise error
+        mock_prisma_client.autorouter_turn_transactions = [*mock_prisma_client.autorouter_turn_transactions, newer]
+        return 1
+
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=execute_raw)
+    mock_prisma_client._autorouter_turn_transactions_lock = asyncio.Lock()
+    mock_prisma_client.autorouter_turn_transactions = [dependent, unsent, written]
+
+    with pytest.raises(type(error)) as raised:
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert {
+        "raised": raised.value,
+        "turn_writes": [
+            (awaited.args[0], awaited.args[6])
+            for awaited in mock_prisma_client.db.execute_raw.await_args_list
+            if awaited.args[0] in turn_statements
+        ],
+        "queue_after": mock_prisma_client.autorouter_turn_transactions,
+    } == {
+        "raised": error,
+        "turn_writes": [
+            (UPSERT_AUTOROUTER_SESSION_SQL, written.turn_at.isoformat()),
+            (UPSERT_AUTOROUTER_SESSION_SQL, unsent.turn_at.isoformat()),
+        ],
+        "queue_after": [unsent, dependent, newer],
+    }
 
 
 @pytest.mark.asyncio
