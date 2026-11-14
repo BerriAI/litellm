@@ -13,6 +13,7 @@ litellm-inference-messages.workspace = true
 litellm-llms.workspace = true
 litellm-model-catalog.workspace = true
 litellm-router-types.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

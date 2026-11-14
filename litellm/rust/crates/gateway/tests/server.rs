@@ -326,6 +326,85 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     );
 }
 
+async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-unlisted-9",
+            "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "environment_variables:\n  SYSTEM_PROMPT: Answer in French.\n  MCP_TOKEN: mcp-token\nmodel_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n{deployment_params}general_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    ))
+    .unwrap();
+    let mut body = json!({
+        "model": "public-model",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+    });
+    body.as_object_mut()
+        .unwrap()
+        .extend(client_params.as_object().cloned().unwrap_or_default());
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = litellm_gateway::router(
+        litellm_gateway::build_inference(&config).unwrap(),
+        &config,
+        None,
+        None,
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(response.status().as_u16(), 200);
+    serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap()
+}
+
+#[rstest]
+#[case::system(
+    "      system: os.environ/SYSTEM_PROMPT\n",
+    "/system",
+    json!("Answer in French.")
+)]
+#[case::mcp_server_token(
+    "      mcp_servers:\n        - type: url\n          url: https://mcp.example.com/sse\n          name: docs\n          authorization_token: os.environ/MCP_TOKEN\n",
+    "/mcp_servers/0/authorization_token",
+    json!("mcp-token")
+)]
+#[tokio::test]
+async fn a_deployment_param_from_the_environment_reaches_the_provider_resolved(
+    #[case] deployment_params: &str,
+    #[case] pointer: &str,
+    #[case] expected: Value,
+) {
+    let forwarded = forwarded_body(deployment_params, json!({})).await;
+
+    assert_eq!(forwarded.pointer(pointer), Some(&expected));
+}
+
+#[rstest]
+#[case::listed("      additional_drop_params: [temperature]\n", None)]
+#[case::unlisted("", Some(json!(0.5)))]
+#[tokio::test]
+async fn a_deployment_additional_drop_param_never_reaches_the_provider(
+    #[case] deployment_params: &str,
+    #[case] expected: Option<Value>,
+) {
+    let forwarded = forwarded_body(deployment_params, json!({"temperature": 0.5})).await;
+
+    assert_eq!(forwarded.get("temperature").cloned(), expected);
+}
+
 #[rstest]
 #[case::fast_mode("supports_speed", "speed", json!("fast"))]
 #[case::adaptive_thinking("supports_adaptive_thinking", "thinking", json!({"type": "adaptive"}))]

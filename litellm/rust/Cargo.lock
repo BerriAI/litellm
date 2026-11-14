@@ -4632,6 +4632,7 @@ dependencies = [
  "litellm-model-catalog",
  "litellm-router-types",
  "rstest",
+ "serde_json",
 ]
 
 [[package]]
