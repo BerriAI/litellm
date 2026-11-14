@@ -366,8 +366,8 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
 
 @pytest.mark.parametrize("deployment_window", [None, 500000])
 def test_model_info_reports_the_shared_context_window_and_a_deployment_override(
-    monkeypatch, local_model_cost_map, deployment_window
-):
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, deployment_window: int | None
+) -> None:
     catalog_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
     configured: Final = {} if deployment_window is None else {"max_context_tokens": deployment_window}
     reported: Final = _enriched_model_info(

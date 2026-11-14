@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import re
 from collections.abc import Iterator, Mapping
@@ -948,7 +949,11 @@ def _supports_continuation_rows(path: Path) -> frozenset[str]:
 def _shared_context_window_rows(path: Path) -> Mapping[str, Mapping[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
-        {key: row for key, row in prices.items() if key != "sample_spec" and isinstance(row, dict) and "max_context_tokens" in row}
+        {
+            key: row
+            for key, row in prices.items()
+            if key != "sample_spec" and isinstance(row, dict) and "max_context_tokens" in row
+        }
     )
 
 
@@ -964,9 +969,10 @@ def test_gemini_4_google_rows_declare_a_shared_context_window_their_split_limits
     rows: Final = _shared_context_window_rows(PRICES_PATH)
     # unified input and output token limit: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon,
     # .../models/gemini/4-hydrogen and .../models/gemini/4-carbon (2026-11-14)
-    unified_window_rows: Final = {
-        f"{provider}/gemini-4-{name}" for provider in ("gemini", "vertex_ai") for name in ("argon", "carbon", "hydrogen")
-    }
+    unified_window_rows: Final = frozenset(
+        f"{provider}/gemini-4-{name}"
+        for provider, name in itertools.product(("gemini", "vertex_ai"), ("argon", "carbon", "hydrogen"))
+    )
     assert unified_window_rows <= rows.keys(), sorted(rows)
     assert _shared_context_window_rows(BACKUP_PRICES_PATH) == rows
     assert tuple(key for key, row in rows.items() if _exceeds_shared_window(row)) == ()
