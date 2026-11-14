@@ -101907,4 +101907,566 @@
         "supports_function_calling": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
     },
+    "fal_ai/fal-ai/pixverse/extend": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/extend",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/extend/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/extend/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/effects": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/effects",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/image-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/image-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/text-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/text-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v3.5/transition": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v3.5/transition",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/effects": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/effects",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/image-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/image-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/text-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/text-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4.5/transition": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4.5/transition",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4/effects": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4/effects",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4/image-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4/image-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v4/text-to-video/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4,
+                "1080p": 0.8
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v4/text-to-video/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v5/effects": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v5/effects",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v5/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            },
+            "8s": {
+                "360p": 0.3,
+                "540p": 0.3,
+                "720p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v5/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/pixverse/v5/transition": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_clip": {
+            "5s": {
+                "360p": 0.15,
+                "540p": 0.15,
+                "720p": 0.2,
+                "1080p": 0.4
+            }
+        },
+        "source": "https://fal.ai/models/fal-ai/pixverse/v5/transition",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
 }
