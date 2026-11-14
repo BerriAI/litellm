@@ -203,7 +203,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         explicit_v1_base: Final = path.endswith(("/openai/v1", "/openai/v1/responses")) or (
             BaseAzureLLM.is_api_version_opt_out(api_version)
         )
-        responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
+        responses_path: Final = (
+            f"{path}/responses" if path.endswith("/openai/v1") else path.removesuffix("/openai/responses")
+        )
         return _without_rejected_api_version(
             BaseAzureLLM.get_base_azure_url(
                 api_base=parsed_base._replace(path=responses_path).geturl() if explicit_v1_base else resolved_api_base,
