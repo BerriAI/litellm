@@ -869,6 +869,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     vector_bucket_name: str | None
     index_name: str | None
     embedding_model: str | None
+    s3_vectors_text_field: ReadOnly[str | None]
     ## IBM WATSONX ##
     watsonx_region_name: str | None
     ## CUSTOM PRICING ##
