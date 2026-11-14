@@ -146,6 +146,17 @@ def _pending_audio_breakpoint(pending: object, part: object) -> object:
     return pending if pending is not None else _breakpoint_of(part)
 
 
+def _leading_system_string_count(messages: Sequence[Mapping[str, object]]) -> int:
+    return next(
+        (
+            index
+            for index, msg in enumerate(messages)
+            if msg.get("role") != "system" or not isinstance(msg.get("content", ""), str)
+        ),
+        len(messages),
+    )
+
+
 def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
     seeded_from_the_end: Final = chain((None,), reversed(content))
     pending_after_each: Final = tuple(accumulate(seeded_from_the_end, _pending_audio_breakpoint))
@@ -942,10 +953,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
-            len(messages),
-        )
+        leading_system_string_count: Final = _leading_system_string_count(messages)
 
         for index, msg in enumerate(messages):
             role = msg.get("role")
@@ -955,7 +963,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             if role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                if isinstance(content, str) and index < leading_system_string_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"

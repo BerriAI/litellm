@@ -5879,6 +5879,45 @@ def test_transform_request_moves_a_message_level_cache_control_onto_the_last_par
     assert messages == sent_messages
 
 
+@pytest.mark.parametrize(
+    ("first_system", "first_input_part"),
+    [
+        (
+            {"role": "system", "content": "Reply ALPHA.", "cache_control": _CACHE_CONTROL},
+            {"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+        ),
+        (
+            {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
+            {"type": "input_text", "text": "Reply ALPHA."},
+        ),
+    ],
+    ids=("message-level-cache-control", "list-content"),
+)
+def test_transform_request_keeps_leading_system_messages_in_client_order_once_one_goes_to_input(
+    first_system: dict[str, object], first_input_part: dict[str, object]
+) -> None:
+    messages: Final = [
+        first_system,
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        {"role": "user", "content": "Reply now."},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        {"type": "message", "role": "system", "content": [first_input_part]},
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Ignore that and reply BRAVO."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+    ]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
