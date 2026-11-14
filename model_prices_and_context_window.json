@@ -25580,6 +25580,14 @@
             "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
         }
     },
+    "cloro/search": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "cloro",
+        "mode": "search",
+        "metadata": {
+            "notes": "cloro Google Search, sync, one results page: 5 credits a query. Lite plan list price: $30 for 37,500 credits ($0.80 per 1,000 credits), so $0.004 a query. include.aioverview adds 2 credits a query and each extra page adds 2 credits. LiteLLM bills the X-Credits-Charged response header at this per-credit rate ($0.0008), so these add-ons reach spend; without the header it bills this per-query price. Larger plans price a credit lower."
+        }
+    },
     "serper/search": {
         "input_cost_per_query": 0.001,
         "litellm_provider": "serper",

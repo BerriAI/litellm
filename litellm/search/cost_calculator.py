@@ -116,5 +116,16 @@ def search_provider_cost_per_query(
         # Simple flat rate
         cost_per_query = float(model_info.get("input_cost_per_query") or 0.0)
 
+    if custom_llm_provider == "cloro":
+        from litellm.llms.cloro.search.transformation import (
+            CLORO_CREDITS_CHARGED_PARAM,
+            cloro_search_cost,
+        )
+
+        params: Final = optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS
+        reported_cost: Final = cloro_search_cost(cost_per_query, params.get(CLORO_CREDITS_CHARGED_PARAM))
+        if reported_cost is not None:
+            return (reported_cost, 0.0)
+
     total_cost: Final = number_of_queries * cost_per_query
     return (total_cost, 0.0)  # (input_cost, output_cost)
