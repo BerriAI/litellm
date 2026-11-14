@@ -174,7 +174,13 @@ from litellm.types.completion import (
     CompletionDispatchContext,
     _CompletionDispatchResult,
 )
-from litellm.types.litellm_params import ControlOptions, RetryStrategy
+from litellm.types.litellm_params import (
+    PROMPT_MANAGEMENT_APPLIED,
+    PROMPT_MANAGEMENT_APPLIED_FIELD,
+    ControlOptions,
+    RetryStrategy,
+    prompt_management_applied,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
@@ -404,6 +410,17 @@ ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
+
+
+def _has_its_own_async_prompt_hook(prompt_manager: CustomLogger | None) -> bool:
+    return (
+        isinstance(prompt_manager, CustomLogger)
+        and type(prompt_manager).async_get_chat_completion_prompt is not CustomLogger.async_get_chat_completion_prompt  # pyright: ignore[reportUnknownMemberType]  # the hook's signature takes bare dicts
+    )
+
+
+def _routes_through_a_prompt_manager(model: str) -> bool:
+    return model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
 
 
 def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> ControlOptions:
@@ -789,6 +806,9 @@ async def acompletion(
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
+    inherits_applied_prompt: Final = prompt_management_applied(caller_kwargs) and not _routes_through_a_prompt_manager(
+        model
+    )
     prompt_management_logger: Final = (
         litellm_logging_obj.get_custom_logger_for_prompt_management(
             model=model,
@@ -798,6 +818,7 @@ async def acompletion(
             dynamic_callback_params=litellm_logging_obj.standard_callback_dynamic_params,
         )
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and not inherits_applied_prompt
         and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id,
             non_default_params=kwargs,
@@ -807,6 +828,15 @@ async def acompletion(
     )
     each_fallback_writes_its_own_cache_dialect: Final = fallbacks is not None and isinstance(
         prompt_management_logger, AnthropicCacheControlHook
+    )
+    applies_prompt_management: Final = (
+        prompt_management_logger is not None and not each_fallback_writes_its_own_cache_dialect
+    )
+    prompt_management_marker: Final[Mapping[str, object]] = (
+        PROMPT_MANAGEMENT_APPLIED
+        if inherits_applied_prompt
+        or (applies_prompt_management and _has_its_own_async_prompt_hook(prompt_management_logger))
+        else MappingProxyType({})
     )
 
     prompt_hook_result: Final = (
@@ -825,9 +855,7 @@ async def acompletion(
                 request_kwargs=kwargs,
             ),
         )
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
-        and prompt_management_logger is not None
-        and not each_fallback_writes_its_own_cache_dialect
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and applies_prompt_management
         else None
     )
     if prompt_hook_result is not None:
@@ -922,7 +950,12 @@ async def acompletion(
 
     if fallbacks is not None:
         response = await async_completion_with_fallbacks(
-            **completion_kwargs, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+            **{**completion_kwargs, **prompt_overrides},
+            kwargs={
+                "fallbacks": fallbacks,
+                **without(caller_kwargs, *prompt_overrides, PROMPT_MANAGEMENT_APPLIED_FIELD),
+                **prompt_management_marker,
+            },
         )
         if response is None:
             raise Exception(
@@ -947,7 +980,12 @@ async def acompletion(
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
         func: Final = partial(
-            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+            completion,
+            **{**completion_kwargs, **prompt_overrides},
+            **{
+                **without(request_kwargs, *prompt_overrides, PROMPT_MANAGEMENT_APPLIED_FIELD),
+                **prompt_management_marker,
+            },
         )
 
         # Add the context to the function
@@ -5860,6 +5898,7 @@ def completion(
     )
     ######## end of unpacking kwargs ###########
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
+    routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
     ## PROMPT MANAGEMENT HOOKS ##
 
     from litellm.integrations.anthropic_cache_control_hook import (
@@ -5879,8 +5918,10 @@ def completion(
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
     )
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-        litellm_logging_obj.should_run_prompt_management_hooks(
+    if (
+        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and not prompt_management_applied(routing_kwargs)
+        and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
@@ -5940,7 +5981,6 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
