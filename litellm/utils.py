@@ -11031,10 +11031,10 @@ class ProviderConfigManager:
     def _get_vertex_ai_vector_stores_config(api_type: str | None) -> BaseVectorStoreConfig | None:
         if api_type == "rag_api" or api_type is None:
             from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
-                VertexVectorStoreConfig,
+                vertex_rag_api_vector_store_config,
             )
 
-            return VertexVectorStoreConfig()
+            return vertex_rag_api_vector_store_config
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
                 vertex_search_api_vector_store_config,
