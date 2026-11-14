@@ -43,6 +43,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_loca
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
+from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 
@@ -469,6 +470,41 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
     assert set(spend.commands[1].split()[1:]) == keys
     assert spend.redis == dict.fromkeys(keys, 5.0)
     assert fake_user_cache.async_get_cache.called is True
+
+
+@pytest.mark.asyncio
+async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend: Final = _spend_counters(
+        monkeypatch,
+        redis={
+            "spend:user:u": 0.0,
+            user_window_counter("u", "1h"): 0.0,
+            user_window_counter("u", "30d"): 0.0,
+        },
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="u",
+        value=LiteLLM_UserTable.model_validate(
+            {
+                "user_id": "u",
+                "budget_limits": [
+                    {"budget_duration": "1h", "max_budget": 5.0, "reset_at": "2026-08-01T01:00:00Z"},
+                    {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-08-31T00:00:00Z"},
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    await ps.increment_spend_counters(token=None, team_id=None, user_id="u", response_cost=2.0)
+    assert spend.redis == {
+        "spend:user:u": 2.0,
+        user_window_counter("u", "1h"): 2.0,
+        user_window_counter("u", "30d"): 2.0,
+    }
+    windows: Final = await ps.accounting_window_keys(None, None, user_id="u")
+    assert {window["window_duration"] for window in windows} == {"1h", "30d"}
 
 
 class _ConcurrencyProbe:

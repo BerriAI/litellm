@@ -15,6 +15,7 @@ from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
+from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
@@ -280,7 +281,10 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
 )
 
 BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
-    {"acreate_interaction": MappingProxyType({"input": ("continuation_token",)})}
+    {
+        "acreate_interaction": MappingProxyType({"input": ("continuation_token",)}),
+        "avector_store_search": MappingProxyType({"query": ("query_image",)}),
+    }
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -895,6 +899,9 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             }
         )
 
+    def direct_litellm_endpoint():  # noqa: ANN202  # the endpoint is looked up by name, so its call stays as untyped as before
+        return without_global_fallbacks_around(getattr(litellm, f"{route_type}"))
+
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
@@ -908,7 +915,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
-            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+            return direct_litellm_endpoint()(**direct_litellm_kwargs())
 
     elif (
         route_type == "acompletion"
@@ -963,7 +970,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     # If we can't get deployment creds, continue without them
                     pass
 
-            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+            return direct_litellm_endpoint()(**direct_litellm_kwargs())
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",
@@ -1003,7 +1010,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             else await _authorized_team_file_deployment(llm_router, model_less_team_file_call)
         )
         if team_file_deployment is not None:
-            return getattr(litellm, f"{route_type}")(
+            return direct_litellm_endpoint()(
                 **_with_team_deployment_attribution(
                     {**direct_litellm_kwargs(), **team_file_deployment.credentials},
                     team_file_deployment,
@@ -1031,7 +1038,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "aingest",
         ] and (data.get("model") is None or data.get("model") == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
-            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+            return direct_litellm_endpoint()(**direct_litellm_kwargs())
 
         if "model" not in data:
             raise ProxyMissingRequiredParamError(
@@ -1072,7 +1079,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.settings().router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+                return direct_litellm_endpoint()(**direct_litellm_kwargs())
             elif (
                 llm_router.settings().default_deployment is not None
                 or len(llm_router.registry().patterns().patterns) > 0
@@ -1127,7 +1134,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
-                    return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+                    return direct_litellm_endpoint()(**direct_litellm_kwargs())
             elif _is_a2a_agent_model(data.get("model", "")):
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
@@ -1139,7 +1146,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 # Fall through to raise exception below if result is None
 
     elif user_model is not None or route_type == "allm_passthrough_route":
-        return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+        return direct_litellm_endpoint()(**direct_litellm_kwargs())
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)

@@ -520,6 +520,13 @@ def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     return is_decisions_model_mode(model_mode)
 
 
+def usage_reported_cost(response: DecisionsIRResponse) -> float | None:
+    cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
+    if not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionsInputLimits:
     max_request_tokens: int | None = None
@@ -572,7 +579,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(
