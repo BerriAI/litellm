@@ -955,7 +955,7 @@ def _root_ref_def_name(schema: Mapping[str, JsonValue], def_names: Mapping[str, 
 
 def _root_ref_chain(
     schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]
-) -> tuple[Mapping[str, JsonValue], ...]:
+) -> tuple[Mapping[str, JsonValue], ...] | None:
     object_defs: Final = MappingProxyType({name: value for name, value in defs.items() if isinstance(value, dict)})
     def_names: Final = MappingProxyType({name: name for name in object_defs})
     next_names: Final = ((name, _root_ref_def_name(value, def_names)) for name, value in object_defs.items())
@@ -964,13 +964,13 @@ def _root_ref_chain(
     if first is None:
         return (schema,)
     names: Final = tuple(accumulate(range(len(next_def)), lambda name, _: next_def.get(name, name), initial=first))
-    return (schema,) if names[-1] in next_def else (schema, *(object_defs[name] for name in frozenset(names)))
+    return None if names[-1] in next_def else (schema, *(object_defs[name] for name in frozenset(names)))
 
 
 def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
     defs: Final = parameters.get("$defs")
     chain: Final = _root_ref_chain(parameters, defs if isinstance(defs, dict) else {})
-    return any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
+    return chain is not None and any(_root_cannot_be_vertex_parameters(schema) for schema in chain)
 
 
 def _is_union(schema: Mapping[str, JsonValue]) -> bool:
@@ -979,18 +979,21 @@ def _is_union(schema: Mapping[str, JsonValue]) -> bool:
 
 def has_bare_root_union(json_schema: Mapping[str, JsonValue]) -> bool:
     defs: Final = json_schema.get("$defs")
-    chain: Final = _root_ref_chain(json_schema, defs if isinstance(defs, dict) else {})
+    chain: Final = _root_ref_chain(json_schema, defs if isinstance(defs, dict) else {}) or (json_schema,)
     return any(map(_is_union, chain)) and not any("properties" in schema for schema in chain)
+
+
+_FORCING_MODES: Final = frozenset({"ANY", "VALIDATED"})
 
 
 def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
     match function_calling_config:
-        case {"mode": "ANY" | "VALIDATED", "allowed_function_names": [*names]} | {
-            "mode": "ANY" | "VALIDATED",
+        case {"mode": str() as mode, "allowed_function_names": [*names]} | {
+            "mode": str() as mode,
             "allowedFunctionNames": [*names],
-        }:
+        } if mode.upper() in _FORCING_MODES:
             return name in names
-        case {"mode": "ANY" | "VALIDATED"}:
+        case {"mode": str() as mode} if mode.upper() in _FORCING_MODES:
             return True
         case _:
             return False

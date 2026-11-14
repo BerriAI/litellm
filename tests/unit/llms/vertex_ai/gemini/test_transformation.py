@@ -531,13 +531,14 @@ def _declarations(model: str, tool_choice: str, extra_body: dict[str, object] | 
     [
         ({"toolConfig": {"functionCallingConfig": {"mode": "ANY"}}}, True),
         ({"tool_config": {"function_calling_config": {"mode": "VALIDATED"}}}, True),
+        ({"toolConfig": {"functionCallingConfig": {"mode": "any"}}}, True),
         ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["lookup"]}}}, True),
         ({"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowed_function_names": ["weather"]}}}, False),
         ({"toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}}, False),
         ({"toolConfig": {"retrievalConfig": {"languageCode": "en"}}}, False),
         (None, False),
     ],
-    ids=["any", "validated-snake-case", "any-named-union-tool", "any-named-other-tool", "auto", "no-mode", "none"],
+    ids=["any", "validated-snake-case", "lowercase-any", "any-named-union-tool", "any-named-other-tool", "auto", "no-mode", "none"],
 )
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-4-argon"])
 def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_tool_choice_does(
