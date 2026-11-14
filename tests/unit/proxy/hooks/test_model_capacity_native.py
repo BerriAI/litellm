@@ -65,6 +65,7 @@ from litellm.proxy.v2_proxy_fields import (
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitCounter, RateLimitScope
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.utils import ModelResponse, PriorityReservationSettings, Usage
+from tests.unit.proxy.hooks.model_capacity_golden import golden
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,6 +79,11 @@ class Clock:
 
     def advance(self, seconds: float) -> None:
         self.current += timedelta(seconds=seconds)
+
+
+@pytest.fixture(autouse=True)
+def golden_case(request: pytest.FixtureRequest) -> None:
+    golden.begin(request.node.nodeid)
 
 
 @pytest.fixture(autouse=True)
@@ -589,6 +595,7 @@ async def _differential(
     finally:
         verbose_proxy_logger.removeHandler(tap)
     python, native = transcripts
+    golden.observe(python, native)
     for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
         assert actual == expected, f"step {index} differs"
     return python
@@ -1252,6 +1259,7 @@ async def test_attempts_settle_through_the_real_logging_path(monkeypatch: pytest
             transcript.append(await _counters(side, scopes))
         transcripts.append(transcript)
     python, native = transcripts
+    golden.observe(python, native)
     assert native == python, (native, python)
     assert [step[1][3] for step in python[1::2]] == [30, 30, 60, 60], python
     assert [step[1] for step in python[0::2]] == [None, "InternalServerError", None, "InternalServerError"], python
@@ -1361,6 +1369,7 @@ async def test_the_real_proxy_hooks_share_one_request_stash_like_python(
             [await _through_the_proxy(proxy_logging, router, capture, request, metadata_auth) for request in requests]
         )
     python, native = runs
+    golden.observe(python, native)
     for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
         assert actual == expected, f"request {index} differs\nPY={expected!r}\nRS={actual!r}"
     assert [run.stashes_created for run in native] == [1, 1, 1], native
@@ -1448,6 +1457,7 @@ async def test_requests_without_a_request_scope_keep_their_stash_through_the_rea
             run.append(await _counters(side, scopes))
         runs.append(run)
     python, native = runs
+    golden.observe(python, native)
     for index, (expected, actual) in enumerate(zip(python, native, strict=True)):
         assert actual == expected, f"entry {index} differs\nPY={expected!r}\nRS={actual!r}"
     assert python[4] == ["luna", {}], python[4]
@@ -1486,6 +1496,7 @@ async def test_sync_sdk_calls_settle_nothing_like_python(monkeypatch: pytest.Mon
         outcome = await asyncio.create_task(lifecycle(), context=contextvars.Context())
         transcripts.append([outcome, await _counters(side, scopes)])
     python, native = transcripts
+    golden.observe(python, native)
     assert native == python, (native, python)
     assert python[1][3][3] is not None, python
 
@@ -1670,6 +1681,7 @@ async def test_a_failed_attempt_settles_outside_the_rate_limits_service_target_l
         for step in steps:
             await _run_step(side, step)
         seen.append(targets)
+    golden.observe(seen[0], seen[1])
     assert seen[1] == seen[0]
     assert seen[0] == [RATE_LIMITS_TARGET, None, RATE_LIMITS_TARGET], seen
 
@@ -1800,6 +1812,7 @@ async def test_saturation_is_read_from_redis_on_every_check_like_python(
         [("model_saturation_check", "shared"), ("priority_model", "shared:high")],
         prepare,
     )
+    golden.observe(reads["PythonSide"], reads["NativeSide"])
     assert reads["NativeSide"] == reads["PythonSide"], reads
     assert [read for read in reads["PythonSide"] if read[0] == "redis"] == [
         ("redis", "model_saturation_check", 60)
@@ -1914,6 +1927,7 @@ async def test_the_proxy_fallback_walk_takes_the_natives_saturation_handoff_like
         monkeypatch.setattr(litellm, name, [])
     python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated)
     native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated)
+    golden.observe(python, native)
     assert native == python, (native, python)
     handoff: Final = python[2]
     assert isinstance(handoff, tuple)
@@ -2002,6 +2016,7 @@ async def test_the_router_fallback_check_holds_a_fallback_through_the_native_lik
         )
         runs.append(run)
     python, native = runs
+    golden.observe(python, native)
     assert native == python, (native, python)
     assert False in python[:4] and True in python[:4], python
 
@@ -2038,6 +2053,7 @@ async def test_a_model_the_walk_leaves_gives_back_its_capped_team_hold_like_pyth
     )
     python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated, walk)
     native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated, walk)
+    golden.observe(python, native)
     assert native == python, (native, python)
     assert python[2:5] == ["busy", "spare", ("spare", ("busy", "unknown", 1))], python
     assert _team_tokens(python) == (0.0, 0.0, None, 150), python
@@ -2060,6 +2076,7 @@ async def test_a_fallback_refused_after_admission_gives_back_its_hold_and_the_re
     )
     python: Final = await _saturation_walk(PythonSide, monkeypatch, isolated, walk)
     native: Final = await _saturation_walk(NativeSide, monkeypatch, isolated, walk)
+    golden.observe(python, native)
     assert native == python, (native, python)
     handoff: Final = python[2]
     assert isinstance(handoff, tuple)
@@ -2094,6 +2111,7 @@ async def test_a_released_hold_is_not_refunded_again_by_the_failure_line_like_py
             )
         )
     python, native = runs
+    golden.observe(python, native)
     assert native == python, (native, python)
     assert [[entry[3] for entry in counters if entry[2] == "tokens"] for counters in python] == [  # pyright: ignore[reportIndexIssue, reportUnknownVariableType, reportAttributeAccessIssue]  # counter rows
         [150, 150],
