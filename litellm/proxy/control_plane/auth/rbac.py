@@ -1,6 +1,7 @@
 """Role and scope policy for the control plane. Roles grant scopes, scopes gate routes, the dataplane binding
 on the token decides where the scopes apply (``*`` or no binding is fleet-wide)."""
 
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -97,10 +98,19 @@ def default_policy() -> RolePolicy:
     return RolePolicy(DEFAULT_ROLES)
 
 
-def _resolve(name: str, definitions: Mapping[str, RoleDefinition], seen: frozenset[str]) -> frozenset[Scope]:
-    definition: Final = definitions[name]
-    parents: Final = definition.inherits - seen
-    return definition.scopes.union(*(_resolve(parent, definitions, seen | {name}) for parent in parents))
+def _resolve(definitions: Mapping[str, RoleDefinition]) -> Mapping[str, frozenset[Scope]]:
+    children: Final = {name: deque[str]() for name in definitions}
+    for name, definition in definitions.items():
+        for ancestor in definition.inherits:
+            children[ancestor].append(name)
+    grants: Final = {name: definition.scopes for name, definition in definitions.items()}
+    pending: Final = deque(definitions)
+    while (parent := pending.popleft() if pending else None) is not None:
+        for child in children[parent]:
+            if (scopes := grants[child] | grants[parent]) != grants[child]:
+                grants[child] = scopes
+                pending.append(child)
+    return grants
 
 
 def build_policy(custom: Mapping[str, RoleDefinition], include_defaults: bool = True) -> RolePolicy | RolePolicyError:
@@ -118,7 +128,7 @@ def build_policy(custom: Mapping[str, RoleDefinition], include_defaults: bool = 
     )  # comprehension-ok: flattening (role, parent) pairs
     if unknown_parents:
         return unknown_parents[0]
-    return RolePolicy({name: _resolve(name, definitions, frozenset()) for name in definitions})
+    return RolePolicy(_resolve(definitions))
 
 
 def parse_role_definition(

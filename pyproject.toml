@@ -269,6 +269,7 @@ admin-mcp = [
 ]
 proxy-dev = [
     "sqlalchemy==2.0.49",
+    "pynacl==1.6.2",
     "alembic==1.18.4",
     { include-group = "admin-mcp" },
     "prisma==0.11.0",

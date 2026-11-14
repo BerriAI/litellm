@@ -2,14 +2,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
 from nacl.exceptions import CryptoError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
-from litellm.proxy.control_plane.auth.rbac import Principal
+from litellm.proxy.control_plane.auth.rbac import Principal, Scope
 from litellm.proxy.control_plane.common.exceptions import (
     ErrorBody,
     bad_request,
@@ -180,7 +180,15 @@ class RuntimeConfig:
                 current: Final = await transaction.load()
                 if not self.state.reload(current):
                     return service_unavailable("Runtime config snapshot is invalid.")
-                invalid: Final = self.validate(change, principal)
+                writer: Final = (
+                    principal
+                    if principal.token_kind == "master_key"
+                    else replace(principal, scopes=principal.scopes & self.state.view.policy.grant(principal.roles))
+                )
+                required: Final = Scope.DATAPLANES_WRITE if change.kind == "dataplane" else Scope.ROLES_WRITE
+                if not writer.has_scope(required):
+                    return forbidden("Missing runtime write scope in the committed policy.")
+                invalid: Final = self.validate(change, writer)
                 if isinstance(invalid, ErrorBody):
                     return invalid
                 published = await stream.append(change)  # rebind-ok: compensate only after XADD succeeded
