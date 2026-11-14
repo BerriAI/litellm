@@ -45,7 +45,9 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 
-_REALTIME_TOKEN_VERSION: Final = "realtime_v1"
+_REALTIME_TOKEN_VERSION: Final = "realtime_v2"
+_REALTIME_TOKEN_MAX_TTL_SECONDS: Final = 600
+_REALTIME_TOKEN_DEFAULT_TTL_SECONDS: Final = 300
 _DEFAULT_REALTIME_MODEL: Final = "gpt-4o-realtime-preview"
 _DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
 _ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription", "translation")
@@ -261,6 +263,32 @@ async def _prepare_client_secret_session(
     return model, session_data, session_type
 
 
+def _effective_realtime_ttl(requested_ttl_seconds: int | None) -> int:
+    if (
+        isinstance(requested_ttl_seconds, int)
+        and 0 < requested_ttl_seconds <= _REALTIME_TOKEN_MAX_TTL_SECONDS
+    ):
+        return requested_ttl_seconds
+    return _REALTIME_TOKEN_DEFAULT_TTL_SECONDS
+
+
+def _realtime_proxy_expires_at(
+    upstream_expires_at: object,
+    requested_ttl_seconds: int | None,
+) -> int:
+    """Effective expiry the proxy is willing to honor (R2-21).
+
+    Caller-requested TTLs are capped and an upstream that returns a missing or
+    absurd far-future expiry cannot mint a long-lived unkillable bearer; the
+    proxy's own clock bound always applies.
+    """
+    effective_ttl: Final = _effective_realtime_ttl(requested_ttl_seconds)
+    proxy_floor: Final = int(time.time()) + effective_ttl
+    if isinstance(upstream_expires_at, int) and 0 < upstream_expires_at < proxy_floor:
+        return upstream_expires_at
+    return proxy_floor
+
+
 def _encode_realtime_token_payload(
     ephemeral_key: str,
     model_id: str,
@@ -269,10 +297,13 @@ def _encode_realtime_token_payload(
     expires_at: int | None,
     session_type: str = "realtime",
     caller_auth: Mapping[str, object] | None = None,
+    owner_key_hash: str = "",
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
-    route without requiring model as a query param.
+    route without requiring model as a query param. expires_at is the
+    proxy-capped effective expiry and owner_key_hash binds the token to the
+    minting virtual key so deleting that key kills outstanding tokens.
     """
     payload: Final[Mapping[str, object]] = {
         "v": _REALTIME_TOKEN_VERSION,
@@ -283,6 +314,7 @@ def _encode_realtime_token_payload(
         "expires_at": expires_at,
         "session_type": session_type,
         **({} if caller_auth is None else {"caller_auth": caller_auth}),
+        "owner_key_hash": owner_key_hash,
     }
     return json.dumps(payload, separators=(",", ":"))
 
@@ -392,7 +424,8 @@ async def create_realtime_client_secret(
             # User provided model at root level, convert to session format
             data["session"] = {"type": "realtime", "model": model}
 
-        if req.expires_after:
+        if req.expires_after is not None:
+            req.expires_after.seconds = _effective_realtime_ttl(req.expires_after.seconds)
             data["expires_after"] = req.expires_after.model_dump(exclude_none=True)
 
         data = await add_litellm_data_to_request(
@@ -467,14 +500,18 @@ async def create_realtime_client_secret(
     # can recover model without requiring query params.
     raw_value: Final[str] = upstream_json.get("value", "")
     expires_at: Final = upstream_json.get("expires_at")
+    requested_ttl: Final = (
+        req.expires_after.seconds if req.expires_after is not None else None
+    )
     token_payload: Final = _encode_realtime_token_payload(
         ephemeral_key=raw_value,
         model_id=model,
         user_id=getattr(user_api_key_dict, "user_id", None),
         team_id=getattr(user_api_key_dict, "team_id", None),
-        expires_at=expires_at if isinstance(expires_at, int) else None,
+        expires_at=_realtime_proxy_expires_at(expires_at, requested_ttl),
         session_type=session_type,
         caller_auth=_caller_auth_for_token(user_api_key_dict) if session_type == "translation" else None,
+        owner_key_hash=getattr(user_api_key_dict, "api_key", "") or "",
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
@@ -559,16 +596,46 @@ async def proxy_realtime_calls(
     sdp_body: Final[bytes] = await request.body()
     decoded_payload: Final = _decode_realtime_token_payload(decrypted_token_value)
     if decoded_payload is not None:
-        # Check token expiry
+        # expiry is proxy-stamped and mandatory for versioned v2 tokens
         expires_at: Final = decoded_payload.get("expires_at")
-        if isinstance(expires_at, int) and time.time() > expires_at:
+        if not isinstance(expires_at, int) or time.time() > expires_at:
             return Response(
                 content=json.dumps({"error": "Token has expired"}),
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 media_type="application/json",
             )
 
+        # The token is bound to the minting virtual key: deleting that key
+        # invalidates every still-outstanding realtime token (R2-21)
+        owner_key_hash: Final = decoded_payload.get("owner_key_hash") or ""
+        owner_models: list[str] | None = None
+        if owner_key_hash:
+            from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
+            if _prisma_client is not None:
+                from litellm.repositories.verification_token_repository import (
+                    VerificationTokenRepository,
+                )
+
+
+                owner_row: Final = await VerificationTokenRepository(
+                    _prisma_client
+                ).find_by_id(owner_key_hash)
+                if owner_row is None or getattr(owner_row, "blocked", False):
+                    return Response(
+                        content=json.dumps(
+                            {"error": "Token's originating key is no longer valid"}
+                        ),
+                        status_code=http_status.HTTP_401_UNAUTHORIZED,
+                        media_type="application/json",
+                    )
+                owner_models: Final = getattr(owner_row, "models", None)
+
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
+        # Model comes from the payload signed at mint time; the query-param
+        # override is dropped (it re-enabled cross-model routing for tokens
+        # minted under ACL'd models) except for legacy compatibility tokens
+        # that carry no model_id in the payload (R1-H4).
         model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
@@ -579,6 +646,28 @@ async def proxy_realtime_calls(
                 content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 media_type="application/json",
+            )
+
+        # Mint-time ACL is authoritative for v2 tokens: the mint route checked
+        # can_key_call_model on this model, so /v1/realtime/calls re-checks it
+        # (defense in depth against runtime model-list changes) (R1-H4).
+        if decoded_payload.get("v") == _REALTIME_TOKEN_VERSION and decoded_payload.get("model_id"):
+            from litellm.proxy.proxy_server import llm_router as _llm_router
+            from litellm.proxy.auth.auth_checks import can_key_call_model
+
+            verify_auth: Final = UserAPIKeyAuth(
+                user_id=user_id,
+                team_id=team_id,
+                api_key=owner_key_hash or None,
+                models=owner_models or [],
+                token=owner_key_hash or None,
+            )
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_router.model_list if llm_router is not None else None,
+                valid_token=verify_auth,
+                llm_router=llm_router,
+
             )
     else:
         if is_translation_request:

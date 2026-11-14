@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    _enforce_reservation_mid_session,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -432,6 +434,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
             "counter_key": "spend:org:org-budgeted",
             "entity_type": "Organization",
             "entity_id": "org-budgeted",
+            "max_budget": 10.0,
             "reserved_cost": reserved_cost,
             "applied_adjustment": 0.0,
         },
@@ -439,6 +442,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
             "counter_key": "spend:project:project-budgeted",
             "entity_type": "Project",
             "entity_id": "project-budgeted",
+            "max_budget": 20.0,
             "reserved_cost": reserved_cost,
             "applied_adjustment": 0.0,
         },
@@ -551,6 +555,7 @@ async def test_cold_annual_counter_preserves_reset_writer_spend(
 
 
 @pytest.mark.asyncio
+<<<<<<< HEAD
 async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_group() -> None:
     from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
     from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
@@ -716,3 +721,133 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+=======
+async def test_lease_keeps_renewing_past_request_timeout_while_task_alive(monkeypatch):
+    """R2-22: the renewal deadline no longer stops the lease while the request
+    task is alive — realtime / long streams outlast ``request_timeout``."""
+    from litellm.proxy.spend_tracking.budget_reservation import _renew_reservation_lease
+
+    refreshes: Final[list[str]] = []
+
+    async def fake_refresh(counter_key: str) -> bool:
+        refreshes.append(counter_key)
+        return True
+
+    monkeypatch.setattr(proxy_server, "refresh_spend_counter_ttl", fake_refresh)
+    monkeypatch.setattr(litellm, "request_timeout", 0.0)  # deadline already elapapsed
+    counter_keys: Final = frozenset({"spend:key:hashed-token"})
+    budget_reservation: Final[dict] = {"entries": [], "finalized": False}
+    request_task: Final = asyncio.current_task()  # still alive during the lease
+
+    lease: Final = asyncio.ensure_future(
+        _renew_reservation_lease(
+            budget_reservation=budget_reservation,
+            counter_keys=counter_keys,
+            interval=0.005,
+            request_task=request_task,
+        )
+    )
+    try:
+        await asyncio.sleep(0.06)
+    finally:
+        budget_reservation["finalized"] = True
+        try:
+            await asyncio.wait_for(lease, timeout=2)
+        except (asyncio.TimeoutError, Exception):
+            lease.cancel()
+    assert refreshes, "a live task must keep the reservation renewed past request_timeout"
+    assert all(key in counter_keys for key in refreshes)
+
+
+@pytest.mark.asyncio
+async def test_mid_session_budget_check_cuts_off_long_session(monkeypatch):
+    """R2-22: a counter whose live spend goes over the budget while a long
+    session runs cancels the request instead of letting the session burn on."""
+    from litellm.proxy.spend_tracking.budget_reservation import _enforce_reservation_mid_session
+
+    reads: Final[list[str]] = []
+
+    async def fake_read(counter_key: str):
+        reads.append(counter_key)
+        return (75.0, True)  # spend has blown past the 50 budget mid-session
+
+    monkeypatch.setattr(proxy_server, "read_spend_counter_cache_value", fake_read)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", proxy_server.spend_counter_cache)
+    budget_reservation: Final[dict] = {
+        "entries": [
+            {
+                "counter_key": "spend:key:hashed-token",
+                "entity_type": "Key",
+                "entity_id": "hashed-token",
+                "max_budget": 50.0,
+                "reserved_cost": 2.0,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    session_started: Final = asyncio.Event()
+
+    async def long_session():
+        session_started.set()
+        await asyncio.sleep(3600)  # the websocket session the lease is policing
+
+    request_task: Final = asyncio.ensure_future(long_session())
+    await session_started.wait()
+
+    await _enforce_reservation_mid_session(
+        budget_reservation=budget_reservation,
+        valid_token=_budgeted_token(),
+        request_task=request_task,
+    )
+    assert reads  # the counter was read
+    # let the cancellation propagate through the loop
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(request_task, timeout=2)
+    assert request_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_mid_session_budget_check_leaves_under_budget_sessions_running(monkeypatch):
+    """Under budget mid-session: no cancellation, session untouched."""
+    from litellm.proxy.spend_tracking.budget_reservation import _enforce_reservation_mid_session
+
+    async def fake_read(counter_key: str):
+        return (10.0, True)
+
+    monkeypatch.setattr(proxy_server, "read_spend_counter_cache_value", fake_read)
+    budget_reservation: Final[dict] = {
+        "entries": [
+            {
+                "counter_key": "spend:key:hashed-token",
+                "entity_type": "Key",
+                "entity_id": "hashed-token",
+                "max_budget": 50.0,
+                "reserved_cost": 2.0,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    session_started: Final = asyncio.Event()
+
+    async def long_session():
+        session_started.set()
+        await asyncio.sleep(3600)
+
+    request_task: Final = asyncio.ensure_future(long_session())
+    try:
+        await session_started.wait()
+
+        await _enforce_reservation_mid_session(
+            budget_reservation=budget_reservation,
+            valid_token=_budgeted_token(),
+            request_task=request_task,
+        )
+
+        assert not request_task.done()
+    finally:
+        request_task.cancel()
+>>>>>>> b916f1dee88 (fix: budget reservation lease follows the live session and enforces mid-session (R2-22))

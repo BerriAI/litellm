@@ -54,7 +54,8 @@ def test_encode_realtime_token_payload():
         expires_at=1234567890,
     )
     decoded = json.loads(payload)
-    assert decoded["v"] == "realtime_v1"
+    assert decoded["v"] == "realtime_v2"
+    assert decoded["owner_key_hash"] == ""
     assert decoded["ephemeral_key"] == "epk_abc123"
     assert decoded["model_id"] == "gpt-4o-realtime-preview"
     assert decoded["user_id"] == "user-1"
@@ -96,7 +97,7 @@ def test_decode_realtime_token_payload_valid():
 def test_decode_realtime_token_payload_invalid_version():
     payload = json.dumps(
         {
-            "v": "realtime_v2",
+            "v": "realtime_v0",
             "ephemeral_key": "epk",
             "model_id": "gpt-4o",
         }
@@ -1886,3 +1887,55 @@ def test_realtime_session_routes_answer_400_for_a_malformed_body(
 
     assert (response.status_code, response.json()["error"]["type"]) == (400, "invalid_request_error")
     assert upstream.called is False
+# ---------------------------------------------------------------------------
+# Realtime token lifecycle (fork hardening R2-21)
+# ---------------------------------------------------------------------------
+
+
+def test_realtime_ttl_is_capped_and_defaults():
+    from litellm.proxy.realtime_endpoints.endpoints import (
+        _REALTIME_TOKEN_DEFAULT_TTL_SECONDS,
+        _REALTIME_TOKEN_MAX_TTL_SECONDS,
+        _effective_realtime_ttl,
+        _realtime_proxy_expires_at,
+    )
+
+    assert _effective_realtime_ttl(60) == 60
+    assert _effective_realtime_ttl(_REALTIME_TOKEN_MAX_TTL_SECONDS) == _REALTIME_TOKEN_MAX_TTL_SECONDS
+    assert _effective_realtime_ttl(_REALTIME_TOKEN_MAX_TTL_SECONDS + 1) == _REALTIME_TOKEN_DEFAULT_TTL_SECONDS
+    assert _effective_realtime_ttl(None) == _REALTIME_TOKEN_DEFAULT_TTL_SECONDS
+    assert _effective_realtime_ttl(-5) == _REALTIME_TOKEN_DEFAULT_TTL_SECONDS
+
+    now = int(time.time())
+
+    # an upstream claiming a far-future expiry cannot extend past the proxy cap
+    expires_at = _realtime_proxy_expires_at(upstream_expires_at=now + 10**9, requested_ttl_seconds=None)
+    assert now <= expires_at <= now + _REALTIME_TOKEN_DEFAULT_TTL_SECONDS + 2
+
+    # upstream expiry earlier than the proxy bound is honored
+    expires_at = _realtime_proxy_expires_at(upstream_expires_at=now + 30, requested_ttl_seconds=None)
+    assert expires_at == now + 30
+
+    # a missing upstream expiry still yields a definite, bounded one
+    expires_at = _realtime_proxy_expires_at(upstream_expires_at=None, requested_ttl_seconds=None)
+    assert now <= expires_at <= now + _REALTIME_TOKEN_DEFAULT_TTL_SECONDS + 2
+
+
+def test_realtime_token_payload_binds_owner_key():
+    from litellm.proxy.realtime_endpoints.endpoints import (
+        _decode_realtime_token_payload,
+        _encode_realtime_token_payload,
+    )
+
+    payload = _encode_realtime_token_payload(
+        ephemeral_key="sk-ephemeral",
+        model_id="gpt-4o-realtime-preview",
+        user_id="alice",
+        team_id=None,
+        expires_at=int(time.time()) + 60,
+        owner_key_hash="hashed-owner",
+    )
+    decoded = _decode_realtime_token_payload(payload)
+    assert decoded is not None
+    assert decoded["owner_key_hash"] == "hashed-owner"
+    assert decoded["v"] != "realtime_v1"
