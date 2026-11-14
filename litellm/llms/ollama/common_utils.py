@@ -140,16 +140,26 @@ class OllamaModelInfo(BaseLLMModelInfo):
     @classmethod
     def get_server_api_base(cls, api_base: str | None = None) -> str:
         api_base = cls.get_api_base(api_base).rstrip("/")
-        for suffix in (
-            "/api/generate",
-            "/api/chat",
-            "/api/embed",
-            "/api/embeddings",
-            "/api/show",
-            "/api/tags",
-        ):
-            if api_base.endswith(suffix):
-                return api_base[: -len(suffix)]
+        stripped = True
+        while stripped:
+            stripped = False
+            for suffix in (
+                "/chat/completions",
+                "/completions",
+                "/embeddings",
+                "/models",
+                "/api/generate",
+                "/api/chat",
+                "/api/embed",
+                "/api/embeddings",
+                "/api/show",
+                "/api/tags",
+                "/v1",
+            ):
+                if api_base.endswith(suffix):
+                    api_base = api_base[: -len(suffix)].rstrip("/")
+                    stripped = True
+                    break
         return api_base
 
     def get_models(self, api_key=None, api_base: str | None = None) -> list[str]:
