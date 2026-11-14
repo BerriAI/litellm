@@ -167,7 +167,9 @@ async def test_release_unbound_budget_reservation_frees_the_counter(spend_counte
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_store: SpendCounterStore):
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(
+    spend_counter_store: SpendCounterStore,
+):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
@@ -237,9 +239,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
         },
     ]
     assert spend_counter_store.get_local("spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(
-        reserved_cost
-    )
+    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(reserved_cost)
 
 
 class _AnnualWindowDatabase:
@@ -308,3 +308,116 @@ async def test_cold_annual_counter_preserves_reset_writer_spend(
     assert failure.value.current_cost == 10.0
     assert store.get_local(f"spend:key:calendar-key:window:{duration}") == 10.0
     assert database.scans == 0
+
+
+LEGACY_KEY: Final = "spend:key:legacy"
+LEGACY_TEAM: Final = "spend:team:legacy-team"
+LEGACY_WINDOW: Final = "spend:key:legacy:window:1d"
+
+
+def _legacy_reservation() -> dict[str, object]:
+    return {
+        "reserved_cost": 0.4,
+        "entries": [
+            {
+                "counter_key": LEGACY_KEY,
+                "entity_type": "Key",
+                "entity_id": "legacy",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            },
+            {
+                "counter_key": LEGACY_TEAM,
+                "entity_type": "Team",
+                "entity_id": "legacy-team",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            },
+            {
+                "counter_key": LEGACY_WINDOW,
+                "entity_type": "Key",
+                "entity_id": "legacy",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+                "window_reset_at": "2026-01-01T00:00:00+00:00",
+            },
+        ],
+        "finalized": False,
+        "callback_bound": True,
+        "input_cost": 0.1,
+        "input_tokens": 12,
+    }
+
+
+def _held_by_a_legacy_reservation(store: SpendCounterStore) -> None:
+    _ = install_native_owner(store)
+    store.set_local(LEGACY_KEY, 1.4)
+    store.set_local(LEGACY_TEAM, 2.4)
+    store.set_local(LEGACY_WINDOW, 0.9)
+
+
+def _legacy_counters(store: SpendCounterStore) -> dict[str, float | None]:
+    return {key: store.get_local(key) for key in (LEGACY_KEY, LEGACY_TEAM, LEGACY_WINDOW)}
+
+
+def _legacy_adjustments(reservation: dict[str, object]) -> list[object]:
+    entries: Final = reservation["entries"]
+    assert isinstance(entries, list)
+    return [entry["applied_adjustment"] for entry in entries]
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_the_python_engine_held_before_the_upgrade_settles_on_the_post_call_cost(
+    spend_counter_store: SpendCounterStore,
+):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
+
+    _held_by_a_legacy_reservation(spend_counter_store)
+    reservation: Final = _legacy_reservation()
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+
+    charged: Final = await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=proxy_server.increment_spend_counters,
+        user_api_key="legacy",
+        user_id=None,
+        end_user_id=None,
+        team_id="legacy-team",
+        org_id=None,
+        kwargs={},
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+        response_cost=0.25,
+        budget_reservation=reservation,
+        request_tags=None,
+        model_access_groups=None,
+    )
+
+    assert charged is True
+    assert _legacy_counters(spend_counter_store) == pytest.approx(
+        {LEGACY_KEY: 1.25, LEGACY_TEAM: 2.25, LEGACY_WINDOW: 0.5}
+    )
+    assert _legacy_adjustments(reservation) == pytest.approx([-0.15, -0.15, -0.4])
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_the_python_engine_held_before_the_upgrade_is_released_in_full(
+    spend_counter_store: SpendCounterStore,
+):
+    from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation
+
+    _held_by_a_legacy_reservation(spend_counter_store)
+    reservation: Final = _legacy_reservation()
+
+    await release_budget_reservation(reservation)
+
+    assert _legacy_counters(spend_counter_store) == pytest.approx(
+        {LEGACY_KEY: 1.0, LEGACY_TEAM: 2.0, LEGACY_WINDOW: 0.5}
+    )
+    assert _legacy_adjustments(reservation) == pytest.approx([-0.4, -0.4, -0.4])
+    assert reservation["finalized"] is True

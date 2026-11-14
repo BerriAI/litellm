@@ -62,7 +62,7 @@ from litellm.proxy.spend_tracking.input_tokens import (
 )
 from litellm.proxy.spend_tracking.native_budgets import (
     admit_native_reservation_now,
-    admitted_native_reservation,
+    await_native_admission,
     native_admission,
     native_budget_route,
     native_owner_reserves,
@@ -515,27 +515,14 @@ async def reconcile_budget_reservation(
     """Settle every reserved counter on ``actual_cost``. With ``apply_consistent`` False the adjustments for
     counters that still hold the reservation are returned instead of written, so the caller can pipeline them with
     its own increments and then call ``stamp_budget_reservation_actual_cost``."""
-    native: Final = await admitted_native_reservation(_HELD_RESERVATION.validate_python(budget_reservation))
+    await await_native_admission(budget_reservation)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
-
-    reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
-    actual: Final = float(actual_cost or 0.0)
-    if native is not None:
-        await settle_native_reservation(native, actual)
-    pending: Final = (
-        ()
-        if native is not None
-        else await _set_reserved_entries_actual_cost(
-            entries=budget_reservation.get("entries") or [],
-            actual_cost=actual,
-            default_reserved_cost=reserved_cost,
-            apply_consistent=apply_consistent,
-        )
-    )
+    _ = float(budget_reservation.get("reserved_cost") or 0.0)
+    await settle_native_reservation(budget_reservation, float(actual_cost or 0.0))
     if finalize:
         budget_reservation["finalized"] = True
-    return pending
+    return ()
 
 
 def stamp_budget_reservation_actual_cost(budget_reservation: dict | None, actual_cost: float | None) -> None:

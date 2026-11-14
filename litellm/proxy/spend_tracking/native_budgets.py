@@ -479,7 +479,7 @@ async def settle_native_reservation(
     actual_cost: float,
 ) -> None:
     budgets: Final = native_budgets()
-    if budgets is None or NATIVE_CALL_ID_KEY not in reservation:
+    if budgets is None:
         return
     entries: Final = _held_entries(reservation.get("entries") or ())
     record: Final = _reservation_record(reservation)
