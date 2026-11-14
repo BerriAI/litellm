@@ -138,6 +138,7 @@ def test_a_thought_another_provider_served_without_a_signature_never_reaches_cla
     ("config", "model", "api_base"),
     [
         (DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", None),
+        (DeepSeekAnthropicMessagesConfig(), "claude-sonnet-4-5", None),
         (AnthropicMessagesConfig(), "kimi-k3", None),
         (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://api.deepseek.com/anthropic"),
         (OpenAILikeAnthropicMessagesConfig(), "kimi-k3", "https://api.moonshot.ai/anthropic"),

@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicModelInfo,
+    anthropic_message_objects,
     context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
@@ -35,7 +36,7 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 
 
 _REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
-_ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
 _CONTEXT_MANAGEMENT: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -45,13 +46,18 @@ def count_tokens_request_body(
 ) -> Mapping[str, object]:
     claude: Final = is_claude_model_target("vertex_ai", model)
     messages: Final = request_data.get("messages")
+    claude_messages: Final = (
+        anthropic_message_objects(_JSON_LIST.validate_python(messages))
+        if claude and isinstance(messages, list)
+        else None
+    )
     tools: Final = request_data.get("tools")
     return {
         **request_data,
         **(
-            {"messages": strip_unsigned_thinking_from_anthropic_messages(_ANTHROPIC_MESSAGES.validate_python(messages))}
-            if claude and isinstance(messages, list)
-            else {}
+            {}
+            if claude_messages is None
+            else {"messages": strip_unsigned_thinking_from_anthropic_messages(claude_messages)}
         ),
         **(
             {

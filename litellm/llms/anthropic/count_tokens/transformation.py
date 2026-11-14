@@ -38,6 +38,7 @@ from litellm.llms.anthropic.common_utils import (
     merge_anthropic_beta_headers,
     strip_unsigned_thinking_from_anthropic_messages,
     tools_without_custom_field,
+    verifies_claude_thinking_signatures,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -524,6 +525,8 @@ class AnthropicCountTokensConfig:
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
         drop_params: bool = False,
+        custom_llm_provider: str = "anthropic",
+        api_base: str | None = None,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -534,7 +537,7 @@ class AnthropicCountTokensConfig:
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
         sent_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
             strip_unsigned_thinking_from_anthropic_messages(messages)
-            if is_claude_model_target("anthropic", model)
+            if verifies_claude_thinking_signatures(custom_llm_provider, model, api_base)
             else messages
         )
         counted_messages, counted_system = _lift_leading_system(sent_messages, system)

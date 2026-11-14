@@ -49,7 +49,6 @@ from ...common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
-    checks_claude_signatures,
     context_management_betas,
     is_claude_model_target,
     merge_anthropic_beta_headers,
@@ -58,6 +57,7 @@ from ...common_utils import (
     strip_advisor_blocks_from_messages,
     strip_unreplayable_blocks_from_anthropic_messages,
     tools_without_custom_field,
+    verifies_claude_thinking_signatures,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -219,10 +219,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return is_claude_model_target(self._resolved_provider, model)
 
     def verifies_thinking_signatures(self, model: str, api_base: str | None) -> bool:
-        return "claude" in model.lower() and (
-            self._resolved_provider != "anthropic"
-            or checks_claude_signatures(AnthropicModelInfo.resolve_anthropic_api_base(api_base))
-        )
+        return verifies_claude_thinking_signatures(self._resolved_provider, model, api_base)
 
     def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
         return tools_without_custom_field(
