@@ -255,6 +255,14 @@ class LangfuseOtelLogger(OpenTelemetry):
             return None
         return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
 
+        rerank_results: Final = response_obj.get("results")
+        if rerank_results:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                safe_dumps(rerank_results),
+            )
+
     @staticmethod
     def _trace_tags(kwargs: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[str, ...]:
         caller_tags: Final = metadata.get("tags")
