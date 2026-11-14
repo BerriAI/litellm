@@ -52,8 +52,8 @@ class _OptionalResponsesBody(BaseModel):
     max_output_tokens: int | None = None
 
 
-OPENAI_MINI_BACKEND: Final = "openai/gpt-5.6-luna"
-OPENAI_VISION_BACKEND: Final = "openai/gpt-5.6"
+OPENAI_MINI_BACKEND: Final = "openai/gpt-6-luna"
+OPENAI_VISION_BACKEND: Final = "openai/gpt-6.1-sol"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"

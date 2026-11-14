@@ -107,9 +107,9 @@ services.
 proxy_config = {
   model_list = [
     {
-      model_name = "gpt-5.6"
+      model_name = "gpt-6.1-sol"
       litellm_params = {
-        model   = "openai/gpt-5.6"
+        model   = "openai/gpt-6.1-sol"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },

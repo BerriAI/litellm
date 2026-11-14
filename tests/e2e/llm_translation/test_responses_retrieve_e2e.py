@@ -30,7 +30,7 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 pytestmark = pytest.mark.e2e
 
 OPENAI_BACKEND: Final = "openai/gpt-5.5"
-OPENAI_MINI_BACKEND: Final = "openai/gpt-5.6-luna"
+OPENAI_MINI_BACKEND: Final = "openai/gpt-6-luna"
 LONG_TASK: Final = "Write a numbered list counting from 1 to 400, one number per line, with a short word after each."
 CANCELLABLE_STATUSES: Final = frozenset({"queued", "in_progress"})
 

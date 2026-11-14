@@ -15,22 +15,22 @@ served the turn. Updates are batched in-memory and flushed to Postgres every
 
 ```yaml
 model_list:
-  - model_name: gpt-5.6
+  - model_name: gpt-6.1-sol
     litellm_params:
-      model: openai/gpt-5.6
+      model: openai/gpt-6.1-sol
     model_info:
-      input_cost_per_token: 0.000004
-      output_cost_per_token: 0.00002
+      input_cost_per_token: 0.000002
+      output_cost_per_token: 0.00001
       adaptive_router_preferences:
         quality_tier: 3
         strengths: ["code_generation", "analytical_reasoning"]
 
-  - model_name: gpt-5.6-luna
+  - model_name: gpt-6-luna
     litellm_params:
-      model: openai/gpt-5.6-luna
+      model: openai/gpt-6-luna
     model_info:
-      input_cost_per_token: 0.0000002
-      output_cost_per_token: 0.0000012
+      input_cost_per_token: 0.0000001
+      output_cost_per_token: 0.0000005
       adaptive_router_preferences:
         quality_tier: 2
         strengths: ["general", "factual_lookup"]
@@ -38,9 +38,9 @@ model_list:
   - model_name: smart-router
     litellm_params:
       model: auto_router/adaptive_router
-      adaptive_router_default_model: gpt-5.6-luna
+      adaptive_router_default_model: gpt-6-luna
       adaptive_router_config:
-        available_models: ["gpt-5.6", "gpt-5.6-luna"]
+        available_models: ["gpt-6.1-sol", "gpt-6-luna"]
         weights:
           quality: 0.7
           cost: 0.3
