@@ -1553,8 +1553,8 @@ def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, obje
     return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
 
 
-def _delta_reasoning_items(delta: object) -> Sequence[object]:
-    items: Final = _field_of(delta, "reasoning_items")
+def _delta_reasoning_items(delta: object, field: str = "reasoning_items") -> Sequence[object]:
+    items: Final = _field_of(delta, field)
     return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
 
 
@@ -1565,8 +1565,8 @@ def _chunk_first_delta(chunk: object) -> object:
     return _field_of(cast(Sequence[object], choices)[0], "delta")  # cast-ok: untyped chunk
 
 
-def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
-    return _delta_reasoning_items(_chunk_first_delta(chunk))
+def _chunk_reasoning_items(chunk: object, field: str = "reasoning_items") -> Sequence[object]:
+    return _delta_reasoning_items(_chunk_first_delta(chunk), field)
 
 
 def _chunk_refusal(chunk: object) -> str:
@@ -1579,6 +1579,7 @@ _NON_TEXT_DELTA_FIELDS: Final = (
     "function_call",
     "reasoning_content",
     "reasoning_items",
+    "reasoning_details",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1807,9 +1808,16 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
     )
     citation_fields: Final = {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
     provider_annotation_fields: Final = {"annotations": list(provider_annotations)} if provider_annotations else {}
+    # Keep every streamed reasoning_details entry in arrival order, as the
+    # non-streaming response does. Do not merge by index: some providers
+    # send whole entries that all have index 0.
+    reasoning_details: Final = tuple(
+        chain.from_iterable(_chunk_reasoning_items(chunk, "reasoning_details") for chunk in typed_chunks)
+    )
+    reasoning_detail_fields: Final = {"reasoning_details": list(reasoning_details)} if reasoning_details else {}
     combined_provider_fields: Final = {
         key: value
-        for fields in (provider_annotation_fields, citation_fields, *provider_field_dicts)
+        for fields in (provider_annotation_fields, citation_fields, *provider_field_dicts, reasoning_detail_fields)
         for key, value in fields.items()
         if key != "citation"
     }
