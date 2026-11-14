@@ -261,6 +261,10 @@ def _reads_prompt_cache_breakpoints(
     )
 
 
+def _is_system_string(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system" and isinstance(message.get("content", ""), str)
+
+
 def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
     if not (litellm_params.get("drop_params") or litellm.drop_params):
         return False
@@ -1045,8 +1049,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+        leading_system_string_count: Final = next(
+            (index for index, msg in enumerate(messages) if not _is_system_string(msg)),
             len(messages),
         )
 
@@ -1060,7 +1064,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(replayed_turn.items)
             elif role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                if isinstance(content, str) and index < leading_system_string_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
