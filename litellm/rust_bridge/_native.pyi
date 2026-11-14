@@ -22,7 +22,35 @@ class NativeRedisStoreError(Exception): ...
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
+def get_llm_provider(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> NativeLlmProvider | NativeLlmProviderError | None: ...
+
+@final
+class NativeLlmProvider:
+    @property
+    def model(self) -> str: ...
+    @property
+    def custom_llm_provider(self) -> str | None: ...
+    @property
+    def api_key(self) -> str | None: ...
+    @property
+    def api_base(self) -> str | None: ...
+
+@final
+class NativeLlmProviderError:
+    @property
+    def message(self) -> str: ...
+    @property
+    def model(self) -> str: ...
+    @property
+    def announce(self) -> bool: ...
+
 def unsupported_tls_settings(ssl_security_level: str | None = None, ssl_ecdh_curve: str | None = None) -> list[str]: ...
+
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
@@ -767,6 +795,8 @@ __all__ = [
     "NativeFetchPolicy",
     "NativeFetched",
     "NativeInstalled",
+    "NativeLlmProvider",
+    "NativeLlmProviderError",
     "NativeModelCostMap",
     "NativeModelCostMapState",
     "NativePending",
@@ -806,6 +836,7 @@ __all__ = [
     "bundled_model_cost_map",
     "completion",
     "embedding",
+    "get_llm_provider",
     "gil_stats",
     "messages",
     "native_redis_breaker_states",

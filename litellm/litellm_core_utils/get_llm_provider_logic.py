@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.opencode.common_utils import is_opencode_api_base
+from litellm.rust_bridge import _native
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
@@ -182,6 +183,62 @@ def inferred_provider(model: str | None) -> str | None:
         return get_llm_provider(model=model)[1]
     except Exception:  # noqa: BLE001  # get_llm_provider raises for an unknown name, which then has no provider
         return None
+
+
+class _ProviderSetWrites:
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count: int = 0
+
+    def record(self) -> None:
+        self.count += 1
+
+
+provider_set_writes: Final = _ProviderSetWrites()
+
+
+def _announce_unknown_provider() -> None:
+    if litellm.suppress_debug_info is False:
+        print()  # noqa: T201
+        print(  # noqa: T201
+            "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
+        )
+        print()  # noqa: T201
+
+
+def _plain_str(value: object) -> bool:
+    return value is None or type(value) is str
+
+
+def resolve_llm_provider(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> tuple[str, str, str | None, str | None]:
+    """``get_llm_provider`` without ``litellm_params``, answered in Rust and by Python when Rust defers."""
+    if type(model) is not str or not all(map(_plain_str, (custom_llm_provider, api_base, api_key))):
+        return get_llm_provider(model, custom_llm_provider, api_base, api_key)
+    match _native.get_llm_provider(model, custom_llm_provider, api_base, api_key):
+        case _native.NativeLlmProvider() as resolved:
+            return (
+                resolved.model,
+                cast(str, resolved.custom_llm_provider),  # cast-ok: Python returns a None provider here too
+                resolved.api_key,
+                resolved.api_base,
+            )
+        case _native.NativeLlmProviderError() as failure:
+            if failure.announce:
+                _announce_unknown_provider()
+            raise litellm.exceptions.BadRequestError(
+                message=failure.message,
+                model=failure.model,
+                response=None,
+                llm_provider="",
+            )
+        case None:
+            return get_llm_provider(model, custom_llm_provider, api_base, api_key)
 
 
 def get_llm_provider(
@@ -575,12 +632,7 @@ def _get_llm_provider(
             custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
-            if litellm.suppress_debug_info is False:
-                print()  # noqa: T201
-                print(  # noqa: T201
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
-                )
-                print()  # noqa: T201
+            _announce_unknown_provider()
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
             raise litellm.exceptions.BadRequestError(

@@ -53,6 +53,10 @@ def model_cost_version() -> ModelCostVersion:
     return ModelCostVersion(table=id(table), size=len(table), writes=_WRITES.count)
 
 
+def model_cost_writes() -> int:
+    return _WRITES.count
+
+
 def publish(table: dict[str, object]) -> None:
     """Makes ``table`` the live ``litellm.model_cost``."""
     import litellm

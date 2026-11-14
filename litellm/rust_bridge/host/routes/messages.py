@@ -29,7 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
-from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header, resolve_llm_provider
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
@@ -157,7 +157,7 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
     """The provider Python's handler resolves for a call that names none, or None when the model
     carries no provider `get_llm_provider` knows."""
     try:
-        _, provider, _, _ = litellm.get_llm_provider(model=model, api_base=api_base)
+        _, provider, _, _ = resolve_llm_provider(model, api_base=api_base)
     except litellm.BadRequestError:
         return None
     return provider
@@ -208,9 +208,7 @@ def _with_deployment_effort(params: Mapping[str, object], request: Mapping[str, 
     `model_info.reasoning_effort_levels`, the one place a deployment, not the model, decides."""
     explicit_provider: Final = optional_str(request.get("custom_llm_provider"))
     try:
-        model, provider, _, _ = litellm.get_llm_provider(
-            model=str(request["model"]), custom_llm_provider=explicit_provider
-        )
+        model, provider, _, _ = resolve_llm_provider(str(request["model"]), explicit_provider)
     except litellm.BadRequestError:
         return params
     return _deployment_output_effort(
@@ -1579,9 +1577,7 @@ class _StampedFrames:
 def _handler_model(request: Mapping[str, object]) -> tuple[str, str | None]:
     explicit_provider: Final = optional_str(request.get("custom_llm_provider"))
     try:
-        model, provider, _, _ = litellm.get_llm_provider(
-            model=str(request["model"]), custom_llm_provider=explicit_provider
-        )
+        model, provider, _, _ = resolve_llm_provider(str(request["model"]), explicit_provider)
     except litellm.BadRequestError:
         return str(request["model"]), explicit_provider
     return model, provider
