@@ -4742,10 +4742,13 @@ _ALL_MODEL_ACCESS: Final = frozenset(
         "*",
     }
 )
+_CUSTOMER_ALL_MODEL_ACCESS: Final = frozenset({SpecialModelNames.all_proxy_models.value, "*"})
 
 
-def _has_model_restrictions(model_allowlists: tuple[Sequence[str], ...]) -> bool:
-    return any(not _ALL_MODEL_ACCESS.issuperset(map(str, allowlist)) for allowlist in model_allowlists)
+def _has_model_restrictions(
+    model_allowlists: tuple[Sequence[str], ...], all_model_access: frozenset[str] = _ALL_MODEL_ACCESS
+) -> bool:
+    return any(not all_model_access.issuperset(map(str, allowlist)) for allowlist in model_allowlists)
 
 
 def _customer_model_allowlists(hierarchy: CustomerHierarchyAuth | None) -> tuple[Sequence[str], ...]:
@@ -4767,7 +4770,9 @@ async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
         or valid_token.agent_caller is not None
         or valid_token.end_user_id is not None
         or personal_key_team_model_access_applies(valid_token)
-        or _has_model_restrictions(_customer_model_allowlists(valid_token.customer_hierarchy))
+        or _has_model_restrictions(
+            _customer_model_allowlists(valid_token.customer_hierarchy), _CUSTOMER_ALL_MODEL_ACCESS
+        )
         or (
             valid_token.jwt_claims is not None
             and JWTAuthManager.claims_limit_models(jwt_handler, valid_token.jwt_claims, general_settings_view())

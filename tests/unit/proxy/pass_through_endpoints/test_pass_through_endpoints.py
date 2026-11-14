@@ -8139,8 +8139,11 @@ async def test_vertex_live_setup_frame_nested_too_deep_to_parse_is_refused() -> 
     [
         UserAPIKeyAuth(token="hashed", models=[]),
         UserAPIKeyAuth(token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(None)),
+        UserAPIKeyAuth(
+            token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("all-proxy-models",))
+        ),
     ],
-    ids=["key", "customer-without-model-list"],
+    ids=["key", "customer-without-model-list", "customer-all-proxy-models"],
 )
 async def test_vertex_live_setup_frame_only_vertex_can_parse_still_reaches_vertex_for_an_unrestricted_key(
     lenient_setup: str, unrestricted_token: UserAPIKeyAuth
@@ -8189,8 +8192,9 @@ async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeat
         UserAPIKeyAuth(
             token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("gemini-live-2.5-flash",))
         ),
+        UserAPIKeyAuth(token="hashed", models=[], customer_hierarchy=_customer_hierarchy_allowing(("all-team-models",))),
     ],
-    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user", "customer"],
+    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user", "customer", "customer-all-team-models"],
 )
 async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token: UserAPIKeyAuth) -> None:
     """A wildcard can match any name the proxy might test the caller with, so only a caller with no model limit
