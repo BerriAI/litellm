@@ -2775,6 +2775,47 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
 
 
 @pytest.mark.asyncio
+async def test_responses_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, proxy_logging_obj, "key-responses-cancel-no-chunk"
+    )
+
+    async def cancel_before_chunk():
+        if False:
+            yield ""
+        raise asyncio.CancelledError()
+
+    streaming_logging_obj: Final = MagicMock()
+    streaming_logging_obj.needs_iterator_wrap.return_value = False
+    streaming_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
+
+    import litellm.proxy.proxy_server as ps
+
+    ps.proxy_logging_obj = streaming_logging_obj
+
+    generator: Final = ps.async_data_generator(
+        response=cancel_before_chunk(),
+        user_api_key_dict=valid_token,
+        request_data=_request_body(),
+    )
+    received: Final[list[str]] = []
+
+    with pytest.raises(asyncio.CancelledError):
+        async for chunk in generator:
+            received.append(chunk)
+
+    assert received == []
+    assert counter_cache.get_local("spend:key:key-responses-cancel-no-chunk") == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_streaming_cancel_after_chunk_keeps_reservation(
     spend_counter_state,
 ):

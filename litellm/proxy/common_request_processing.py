@@ -5398,6 +5398,7 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected: bool = False,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
+        delivered_chunk: bool = False,
     ) -> None:
         with anyio.CancelScope(shield=True):
             if stream_completed and proxy_logging_obj is not None and user_api_key_dict is not None:
@@ -5423,12 +5424,24 @@ class ProxyBaseLLMRequestProcessing:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
                         request_data, response
                     )
-                if (
-                    not success_event_owns_slot_release
-                    and proxy_logging_obj is not None
-                    and user_api_key_dict is not None
-                ):
-                    await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+                if not success_event_owns_slot_release:
+                    if not delivered_chunk and not _withheld_provider_output(response):
+                        reservation: Final = (
+                            getattr(user_api_key_dict, "budget_reservation", None)
+                            if user_api_key_dict is not None
+                            else None
+                        ) or getattr(getattr(request, "state", None), "budget_reservation", None)
+                        if reservation is not None:
+                            from litellm.proxy.spend_tracking.budget_reservation import (
+                                release_budget_reservation_on_cancel,
+                            )
+
+                            await release_budget_reservation_on_cancel(reservation)
+                    if (
+                        proxy_logging_obj is not None
+                        and user_api_key_dict is not None
+                    ):
+                        await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if has_attributes(response, _ClosesAsync, "aclose"):
                 try:
@@ -5580,12 +5593,6 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
             await close_guarded_stream(guarded_stream)
-            if not delivered_chunk and not _withheld_provider_output(response):
-                from litellm.proxy.spend_tracking.budget_reservation import (
-                    release_budget_reservation_on_cancel,
-                )
-
-                await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -5638,6 +5645,7 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected=client_disconnected,
                     user_api_key_dict=user_api_key_dict,
                     proxy_logging_obj=proxy_logging_obj,
+                    delivered_chunk=delivered_chunk,
                 )
 
     @staticmethod

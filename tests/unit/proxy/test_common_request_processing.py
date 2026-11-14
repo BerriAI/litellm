@@ -11196,6 +11196,51 @@ class TestStreamingClientDisconnectBilling:
         proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_disconnect_reconciles_budget_reservation_on_disconnect_when_unbilled(
+        self,
+    ) -> None:
+        import types
+
+        from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation_on_cancel
+
+        response: Final = await self._start_partial_stream()
+        empty_response: Final = types.SimpleNamespace(chunks=[], messages=None)
+        proxy_logging_obj: Final = types.SimpleNamespace(
+            arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+        )
+        reservation: Final = {
+            "reserved_cost": 0.036,
+            "input_cost": 0.003,
+            "finalized": False,
+            "callback_bound": True,
+        }
+        user_api_key_dict: Final = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.budget_reservation = reservation
+
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel",
+            side_effect=release_budget_reservation_on_cancel,
+        ) as mock_release:
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=empty_response,
+                stream_completed=False,
+                client_disconnected=True,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            mock_release.assert_awaited_once_with(reservation)
+            assert reservation["finalized"] is True
+
+    test_disconnect_reconciles_budget_reservation_when_no_spend_billed = (
+        test_disconnect_reconciles_budget_reservation_on_disconnect_when_unbilled
+    )
+    test_finalize_streaming_generator_cleanup_reconciles_budget_reservation_on_disconnect_when_unbilled = (
+        test_disconnect_reconciles_budget_reservation_on_disconnect_when_unbilled
+    )
+
+    @pytest.mark.asyncio
     async def test_disconnect_whose_in_flight_round_billing_raises_still_closes_the_stream_and_frees_the_slot(self):
         import types
 

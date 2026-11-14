@@ -10986,6 +10986,7 @@ async def async_data_generator(
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
+    delivered_chunk: bool = False  # rebind-ok: set once a provider chunk (not keepalive ping) is received
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
         "_litellm_skip_openai_stream_done"
@@ -11065,7 +11066,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
-            chunk_received_at = time.perf_counter()
+            delivered_chunk = True
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
@@ -11256,6 +11257,7 @@ async def async_data_generator(
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
+            delivered_chunk=delivered_chunk,
         )
 
 
