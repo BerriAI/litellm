@@ -1316,8 +1316,6 @@ def test_init_rejects_invalid_on_flagged_action():
         ({}, {"on_flagged_action": "passthrough"}, "passthrough", False),
         ({}, None, "block", False),
         ({"on_flagged_action": "block"}, None, "block", False),
-        # LitellmParams defaults on_flagged_action to 'monitor' for another guardrail, and a guardrail
-        # saved through the API is stored with that value, so it reads as unset rather than a typo.
         ({"on_flagged_action": "monitor"}, None, "block", False),
         ({"on_flagged_action": "reply"}, None, "block", True),
     ],
@@ -1339,6 +1337,32 @@ def test_initializer_reads_on_flagged_action(flattened, nested, expected, warns,
 
     assert g.on_flagged_action == expected
     assert warning.called is warns
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({"on_flagged_action": "passthrough", "optional_params": {"max_retries": 0}}, "passthrough"),
+        ({"optional_params": {"on_flagged_action": "passthrough"}}, "passthrough"),
+        ({"optional_params": {"max_retries": 0}}, "block"),
+        ({}, "block"),
+    ],
+)
+def test_a_guardrail_saved_and_reloaded_keeps_its_on_flagged_action(configured, expected, monkeypatch):
+    import litellm
+    from litellm._logging import verbose_proxy_logger
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm, "callbacks", litellm.callbacks.copy())
+    created: Final = LitellmParams(guardrail="straiker", mode="pre_call", api_key="abc", **configured)
+    reloaded: Final = LitellmParams(**created.model_dump())
+
+    with patch.object(verbose_proxy_logger, "warning") as warning:
+        on_create = initialize_guardrail(created, {"guardrail_name": "straiker"})
+        on_reload = initialize_guardrail(reloaded, {"guardrail_name": "straiker"})
+
+    assert (on_create.on_flagged_action, on_reload.on_flagged_action) == (expected, expected)
+    assert warning.called is False
 
 
 @pytest.mark.asyncio

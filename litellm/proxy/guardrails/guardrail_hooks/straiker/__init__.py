@@ -36,8 +36,9 @@ class _V3Routing(LiteLLMBaseModel):
 
 _STREAM_MODE: Final[TypeAdapter[StraikerStreamMode]] = TypeAdapter(StraikerStreamMode)
 _CONFIG_ENTRIES: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
-# LitellmParams carries another guardrail's `on_flagged_action` default, 'monitor', and a guardrail
-# saved through the API is stored with it, so that value means "not set" here, not a typo.
+# LitellmParams carries other guardrails' `on_flagged_action` defaults, 'monitor' at the top level and
+# 'block' in optional_params, and a guardrail saved through the API stores both as if set. So 'passthrough'
+# at either level opts in, and 'monitor' means "not set" here, not a typo.
 _UNSET_ON_FLAGGED_ACTIONS: Final = ("monitor",)
 
 _OPTIONAL_INIT_FIELDS: Final = (
@@ -77,14 +78,17 @@ def _explicit_value(params: object, attribute_name: str) -> object:
 
 def _on_flagged_action(litellm_params: "LitellmParams", optional_params: object) -> StraikerOnFlaggedAction:
     """'passthrough' only when the operator asked for it; anything else keeps the HTTP 400 block."""
-    nested: Final = _explicit_value(optional_params, "on_flagged_action")
-    value: Final = nested if nested is not None else _explicit_value(litellm_params, "on_flagged_action")
-    if value == "passthrough":
+    values: Final = (
+        _explicit_value(optional_params, "on_flagged_action"),
+        _explicit_value(litellm_params, "on_flagged_action"),
+    )
+    if "passthrough" in values:
         return "passthrough"
-    if value is not None and value != "block" and value not in _UNSET_ON_FLAGGED_ACTIONS:
+    unknown: Final = tuple(value for value in values if value not in (None, "block", *_UNSET_ON_FLAGGED_ACTIONS))
+    if unknown:
         verbose_proxy_logger.warning(
             "Straiker guardrail: ignoring on_flagged_action %r, expected 'block' or 'passthrough'; blocking with HTTP 400",
-            value,
+            unknown[0],
         )
     return "block"
 
