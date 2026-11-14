@@ -10,6 +10,7 @@ import pytest
 from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
+from jwt.algorithms import HMACAlgorithm
 
 from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 from litellm.proxy.common_utils.fips import (
@@ -209,6 +210,64 @@ def test_turning_fips_mode_off_gives_jwt_its_own_hmac_back(fips_mode: None, hmac
 
     assert jwt.decode(token, _SHORT_HMAC_KEY, algorithms=["HS256"]) == {"sub": "u"}
     hmac_digest.assert_not_called()
+
+
+class _OperatorHS256(HMACAlgorithm):
+    pass
+
+
+@pytest.fixture
+def operator_hs256() -> Iterator[_OperatorHS256]:
+    stock: Final = jwt.get_algorithm_by_name("HS256")
+    operator: Final = _OperatorHS256(HMACAlgorithm.SHA256)
+    jwt.unregister_algorithm("HS256")
+    jwt.register_algorithm("HS256", operator)
+    yield operator
+    enforce_fips_mode({})
+    jwt.unregister_algorithm("HS256")
+    jwt.register_algorithm("HS256", stock)
+
+
+@pytest.fixture
+def hs384_unregistered() -> Iterator[None]:
+    stock: Final = jwt.get_algorithm_by_name("HS384")
+    jwt.unregister_algorithm("HS384")
+    yield
+    jwt.register_algorithm("HS384", stock)
+
+
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}])
+def test_fips_mode_off_leaves_an_algorithm_the_operator_registered_in_place(
+    operator_hs256: _OperatorHS256, general_settings: Mapping[str, object]
+) -> None:
+    enforce_fips_mode(general_settings)
+
+    assert jwt.get_algorithm_by_name("HS256") is operator_hs256
+
+
+def test_turning_fips_mode_off_puts_back_the_algorithm_the_operator_registered(
+    operator_hs256: _OperatorHS256, fips_mode: None
+) -> None:
+    assert jwt.get_algorithm_by_name("HS256") is not operator_hs256
+
+    enforce_fips_mode({})
+
+    assert jwt.get_algorithm_by_name("HS256") is operator_hs256
+
+
+@pytest.mark.parametrize("general_settings", [{}, {"fips_mode": False}])
+def test_fips_mode_off_leaves_an_algorithm_the_operator_unregistered_out(
+    hs384_unregistered: None, general_settings: Mapping[str, object]
+) -> None:
+    enforce_fips_mode(general_settings)
+
+    with pytest.raises(NotImplementedError):
+        jwt.get_algorithm_by_name("HS384")
+
+
+def test_fips_mode_leaves_an_algorithm_the_operator_unregistered_out(hs384_unregistered: None, fips_mode: None) -> None:
+    with pytest.raises(NotImplementedError):
+        jwt.get_algorithm_by_name("HS384")
 
 
 def test_fips_mode_refuses_a_ui_session_cookie_signed_with_a_master_key_under_112_bits(fips_mode: None) -> None:
