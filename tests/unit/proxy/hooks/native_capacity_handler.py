@@ -3,6 +3,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
+from unittest.mock import patch
 
 from litellm import DualCache, Router
 from litellm.types.router import ModelGroupInfo
@@ -33,7 +34,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.hooks.priority_class_share import ActiveTeamRegistry
 from litellm.proxy.request_auth_context import REQUEST_AUTH
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import LocalValue, RateLimitCounter, RateLimitScope
 from litellm.proxy.utils import HookRun, InternalUsageCache, hook_fields, raise_v2_abort
 from litellm.proxy.v2_proxy_fields import (
     DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
@@ -125,6 +126,41 @@ def _record_descriptors(limiter: PROXY_MaxParallelRequestsHandler_v3) -> None:
         return await original(descriptors, *args, **kwargs)
 
     vars(limiter)["should_rate_limit"] = recorded
+
+
+async def pre_call_at_saturation(
+    handler: "NativeDynamicRateLimitHandler",
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str,
+    saturation: float,
+    data: dict[str, object] | None = None,  # mutable-ok: the pre-call hook rewrites the request dict in place
+) -> None:
+    group: Final = handler.llm_router.registry().group(model)
+    assert group is not None
+    rate_limits: Final = handler.v3_limiter.rate_limits
+    read: Final = rate_limits.get_from_redis
+    scope: Final = RateLimitScope("model_saturation_check", model)
+    tpm: Final = group.tpm
+    rpm: Final = group.rpm
+
+    async def at_saturation(counter: RateLimitCounter, backfill_ttl: float | None = None) -> LocalValue | None:
+        if counter == scope.counter("tokens"):
+            return round(saturation * tpm) if tpm else None
+        if counter == scope.counter("requests"):
+            return None if tpm or not rpm else round(saturation * rpm)
+        return await read(counter, backfill_ttl=backfill_ttl)
+
+    request: Final = data if data is not None else {"max_tokens": 0}
+    requested: Final = request.get("model")
+    request["model"] = model
+    try:
+        with patch.object(rate_limits, "get_from_redis", at_saturation):
+            await handler.async_pre_call_hook(user_api_key_dict, DualCache(), request, "acompletion")
+    finally:
+        if requested is None:
+            del request["model"]
+        else:
+            request["model"] = requested
 
 
 async def priority_based_descriptors(
