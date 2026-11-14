@@ -16244,12 +16244,13 @@ async def _routed_count_deployment(
     if llm_router is None:
         return None
     try:
-        return await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
         return None
+    return routed if isinstance(routed, Mapping) else None
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
