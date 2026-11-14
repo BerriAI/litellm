@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildProjectCreateParams, buildProjectUpdateParams } from "./projectFormUtils";
+import {
+  buildProjectCreateParams,
+  buildProjectUpdateParams,
+  withStoredBatchEnqueuedTokenLimit,
+} from "./projectFormUtils";
 import { ProjectFormValues } from "./ProjectBaseForm";
 
 const baseValues: ProjectFormValues = {
@@ -149,6 +153,45 @@ describe("buildProjectCreateParams", () => {
       guardrails: [],
     });
     expect(result).not.toHaveProperty("guardrails");
+  });
+});
+
+describe("per-model batch enqueued token limit", () => {
+  it("should send the limit inside metadata next to the key-value entries", () => {
+    const result = buildProjectCreateParams({
+      ...baseValues,
+      modelLimits: [{ model: "gpt-4", batchEnqueuedTokens: 5000 }],
+      metadata: [{ key: "owner", value: "platform" }],
+    });
+    expect(result.metadata).toEqual({ owner: "platform", model_batch_enqueued_token_limit: { "gpt-4": 5000 } });
+    expect(result).not.toHaveProperty("model_batch_enqueued_token_limit");
+  });
+
+  it("should leave the limit out of metadata when no row sets one", () => {
+    const result = buildProjectUpdateParams({ ...baseValues, modelLimits: [{ model: "gpt-4", rpm: 20 }] });
+    expect(result.metadata).toEqual({});
+  });
+
+  it("should put back the stored limit that the form dropped", () => {
+    const stored = { owner: "old", model_batch_enqueued_token_limit: { "gpt-4": 1000 } };
+    expect(withStoredBatchEnqueuedTokenLimit({ owner: "platform" }, stored)).toStrictEqual({
+      owner: "platform",
+      model_batch_enqueued_token_limit: { "gpt-4": 1000 },
+    });
+  });
+
+  it("should replace a limit the form changed with the stored one", () => {
+    const stored = { model_batch_enqueued_token_limit: { "gpt-4": 1000 } };
+    const edited = { owner: "platform", model_batch_enqueued_token_limit: { "gpt-4": 9000 } };
+    expect(withStoredBatchEnqueuedTokenLimit(edited, stored)).toStrictEqual({
+      owner: "platform",
+      model_batch_enqueued_token_limit: { "gpt-4": 1000 },
+    });
+  });
+
+  it("should drop a limit the form added when none is stored", () => {
+    const edited = { owner: "platform", model_batch_enqueued_token_limit: { "gpt-4": 9000 } };
+    expect(withStoredBatchEnqueuedTokenLimit(edited, null)).toStrictEqual({ owner: "platform" });
   });
 });
 
