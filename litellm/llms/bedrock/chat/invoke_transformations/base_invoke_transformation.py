@@ -25,7 +25,7 @@ from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_SERVICE_TIER_HEADER,
     BedrockError,
-    bedrock_invoke_guardrail_intervened,
+    bedrock_invoke_guardrail_blocked,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -343,11 +343,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             api_key,
             json_mode,
         )
-        if not bedrock_invoke_guardrail_intervened(_INVOKE_RESPONSE_BODY.validate_python(raw_response.json())):
+        if not bedrock_invoke_guardrail_blocked(_INVOKE_RESPONSE_BODY.validate_python(raw_response.json())):
             return response
-        for choice in response.choices:
-            choice.finish_reason = "content_filter"
-        return response
+        return response.model_copy(
+            update={
+                "choices": [
+                    choice.model_copy(update={"finish_reason": "content_filter"}) for choice in response.choices
+                ]
+            }
+        )
 
     def _transform_invoke_response(
         self,

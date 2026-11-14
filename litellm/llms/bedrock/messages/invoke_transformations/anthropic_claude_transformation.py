@@ -15,6 +15,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -41,7 +42,8 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
-    bedrock_invoke_guardrail_intervened,
+    bedrock_invoke_guardrail_blocked,
+    bedrock_invoke_stream_guardrail_blocked,
     bedrock_native_output_format,
     bedrock_native_output_retry_requested,
     bedrock_supports_per_turn_control,
@@ -86,7 +88,6 @@ else:
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
-_BEDROCK_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -935,7 +936,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             raw_response=raw_response,
             logging_obj=logging_obj,
         )
-        if not bedrock_invoke_guardrail_intervened(response):
+        if not bedrock_invoke_guardrail_blocked(response):
             return response
         return {**response, "stop_reason": "refusal"}
 
@@ -1076,9 +1077,6 @@ class AmazonAnthropicClaudeMessagesConfig(
                 if delta_usage:
                     pending_delta["usage"] = delta_usage
 
-                if bedrock_invoke_guardrail_intervened(_BEDROCK_EVENT.validate_python(chunk)):
-                    pending_delta["delta"] = {**(pending_delta.get("delta") or {}), "stop_reason": "refusal"}
-
                 yield pending_delta
                 pending_delta = None
                 yield chunk
@@ -1100,7 +1098,35 @@ class AmazonAnthropicClaudeMessagesConfig(
             yield pending_delta
 
 
+def _refused(message_delta: GChunk | dict[str, object]) -> dict[str, object]:  # mutable-ok: stream chunks are dicts
+    delta: Final = object_mapping(message_delta.get("delta"))
+    return {**message_delta, "delta": {**(delta or {}), "stop_reason": "refusal"}}
+
+
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
+    def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        super().__init__(model=model, json_mode=json_mode)
+        self._held_message_delta: GChunk | dict[str, object] | None = None  # mutable-ok: stream chunks are dicts
+
+    def _chunks_for_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
+    ) -> tuple[GChunk | ModelResponseStream | dict[str, object], ...]:  # mutable-ok: mirrors override contract
+        blocked: Final = bedrock_invoke_stream_guardrail_blocked(chunk_data)
+        parsed: Final = self.chunk_parser(chunk_data=chunk_data)
+        held: Final = self._held_chunks()
+        if isinstance(parsed, dict) and parsed.get("type") == "message_delta":
+            self._held_message_delta = parsed
+            return held
+        if blocked:
+            return (*map(_refused, held), parsed)
+        return (*held, parsed)
+
+    def _held_chunks(self) -> tuple[GChunk | dict[str, object], ...]:  # mutable-ok: stream chunks are dicts
+        held: Final = self._held_message_delta
+        self._held_message_delta = None
+        return () if held is None else (held,)
+
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format

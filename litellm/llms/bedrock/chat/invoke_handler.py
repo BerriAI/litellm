@@ -25,7 +25,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
-from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, bedrock_invoke_guardrail_intervened
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, bedrock_invoke_stream_guardrail_blocked
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -207,6 +207,8 @@ def _stream_decoder(
     sync_stream: bool,
     response_format_schema: ResponseFormatSchema | None = None,
 ) -> "AWSEventStreamDecoder":
+    if bedrock_invoke_provider is None:
+        return AWSEventStreamDecoder(model=model, json_mode=json_mode)
     if bedrock_invoke_provider == "anthropic":
         return AmazonAnthropicClaudeStreamDecoder(
             model=model,
@@ -864,16 +866,21 @@ class AWSEventStreamDecoder:
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         served_tier: Final = served_service_tier(response_headers)
-        for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    for parsed in self._chunks_for_event(_data):
-                        yield _with_served_service_tier(parsed, served_tier)
+        try:
+            for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        # sse_event = ServerSentEvent(data=message, event="completion")
+                        _data = json.loads(message)
+                        for parsed in self._chunks_for_event(_data):
+                            yield _with_served_service_tier(parsed, served_tier)
+        except Exception:
+            for held in self._held_chunks():
+                yield _with_served_service_tier(held, served_tier)
+            raise
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         for held in self._held_chunks():
             yield _with_served_service_tier(held, served_tier)
@@ -893,15 +900,20 @@ class AWSEventStreamDecoder:
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
         served_tier: Final = served_service_tier(response_headers)
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    _data = json.loads(message)
-                    for parsed in self._chunks_for_event(_data):
-                        yield _with_served_service_tier(parsed, served_tier)
+        try:
+            async for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        _data = json.loads(message)
+                        for parsed in self._chunks_for_event(_data):
+                            yield _with_served_service_tier(parsed, served_tier)
+        except Exception:
+            for held in self._held_chunks():
+                yield _with_served_service_tier(held, served_tier)
+            raise
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         for held in self._held_chunks():
             yield _with_served_service_tier(held, served_tier)
@@ -996,7 +1008,7 @@ def _content_filtered(chunk: _DecodedChunk) -> _DecodedChunk:
 def _guardrail_blocked_chunks(held: _DecodedChunk | None, parsed: _DecodedChunk) -> tuple[_DecodedChunk, ...]:
     if held is None:
         return (_content_filtered(parsed),)
-    return (_content_filtered(held), _content_filtered(parsed) if _is_finish_chunk(parsed) else parsed)
+    return (_content_filtered(held), parsed)
 
 
 class AmazonInvokeStreamDecoder(AWSEventStreamDecoder):
@@ -1008,10 +1020,11 @@ class AmazonInvokeStreamDecoder(AWSEventStreamDecoder):
         self,
         chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
     ) -> tuple[_DecodedChunk, ...]:
+        blocked: Final = bedrock_invoke_stream_guardrail_blocked(chunk_data)
+        parsed: Final = self.chunk_parser(chunk_data=chunk_data)
         held: Final = self._held_finish_chunk
         self._held_finish_chunk = None
-        parsed: Final = self.chunk_parser(chunk_data=chunk_data)
-        if bedrock_invoke_guardrail_intervened(chunk_data):
+        if blocked:
             return _guardrail_blocked_chunks(held, parsed)
         if not _is_finish_chunk(parsed):
             return (parsed,) if held is None else (held, parsed)
