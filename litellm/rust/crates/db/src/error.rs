@@ -6,6 +6,8 @@ pub enum Error {
     InvalidSpendBatch { ids: usize, costs: usize },
     #[error("invalid spend timestamp")]
     InvalidTimestamp(#[from] chrono::ParseError),
+    #[error("invalid pool duration")]
+    InvalidDuration(#[from] std::time::TryFromFloatSecsError),
 }
 
 impl Error {

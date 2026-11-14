@@ -3836,6 +3836,8 @@ name = "litellm-db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures-util",
+ "litellm-secret-value",
  "macro_rules_attribute",
  "rstest",
  "serde",
@@ -3844,6 +3846,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.19",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4485,6 +4488,7 @@ dependencies = [
  "litellm-callbacks-s3-log",
  "litellm-circuit-breaker",
  "litellm-core-utils",
+ "litellm-db",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
