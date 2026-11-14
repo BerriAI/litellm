@@ -16,6 +16,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    GEMINI_PASS_THROUGH_ROUTE_PREFIX,
+    GEMINI_UPLOAD_PATH_PREFIX,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
@@ -412,8 +414,11 @@ _read_request_body: Final = read_request_body
 
 
 def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
-    """Azure Speech audio and every OpenSearch body are forwarded byte for byte, so auth must not parse them."""
-    if route.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
+    """Azure Speech audio, Gemini Files API uploads, and every OpenSearch body are forwarded byte for byte, so auth
+    must not parse them."""
+    if route.startswith(
+        (f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/", f"{GEMINI_PASS_THROUGH_ROUTE_PREFIX}{GEMINI_UPLOAD_PATH_PREFIX}")
+    ):
         return True
     media_type: Final = _normalize_media_type(content_type)
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (

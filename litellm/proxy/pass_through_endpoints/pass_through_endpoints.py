@@ -483,7 +483,7 @@ def _is_provider_payload(request: Request) -> bool:
 class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_response_headers(
-        headers: httpx.Headers,
+        headers: Mapping[str, str],
         litellm_call_id: str | None = None,
         custom_headers: Mapping[str, str] | None = None,
     ) -> dict:
@@ -1434,6 +1434,7 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
+    response_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
 ):
@@ -1459,6 +1460,7 @@ async def pass_through_request(
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
             litellm_params the request is logged with
+        response_headers_filter: Optional rewrite of the upstream response headers before they reach the client
         operation: Optional GenAI operation the route reports, unless the upstream names its own
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
@@ -1904,7 +1906,7 @@ async def pass_through_request(
 
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=relay_response.headers,
+                headers=response_headers_filter(relay_response.headers),
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
@@ -2006,7 +2008,7 @@ async def pass_through_request(
 
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=detected_relay_response.headers,
+                headers=response_headers_filter(detected_relay_response.headers),
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
@@ -2082,7 +2084,7 @@ async def pass_through_request(
                 ),
                 status_code=response.status_code,
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
+                    headers=response_headers_filter(response.headers),
                     custom_headers=relay_custom_headers,
                 ),
             )
@@ -2250,7 +2252,7 @@ async def pass_through_request(
             custom_headers.update(callback_headers)
 
         response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
-            headers=response.headers,
+            headers=response_headers_filter(response.headers),
             custom_headers=custom_headers,
         )
         emitted_call_id: Final = (
@@ -2513,6 +2515,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
+    response_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
     keep_target_query: bool = False,
 ):
@@ -2664,6 +2667,7 @@ def create_pass_through_route(
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
                         upstream_request_filter=upstream_request_filter,
+                        response_headers_filter=response_headers_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
                     )

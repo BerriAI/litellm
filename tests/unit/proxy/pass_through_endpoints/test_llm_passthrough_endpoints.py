@@ -9,6 +9,7 @@ import responses
 import respx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import Request, Response
 from fastapi.testclient import TestClient
 
 import litellm
@@ -234,6 +235,187 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.path == f"/{endpoint}"
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
+
+
+GEMINI_UPLOAD_ENDPOINT: Final = "upload/v1beta/files"
+JSONL_BATCH_REQUESTS: Final = (
+    b'{"key":"r1","request":{"contents":[{"parts":[{"text":"Say hi"}]}]}}\n'
+    b'{"key":"r2","request":{"contents":[{"parts":[{"text":"Say bye"}]}]}}\n'
+)
+
+
+async def _call_gemini_upload_route(
+    headers: tuple[tuple[bytes, bytes], ...], body: bytes, query_string: bytes = b""
+) -> Response:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        gemini_proxy_route,
+    )
+
+    scope: Final = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": f"/gemini/{GEMINI_UPLOAD_ENDPOINT}",
+        "raw_path": f"/gemini/{GEMINI_UPLOAD_ENDPOINT}".encode(),
+        "root_path": "",
+        "query_string": query_string,
+        "headers": [(b"x-goog-api-key", b"sk-9876"), *headers],
+        "client": ("127.0.0.1", 51234),
+        "server": ("proxy.local", 4000),
+        "state": {},
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return await gemini_proxy_route(
+        endpoint=GEMINI_UPLOAD_ENDPOINT,
+        request=Request(scope, receive),
+        fastapi_response=Response(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["application/jsonl", "application/json"])
+async def test_gemini_upload_forwards_jsonl_bytes_and_upload_headers(
+    respx_mock: "respx.MockRouter", httpx_transport: None, monkeypatch: pytest.MonkeyPatch, content_type: str
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    uploaded_file: Final = {"file": {"name": "files/abc", "mimeType": content_type, "sizeBytes": "137"}}
+    upstream: Final = respx_mock.post(
+        url__startswith=f"https://generativelanguage.googleapis.com/{GEMINI_UPLOAD_ENDPOINT}"
+    ).mock(return_value=httpx.Response(200, json=uploaded_file))
+
+    response: Final = await _call_gemini_upload_route(
+        headers=((b"content-type", content_type.encode()), (b"x-goog-upload-protocol", b"raw")),
+        body=JSONL_BATCH_REQUESTS,
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == uploaded_file
+    outbound: Final = upstream.calls[0].request
+    assert outbound.content == JSONL_BATCH_REQUESTS
+    assert outbound.headers["content-type"] == content_type
+    assert outbound.headers["x-goog-upload-protocol"] == "raw"
+    assert "x-goog-api-key" not in outbound.headers
+    assert outbound.url.params["key"] == "gemini-test-key"
+
+
+GEMINI_UPLOAD_SESSION_PATH: Final = f"/{GEMINI_UPLOAD_ENDPOINT}?upload_id=session-1&upload_protocol=resumable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gemini_api_base", "proxy_base_url", "upstream_upload_url", "expected_upload_url"),
+    [
+        (
+            None,
+            None,
+            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
+        ),
+        (
+            None,
+            "https://llm.example.com",
+            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"https://llm.example.com/gemini{GEMINI_UPLOAD_SESSION_PATH}",
+        ),
+        (
+            "https://gemini-gateway.internal/google",
+            None,
+            f"https://gemini-gateway.internal/google{GEMINI_UPLOAD_SESSION_PATH}",
+            f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
+        ),
+        (
+            "https://gemini-gateway.internal/google",
+            None,
+            f"https://generativelanguage.googleapis.com{GEMINI_UPLOAD_SESSION_PATH}",
+            f"http://proxy.local:4000/gemini{GEMINI_UPLOAD_SESSION_PATH}",
+        ),
+    ],
+    ids=["default-base", "proxy-base-url", "base-with-path", "url-outside-base"],
+)
+async def test_gemini_resumable_upload_start_returns_an_upload_url_on_the_proxy(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    gemini_api_base: str | None,
+    proxy_base_url: str | None,
+    upstream_upload_url: str,
+    expected_upload_url: str,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    for name, value in (("GEMINI_API_BASE", gemini_api_base), ("PROXY_BASE_URL", proxy_base_url)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    upstream: Final = respx_mock.post(
+        url__startswith=f"{gemini_api_base or 'https://generativelanguage.googleapis.com'}/{GEMINI_UPLOAD_ENDPOINT}"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            headers={
+                "content-type": "text/plain; charset=utf-8",
+                "x-goog-upload-status": "active",
+                "x-goog-upload-url": upstream_upload_url,
+                "x-goog-upload-control-url": upstream_upload_url,
+            },
+        )
+    )
+    metadata: Final = b'{"file": {"display_name": "batch-requests"}}'
+
+    response: Final = await _call_gemini_upload_route(
+        headers=(
+            (b"content-type", b"application/json"),
+            (b"x-goog-upload-protocol", b"resumable"),
+            (b"x-goog-upload-command", b"start"),
+            (b"x-goog-upload-header-content-length", b"137"),
+            (b"x-goog-upload-header-content-type", b"application/jsonl"),
+        ),
+        body=metadata,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-goog-upload-url"] == expected_upload_url
+    assert response.headers["x-goog-upload-control-url"] == expected_upload_url
+    assert response.headers["x-goog-upload-status"] == "active"
+    outbound: Final = upstream.calls[0].request
+    assert outbound.content == metadata
+    assert outbound.headers["x-goog-upload-command"] == "start"
+    assert outbound.headers["x-goog-upload-header-content-length"] == "137"
+    assert outbound.headers["x-goog-upload-header-content-type"] == "application/jsonl"
+
+
+@pytest.mark.asyncio
+async def test_gemini_resumable_upload_chunk_reaches_the_upload_session(
+    respx_mock: "respx.MockRouter", httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    upstream: Final = respx_mock.post(
+        url__startswith=f"https://generativelanguage.googleapis.com/{GEMINI_UPLOAD_ENDPOINT}"
+    ).mock(
+        return_value=httpx.Response(
+            200, headers={"x-goog-upload-status": "final"}, json={"file": {"name": "files/abc", "state": "ACTIVE"}}
+        )
+    )
+
+    response: Final = await _call_gemini_upload_route(
+        headers=((b"x-goog-upload-command", b"upload, finalize"), (b"x-goog-upload-offset", b"0")),
+        body=JSONL_BATCH_REQUESTS,
+        query_string=b"upload_id=session-1&upload_protocol=resumable",
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-goog-upload-status"] == "final"
+    outbound: Final = upstream.calls[0].request
+    assert outbound.content == JSONL_BATCH_REQUESTS
+    assert outbound.url.params["upload_id"] == "session-1"
+    assert outbound.url.params["key"] == "gemini-test-key"
+    assert outbound.headers["x-goog-upload-command"] == "upload, finalize"
+    assert outbound.headers["x-goog-upload-offset"] == "0"
 
 @pytest.mark.asyncio
 async def test_router_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():

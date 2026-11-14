@@ -45,6 +45,8 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    GEMINI_PASS_THROUGH_ROUTE_PREFIX,
+    GEMINI_UPLOAD_PATH_PREFIX,
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
@@ -170,7 +172,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
-from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
+from litellm.proxy.utils import get_custom_url, is_known_model, normalize_route_for_root_path
 from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -466,6 +468,41 @@ async def llm_passthrough_factory_proxy_route(
     return received_value
 
 
+GEMINI_UPLOAD_REQUEST_HEADER_PREFIX: Final = "x-goog-upload-"
+GEMINI_UPLOAD_SESSION_URL_RESPONSE_HEADERS: Final = frozenset({"x-goog-upload-url", "x-goog-upload-control-url"})
+
+
+def _gemini_upload_request_headers(request_headers: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in request_headers.items()
+            if name == "content-type" or name.startswith(GEMINI_UPLOAD_REQUEST_HEADER_PREFIX)
+        }
+    )
+
+
+def _upload_session_url_via_proxy(upload_session_url: str, upstream_base_url: str, proxy_gemini_url: str) -> str:
+    if upload_session_url.startswith(f"{upstream_base_url}/"):
+        return f"{proxy_gemini_url}{upload_session_url.removeprefix(upstream_base_url)}"
+    return f"{proxy_gemini_url}{httpx.URL(upload_session_url).raw_path.decode('ascii')}"
+
+
+def _gemini_response_headers_via_proxy(
+    upstream_headers: Mapping[str, str], upstream_base_url: str, proxy_gemini_url: str
+) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name: (
+                _upload_session_url_via_proxy(value, upstream_base_url, proxy_gemini_url)
+                if name.lower() in GEMINI_UPLOAD_SESSION_URL_RESPONSE_HEADERS
+                else value
+            )
+            for name, value in upstream_headers.items()
+        }
+    )
+
+
 @router.api_route(
     "/gemini/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -516,14 +553,24 @@ async def gemini_proxy_route(
     if "stream" in str(updated_url):
         is_streaming_request = True
 
+    is_upload: Final = encoded_endpoint.startswith(GEMINI_UPLOAD_PATH_PREFIX)
+
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
+        custom_headers=_gemini_upload_request_headers(request.headers) if is_upload else None,
         custom_llm_provider="gemini",
         is_streaming_request=is_streaming_request,
         query_params=merged_params,
+        response_headers_filter=partial(
+            _gemini_response_headers_via_proxy,
+            upstream_base_url=base_target_url.rstrip("/"),
+            proxy_gemini_url=get_custom_url(str(request.base_url), route=GEMINI_PASS_THROUGH_ROUTE_PREFIX.lstrip("/")),
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
+    if is_upload:
+        setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, await request.body())
     received_value: Final = await endpoint_func(
         request,
         fastapi_response,
