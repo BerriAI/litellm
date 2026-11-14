@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 import litellm
 from litellm.caching import DualCache
@@ -207,7 +207,9 @@ async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy, g
     assert golden.canonical(refusals[0]) == golden.recorded("python", refusals[0])
 
 
-async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, Mapping[str, float]]:
+async def _websocket_auth(
+    proxy: Proxy, native: bool, path: str = "/v1/responses", model: str = "gpt-4o"
+) -> UserAPIKeyAuth:
     _use_native(proxy, native)
     await cache_key_object(
         hashed_token=TOKEN,
@@ -225,7 +227,7 @@ async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, M
     websocket: Final = WebSocket(
         {
             "type": "websocket",
-            "path": "/v1/responses",
+            "path": path,
             "root_path": "",
             "query_string": b"",
             "headers": [(b"authorization", f"Bearer {API_KEY}".encode())],
@@ -236,7 +238,11 @@ async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, M
         receive,
         send,
     )
-    auth: Final = await user_api_key_auth_websocket_for_model(websocket, "gpt-4o")
+    return await user_api_key_auth_websocket_for_model(websocket, model)
+
+
+async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, Mapping[str, float]]:
+    auth: Final = await _websocket_auth(proxy, native)
     reservation: Final = auth.budget_reservation
     entries: Final = None if reservation is None else reservation.get("entries")
     return entries, dict(proxy.store.snapshot())
@@ -250,6 +256,119 @@ async def test_a_responses_websocket_session_holds_its_admission_at_connect_like
     native: Final = await _websocket_session_held(proxy, native=True)
 
     assert python[1][KEY_COUNTER] > 0.0, "the flag-off run must hold the admission at connect"
+    assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
+
+
+SOCKET_ROUTES: Final = {
+    "responses": ("/v1/responses", "gpt-4o"),
+    "realtime": ("/v1/realtime", "gpt-realtime"),
+    "realtime_translations": ("/v1/realtime/translations", "gpt-realtime"),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", SOCKET_ROUTES.values(), ids=SOCKET_ROUTES.keys())
+async def test_the_native_owner_holds_a_websocket_admission_at_connect_like_python(
+    proxy: Proxy, golden: Golden, route: tuple[str, str]
+) -> None:
+    python: Final = await _websocket_auth(proxy, False, *route)
+    python_held: Final = (python.budget_reservation, dict(proxy.store.snapshot()))
+    native: Final = await _websocket_auth(proxy, True, *route)
+
+    assert native_budgets.is_native_reservation(native.budget_reservation)
+    assert python_held[1][KEY_COUNTER] > 0.0, "the Python engine must hold the admission at connect"
+    assert native.budget_reservation is not None and python.budget_reservation is not None
+    assert _held_entries(native.budget_reservation) == _held_entries(python.budget_reservation)
+    assert proxy.store.snapshot() == python_held[1]
+    assert golden.canonical(python_held) == golden.recorded("python", python_held)
+
+
+def _held_entries(reservation: Mapping[str, object]) -> object:
+    entries: Final = reservation["entries"]
+    assert isinstance(entries, list)
+    return (reservation["reserved_cost"], entries, reservation["input_cost"], reservation["input_tokens"])
+
+
+async def _second_turn(_auth: UserAPIKeyAuth, _data: RequestData) -> None:
+    await proxy_server.increment_spend_counters(
+        token=TOKEN, team_id=None, user_id=None, response_cost=0.0003, budget_reservation=None
+    )
+
+
+async def _websocket_turns(proxy: Proxy, native: bool) -> tuple[Mapping[str, float], ...]:
+    auth: Final = await _websocket_auth(proxy, native)
+    data: Final = {"model": "gpt-4o", "metadata": {"user_api_key_budget_reservation": auth.budget_reservation}}
+    at_connect: Final = dict(proxy.store.snapshot())
+    await _success(auth, data)
+    after_first: Final = dict(proxy.store.snapshot())
+    await _second_turn(auth, data)
+    return at_connect, after_first, dict(proxy.store.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_settles_its_first_turn_against_the_connect_hold_like_python(
+    proxy: Proxy, golden: Golden
+) -> None:
+    python: Final = await _websocket_turns(proxy, native=False)
+    native: Final = await _websocket_turns(proxy, native=True)
+
+    assert python[0][KEY_COUNTER] > python[1][KEY_COUNTER] > 0.0, "the first turn must settle the connect hold"
+    assert python[2][KEY_COUNTER] == pytest.approx(python[1][KEY_COUNTER] + 0.0003)
+    assert native == python
+    assert golden.canonical(python) == golden.recorded("python", python)
+
+
+@dataclass(frozen=True, slots=True)
+class SocketRun:
+    held_at_connect: Mapping[str, float] | None
+    closed: tuple[int, str] | None
+    counters_after_close: Mapping[str, float]
+
+
+def _responses_socket(proxy: Proxy, native: bool, team_at_max: bool) -> SocketRun:
+    _use_native(proxy, native)
+
+    async def seed() -> None:
+        await cache_key_object(
+            hashed_token=TOKEN,
+            user_api_key_obj=UserAPIKeyAuth(
+                token=TOKEN, team_id=TEAM if team_at_max else None, max_budget=None if team_at_max else 1.0, spend=0.0
+            ),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+        await cache_team_object(
+            team_id=TEAM,
+            team_table=LiteLLM_TeamTableCachedObj(team_id=TEAM, max_budget=1.0, spend=0.0),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+
+    asyncio.run(seed())
+    if team_at_max:
+        proxy.store.set_local(TEAM_COUNTER, 1.0)
+    client: Final = TestClient(proxy_server.app, raise_server_exceptions=False)
+    try:
+        with client.websocket_connect("/v1/responses?model=gpt-4o", headers={"Authorization": f"Bearer {API_KEY}"}):
+            held: Final = dict(proxy.store.snapshot())
+    except WebSocketDisconnect as refused:
+        return SocketRun(None, (refused.code, refused.reason), dict(proxy.store.snapshot()))
+    return SocketRun(held, None, dict(proxy.store.snapshot()))
+
+
+SOCKET_OUTCOMES: Final = {"admitted_then_disconnects": False, "refused_at_connect": True}
+
+
+@pytest.mark.parametrize("team_at_max", SOCKET_OUTCOMES.values(), ids=SOCKET_OUTCOMES.keys())
+def test_a_responses_websocket_over_the_proxy_reserves_refuses_and_releases_like_python(
+    proxy: Proxy, golden: Golden, team_at_max: bool
+) -> None:
+    python: Final = _responses_socket(proxy, False, team_at_max)
+    native: Final = _responses_socket(proxy, True, team_at_max)
+
+    assert (python.closed is not None) == team_at_max
+    assert python.held_at_connect is None or python.held_at_connect[KEY_COUNTER] > 0.0
     assert native == python
     assert golden.canonical(python) == golden.recorded("python", python)
 
