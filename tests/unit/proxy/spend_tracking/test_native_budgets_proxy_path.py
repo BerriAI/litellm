@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Awaitable, Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
 import httpx
@@ -11,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 import litellm
@@ -331,6 +333,18 @@ class SocketRun:
     counters_after_close: Mapping[str, float]
 
 
+@dataclass(frozen=True, slots=True)
+class _Served:
+    app: ASGIApp
+    finished: threading.Event = field(default_factory=threading.Event)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.finished.set()
+
+
 def _responses_socket(proxy: Proxy, team_at_max: bool) -> SocketRun:
     _use_native(proxy)
 
@@ -353,10 +367,15 @@ def _responses_socket(proxy: Proxy, team_at_max: bool) -> SocketRun:
     asyncio.run(seed())
     if team_at_max:
         proxy.store.set_local(TEAM_COUNTER, 1.0)
-    client: Final = TestClient(proxy_server.app, raise_server_exceptions=False)
+    served: Final = _Served(proxy_server.app)
+    client: Final = TestClient(served, raise_server_exceptions=False)
     try:
-        with client.websocket_connect("/v1/responses?model=gpt-4o", headers={"Authorization": f"Bearer {API_KEY}"}):
+        with client.websocket_connect(
+            "/v1/responses?model=gpt-4o", headers={"Authorization": f"Bearer {API_KEY}"}
+        ) as socket:
             held: Final = dict(proxy.store.snapshot())
+            socket.close(1000)
+            assert served.finished.wait(10.0), "the proxy must finish the closed socket before the client tears it down"
     except WebSocketDisconnect as refused:
         return SocketRun(None, (refused.code, refused.reason), dict(proxy.store.snapshot()))
     return SocketRun(held, None, dict(proxy.store.snapshot()))
