@@ -579,6 +579,11 @@ def test_a_closed_socket_gives_back_its_key_tpm_reservation_so_the_next_socket_i
                 lambda found: any(row["request_id"] == billed for row in found),
                 seconds=70,
             )
+            eventually(
+                partial(_key_tokens, key),
+                lambda tokens: tokens <= KEY_TPM_LIMIT - SOCKET_RESERVATION,
+                seconds=15,
+            )
             return received, closed_in
 
         minute: Final = _fresh_minute()
