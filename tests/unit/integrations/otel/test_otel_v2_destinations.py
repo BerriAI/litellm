@@ -3120,6 +3120,31 @@ class TestSpanScope:
         monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
         assert langfuse_destination_span_scope(" LLM_ONLY\n") == "llm_only"
 
+    @pytest.mark.parametrize(
+        ("bare", "prefixed", "configured", "expected"),
+        [
+            ("llm_only", None, None, "full"),
+            ("full", "llm_only", None, "llm_only"),
+            ("full", "full", "llm_only", "llm_only"),
+            ("llm_only", "llm_only", "full", "full"),
+        ],
+    )
+    def test_only_prefixed_environment_sets_destination_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        bare: str,
+        prefixed: str | None,
+        configured: str | None,
+        expected: str,
+    ) -> None:
+        monkeypatch.setenv("langfuse_destination_span_scope", bare)
+        if prefixed is None:
+            monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        else:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", prefixed)
+
+        assert langfuse_destination_span_scope(configured) == expected
+
     @pytest.mark.parametrize("spelling", ["LLM_ONLY", " llm_only\n", "full"])
     def test_destination_scope_config_normalizes_like_operator_scope(
         self,

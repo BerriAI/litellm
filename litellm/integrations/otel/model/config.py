@@ -420,9 +420,7 @@ class _LangfuseDestinationSpanScopeSettings(BaseSettings):
 
     langfuse_destination_span_scope: OtelSpanScope = Field(
         default="full",
-        validation_alias=AliasChoices(
-            "langfuse_destination_span_scope", "LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE"
-        ),
+        validation_alias=AliasChoices("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE"),
     )
 
     @field_validator("langfuse_destination_span_scope", mode="before")
@@ -439,7 +437,7 @@ def langfuse_destination_span_scope(configured: object = None) -> OtelSpanScope:
 def _cached_langfuse_destination_span_scope(configured: str | None) -> OtelSpanScope:
     try:
         return _LangfuseDestinationSpanScopeSettings.model_validate(
-            {"langfuse_destination_span_scope": configured} if configured is not None else {}
+            {"LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE": configured} if configured is not None else {}
         ).langfuse_destination_span_scope
     except ValidationError as error:
         verbose_logger.warning(
