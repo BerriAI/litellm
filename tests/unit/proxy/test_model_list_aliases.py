@@ -8,6 +8,7 @@ next to its target and resolves by name.
 import json
 from collections.abc import Sequence
 from itertools import chain
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -53,7 +54,7 @@ class _V2ListingGate(CustomLoggerV2):
 
     @on(Hook.list_models, reads={Field.model_list}, writes={Field.model_list})
     async def list_models(self, view: DeclaredView, ctx: CallContext[object]) -> Patch:
-        names = _LISTED_NAMES.validate_python(view.model_list)
+        names: Final = _LISTED_NAMES.validate_python(view.model_list)
         return Patch().set(Field.model_list, tuple(name for name in names if name not in self.hidden))
 
 
@@ -395,7 +396,7 @@ async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retriev
 async def _model_group_rows(
     user_api_key_dict: UserAPIKeyAuth, model_group: str | None = None
 ) -> dict[str, dict[str, object]]:
-    response = await proxy_server.model_group_info(user_api_key_dict=user_api_key_dict, model_group=model_group)
+    response: Final = await proxy_server.model_group_info(user_api_key_dict=user_api_key_dict, model_group=model_group)
     return {row.model_group: row.model_dump() for row in response["data"]}
 
 
@@ -418,7 +419,7 @@ def _team_listing(*extra: str, **aliases: dict[str, str]) -> UserAPIKeyAuth:
 async def test_model_group_info_describes_every_alias_v1_models_lists_as_its_target(
     router: Router, caller: UserAPIKeyAuth, alias: str, target: str
 ) -> None:
-    rows = await _model_group_rows(caller)
+    rows: Final = await _model_group_rows(caller)
 
     assert list(rows) == await _v1_models(caller)
     assert rows[alias] == {**rows[target], "model_group": alias}
@@ -427,9 +428,9 @@ async def test_model_group_info_describes_every_alias_v1_models_lists_as_its_tar
 
 @pytest.mark.asyncio
 async def test_model_group_info_describes_a_team_alias_to_a_model_the_team_does_not_list(router: Router) -> None:
-    caller = _team_listing("fast", team_model_aliases={"fast": "gpt-4.1"})
+    caller: Final = _team_listing("fast", team_model_aliases={"fast": "gpt-4.1"})
 
-    rows = await _model_group_rows(caller)
+    rows: Final = await _model_group_rows(caller)
     assert list(rows) == await _v1_models(caller)
     assert rows["fast"] == {**(await _model_group_rows(_keyholder("gpt-4.1")))["gpt-4.1"], "model_group": "fast"}
 
@@ -441,8 +442,8 @@ async def test_model_group_info_describes_a_team_alias_to_a_model_the_team_does_
 async def test_model_group_info_does_not_describe_an_alias_to_a_model_the_listing_hides(
     router: Router, target: str, team_id: str
 ) -> None:
-    models = ["gpt-4.1-mini", "fast"]
-    caller = _team_member(team_id=team_id, models=models, team_model_aliases={"fast": target})
+    models: Final = ["gpt-4.1-mini", "fast"]
+    caller: Final = _team_member(team_id=team_id, models=models, team_model_aliases={"fast": target})
 
     assert await _model_group_rows(caller) == await _model_group_rows(_team_member(team_id=team_id, models=models))
 
@@ -452,7 +453,7 @@ async def test_model_group_info_does_not_describe_an_alias_to_a_model_the_listin
 async def test_model_group_info_lists_a_paused_model_but_describes_no_alias_by_it(
     router: Router, models: list[str]
 ) -> None:
-    caller = _team_member(models=models, team_model_aliases={"fast": "paused"})
+    caller: Final = _team_member(models=models, team_model_aliases={"fast": "paused"})
 
     assert await _model_group_rows(caller) == await _model_group_rows(_team_member(models=models))
 
@@ -477,7 +478,7 @@ async def test_model_group_info_hides_an_alias_whose_target_a_listing_callback_h
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({gated}))])
     ProxyLogging._callback_capabilities_cache.clear()
-    caller = _team_member(models=models, team_model_aliases={"fast": target})
+    caller: Final = _team_member(models=models, team_model_aliases={"fast": target})
 
     assert await _model_group_rows(caller) == await _model_group_rows(_team_member(models=models))
 
@@ -486,8 +487,8 @@ async def test_model_group_info_hides_an_alias_whose_target_a_listing_callback_h
 async def test_model_group_info_keeps_every_group_an_allow_list_callback_allows_when_an_alias_points_past_them(
     router: Router, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    caller = _team_member(models=["gpt-4.1-mini", "legacy", "fast"], team_model_aliases={"fast": "gpt-4.1"})
-    listed = await _v1_models(caller)
+    caller: Final = _team_member(models=["gpt-4.1-mini", "legacy", "fast"], team_model_aliases={"fast": "gpt-4.1"})
+    listed: Final = await _v1_models(caller)
 
     monkeypatch.setattr(litellm, "callbacks", [_ListingAllowList(frozenset(listed))])
     ProxyLogging._callback_capabilities_cache.clear()
@@ -501,9 +502,9 @@ async def test_a_name_a_listing_callback_hides_stays_hidden_when_it_is_also_an_a
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"fast"}))])
     ProxyLogging._callback_capabilities_cache.clear()
-    models = ["gpt-4.1-mini", "fast"]
-    caller = _team_member(models=models, team_model_aliases={"fast": "gpt-4.1-mini"})
-    unaliased = _team_member(models=models)
+    models: Final = ["gpt-4.1-mini", "fast"]
+    caller: Final = _team_member(models=models, team_model_aliases={"fast": "gpt-4.1-mini"})
+    unaliased: Final = _team_member(models=models)
 
     assert await _v1_models(caller) == await _v1_models(unaliased)
     assert await _model_group_rows(caller) == await _model_group_rows(unaliased)
@@ -519,14 +520,14 @@ async def test_a_name_a_listing_callback_hides_stays_hidden_when_it_is_also_an_a
 async def test_model_group_info_for_one_group_offers_listing_callbacks_only_the_names_it_reads(
     router: Router, monkeypatch: pytest.MonkeyPatch, model_group: str, offered: set[str]
 ) -> None:
-    recorder = _ListingRecorder()
+    recorder: Final = _ListingRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     ProxyLogging._callback_capabilities_cache.clear()
-    caller = _team_member(
+    caller: Final = _team_member(
         models=["gpt-4.1-mini", "gpt-4.1", "model_name_team1_abc"], team_model_aliases={"fast": "gpt-4.1"}
     )
 
-    rows = await _model_group_rows(caller, model_group=model_group)
+    rows: Final = await _model_group_rows(caller, model_group=model_group)
 
     assert list(rows) == [model_group]
     assert set(chain.from_iterable(recorder.offered)) == offered
