@@ -3057,7 +3057,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
-        if self._carry_parked_success():
+        parked_success_carried: Final = self._carry_parked_success()
+        self.bridged_model_response = None
+        if parked_success_carried:
             return
         usage: Final = self._model_call_details_view.get("combined_usage_object")
         response_cost: Final = self._model_call_details_view.get("response_cost")

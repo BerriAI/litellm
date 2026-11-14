@@ -7633,6 +7633,75 @@ def test_handle_anthropic_messages_response_logging_reparses_the_served_body_wit
     assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
 
 
+@pytest.mark.asyncio
+async def test_a_native_messages_reply_served_after_a_refused_bridged_attempt_bills_its_own_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.utils import _schedule_async_success_logging
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.payloads: tuple[Mapping[str, object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, StandardLoggingPayload], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.payloads = (*self.payloads, kwargs["standard_logging_object"])
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = LitellmLogging(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="bridged-refusal-then-native",
+        function_id="bridged-refusal-then-native",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        custom_llm_provider="anthropic",
+    )
+    logging_obj.defer_async_logging = True
+    logging_obj.record_bridged_model_response(
+        ModelResponse(
+            id="chatcmpl-refused",
+            model="claude-sonnet-4-5",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "no"}, "finish_reason": "content_filter"}],
+            usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        )
+    )
+    now: Final = datetime.datetime.now()
+
+    _schedule_async_success_logging(
+        logging_obj, _upstream_messages_reply({"input_tokens": 1000, "output_tokens": 500}, "msg_refused"), now, now,
+        is_completion_with_fallbacks=False,
+    )
+    logging_obj.carry_failed_attempt_usage()
+    _schedule_async_success_logging(
+        logging_obj, _upstream_messages_reply({"input_tokens": 12, "output_tokens": 7}, "msg_served"), now, now,
+        is_completion_with_fallbacks=False,
+    )
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await drain_logging_tasks()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    (payload,) = recorder.payloads
+    assert payload["id"] == "msg_served"
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (1012, 507)
+
+
 def _upstream_messages_reply(usage: Mapping[str, object], message_id: str | None = None) -> dict[str, object]:
     return {
         **({} if message_id is None else {"id": message_id}),
