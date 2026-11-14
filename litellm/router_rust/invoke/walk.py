@@ -14,6 +14,7 @@ reads a failed request's walk off it), so a fresh call's root writes reach that 
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from litellm.exceptions import logged_class_name
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ def _breadcrumb(
         "deployment_id": known_id,
         "model": deployment if isinstance(deployment, str) else None,
         "base_model": base_model,
-        "exception_type": type(error).__name__,
+        "exception_type": logged_class_name(error),
         "exception_string": str(error),
         "attempted_retries": attempted if type(attempted) is int else None,
     }
@@ -131,7 +132,7 @@ def log_retry_into(
             {
                 "litellm.routing.router_model_name": router_name,
                 "litellm.retry.count": request_retry_count,
-                "error.type": type(error).__name__,
+                "error.type": logged_class_name(error),
                 **({"litellm.deployment.model_group": model_group} if isinstance(model_group, str) else {}),
                 **({"litellm.deployment.id": deployment_id} if isinstance(deployment_id, str) else {}),
             },
