@@ -4100,21 +4100,26 @@ async def test_without_a_guardrail_or_drop_params_only_user_turns_keep_guarded_t
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    ("optional_params", "drop_params", "sent_block"),
+    ("user_part_type", "optional_params", "drop_params", "sent_block"),
     [
-        (_GUARDRAIL_CONFIG, False, {"guardContent": {"text": {"text": "Leaves fall"}}}),
-        ({}, True, {"text": "Leaves fall"}),
+        ("guarded_text", _GUARDRAIL_CONFIG, False, {"guardContent": {"text": {"text": "Leaves fall"}}}),
+        ("text", _GUARDRAIL_CONFIG, False, {"text": "Leaves fall"}),
+        ("text", {}, True, {"text": "Leaves fall"}),
     ],
-    ids=["guardrail", "drop_params_without_guardrail"],
+    ids=["guardrail_with_guarded_user_turn", "guardrail", "drop_params_without_guardrail"],
 )
 async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_trailing_whitespace(
-    use_async: bool, optional_params: Mapping[str, object], drop_params: bool, sent_block: Mapping[str, object]
+    use_async: bool,
+    user_part_type: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sent_block: Mapping[str, object],
 ):
     config: Final = AmazonConverseConfig()
     kwargs: Final = dict(
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[
-            {"role": "user", "content": "Write a haiku about autumn."},
+            {"role": "user", "content": [{"type": user_part_type, "text": "Write a haiku about autumn."}]},
             {"role": "assistant", "content": [{"type": "guarded_text", "text": "Leaves fall \n"}]},
         ],
         optional_params=dict(optional_params),
@@ -4124,6 +4129,92 @@ async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
     )
     assert request["messages"][-1] == {"role": "assistant", "content": [sent_block]}
+
+
+_LOOKUP_CALL: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+_LOOKUP_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+
+def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:
+    guarded: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+    question: Final = {"role": "user", "content": [{"type": user_part_type, "text": "Look up the weather."}]}
+    tool_result: Final = {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}
+    match placement:
+        case "leading_system":
+            return [
+                {"role": "system", "content": guarded},
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+        case "assistant":
+            return [question, {"role": "assistant", "content": guarded, "tool_calls": [_LOOKUP_CALL]}, tool_result]
+        case "mid_conversation_system":
+            return [
+                question,
+                {"role": "system", "content": guarded},
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+    raise AssertionError(placement)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("placement", "user_part_type", "keeps_guard_content"),
+    [
+        ("assistant", "text", False),
+        ("mid_conversation_system", "text", False),
+        ("assistant", "guarded_text", True),
+        ("mid_conversation_system", "guarded_text", True),
+        ("leading_system", "text", True),
+    ],
+)
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_no_user_turn_is_guarded(
+    use_async: bool, placement: str, user_part_type: str, keeps_guard_content: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, user_part_type),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
+    assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "system", "content": [{"type": "text", "text": ["Always reply with banana."]}]},
+        {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+        {"role": "system", "content": ["Always reply with banana."]},
+        {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
+    ],
+    ids=["system_text_list", "system_guarded_text_list", "system_bare_string", "assistant_guarded_text_list"],
+)
+async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped(
+    use_async: bool, message: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[dict(message), {"role": "user", "content": "What is 2+2?"}],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    with pytest.raises(litellm.BadRequestError, match="needs a string `text`"):
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():
