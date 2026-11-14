@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
 
 import httpx
+import pytest
 from pydantic import JsonValue
 
 from tests.integration._support.client import (
@@ -18,6 +20,8 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows
+from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,3 +195,117 @@ def test_a_deployment_id_cannot_reach_a_disallowed_model(gateway: Gateway) -> No
         key: Final = scenario.key(disallowed_models=[disallowed])
         _assert_denied(gateway, key, {"model": deployment_id}, deployment_id)
         _assert_denied(gateway, key, {"model": scenario.model(), "fallbacks": [deployment_id]}, deployment_id)
+
+
+def test_a_key_alias_to_a_deployment_id_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        deployment_id: Final = f"integration-deployment-{uuid.uuid4().hex}"
+        disallowed: Final = scenario.model(model_info={"id": deployment_id})
+        alias: Final = f"alias-{uuid.uuid4().hex[:8]}"
+        key: Final = scenario.key(aliases={alias: deployment_id}, disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": alias}, alias)
+
+
+def test_a_team_deployments_routing_name_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        disallowed: Final = scenario.model(model_info={"team_id": team})
+        (deployment,) = read_rows(
+            """SELECT model_name FROM "LiteLLM_ProxyModelTable" WHERE model_info->>'team_public_model_name' = %s""",
+            (disallowed,),
+        )
+        routing_name: Final = string_value(deployment["model_name"])
+        assert routing_name.startswith(f"model_name_{team}_"), routing_name
+        _assert_served(gateway, scenario.key(team_id=team), routing_name)
+        key: Final = scenario.key(team_id=team, disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": routing_name}, routing_name)
+
+
+def _batch_row(model: str) -> str:
+    return json.dumps(
+        {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": model, "messages": [{"role": "user", "content": "batch row"}], "max_tokens": 8},
+        }
+    )
+
+
+def _batch_provider(input_file: str) -> RoutedResponse:
+    return RoutedResponse(
+        content_type="application/x-routed",
+        routes={
+            "POST /files": JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "file-in-$REQUEST_ID",
+                    "object": "file",
+                    "purpose": "batch",
+                    "bytes": len(input_file),
+                    "created_at": 1,
+                    "filename": "input.jsonl",
+                    "status": "processed",
+                },
+            ),
+            "GET /files/file-in-$REQUEST_ID/content": TextResponse(content_type="application/jsonl", body=input_file),
+            "POST /batches": JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "batch-$REQUEST_ID",
+                    "object": "batch",
+                    "endpoint": "/v1/chat/completions",
+                    "input_file_id": "file-in-$REQUEST_ID",
+                    "completion_window": "24h",
+                    "status": "validating",
+                    "created_at": 1,
+                },
+            ),
+        },
+    )
+
+
+def _create_batch_from_file(gateway: Gateway, key: str, provider_model: str, input_file: str) -> httpx.Response:
+    uploaded: Final = gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "model": provider_model},
+        {"file": ("input.jsonl", input_file.encode(), "application/jsonl")},
+        key=key,
+    )
+    assert uploaded.status_code == 200, f"{uploaded.status_code} {uploaded.text}"
+    return gateway.request(
+        "POST",
+        "/v1/batches",
+        {
+            "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+        key=key,
+    )
+
+
+def _batch_provider_model(scenario: Scenario, group: str, row_model: str | None = None) -> str:
+    model: Final = f"integration-{uuid.uuid4().hex}"
+    provider: Final = register_scenario(
+        f"disallowed-batch-{uuid.uuid4().hex}", _batch_provider(_batch_row(model if row_model is None else row_model))
+    )
+    scenario.cleanups.callback(delete_scenario, provider)
+    return scenario.model(name=model, model_info={"access_groups": [group]}, api_base=provider.api_base())
+
+
+@pytest.mark.parametrize("key_models", [[], ["all-team-models"]], ids=["inherits-team-models", "all-team-models"])
+def test_a_batch_file_row_cannot_reach_a_disallowed_model(gateway: Gateway, key_models: list[JsonValue]) -> None:
+    with gateway.scenario() as scenario:
+        group: Final = f"integration-group-{uuid.uuid4().hex[:10]}"
+        disallowed: Final = scenario.model(model_info={"access_groups": [group]})
+        serves_own_rows: Final = _batch_provider_model(scenario, group)
+        serves_disallowed_rows: Final = _batch_provider_model(scenario, group, disallowed)
+        key: Final = scenario.key(
+            team_id=scenario.team(models=[group]), models=key_models, disallowed_models=[disallowed]
+        )
+        created: Final = _create_batch_from_file(gateway, key, serves_own_rows, _batch_row(serves_own_rows))
+        assert created.status_code == 200, f"{created.status_code} {created.text}"
+        refused: Final = _create_batch_from_file(gateway, key, serves_disallowed_rows, _batch_row(disallowed))
+        assert refused.status_code == 403, f"{refused.status_code} {refused.text}"
+        assert disallowed in refused.text, refused.text

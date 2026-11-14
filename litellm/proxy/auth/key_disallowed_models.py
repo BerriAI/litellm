@@ -16,6 +16,18 @@ def key_disallowed_models(valid_token: UserAPIKeyAuth) -> frozenset[str]:
     return frozenset(valid_token.disallowed_models or ())
 
 
+def _deployment_names(
+    name: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
+) -> tuple[str | None, ...]:
+    from litellm.proxy.auth.auth_checks import _owning_team_names_for_team_deployment
+
+    deployment: Final = llm_router.registry().deployment(name) if llm_router is not None else None
+    return (
+        *(() if deployment is None else (deployment.model_name, deployment.model_info.team_public_model_name)),
+        *_owning_team_names_for_team_deployment(name, llm_router, valid_token.team_id, valid_token.team_model_aliases),
+    )
+
+
 def _names_model_resolves_through(
     model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
 ) -> frozenset[str]:
@@ -30,23 +42,17 @@ def _names_model_resolves_through(
         if llm_router is not None and model in llm_router.registry().aliases()
         else None
     )
-    deployment: Final = llm_router.registry().deployment(model) if llm_router is not None else None
-    deployment_names: Final = (
-        () if deployment is None else (deployment.model_name, deployment.model_info.team_public_model_name)
-    )
-    return frozenset(
+    chain: Final = frozenset(
         name
-        for name in (
-            model,
-            after_team_alias,
-            after_key_alias,
-            after_global_alias,
-            dispatched,
-            router_alias_target,
-            *deployment_names,
-        )
+        for name in (model, after_team_alias, after_key_alias, after_global_alias, dispatched, router_alias_target)
         if name is not None
     )
+    return chain | frozenset(
+        resolved
+        for name in chain
+        for resolved in _deployment_names(name, valid_token, llm_router)
+        if resolved is not None
+    )  # comprehension-ok: every name in the chain expands to its deployment's names
 
 
 def _matches(name: str, entry: str) -> bool:
