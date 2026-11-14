@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -119,7 +121,7 @@ def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segmen
 
 def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
     from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     provider_prefix: Final = f"{custom_llm_provider}/"
     segments: Final = wildcard.removeprefix(provider_prefix).split("/")
@@ -190,7 +192,10 @@ class HealthCheckHelpers:
         from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         _metadata_variable_name: Final = "litellm_metadata"
-        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
+        litellm_metadata: Final[Mapping[str, object]] = {
+            **HealthCheckHelpers._get_metadata_for_health_check_call(),
+            "model_info": TypeAdapter(dict[str, object]).validate_python(model_params).get("model_info") or {},
+        }
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,

@@ -24,14 +24,18 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import (
     ROUTER_SESSION_PINS_TARGET,
     claim_affinity_pin,
-    claim_affinity_pin_in_memory,
     set_local_affinity_pin,
 )
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
+from litellm.redis.stores.router_session_pins import (
+    DeploymentPin,
+    DeploymentSessionPin,
+    PinKey,
+    RouterSessionPinStore,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -97,12 +101,11 @@ class DeploymentAffinityCheck(CustomLogger):
     `Router(optional_pre_call_checks=[...])`.
     """
 
-    CACHE_KEY_PREFIX = "deployment_affinity:v1"
     USER_ID_AFFINITY_PREFIX: Final = "user_id:"
 
     def __init__(
         self,
-        cache: DualCache,
+        pins: RouterSessionPinStore,
         ttl_seconds: int,
         enable_user_key_affinity: bool,
         enable_responses_api_affinity: bool,
@@ -112,7 +115,7 @@ class DeploymentAffinityCheck(CustomLogger):
         session_affinity_repin_on_failover: bool = False,
     ):
         super().__init__()
-        self.cache = cache
+        self.pins: Final = pins
         self.ttl_seconds = ttl_seconds
         self.enable_user_key_affinity = enable_user_key_affinity
         self.enable_responses_api_affinity = enable_responses_api_affinity
@@ -261,18 +264,16 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{value[:keep]}..."
 
     @classmethod
-    def get_affinity_cache_key(cls, model_group: str, user_key: str) -> str:
-        hashed_user_key: Final = cls._hash_user_key(user_key=user_key)
-        return f"{cls.CACHE_KEY_PREFIX}:{model_group}:{hashed_user_key}"
+    def get_affinity_cache_key(cls, model_group: str, user_key: str) -> DeploymentPin:
+        return DeploymentPin(model_group=model_group, caller=user_key)
 
     @classmethod
-    def get_session_affinity_cache_key(cls, model_group: str, session_id: str, user_key: str | None) -> str:
-        """Session pins are scoped by the caller's hashed API key so two callers reusing
-        the same client-supplied session_id cannot read or steer each other's pin.
-        `"unscoped"` covers direct Router usage with no authenticated caller, matching
-        the complexity router's own session pin key."""
-        hashed_user_key: Final = cls._hash_user_key(user_key) if user_key is not None else "unscoped"
-        return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{hashed_user_key}:{session_id}"
+    def get_session_affinity_cache_key(
+        cls, model_group: str, session_id: str, user_key: str | None
+    ) -> DeploymentSessionPin:
+        """Session pins are scoped by the caller so two callers reusing the same client-supplied session_id cannot
+        read or steer each other's pin."""
+        return DeploymentSessionPin(model_group=model_group, caller=user_key, session_id=session_id)
 
     @staticmethod
     def _get_session_id_from_metadata_dict(metadata: Mapping[object, object]) -> str | None:
@@ -352,17 +353,13 @@ class DeploymentAffinityCheck(CustomLogger):
             return stored
         return None
 
-    def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
-        set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
+    def _set_local_pin(self, cache_key: PinKey, value: object, ttl_seconds: int) -> None:
+        set_local_affinity_pin(self.pins, cache_key, value, ttl_seconds)
 
-    async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
-        winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
-        return self._pinned_model_id(winner)
-
-    def _claim_pin_in_memory(
-        self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int
+    async def _claim_pin(
+        self, cache_key: PinKey, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int
     ) -> str | None:
-        winner: Final = claim_affinity_pin_in_memory(self.cache, cache_key, pin_value, ttl_seconds)
+        winner: Final = await claim_affinity_pin(self.pins, cache_key, pin_value, ttl_seconds)
         return self._pinned_model_id(winner)
 
     @staticmethod
@@ -453,7 +450,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         parent_otel_span,
                     )
                     if self.session_affinity_repin_on_failover
-                    else await self.cache.async_get_cache(key=session_cache_key)
+                    else await self.pins.get(session_cache_key)
                 )
 
                 session_model_id: str | None = None
@@ -488,7 +485,7 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         cache_key: Final = self.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
-        cache_result: Final = await self.cache.async_get_cache(key=cache_key)
+        cache_result: Final = await self.pins.get(cache_key)
 
         model_id: str | None = None
         if isinstance(cache_result, dict):
@@ -518,21 +515,20 @@ class DeploymentAffinityCheck(CustomLogger):
         )
         return [deployment]
 
-    async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
-        redis_cache: Final = self.cache.redis_cache
-        if redis_cache is None:
-            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key))
-        local_before: Final = TypeAdapter(object).validate_python(self.cache.in_memory_cache.get_cache(cache_key))
+    async def _read_shared_session_pin(
+        self, cache_key: PinKey, ttl_seconds: int, parent_otel_span: Span | None
+    ) -> object:
+        if not self.pins.has_redis:
+            return await self.pins.get(cache_key)
+        local_before: Final = self.pins.get_local(cache_key)
         try:
-            shared: Final[object] = await redis_cache.async_get_cache(
-                key=cache_key, parent_otel_span=parent_otel_span, raise_on_error=True
-            )
+            shared: Final = await self.pins.get_shared(cache_key)
         except Exception:  # noqa: BLE001  # Optional affinity falls back locally on Redis admission or read failure
             verbose_router_logger.debug("Session pin read failed, using pod-local affinity")
-            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key, local_only=True))
-        if self.cache.in_memory_cache.get_cache(cache_key) is local_before:
+            return self.pins.get_local(cache_key)
+        if self.pins.get_local(cache_key) == local_before:
             if shared is None:
-                self.cache.in_memory_cache.delete_cache(cache_key)
+                self.pins.delete_local(cache_key)
             else:
                 self._set_local_pin(cache_key, shared, ttl_seconds)
         return shared
@@ -575,7 +571,7 @@ class DeploymentAffinityCheck(CustomLogger):
             model_group, session_id, self.get_user_key_from_request_kwargs(request_kwargs)
         )
         await claim_affinity_pin(
-            self.cache,
+            self.pins,
             cache_key,
             DeploymentAffinityCacheValue(model_id=str(model_id)),
             marker_ttl if marker_ttl is not None else self.ttl_seconds,

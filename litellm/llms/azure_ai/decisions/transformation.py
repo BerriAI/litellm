@@ -12,7 +12,7 @@ from litellm.llms.azure_ai.common_utils import (
     AZURE_ENTRA_LITELLM_PARAM_KEYS,
     get_azure_ai_auth_headers,
 )
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, DecisionsInputLimits
 
 _FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 _AZURE_AI_CREDENTIAL_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset({"azure_ad_token_provider"})
@@ -25,6 +25,16 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("AZURE_AI_API_KEY",)
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        limits: Final = super().get_input_limits(model, custom_llm_provider, headers)
+        return (
+            limits
+            if limits.max_request_tokens is not None
+            else super().get_input_limits("Microsoft-Decision-1", custom_llm_provider, headers)
+        )
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "Missing AZURE_AI_API_BASE - set AZURE_AI_API_BASE or pass api_base, e.g. https://<resource>.services.ai.azure.com"
