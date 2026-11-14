@@ -204,6 +204,20 @@ def test_add_callbacks_from_db_config():
     litellm._known_custom_logger_compatible_callbacks = []
 
 
+def test_add_string_callback_from_db_config(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "callback_settings", {})
+    monkeypatch.setattr(litellm, "_known_custom_logger_compatible_callbacks", [])
+    proxy_config = ProxyConfig()
+
+    proxy_config._add_callbacks_from_db_config({"litellm_settings": {"success_callback": "custom_callback_api"}})
+
+    assert litellm.success_callback == ["custom_callback_api"]
+    assert litellm.failure_callback == []
+
+
 def test_add_callbacks_invalid_input():
     """Test handling of invalid input for callbacks"""
     proxy_config = ProxyConfig()
@@ -215,8 +229,8 @@ def test_add_callbacks_invalid_input():
     # Test Case 1: Invalid callback format
     config_data = {
         "litellm_settings": {
-            "success_callback": "invalid_string_format",  # Should be a list
-            "failure_callback": 123,  # Should be a list
+            "success_callback": 123,
+            "failure_callback": 123,
         }
     }
 
