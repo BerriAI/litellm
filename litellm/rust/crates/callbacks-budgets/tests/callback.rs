@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
-use futures_util::FutureExt;
 use litellm_callbacks::{
-    BudgetPlan, BudgetPlanCounter, BudgetReservation, Callback, CallbackError, Field, FieldSet,
-    FieldValues, Hook, HookInput, HookOutput, HostCallError, HostException, HostFault, HostRequest,
-    Hosted, PatchOp, Verdict, hosted,
+    BudgetCounterSpend, BudgetPlan, BudgetPlanCounter, BudgetReservation, Callback, Field,
+    FieldSet, FieldValues, Hook, HookInput, PatchOp, Verdict,
 };
 use litellm_callbacks_budgets::{Budgets, Settle, Settlement, Shared};
-use litellm_coroutine::CoroutineState;
 use litellm_redis_store::{
     Number,
     spend_counters::{SpendCounter, SpendCounters},
@@ -66,8 +63,11 @@ const KEY: &str = "spend:key:hashed";
 fn pre_call(plan: &BudgetPlan) -> HookInput {
     HookInput {
         hook: Hook::PreCall,
-        fields: FieldValues::new(FieldSet::of(&[Field::BudgetPlan]))
-            .with(Field::BudgetPlan, serde_json::to_value(plan).unwrap()),
+        fields: FieldValues::new(FieldSet::of(&[
+            Field::BudgetPlan,
+            Field::BudgetCounterSpend,
+        ]))
+        .with(Field::BudgetPlan, serde_json::to_value(plan).unwrap()),
         call: None,
     }
 }
@@ -151,7 +151,10 @@ async fn no_plan_reserves_nothing() {
     let callback = Shared(Arc::new(Budgets::new(Arc::clone(&store))));
     let input = HookInput {
         hook: Hook::PreCall,
-        fields: FieldValues::new(FieldSet::of(&[Field::BudgetPlan])),
+        fields: FieldValues::new(FieldSet::of(&[
+            Field::BudgetPlan,
+            Field::BudgetCounterSpend,
+        ])),
         call: None,
     };
     assert_eq!(callback.handle(&input, None).await.unwrap(), None);
@@ -213,80 +216,81 @@ async fn a_refusal_aborts_with_the_typed_budget_error() {
     assert_eq!(value(&store, KEY), Some(10.0));
 }
 
-fn hosted_pre_call(store: &Arc<SpendCounters>, plan: &BudgetPlan) -> Hosted<HookOutput> {
-    let callback = Shared(Arc::new(Budgets::new(Arc::clone(store))));
-    let input = pre_call(plan);
-    hosted(move |host| async move { callback.handle_hosted(&input, None, host).await })
-}
-
-fn step(body: &mut Hosted<HookOutput>) -> CoroutineState<HostRequest, HookOutput> {
-    body.resume().now_or_never().unwrap().unwrap()
+fn observed_pre_call(plan: &BudgetPlan, observed: &[(&str, f64)]) -> HookInput {
+    let observed: Vec<BudgetCounterSpend> = observed
+        .iter()
+        .map(|(key, spend)| BudgetCounterSpend {
+            counter_key: Some((*key).to_owned()),
+            spend: Some(*spend),
+        })
+        .collect();
+    HookInput {
+        hook: Hook::PreCall,
+        fields: FieldValues::new(FieldSet::of(&[
+            Field::BudgetPlan,
+            Field::BudgetCounterSpend,
+        ]))
+        .with(Field::BudgetPlan, serde_json::to_value(plan).unwrap())
+        .with(
+            Field::BudgetCounterSpend,
+            serde_json::to_value(observed).unwrap(),
+        ),
+        call: None,
+    }
 }
 
 #[rstest]
 #[tokio::test]
-async fn a_warm_counter_is_reserved_without_a_host_call() {
+async fn the_callback_reads_the_plan_and_the_counter_spend_python_observed() {
+    let callback = Shared(Arc::new(Budgets::new(store(&[]))));
+    let [subscription] = callback.manifest().subscriptions.as_slice() else {
+        panic!("expected one subscription");
+    };
+    assert_eq!(
+        subscription.reads,
+        FieldSet::of(&[Field::BudgetPlan, Field::BudgetCounterSpend])
+    );
+}
+
+#[rstest]
+#[case::observed(&[(KEY, 1.0)])]
+#[case::not_observed(&[])]
+#[tokio::test]
+async fn a_counter_python_observed_is_charged_on_the_store(#[case] observed: &[(&str, f64)]) {
     let store = store(&[(KEY, 1.0)]);
+    let callback = Shared(Arc::new(Budgets::new(Arc::clone(&store))));
     let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-    let mut body = hosted_pre_call(&store, &plan);
-    let CoroutineState::Complete(Ok(Some(Verdict::Patch(_)))) = step(&mut body) else {
-        panic!("expected the reservation without a host call");
+    let Some(Verdict::Patch(_)) = callback
+        .handle(&observed_pre_call(&plan, observed), None)
+        .await
+        .unwrap()
+    else {
+        panic!("expected the reservation");
     };
     assert_eq!(value(&store, KEY), Some(3.0));
 }
 
 #[rstest]
 #[tokio::test]
-async fn a_cold_counter_asks_the_host_for_its_current_spend() {
-    let store = store(&[]);
-    let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-    let mut body = hosted_pre_call(&store, &plan);
-    let CoroutineState::Yielded(request) = step(&mut body) else {
-        panic!("expected a host call");
-    };
-    assert_eq!(request.call, "current_spend");
-    assert_eq!(
-        request.request,
-        json!({"counter_key": KEY, "fallback_spend": 0.0})
+async fn an_observed_spend_with_no_room_charges_counters_one_at_a_time_and_refuses_the_full_one() {
+    const TEAM: &str = "spend:team:team-1";
+    let store = store(&[(KEY, 10.0), (TEAM, 0.0)]);
+    let callback = Shared(Arc::new(Budgets::new(Arc::clone(&store))));
+    let plan = plan(
+        vec![
+            counter(TEAM, 10.0, "Team", "team-1"),
+            counter(KEY, 10.0, "Key", "hashed"),
+        ],
+        2.0,
     );
-    store
-        .set_local(
-            &SpendCounter::parse(KEY).unwrap(),
-            Number::Float(10.0),
-            None,
-        )
-        .unwrap();
-    request.reply.send(Ok(json!(10.0)));
-    let CoroutineState::Complete(Ok(Some(Verdict::Abort(abort)))) = step(&mut body) else {
-        panic!("expected the refusal the reseeded spend gives");
-    };
-    assert_eq!(
-        abort.error.unwrap().fields["message"],
-        json!("Budget has been exceeded! Key=hashed Current cost: 12.0, Max budget: 10.0")
-    );
-    assert_eq!(value(&store, KEY), Some(10.0));
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_host_call_that_raises_fails_the_hook_with_the_raised_exception() {
-    let store = store(&[]);
-    let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-    let mut body = hosted_pre_call(&store, &plan);
-    let CoroutineState::Yielded(request) = step(&mut body) else {
-        panic!("expected a host call");
-    };
-    request.reply.send(Err(HostFault::Raised(HostException::new(
-        "ConnectionError: database unreachable",
-        (),
-    ))));
-    let CoroutineState::Complete(Err(CallbackError::Host(HostCallError::Raised {
-        call: "current_spend",
-        exception,
-    }))) = step(&mut body)
+    let Some(Verdict::Abort(abort)) = callback
+        .handle(&observed_pre_call(&plan, &[(KEY, 10.0), (TEAM, 0.0)]), None)
+        .await
+        .unwrap()
     else {
-        panic!("expected the raised host call");
+        panic!("expected the refusal");
     };
-    assert_eq!(exception.message(), "ConnectionError: database unreachable");
-    assert_eq!(value(&store, KEY), None);
+    assert_eq!(abort.error.unwrap().kind, "budget_exceeded");
+    assert_eq!(value(&store, KEY), Some(10.0));
+    assert_eq!(value(&store, TEAM), Some(0.0));
 }

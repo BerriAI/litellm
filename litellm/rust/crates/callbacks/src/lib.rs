@@ -25,11 +25,12 @@ pub use manifest::{
 };
 pub use payload::{PayloadHost, PayloadRef, RenderOptions, Rendered, render_all};
 pub use record::{
-    AgentPolicy, AttemptTiming, BudgetPlan, BudgetPlanCounter, BudgetReservation, Cost, Deployment,
-    EstimatedOutputTokens, GuardrailEntry, InputSequenceLength, KeyIdentity, KeyLimits,
-    LimiterRequest, LoggedKeyIdentity, LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind,
-    MetadataLabel, ModelInfo, Moment, Outcome, OutputCap, RateLimitState, RateLimitStatus,
-    RateLimitStatuses, ReservationEntry, Usage, UsageRecord, ZeroCost,
+    AgentPolicy, AttemptTiming, BudgetCounterSpend, BudgetPlan, BudgetPlanCounter,
+    BudgetReservation, Cost, Deployment, EstimatedOutputTokens, GuardrailEntry,
+    InputSequenceLength, KeyIdentity, KeyLimits, LimiterRequest, LoggedKeyIdentity,
+    LoggedModelGroup, LoggedRequest, McpToolCall, MetadataKind, MetadataLabel, ModelInfo, Moment,
+    Outcome, OutputCap, RateLimitState, RateLimitStatus, RateLimitStatuses, ReservationEntry,
+    Usage, UsageRecord, ZeroCost,
 };
 pub use scalar::Scalar;
 pub use verdict::{Abort, AbortError, Patch, PatchOp, Verdict};

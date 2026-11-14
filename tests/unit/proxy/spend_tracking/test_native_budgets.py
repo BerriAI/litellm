@@ -14,7 +14,7 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
-from litellm.integrations.custom_logger_v2.field_sources import HookArgs, SourcedFields
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs, SourcedFields, fetch_reads
 from litellm.integrations.custom_logger_v2.legacy import PROXY_REQUEST_KEYS, KwargsFields
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
@@ -151,9 +151,11 @@ async def _pre_call(
     fields: Final = SourcedFields(
         KwargsFields(data, PROXY_REQUEST_KEYS), PRE_CALL_SOURCES, HookArgs(auth=auth, request=data)
     )
+    reads: Final = frozenset({Field.budget_plan, Field.budget_counter_spend})
+    await fetch_reads(fields, reads)
     outcome: Final = await logger.run_rust(
         Hook.pre_call,
-        frozenset({Field.budget_plan}),
+        reads,
         FieldView(fields),
         CallContext[object](hook=Hook.pre_call, call=None, state=None),
     )
@@ -630,14 +632,14 @@ def _reset_reads(reads: _SpendReads) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_warm_counter_is_read_by_the_native_without_asking_python(
+async def test_a_warm_counter_is_read_through_python_without_a_db_read(
     store: SpendCounterStore, monkeypatch: pytest.MonkeyPatch, golden: Golden
 ) -> None:
     reads: Final = _count_spend_reads(monkeypatch, 0.0)
     identity: Final = Identity(team_budget=100.0, spend={KEY: 1.0, TEAM: 2.0})
     native: Final = await _native_admit(store, identity, "call-warm")
 
-    assert (reads.current_spend_calls, reads.db_reads) == (0, 0)
+    assert (reads.current_spend_calls, reads.db_reads) == (2, 0)
     recorded: Final = (native.counters, _entries(native.reservation))
     assert golden.canonical(recorded) == golden.recorded("python", recorded)
 
@@ -654,7 +656,7 @@ async def test_a_cold_counter_is_reseeded_through_python_like_python(
     identity: Final = Identity(team_budget=100.0, spend={TEAM: 2.0})
     native: Final = await _native_admit(store, identity, "call-cold")
 
-    assert (reads.current_spend_calls, reads.db_reads) == (1, 1)
+    assert (reads.current_spend_calls, reads.db_reads) == (2, 1)
     recorded: Final = (_refusal_fields(native.refusal), native.counters, _entries(native.reservation))
     assert golden.canonical(recorded) == golden.recorded("python", recorded)
 

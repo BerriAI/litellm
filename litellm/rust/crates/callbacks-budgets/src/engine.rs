@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use litellm_callbacks::{
-    BudgetReservation, Host, HostCall, HostCallError, ReservationEntry, Scalar,
-};
+use litellm_callbacks::{BudgetCounterSpend, BudgetReservation, ReservationEntry};
 use litellm_python_compat::repr::float_repr;
 use litellm_redis_store::{
     Number,
@@ -75,7 +73,6 @@ pub enum EngineError {
     Store(litellm_redis_store::Error),
     Plan(NotASpendCounter),
     Reservation(ReservationError),
-    Host(HostCallError),
 }
 
 impl std::fmt::Display for EngineError {
@@ -87,7 +84,6 @@ impl std::fmt::Display for EngineError {
             Self::Store(error) => write!(f, "{error}"),
             Self::Plan(error) => write!(f, "{error}"),
             Self::Reservation(error) => write!(f, "{error}"),
-            Self::Host(error) => write!(f, "{error}"),
         }
     }
 }
@@ -130,40 +126,12 @@ fn exceeded(counter: &Counter, current_cost: f64, estimated_cost: Option<f64>) -
     })
 }
 
-#[derive(Serialize)]
-pub struct CurrentSpend {
-    pub counter_key: String,
-    pub fallback_spend: Scalar,
-}
-
-impl HostCall for CurrentSpend {
-    const NAME: &'static str = "current_spend";
-    type Reply = Scalar;
-}
-
-async fn current_value(
-    store: &SpendCounters,
-    counter: &Counter,
-    host: &Host,
-) -> Result<f64, EngineError> {
-    if let Some(value) = store.read(&counter.counter).await?.value() {
-        return Ok(value.as_f64());
-    }
-    if !host.is_attached() {
-        return Ok(counter.planned.fallback_spend);
-    }
-    let call = CurrentSpend {
-        counter_key: counter.planned.counter_key.clone(),
-        fallback_spend: Scalar::Float(counter.planned.fallback_spend),
-    };
-    match host.call(call).await.map_err(EngineError::Host)? {
-        Scalar::Float(spend) => Ok(spend),
-        Scalar::Int(spend) => Ok(spend as f64),
-        other => Err(EngineError::Host(HostCallError::Reply {
-            call: CurrentSpend::NAME,
-            message: format!("{other:?} is not a spend"),
-        })),
-    }
+fn observed_spend(observed: &[BudgetCounterSpend], counter: &Counter) -> f64 {
+    observed
+        .iter()
+        .find(|spend| spend.counter_key.as_deref() == Some(counter.key()))
+        .and_then(|spend| spend.spend)
+        .unwrap_or(counter.planned.fallback_spend)
 }
 
 fn applies_to(value: Option<f64>, adjustment: f64) -> bool {
@@ -304,7 +272,7 @@ pub(crate) async fn release_best_effort(store: &SpendCounters, entries: &mut [En
 
 struct Admission<'a> {
     store: &'a SpendCounters,
-    host: &'a Host,
+    observed: &'a [BudgetCounterSpend],
     plan: &'a Plan,
     applied: Vec<Entry>,
     cost: f64,
@@ -312,14 +280,9 @@ struct Admission<'a> {
 
 impl Admission<'_> {
     async fn charge(&mut self, counters: &[Counter]) -> Result<(), EngineError> {
-        let mut values = Vec::with_capacity(counters.len());
-        for counter in counters {
-            values.push(current_value(self.store, counter, self.host).await?);
-        }
-        let fits = counters
-            .iter()
-            .zip(&values)
-            .all(|(counter, value)| value + self.cost <= counter.planned.max_budget);
+        let fits = counters.iter().all(|counter| {
+            observed_spend(self.observed, counter) + self.cost <= counter.planned.max_budget
+        });
         let groups: Vec<&[Counter]> = if fits {
             vec![counters]
         } else {
@@ -404,12 +367,12 @@ impl Admission<'_> {
 pub async fn reserve(
     store: &SpendCounters,
     plan: &Plan,
-    host: &Host,
+    observed: &[BudgetCounterSpend],
 ) -> Result<Option<Reservation>, EngineError> {
     let counters = plan.counters().map_err(EngineError::Plan)?;
     let mut admission = Admission {
         store,
-        host,
+        observed,
         plan,
         applied: Vec::new(),
         cost: plan.reservation_cost,
@@ -661,10 +624,7 @@ mod tests {
             ],
             3.0,
         );
-        let reservation = reserve(&store, &plan, &Host::detached())
-            .await
-            .unwrap()
-            .unwrap();
+        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
         assert_eq!(reservation.reserved_cost, 3.0);
         assert_eq!(reservation.input_cost, 0.75);
         assert_eq!(value(&store, KEY), Some(4.0));
@@ -686,10 +646,7 @@ mod tests {
             ],
             3.0,
         );
-        let reservation = reserve(&store, &plan, &Host::detached())
-            .await
-            .unwrap()
-            .unwrap();
+        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
         assert_eq!(reservation.reserved_cost, 1.0);
         assert_eq!(value(&store, KEY), Some(2.0));
         assert_eq!(value(&store, TEAM), Some(10.0));
@@ -727,8 +684,7 @@ mod tests {
                 1.0,
             )
         };
-        let Err(EngineError::Exceeded(exceeded)) = reserve(&store, &plan, &Host::detached()).await
-        else {
+        let Err(EngineError::Exceeded(exceeded)) = reserve(&store, &plan, &[]).await else {
             panic!("expected a refusal");
         };
         assert_eq!(exceeded.message, message);
@@ -752,10 +708,7 @@ mod tests {
                 1.0,
             )
         };
-        let reservation = reserve(&store, &plan, &Host::detached())
-            .await
-            .unwrap()
-            .unwrap();
+        let reservation = reserve(&store, &plan, &[]).await.unwrap().unwrap();
         assert_eq!(reservation.entries.len(), 1);
         assert_eq!(reservation.entries[0].counter_key, TEAM);
         assert_eq!(value(&store, KEY), Some(10.0));
@@ -841,12 +794,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(
-            &reserve(&store, &plan, &Host::detached())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
+        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
         store
             .invalidate(&[SpendCounter::parse(TEAM).unwrap()])
             .await;
@@ -874,12 +822,7 @@ mod tests {
     async fn a_counter_the_caller_saw_missing_is_reseeded_whatever_the_store_holds_now() {
         let store = store(&[(KEY, 1.0)]);
         let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-        let record = record(
-            &reserve(&store, &plan, &Host::detached())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
+        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
         let settlement = settle(
             &store,
             &Settle {
@@ -915,12 +858,7 @@ mod tests {
     ) {
         let store = store(&[(KEY, 1.0)]);
         let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 2.0);
-        let mut record = record(
-            &reserve(&store, &plan, &Host::detached())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
+        let mut record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
         let settlement = settle_now(&store, &record, &[], actual).await.unwrap();
         assert_eq!(settlement.adjustments, vec![Some(actual - 2.0)]);
         stamp(&mut record, &settlement);
@@ -946,12 +884,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(
-            &reserve(&store, &plan, &Host::detached())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
+        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
         let key = SpendCounter::parse(KEY).unwrap();
         match before_settle {
             Some(spend) => store.set_local(&key, Number::Float(spend), None).unwrap(),
@@ -988,12 +921,7 @@ mod tests {
             ],
             2.0,
         );
-        let record = record(
-            &reserve(&store, &plan, &Host::detached())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
+        let record = record(&reserve(&store, &plan, &[]).await.unwrap().unwrap());
         store
             .invalidate(&[SpendCounter::parse(TEAM).unwrap()])
             .await;

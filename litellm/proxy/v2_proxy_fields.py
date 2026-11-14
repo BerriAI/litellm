@@ -19,8 +19,14 @@ from litellm.integrations.custom_logger_v2.derivations import (
     member,
 )
 from litellm.integrations.custom_logger_v2.enums import Field
-from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, mapped
-from litellm.types.integrations.custom_logger_v2 import LimiterRequest, OutputCap, RateLimitStatuses, coerce_record
+from litellm.integrations.custom_logger_v2.field_sources import FieldSource, HookArgs, derived, fetched, mapped
+from litellm.types.integrations.custom_logger_v2 import (
+    BudgetCounterSpend,
+    LimiterRequest,
+    OutputCap,
+    RateLimitStatuses,
+    coerce_record,
+)
 
 
 def _call_id(args: HookArgs) -> str | None:
@@ -123,12 +129,19 @@ def limiter_request(args: HookArgs) -> LimiterRequest | None:
     )
 
 
+async def budget_counter_spend(args: HookArgs) -> tuple[BudgetCounterSpend, ...] | None:
+    from litellm.proxy.spend_tracking.native_budgets import budget_counter_spend as observed
+
+    return await observed(args)
+
+
 PRE_CALL_SOURCES: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
         **PRE_CALL_AUTH_SOURCES,
         Field.rate_limit_statuses: mapped(rate_limit_statuses, write_rate_limit_statuses),
         Field.output_cap: derived(output_cap),
         Field.limiter_request: derived(limiter_request),
+        Field.budget_counter_spend: fetched(budget_counter_spend),
     }
 )
 DERIVED_POST_CALL_SUCCESS_FIELDS: Final = DERIVED_AUTH_FIELDS
@@ -178,6 +191,7 @@ __all__ = [
     "DERIVED_POST_CALL_SUCCESS_FIELDS",
     "DERIVED_RESPONSE_HEADERS_FIELDS",
     "PRE_CALL_SOURCES",
+    "budget_counter_spend",
     "limiter_request",
     "output_cap",
     "post_call_facts",

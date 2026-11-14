@@ -108,6 +108,7 @@ fields! {
     MetadataLabels = 44, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
     InputSequenceLength = 45, SmallRecord, crate::record::InputSequenceLength;
     LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
+    BudgetCounterSpend = 47, SmallRecord, std::vec::Vec<crate::record::BudgetCounterSpend>;
 }
 
 impl Field {
@@ -146,6 +147,7 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::MetadataLabels,
     Field::InputSequenceLength,
     Field::LimiterRequest,
+    Field::BudgetCounterSpend,
 ]);
 
 pub const BY_REFERENCE: FieldSet = FieldSet::of(&[Field::StandardLoggingPayloadRef]);
@@ -237,7 +239,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LimiterRequest, 46, "limiter_request")]
+    #[case::last(Field::BudgetCounterSpend, 47, "budget_counter_spend")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

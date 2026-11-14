@@ -242,6 +242,11 @@ class BudgetPlanCounter(Strict):
     spend_log_entity_id: str | None = None
 
 
+class BudgetCounterSpend(Strict):
+    counter_key: str | None = None
+    spend: F64 | None = None
+
+
 class BudgetPlan(Record):
     counters: tuple[BudgetPlanCounter, ...] | None = None
     reservation_cost: F64 | None = None
@@ -474,6 +479,7 @@ def coerce_value(owner: str, adapter: TypeAdapter[ValueT], raw: object) -> Value
 __all__ = [
     "AgentPolicy",
     "AttemptTiming",
+    "BudgetCounterSpend",
     "BudgetPlan",
     "BudgetPlanCounter",
     "BudgetReservation",

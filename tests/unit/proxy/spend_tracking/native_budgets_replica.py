@@ -17,7 +17,7 @@ import litellm
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.enforcement import FieldView
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
-from litellm.integrations.custom_logger_v2.field_sources import HookArgs, SourcedFields
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs, SourcedFields, fetch_reads
 from litellm.integrations.custom_logger_v2.legacy import PROXY_REQUEST_KEYS, KwargsFields
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.proxy import proxy_server
@@ -65,9 +65,11 @@ async def native_pre_call(auth: UserAPIKeyAuth, data: Mapping[str, object]) -> P
     fields: Final = SourcedFields(
         KwargsFields(request, PROXY_REQUEST_KEYS), PRE_CALL_SOURCES, HookArgs(auth=auth, request=request)
     )
+    reads: Final = frozenset({Field.budget_plan, Field.budget_counter_spend})
+    await fetch_reads(fields, reads)
     outcome: Final = await native_owner().run_rust(
         Hook.pre_call,
-        frozenset({Field.budget_plan}),
+        reads,
         FieldView(fields),
         CallContext[object](hook=Hook.pre_call, call=None, state=None),
     )

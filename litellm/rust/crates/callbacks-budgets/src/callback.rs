@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
     Abort, AbortError, Activation, BudgetReservation, Callback, CallbackError, Field, FieldSet,
-    Hook, HookInput, HookOutput, Host, Manifest, OptOutBy, Patch, ReservationEntry, Selection,
+    Hook, HookInput, HookOutput, Manifest, OptOutBy, Patch, ReservationEntry, Selection,
     Subscription, Verdict, typed,
 };
 use litellm_redis_store::spend_counters::SpendCounters;
@@ -32,7 +32,7 @@ fn manifest() -> Manifest {
             ..Selection::named(NAME)
         },
         subscriptions: vec![Subscription {
-            reads: FieldSet::of(&[Field::BudgetPlan]),
+            reads: FieldSet::of(&[Field::BudgetPlan, Field::BudgetCounterSpend]),
             writes: FieldSet::of(&[Field::BudgetReservation]),
             may_abort: true,
             ..Subscription::on(Hook::PreCall)
@@ -127,14 +127,18 @@ impl Budgets {
             .await
     }
 
-    async fn admit(&self, input: &HookInput, host: Host) -> HookOutput {
+    async fn admit(&self, input: &HookInput) -> HookOutput {
         let Some(record) = input.fields.get::<typed::BudgetPlan>()? else {
             return Ok(None);
         };
+        let observed = input
+            .fields
+            .get::<typed::BudgetCounterSpend>()?
+            .unwrap_or_default();
         let plan =
             Plan::try_from(record).map_err(|error| CallbackError::Failed(error.to_string()))?;
         match self
-            .logged(engine::reserve(&self.store, &plan, &host))
+            .logged(engine::reserve(&self.store, &plan, &observed))
             .await
         {
             Ok(None) => Ok(None),
@@ -145,7 +149,6 @@ impl Budgets {
                     Patch::default().set(Field::BudgetReservation, record),
                 )))
             }
-            Err(EngineError::Host(error)) => Err(CallbackError::Host(error)),
             Err(error) => Ok(Some(Verdict::Abort(abort(&error, plan.status_code)))),
         }
     }
@@ -163,20 +166,11 @@ impl Callback for Shared {
     fn handle<'a>(
         &'a self,
         input: &'a HookInput,
-        state: Option<&'a ()>,
-    ) -> BoxFuture<'a, HookOutput> {
-        self.handle_hosted(input, state, Host::detached())
-    }
-
-    fn handle_hosted<'a>(
-        &'a self,
-        input: &'a HookInput,
         _state: Option<&'a ()>,
-        host: Host,
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             match input.hook {
-                Hook::PreCall => self.0.admit(input, host).await,
+                Hook::PreCall => self.0.admit(input).await,
                 _ => Ok(None),
             }
         })

@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -23,12 +23,14 @@ class HookArgs:
 
 Derive: TypeAlias = Callable[[HookArgs], object]
 Write: TypeAlias = Callable[[HookArgs, object], None]
+Fetch: TypeAlias = Callable[[HookArgs], Awaitable[object]]
 
 
 @dataclass(frozen=True, slots=True)
 class FieldSource:
     read: Derive
     write: Write | None = None
+    fetch: Fetch | None = None
 
     @property
     def derived(self) -> bool:
@@ -41,6 +43,14 @@ def derived(read: Derive) -> FieldSource:
 
 def mapped(read: Derive, write: Write) -> FieldSource:
     return FieldSource(read=read, write=write)
+
+
+def _unfetched(_: HookArgs) -> None:
+    return None
+
+
+def fetched(fetch: Fetch) -> FieldSource:
+    return FieldSource(read=_unfetched, fetch=fetch)
 
 
 class _Cache:
@@ -85,6 +95,8 @@ class SourcedFields(LiveFields):
         if not source.derived:
             return source.read(self._args)
         cached: Final = self._cache.values
+        if source.fetch is not None:
+            return cached.get(field)
         if field not in cached:
             cached[field] = source.read(self._args)
         return cached[field]
@@ -109,6 +121,19 @@ class SourcedFields(LiveFields):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
+
+    def _unfetched(self, fields: Iterable[Field]) -> tuple[tuple[Field, Fetch], ...]:
+        return tuple(
+            (field, source.fetch)
+            for field in fields
+            if field not in self._cache.values
+            and (source := self._sources.get(field)) is not None
+            and source.fetch is not None
+        )
+
+    async def fetch(self, fields: Iterable[Field]) -> None:
+        for field, fetch in self._unfetched(fields):
+            self._cache.values[field] = await fetch(self._args)
 
     def apply(self, patch: Patch) -> Mapping[Field, object]:
         for op in patch.ops:
@@ -145,14 +170,22 @@ def settle_reads(fields: Mapping[Field, object], reads: Iterable[Field]) -> None
         _ = field in fields
 
 
+async def fetch_reads(fields: Mapping[Field, object], reads: Iterable[Field]) -> None:
+    if isinstance(fields, SourcedFields):
+        await fields.fetch(reads)
+
+
 __all__ = [
     "NO_SOURCES",
     "Derive",
+    "Fetch",
     "FieldSource",
     "HookArgs",
     "SourcedFields",
     "Write",
     "derived",
+    "fetch_reads",
+    "fetched",
     "mapped",
     "settle_reads",
     "source_table_problem",

@@ -10,6 +10,7 @@ from litellm.integrations.custom_logger_v2.field_sources import FieldSource, Hoo
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
+    BudgetCounterSpend,
     BudgetPlan,
     BudgetReservation,
     Cost,
@@ -687,6 +688,7 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.metadata_labels: tuple[MetadataLabel, ...],
         Field.input_sequence_length: InputSequenceLength,
         Field.limiter_request: LimiterRequest,
+        Field.budget_counter_spend: tuple[BudgetCounterSpend, ...],
     }
 )
 

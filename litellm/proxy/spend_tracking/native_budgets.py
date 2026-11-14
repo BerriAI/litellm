@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReservation, coerce_record
+from litellm.types.integrations.custom_logger_v2 import BudgetCounterSpend, BudgetPlan, BudgetReservation, coerce_record
 from litellm.types.proxy.native_budgets import BudgetCheck, NativeSettlement
 from litellm.types.utils import CallTypes
 
@@ -378,22 +378,33 @@ class NativeBudgetsLogger(RustLogger):
         return outcome
 
 
-class _CurrentSpend(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    counter_key: str
-    fallback_spend: float
-
-
-_CURRENT_SPEND: Final = TypeAdapter(_CurrentSpend)
+def _planned_counters(plan: BudgetPlan) -> tuple[tuple[str, float], ...]:
+    return tuple(
+        (counter.counter_key, float(counter.fallback_spend or 0.0))
+        for counter in plan.counters or ()
+        if counter.counter_key is not None
+    )
 
 
-class BudgetsHost:
-    async def current_spend(self, request: object) -> float:
-        call: Final = _CURRENT_SPEND.validate_python(request)
-        from litellm.proxy.proxy_server import get_current_spend
+async def observed_counter_spend(plan: BudgetPlan) -> tuple[BudgetCounterSpend, ...]:
+    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
 
-        return await get_current_spend(counter_key=call.counter_key, fallback_spend=call.fallback_spend)
+    counters: Final = _planned_counters(plan)
+    with spend_counter_batch_scope(spend_counter_store, counter_keys=frozenset(key for key, _ in counters)):
+        return tuple(
+            [
+                BudgetCounterSpend(
+                    counter_key=counter_key,
+                    spend=await get_current_spend(counter_key=counter_key, fallback_spend=fallback_spend),
+                )
+                for counter_key, fallback_spend in counters
+            ]
+        )
+
+
+async def budget_counter_spend(args: HookArgs) -> tuple[BudgetCounterSpend, ...] | None:
+    plan: Final = getattr(args.auth, Field.budget_plan.value, None)
+    return await observed_counter_spend(plan) if isinstance(plan, BudgetPlan) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,7 +441,7 @@ def install_native_budgets(store: SpendCounterStore, callbacks: list[object]) ->
     budgets: Final = NativeBudgets(handle)
     template: Final = rust_logger(budgets.callback())
     owner_type: Final = type(type(template).__name__, (NativeBudgetsLogger, type(template)), {"budgets": budgets})
-    logger: Final = owner_type(template.rust, host=BudgetsHost())
+    logger: Final = owner_type(template.rust)
     register_abort_error("budget_exceeded", _budget_exceeded)
     register_abort_error("budget_unavailable", _budget_unavailable)
     register_abort_error("budget_reservation_failed", _reservation_failed)
@@ -447,8 +458,8 @@ async def admit_native_reservation_now(
         return None
     outcome: Final = await _installed[0].logger.run_rust(
         Hook.pre_call,
-        frozenset({Field.budget_plan}),
-        FieldView({Field.budget_plan: plan}),
+        frozenset({Field.budget_plan, Field.budget_counter_spend}),
+        FieldView({Field.budget_plan: plan, Field.budget_counter_spend: await observed_counter_spend(plan)}),
         CallContext[object](hook=Hook.pre_call, call=None, state=None),
     )
     if isinstance(outcome, Abort):

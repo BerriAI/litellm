@@ -16,7 +16,7 @@ from typing_extensions import Self
 from litellm.integrations.custom_logger_v2.call import CallContext, CallFacts
 from litellm.integrations.custom_logger_v2.enforcement import ContractViolation, Enforced, Policy, Unchecked
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
-from litellm.integrations.custom_logger_v2.field_sources import settle_reads
+from litellm.integrations.custom_logger_v2.field_sources import fetch_reads, settle_reads
 from litellm.integrations.custom_logger_v2.hooks import HOOK_SPECS
 from litellm.integrations.custom_logger_v2.manifest import LegacyBinding
 from litellm.integrations.custom_logger_v2.offpath import InProcessSink, OffPathSink
@@ -391,6 +391,7 @@ class RequestScope:
         policy: Final = self._dispatcher.policy
         handler: Final = _handler(entry.manifest.logger, entry.subscription.handler)
         context: Final = CallContext[object](hook=hook, call=call, state=state)
+        await fetch_reads(fields, entry.subscription.reads)
         view: Final = policy.view(entry.subscription, fields)
         result: Final = (
             await _awaited(handler(view, context))

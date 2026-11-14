@@ -468,5 +468,11 @@
     "fallback_on_saturation": true,
     "fallback_on_saturation_invalid": "text",
     "fallback_walk_armed": true
-  }
+  },
+  "budget_counter_spend": [
+    {
+      "counter_key": "text",
+      "spend": 1.5
+    }
+  ]
 }

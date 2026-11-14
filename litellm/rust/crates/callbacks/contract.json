@@ -481,6 +481,11 @@
       "name": "limiter_request",
       "bit": 46,
       "tier": "small_record"
+    },
+    {
+      "name": "budget_counter_spend",
+      "bit": 47,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -503,6 +508,7 @@
   ],
   "derived_only": [
     "attempt_timing",
+    "budget_counter_spend",
     "budget_plan",
     "cold_storage_object_key",
     "cost",

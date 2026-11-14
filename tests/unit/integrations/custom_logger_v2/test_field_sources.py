@@ -1,20 +1,22 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 from litellm.integrations.custom_logger_v2 import Field, Hook, InvalidDeclarationError, InvalidPatchError, Patch
-from litellm.integrations.custom_logger_v2.hooks import Subscription
 from litellm.integrations.custom_logger_v2.field_sources import (
-    HookArgs,
     FieldSource,
+    HookArgs,
     SourcedFields,
     derived,
+    fetch_reads,
+    fetched,
     mapped,
     source_table_problem,
     with_sources,
 )
+from litellm.integrations.custom_logger_v2.hooks import Subscription
 
 INNER: Final = MappingProxyType({Field.model: "gpt"})
 ARGS: Final = HookArgs(request={"model": "gpt"})
@@ -43,6 +45,38 @@ def test_a_derived_source_runs_only_when_read_and_then_once_for_every_reader_of_
     assert first is second
     assert calls == [ARGS]
     assert dict(fields) == {Field.model: "gpt", Field.key_identity: first}
+
+
+def _fetching(value: object) -> tuple[list[HookArgs], Callable[[HookArgs], Awaitable[object]]]:
+    calls: Final[list[HookArgs]] = []
+
+    async def fetch(args: HookArgs) -> object:
+        calls.append(args)
+        return value
+
+    return calls, fetch
+
+
+@pytest.mark.asyncio
+async def test_a_fetched_source_is_absent_until_its_reads_are_fetched_and_then_fetched_once() -> None:
+    calls, fetch = _fetching(({"counter_key": "spend:key:h", "spend": 1.0},))
+    fields: Final = SourcedFields(INNER, {Field.budget_counter_spend: fetched(fetch)}, ARGS)
+
+    assert Field.budget_counter_spend not in fields
+    await fetch_reads(fields, {Field.model})
+    assert calls == []
+    await fetch_reads(fields, {Field.budget_counter_spend})
+    await fetch_reads(fields.apply(Patch().set(Field.model, "claude")), {Field.budget_counter_spend})
+
+    assert fields[Field.budget_counter_spend] == ({"counter_key": "spend:key:h", "spend": 1.0},)
+    assert calls == [ARGS]
+
+
+@pytest.mark.asyncio
+async def test_fetching_reads_of_plain_fields_does_nothing() -> None:
+    await fetch_reads(INNER, {Field.budget_counter_spend})
+
+    assert dict(INNER) == {Field.model: "gpt"}
 
 
 def test_the_derived_cache_survives_a_patch_to_another_field() -> None:

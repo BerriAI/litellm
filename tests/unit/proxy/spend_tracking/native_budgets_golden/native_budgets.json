@@ -409,7 +409,7 @@
         }
       ]
     },
-    "test_a_warm_counter_is_read_by_the_native_without_asking_python": {
+    "test_a_warm_counter_is_read_through_python_without_a_db_read": {
       "python": [
         {
           "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
