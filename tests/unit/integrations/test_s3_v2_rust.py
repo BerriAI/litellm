@@ -1502,3 +1502,255 @@ async def test_unlisted_status_gets_one_put_and_stays_queued(
     assert len(bucket.puts()) == 4
     assert time.monotonic() - started < 0.5
     assert len(logger.sink.queued_keys()) == 4
+
+
+_SLOW_DOWN: Final = (503, "<Error><Code>SlowDown</Code></Error>")
+
+
+def _names(puts: list[Received]) -> list[str]:
+    return [put.path.rsplit("_", 1)[-1] for put in puts]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        pytest.param(503, "SlowDown", id="503"),
+        pytest.param(429, "SlowDown", id="429"),
+        pytest.param(500, "InternalError", id="500"),
+        pytest.param(403, "AccessDenied", id="access-denied-403"),
+    ],
+)
+async def test_retryable_statuses_back_off_three_attempts(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, code: str | None
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (status, _coded_body(code)))
+
+    await _upload(logger, _payload("req"))
+
+    assert len(bucket.puts()) == 3
+    _assert_backoff_gaps(bucket.puts())
+    assert len(logger.sink.queued_keys()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        pytest.param(408, None, id="408"),
+        pytest.param(502, None, id="502"),
+        pytest.param(504, None, id="504"),
+    ],
+)
+async def test_unlisted_statuses_are_not_retried_in_call(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, code: str | None
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (status, _coded_body(code)))
+
+    started: Final = time.monotonic()
+    await _upload(logger, _payload("req"))
+
+    assert len(bucket.puts()) == 1
+    assert time.monotonic() - started < 0.5
+    assert len(logger.sink.queued_keys()) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_finishes_before_the_next_first_attempt(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=1)
+    bucket.reply("_a.json", _SLOW_DOWN, (200, ""))
+    await _log_all(logger, [_payload("a"), _payload("b")])
+
+    await logger.flush_queue()
+
+    assert _names(bucket.puts()) == ["a.json", "a.json", "b.json"]
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_objects_in_backoff_are_bounded_by_the_slot_width(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=2)
+    bucket.reply("/test-bucket/", _SLOW_DOWN)
+    await _log_all(logger, [_payload(f"elem-{i}") for i in range(20)])
+
+    await logger.flush_queue()
+
+    first_and_last: Final[dict[str, list[float]]] = {}
+    for put in bucket.puts():
+        span = first_and_last.setdefault(put.path, [put.at, put.at])
+        span[1] = put.at
+    peak: Final = max(
+        sum(1 for start, end in first_and_last.values() if start <= moment <= end)
+        for moment, _ in first_and_last.values()
+    )
+    assert peak <= 2, f"{peak} objects slept at once, slot width is 2"
+    assert len(bucket.puts()) == 60
+
+
+@pytest.mark.asyncio
+async def test_terminal_code_is_retried_like_base_when_the_drop_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_drop_on_terminal_error=False)
+    bucket.reply("_x.json", (403, "<Error><Code>InvalidRequest</Code></Error>"), (200, ""))
+
+    with _failures() as failures:
+        await _upload(logger, _payload("x"))
+
+    assert len(bucket.puts()) == 2
+    failures.assert_not_called()
+
+    dropping: Final = _logger(monkeypatch, bucket)
+    bucket.script.clear()
+    bucket.reply("_x.json", (403, "<Error><Code>InvalidRequest</Code></Error>"), (200, ""))
+    before: Final = len(bucket.puts())
+
+    await _upload(dropping, _payload("x"))
+
+    assert len(bucket.puts()) - before == 1
+
+
+@pytest.mark.asyncio
+async def test_send_batch_calls_upload_with_one_positional_arg(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    await _log_all(logger, [_payload("a"), _payload("b")])
+
+    await logger.flush_queue()
+
+    assert sorted(_names(bucket.puts())) == ["a.json", "b.json"]
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_failed_elements_stay_oldest_first_when_requeued(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_retry_age_seconds=3600)
+    bucket.reply("_f2.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload("f1"), _payload("f2")])
+
+    await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+
+    assert logger.sink.queued_keys() == [_key("f2"), _key("late")]
+
+
+@pytest.mark.asyncio
+async def test_overflow_prefers_arrivals_over_failed_elements_without_counting_the_trim(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_queue_size=1)
+    bucket.reply("_f2.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload("f1"), _payload("f2")])
+
+    with _failures() as mock_failure:
+        await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+
+    assert logger.sink.queued_keys() == [_key("late")]
+    failed_uploads: Final = 1
+    assert mock_failure.call_count == failed_uploads
+
+
+@pytest.mark.asyncio
+async def test_fresh_elements_upload_before_stale_retries_after_a_failed_flush(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_concurrent_uploads=1)
+    bucket.reply("_f2.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload("f1"), _payload("f2")])
+
+    await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+
+    bucket.script.clear()
+    before: Final = len(bucket.puts())
+    await logger.flush_queue()
+
+    assert _names(bucket.puts()[before:]) == ["late.json", "f2.json"]
+    assert logger.sink.queued_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_overflow_trims_oldest_across_failed_flushes(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_queue_size=3)
+    bucket.reply("/test-bucket/", _SLOW_DOWN)
+    await _log_all(logger, [_payload(name) for name in ("a", "b", "c")])
+
+    await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("d")]))
+
+    assert logger.sink.queued_keys() == [_key("b"), _key("c"), _key("d")]
+
+    seen: Final = len(bucket.puts())
+
+    async def log_e_once_the_next_flush_puts() -> None:
+        while len(bucket.puts()) == seen:
+            await asyncio.sleep(0.005)
+        await log_payload(logger, _payload("e"), START)
+
+    await asyncio.gather(logger.flush_queue(), log_e_once_the_next_flush_puts())
+
+    assert logger.sink.queued_keys() == [_key("c"), _key("d"), _key("e")]
+
+
+@pytest.mark.asyncio
+async def test_retry_age_budget_drops_after_the_clock_set_by_a_partial_failure(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_retry_age_seconds=1)
+    bucket.reply("_poison.json", _SLOW_DOWN)
+    await _log_all(logger, [_payload("poison"), _payload("good")])
+
+    with _failures() as mock_failure:
+        await logger.flush_queue()
+
+        assert logger.sink.queued_keys() == [_key("poison")]
+
+        await asyncio.sleep(1.1)
+        await log_payload(logger, _payload("good-2"), START)
+        await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == []
+    poison_puts: Final = sum(1 for put in bucket.puts() if put.path.endswith("_poison.json"))
+    assert poison_puts == 6
+    upload_failures: Final = 2
+    assert mock_failure.call_count == upload_failures
+
+
+@pytest.mark.asyncio
+async def test_the_retry_clock_starts_at_the_first_partial_failure_not_first_seen(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket, s3_max_retry_age_seconds=1)
+    bucket.reply("_poison.json", _SLOW_DOWN)
+    await log_payload(logger, _payload("poison"), START)
+
+    await logger.flush_queue()
+
+    assert len(logger.sink.queued_keys()) == 1
+
+    await asyncio.sleep(1.1)
+    await log_payload(logger, _payload("good"), START)
+    await logger.flush_queue()
+
+    assert logger.sink.queued_keys() == [_key("poison")]
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_5xx_is_requeued_without_an_extra_attempt(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+) -> None:
+    logger: Final = _logger(monkeypatch, bucket)
+    bucket.reply("/test-bucket/", (507, ""))
+
+    await _upload(logger, _payload("req-507"))
+
+    assert len(logger.sink.queued_keys()) == 1
+    assert len(bucket.puts()) == 1
