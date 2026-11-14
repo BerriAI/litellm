@@ -1,35 +1,16 @@
-import asyncio
-import threading
-from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 
-from litellm.caching.dual_cache import DualCache
-from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
-    AgenticAnthropicStreamingIterator,
-)
-from litellm.llms.anthropic.messages.native.streaming_iterator import (
-    AnthropicMessagesStreamingResponse,
-)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
-    Litellm_EntityType,
     LiteLLM_OrganizationTable,
-    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
-    LiteLLM_TeamMembership,
-    LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -39,18 +20,14 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     _get_model_access_group_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
-    invalidate_budget_reservation_counters,
     release_budget_reservation_on_cancel,
     reserve_budget_for_request,
 )
-from litellm.proxy.spend_tracking.input_tokens import (
-    TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
-    _approximate_input_size,
-)
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.redis.stores.spend_counters import model_access_group_counter
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
+from tests.unit.proxy.spend_tracking.native_budgets_replica import install_native_owner
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -82,24 +59,6 @@ def _request_body() -> dict:
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
     }
-
-
-async def _reserve(valid_token, cost, key_cache, proxy_logging_obj):
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=cost,
-    ):
-        return await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
 
 
 def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
@@ -159,44 +118,6 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
     assert counter_cache.get_local("spend:end_user:customer-1") == pytest.approx(4.50)
     assert counter_cache.get_local("spend:tag:paid-tag") == pytest.approx(7.50)
     assert counter_cache.get_local("spend:tag:other-tag") == pytest.approx(2.50)
-
-
-def _project_scoped_token() -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(
-        token="key-project-scoped",
-        spend=0.0,
-        user_id="user-proj",
-        team_id="team-proj",
-        project_id="proj-1",
-    )
-
-
-async def _seed_project_scoped_budgets(
-    key_cache: DualCache,
-    team_member_spend: float,
-    team_member_max_budget: float,
-    project_spend: float,
-    project_max_budget: float,
-) -> None:
-    await key_cache.async_set_cache(
-        key="team_membership:user-proj:team-proj",
-        value=LiteLLM_TeamMembership(
-            user_id="user-proj",
-            team_id="team-proj",
-            spend=team_member_spend,
-            litellm_budget_table=LiteLLM_BudgetTable(max_budget=team_member_max_budget),
-        ).model_dump(),
-    )
-    await key_cache.async_set_cache(
-        key="project_id:proj-1",
-        value=LiteLLM_ProjectTableCachedObj(
-            project_id="proj-1",
-            team_id="team-proj",
-            budget_id="project-budget-id",
-            spend=project_spend,
-            litellm_budget_table=LiteLLM_BudgetTable(max_budget=project_max_budget),
-        ).model_dump(),
-    )
 
 
 @pytest.mark.asyncio
@@ -424,13 +345,15 @@ def test_reservation_uses_most_expensive_deployment_in_group():
 
 
 @pytest.mark.asyncio
-async def test_should_skip_reservation_for_per_pixel_image_model(
-    spend_counter_state,
-):
+async def test_should_skip_reservation_for_per_pixel_image_model(spend_counter_state, native_budgets_on, monkeypatch):
     """DALL-E 2-style per-pixel pricing depends on the requested ``size``,
     which we don't decode here. Fall through to read-time enforcement
     rather than guess."""
+    import litellm.proxy.proxy_server as ps
+
     counter_cache, key_cache = spend_counter_state
+    monkeypatch.setattr(ps, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
+    _ = install_native_owner(ps.spend_counter_store)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
         token="key-image-per-pixel",
@@ -474,55 +397,6 @@ def test_should_start_window_without_reset_at_at_duration_boundary():
     assert before <= window_start <= after
 
 
-async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token: str):
-    valid_token = UserAPIKeyAuth(token=token, spend=0.0, max_budget=10.0)
-    with (
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-            return_value=2.0,
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_input_cost",
-            return_value=0.5,
-        ),
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    assert reservation is not None
-    assert counter_cache.get_local(f"spend:key:{token}") == pytest.approx(2.0)
-    valid_token.budget_reservation = reservation
-    return valid_token, reservation
-
-
-async def _never_ending_stream():
-    yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
-    await asyncio.sleep(30)
-
-
-def _drive_streaming_cancel(valid_token, iterator_hook):
-    streaming_logging_obj = MagicMock()
-    streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
-    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
-    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-        response=MagicMock(),
-        user_api_key_dict=valid_token,
-        request_data=_request_body(),
-        proxy_logging_obj=streaming_logging_obj,
-        serialize_chunk=lambda chunk: chunk,
-        serialize_error=lambda exc: str(exc),
-    )
-    return generator, streaming_logging_obj
-
-
 @pytest.mark.asyncio
 async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     # If the release itself fails (e.g. Redis unavailable) it must not escape
@@ -540,78 +414,6 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     ):
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
-
-
-def _tiered_router() -> Router:
-    return Router(
-        model_list=[
-            {
-                "model_name": "dashscope/qwen3-max",
-                "litellm_params": {"model": "dashscope/qwen3-max", "api_key": "sk-fake"},
-                "model_info": {
-                    "max_input_tokens": 258048,
-                    "max_output_tokens": 65536,
-                    "tiered_pricing": [
-                        {
-                            "input_cost_per_token": 1.2e-06,
-                            "output_cost_per_token": 6e-06,
-                            "range": [0, 32000],
-                        },
-                        {
-                            "input_cost_per_token": 2.4e-06,
-                            "output_cost_per_token": 1.2e-05,
-                            "range": [32000, 128000],
-                        },
-                    ],
-                },
-            }
-        ]
-    )
-
-
-def _body_with_content_size(model: str, content_chars: int) -> dict:
-    return {
-        "model": model,
-        "messages": [{"role": "user", "content": "token " * (content_chars // 6)}],
-        "max_tokens": 10,
-    }
-
-
-def _values_only_size(value: object) -> int:
-    """The keys-ignoring walk the fixture below is sized to defeat"""
-    if isinstance(value, Mapping):
-        return sum(_values_only_size(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return sum(_values_only_size(item) for item in value)
-    return len(value) if isinstance(value, str) else 0
-
-
-_TOOL_PROPERTY_NAME_PREFIX = "service_metric_name_segment_" * 3
-
-
-def _key_heavy_tool(index: int) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": f"lookup_service_metric_{index}",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    f"{_TOOL_PROPERTY_NAME_PREFIX}{index}_{field}": {"type": "string"} for field in range(24)
-                },
-            },
-        },
-    }
-
-
-def _body_with_key_heavy_tool_schema(model: str) -> dict:
-    """A tool schema whose bulk is property names rather than property values"""
-    return {
-        "model": model,
-        "messages": [{"role": "user", "content": "which service is slow?"}],
-        "tools": [_key_heavy_tool(index) for index in range(24)],
-        "max_tokens": 10,
-    }
 
 
 class _ModelAccessGroupBudgetPrisma:
@@ -689,27 +491,6 @@ async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=N
         value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
         model_type=ModelAccessGroupBudget,
     )
-
-
-async def _reserve_for_model_access_groups(key_cache, groups, estimate):
-    """Reserve against the given groups, whose rows are already cached, so nothing hits the DB."""
-    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=estimate,
-    ):
-        return await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=UserAPIKeyAuth(
-                api_key="hashed", token="tok-mag-counter", matched_model_access_groups=list(groups)
-            ),
-            team_object=None,
-            user_object=None,
-            prisma_client=_ModelAccessGroupBudgetPrisma(),
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
-        )
 
 
 @pytest.mark.asyncio
