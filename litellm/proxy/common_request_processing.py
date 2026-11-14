@@ -3501,7 +3501,7 @@ class ProxyBaseLLMRequestProcessing:
                                 ),
                             )
                         )
-                        self.data = stamped
+                        self.data = stamped  # pyright: ignore[reportGeneralTypeIssues]  # cyclic payload inference
                         return stamped, admitted_logging_obj
                 if not at_saturation:
                     self.data = rate_limited_data
