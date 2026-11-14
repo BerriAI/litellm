@@ -1,6 +1,8 @@
 import asyncio
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -49,7 +51,12 @@ from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
-from tests.unit.proxy.spend_tracking.native_budgets_replica import reserve_budget_for_request
+from tests.unit.proxy.spend_tracking.native_budgets_replica import (
+    RespRedis,
+    install_native_owner,
+    reserve_budget_for_request,
+    resp_store,
+)
 
 pytestmark = pytest.mark.usefixtures("native_budgets_on")
 
@@ -1604,6 +1611,315 @@ async def test_release_budget_reservation_on_cancel_noop_when_finalized(
 
     # already reconciled by the success/failure path -> must stay untouched
     assert counter_cache.get_local("spend:key:key-cancel-finalized") == pytest.approx(3.0)
+
+
+@contextmanager
+def _install(redis: RespRedis, ttl: float = 60.0) -> Iterator[SpendCounterStore]:
+    import litellm.proxy.proxy_server as ps
+
+    with resp_store(redis, default_ttl=ttl) as store:
+        ps.spend_counter_store = store
+        _ = install_native_owner(store)
+        yield store
+
+
+@pytest.mark.asyncio
+async def test_should_preserve_budget_error_and_continue_partial_cleanup(
+    spend_counter_state,
+    caplog,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-cleanup-failure",
+        spend=0.0,
+        max_budget=1.0,
+        team_id="team-budget-cleanup-failure",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-budget-cleanup-failure",
+        spend=0.3,
+        max_budget=0.3,
+    )
+    await key_cache.async_set_cache(
+        key="team_id:team-budget-cleanup-failure",
+        value=team_object,
+    )
+    redis = RespRedis(values={})
+    redis.fail_once.append(
+        lambda command: command[:2] == ("INCRBYFLOAT", "spend:key:key-budget-cleanup-failure") and float(command[2]) < 0
+    )
+
+    with (
+        _install(redis) as store,
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.4,
+        ),
+        pytest.raises(litellm.BudgetExceededError),
+    ):
+        await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert store.get_local("spend:key:key-budget-cleanup-failure") is None
+    assert store.get_local("spend:team:team-budget-cleanup-failure") == pytest.approx(0.3)
+    assert "Failed to release partial budget reservation during exception cleanup" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
+    spend_counter_state,
+):
+    """A request that runs longer than the counter TTL must keep its reservation in Redis
+    (so a concurrent request on any worker still sees it), and renewal must stop once the
+    reservation is reconciled so an idle counter still expires on its own."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = RespRedis(values={}, ttl=0.2)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease", spend=0.0, max_budget=1.0)
+    counter_key = "spend:key:key-lease"
+
+    with _install(redis_cache, ttl=0.2):
+        reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+        assert reservation is not None
+
+        await asyncio.sleep(0.5)
+        assert redis_cache.get(counter_key) == pytest.approx(0.6)
+        concurrent = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+        assert concurrent is not None
+        assert concurrent["reserved_cost"] == pytest.approx(0.4)
+
+        await release_budget_reservation(reservation)
+        await release_budget_reservation(concurrent)
+        await asyncio.sleep(0.15)
+        refreshes_after_release = redis_cache.refresh_count
+        await asyncio.sleep(0.35)
+        assert redis_cache.refresh_count == refreshes_after_release
+        assert redis_cache.get(counter_key) is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_lease_keeps_renewing_after_transient_redis_failure(
+    spend_counter_state,
+):
+    """One failed EXPIRE (Redis blip, open circuit breaker) must not end renewal for the
+    rest of the request."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = RespRedis(values={}, ttl=0.2)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-blip", spend=0.0, max_budget=1.0)
+
+    with _install(redis_cache, ttl=0.2):
+        reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+        assert reservation is not None
+        redis_cache.fail_once.append(lambda command: command[0] == "EXPIRE")
+
+        await asyncio.sleep(0.5)
+        assert redis_cache.refresh_attempts >= 3
+        await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_reservation_lease_stops_when_request_task_ends_without_reconciling(
+    spend_counter_state,
+):
+    """A request whose task ends without reconciling (client disconnect path that skips the
+    cost callbacks) must not keep renewing: the counter falls back to its plain TTL instead of
+    pinning the reservation until the request timeout."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = RespRedis(values={}, ttl=0.2)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-orphan", spend=0.0, max_budget=1.0)
+    counter_key = "spend:key:key-lease-orphan"
+
+    with _install(redis_cache, ttl=0.2):
+        reservation = await asyncio.create_task(_reserve(valid_token, 0.6, key_cache, proxy_logging_obj))
+        assert reservation is not None
+        assert reservation["finalized"] is False
+
+        await asyncio.sleep(0.5)
+        assert redis_cache.refresh_count == 0
+        assert redis_cache.get(counter_key) is None
+
+
+class _TeamMembershipFloorDb:
+    """Stands in for `prisma_client.db`: only the team-membership row exists and its spend is the DB floor."""
+
+    def __init__(self, spend: float) -> None:
+        self.spend = spend
+
+    def __getattr__(self, table_name: str) -> SimpleNamespace:
+        row = SimpleNamespace(spend=self.spend) if table_name == "litellm_teammembership" else None
+        return SimpleNamespace(find_unique=AsyncMock(return_value=row))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
+    spend_counter_state,
+):
+    """Redis key expired mid-stream while the pod's in-memory copy still holds the
+    reserved value: reconcile must reseed from the DB floor plus the settled cost
+    instead of applying ``actual - reserved`` to the empty key."""
+    import litellm.proxy.proxy_server as ps
+
+    counter_key = "spend:team_member:user-expiry:team-expiry"
+    redis_cache = RespRedis(values={}, ttl=60.0)
+
+    with _install(redis_cache) as store:
+        store.set_local(counter_key, 0.6)
+
+        reservation = {
+            "reserved_cost": 0.6,
+            "entries": [
+                {
+                    "counter_key": counter_key,
+                    "entity_type": "TeamMember",
+                    "entity_id": "user-expiry:team-expiry",
+                    "reserved_cost": 0.6,
+                    "applied_adjustment": 0.0,
+                }
+            ],
+            "finalized": False,
+        }
+
+        with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+            ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+        ):
+            await ps.increment_spend_counters(
+                token="key-expiry",
+                team_id="team-expiry",
+                user_id="user-expiry",
+                response_cost=0.05,
+                budget_reservation=reservation,
+            )
+
+        assert redis_cache.values[counter_key] == pytest.approx(0.35)
+        assert store.get_local(counter_key) == pytest.approx(0.35)
+        assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands_between_passes(
+    spend_counter_state,
+):
+    """The early reconcile (before the spend row is enqueued) reseeds from a DB
+    floor that cannot yet include this request. When the periodic flush commits
+    the row before increment_spend_counters runs its second reconcile, the
+    applied_adjustment early-return must keep the counter from adding the cost
+    a second time."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-flush:team-flush"
+    redis_cache = RespRedis(values={}, ttl=60.0)
+
+    with _install(redis_cache) as store:
+        store.set_local(counter_key, 0.6)
+        db_floor = _TeamMembershipFloorDb(spend=0.3)
+        ps.prisma_client = SimpleNamespace(db=db_floor)
+
+        reservation = {
+            "reserved_cost": 0.6,
+            "entries": [
+                {
+                    "counter_key": counter_key,
+                    "entity_type": "TeamMember",
+                    "entity_id": "user-flush:team-flush",
+                    "reserved_cost": 0.6,
+                    "applied_adjustment": 0.0,
+                }
+            ],
+            "finalized": False,
+        }
+
+        await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.05, finalize=False)
+
+        assert redis_cache.values[counter_key] == pytest.approx(0.35)
+        assert reservation["entries"][0]["applied_adjustment"] == pytest.approx(-0.55)
+        assert reservation["finalized"] is False
+
+        db_floor.spend = 0.35
+        await ps.increment_spend_counters(
+            token="key-flush",
+            team_id="team-flush",
+            user_id="user-flush",
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+        assert redis_cache.values[counter_key] == pytest.approx(0.35)
+        assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_reserved_counter_deleted_during_spend_write_is_reseeded_instead_of_going_negative(
+    spend_counter_state,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:key:key-deleted-mid-write"
+    redis_cache = RespRedis(values={counter_key: 0.6}, ttl=60.0)
+
+    with _install(redis_cache) as store:
+        store.set_local(counter_key, 0.6)
+
+        async def _delete_counter_while_persisting(**kwargs: object) -> bool:
+            redis_cache.values.pop(counter_key, None)
+            store.delete_local(counter_key)
+            return True
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
+            side_effect=_delete_counter_while_persisting
+        )
+        reservation = {
+            "reserved_cost": 0.6,
+            "entries": [
+                {
+                    "counter_key": counter_key,
+                    "entity_type": "Key",
+                    "entity_id": "key-deleted-mid-write",
+                    "reserved_cost": 0.6,
+                    "applied_adjustment": 0.0,
+                }
+            ],
+            "finalized": False,
+        }
+
+        with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+            ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+        ):
+            charged = await _update_database_and_spend_counters(
+                proxy_logging_obj=proxy_logging_obj,
+                increment_spend_counters=ps.increment_spend_counters,
+                user_api_key="key-deleted-mid-write",
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                org_id=None,
+                kwargs={},
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.05,
+                budget_reservation=reservation,
+            )
+
+        assert charged is True
+        assert redis_cache.values[counter_key] == pytest.approx(0.35), redis_cache.commands
+        assert reservation["finalized"] is True
 
 
 async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token: str):
