@@ -522,6 +522,7 @@ _GUARDRAIL_CASES: Final = (
     ),
     pytest.param(MappingProxyType({"amazon-bedrock-guardrailAction": "NONE"}), (11, 7), False, id="guardrail_passed"),
     pytest.param(MappingProxyType({}), (11, 7), False, id="no_guardrail"),
+    pytest.param(MappingProxyType({}), (0, 0), False, id="no_guardrail_with_zero_usage"),
 )
 
 

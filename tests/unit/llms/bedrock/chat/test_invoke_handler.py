@@ -2110,12 +2110,30 @@ def _kimi_invoke_stream_events(trailing_fields: Mapping[str, object] | None) -> 
     return (*message, {**_openai_stream_chunk({}, "stop"), **trailing_fields})
 
 
+def _kimi_invoke_stream_with_usage_chunk_events(
+    trailing_fields: Mapping[str, object] | None,
+) -> tuple[Mapping[str, object], ...]:
+    metrics_field: Final = "amazon-bedrock-invocationMetrics"
+    fields: Final = trailing_fields or {}
+    message: Final = _kimi_invoke_stream_events({k: v for k, v in fields.items() if k != metrics_field})
+    if metrics_field not in fields:
+        return message
+    usage: Final = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+    return (*message, {**_openai_stream_chunk({}), "choices": [], "usage": usage, metrics_field: fields[metrics_field]})
+
+
 _GUARDRAIL_STREAM_FAMILIES: Final = [
     pytest.param(
         "bedrock/invoke/us.meta.llama4-maverick-17b-instruct-v1:0", _llama_invoke_stream_events, False, id="llama"
     ),
     pytest.param("bedrock/invoke/us.amazon.nova-2-lite-v1:0", _nova_invoke_stream_events, True, id="nova"),
     pytest.param("bedrock/invoke/moonshotai.kimi-k2.5", _kimi_invoke_stream_events, False, id="kimi"),
+    pytest.param(
+        "bedrock/invoke/moonshotai.kimi-k2.5",
+        _kimi_invoke_stream_with_usage_chunk_events,
+        False,
+        id="kimi_include_usage",
+    ),
 ]
 _InvokeStreamEvents = Callable[[Mapping[str, object] | None], tuple[Mapping[str, object], ...]]
 

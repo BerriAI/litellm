@@ -22,7 +22,7 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
-from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, bedrock_invoke_stream_guardrail_blocked
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD, BedrockInvokeStreamGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -974,36 +974,33 @@ def _content_filtered(chunk: _DecodedChunk) -> _DecodedChunk:
     return {**chunk, "is_finished": True, "finish_reason": "content_filter"}
 
 
-def _guardrail_blocked_chunks(held: _DecodedChunk | None, parsed: _DecodedChunk) -> tuple[_DecodedChunk, ...]:
-    if held is None:
-        return (_content_filtered(parsed),)
-    return (_content_filtered(held), parsed)
+def _content_filtered_tail(tail: tuple[_DecodedChunk, ...]) -> tuple[_DecodedChunk, ...]:
+    if any(map(_is_finish_chunk, tail)):
+        return tuple(_content_filtered(chunk) if _is_finish_chunk(chunk) else chunk for chunk in tail)
+    return tuple(_content_filtered(chunk) if index == 0 else chunk for index, chunk in enumerate(tail))
 
 
 class AmazonInvokeStreamDecoder(AWSEventStreamDecoder):
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
         super().__init__(model=model, json_mode=json_mode)
-        self._held_finish_chunk: _DecodedChunk | None = None
+        self._guardrail: BedrockInvokeStreamGuardrail = BedrockInvokeStreamGuardrail()
+        self._tail: tuple[_DecodedChunk, ...] = ()
 
     def _chunks_for_event(
         self,
         chunk_data: dict[str, object],  # mutable-ok: chunk_parser takes the decoded event as is
     ) -> tuple[_DecodedChunk, ...]:
-        blocked: Final = bedrock_invoke_stream_guardrail_blocked(chunk_data)
+        self._guardrail = self._guardrail.with_event(chunk_data)
         parsed: Final = self.chunk_parser(chunk_data=chunk_data)
-        held: Final = self._held_finish_chunk
-        self._held_finish_chunk = None
-        if blocked:
-            return _guardrail_blocked_chunks(held, parsed)
-        if not _is_finish_chunk(parsed):
-            return (parsed,) if held is None else (held, parsed)
-        self._held_finish_chunk = parsed
-        return () if held is None else (held,)
+        if not self._tail and not self._guardrail.intervened and not _is_finish_chunk(parsed):
+            return (parsed,)
+        self._tail = (*self._tail, parsed)
+        return ()
 
     def _held_chunks(self) -> tuple[_DecodedChunk, ...]:
-        held: Final = self._held_finish_chunk
-        self._held_finish_chunk = None
-        return () if held is None else (held,)
+        tail: Final = self._tail
+        self._tail = ()
+        return _content_filtered_tail(tail) if self._guardrail.blocked else tail
 
 
 class AmazonAnthropicClaudeStreamDecoder(AmazonInvokeStreamDecoder):

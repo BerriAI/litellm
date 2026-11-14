@@ -4319,6 +4319,7 @@ _GUARDRAIL_CASES: Final = [
     ),
     pytest.param({"amazon-bedrock-guardrailAction": "NONE"}, _MODEL_RAN_USAGE, "end_turn", id="guardrail_passed"),
     pytest.param({}, _MODEL_RAN_USAGE, "end_turn", id="no_guardrail"),
+    pytest.param({}, _NO_MODEL_USAGE, "end_turn", id="no_guardrail_with_zero_usage"),
 ]
 _GUARDRAIL_STREAM_CASES: Final = [
     pytest.param(_INTERVENED, "refusal", id="blocked"),
