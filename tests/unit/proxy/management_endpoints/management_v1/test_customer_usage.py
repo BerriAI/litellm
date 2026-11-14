@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
-from litellm.proxy.management_endpoints.management_v1.customer_usage import get_customer_usage_prisma, router
+from litellm.proxy.management_endpoints.management_v1.customer_usage import (
+    bounded_organizations,
+    get_customer_usage_prisma,
+    router,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
 from tests.unit.proxy.management_endpoints.test_common_daily_activity import _grouping_row
@@ -333,9 +337,25 @@ def test_non_admins_cannot_read_customer_usage(role: LitellmUserRoles) -> None:
 
 
 @pytest.mark.parametrize(
+    "identifiers",
+    (
+        pytest.param(" org-a ", id="surrounding-whitespace"),
+        pytest.param("org-a, org-a ", id="distinct-exact-identifiers"),
+        pytest.param(" \t ", id="whitespace-only-identifier"),
+        pytest.param(",".join(f"org-{index}" for index in range(100)), id="maximum-count"),
+    ),
+)
+def test_aggregate_filter_preserves_exact_organization_identifiers(identifiers: str) -> None:
+    assert bounded_organizations(identifiers) == identifiers
+
+
+@pytest.mark.parametrize(
     "params,status",
     (
         ({**RANGE, "customer_org_ids": ""}, 422),
+        ({**RANGE, "customer_org_ids": ",org-a"}, 422),
+        ({**RANGE, "customer_org_ids": "org-a,"}, 422),
+        ({**RANGE, "customer_org_ids": "org-a,,org-b"}, 422),
         ({**RANGE, "customer_org_ids": ",".join(str(index) for index in range(101))}, 422),
         ({"start_date": "2020-01-01", "end_date": "2024-01-01", "customer_org_ids": "org-a"}, 400),
         ({**RANGE, "start_date": "2024-02-01", "customer_org_ids": "org-a"}, 400),

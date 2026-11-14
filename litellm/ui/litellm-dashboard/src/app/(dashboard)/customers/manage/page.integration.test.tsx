@@ -67,6 +67,8 @@ const requestedUrls = () => fetchMock.mock.calls.map(([input]) => requestUrl(inp
 
 function serve(input: Parameters<typeof fetch>[0]): Response {
   const url = requestUrl(input);
+  if (url.pathname.endsWith("/daily/activity/aggregated"))
+    return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
   if (url.pathname.endsWith("/daily/activity")) return json({ results: [], metadata: EMPTY_DAILY_ACTIVITY_METADATA });
   if (url.pathname === "/models")
     return json({ data: [{ id: "configured-model", object: "model", created: 0, owned_by: "openai" }] });
@@ -133,6 +135,8 @@ describe("customer hierarchy management", () => {
             meta: { total_count: 1, page: 1, page_size: 20, total_pages: 1 },
           });
         }
+        if (url.pathname.endsWith("/daily/activity/aggregated"))
+          return json({ results: [], metadata: { ...EMPTY_DAILY_ACTIVITY_METADATA, total_spend: 12 } });
         if (!url.pathname.endsWith("/daily/activity")) return serve(input);
         const spend = url.pathname.includes("customer_organizations") ? 12 : 3;
         const metrics = {
@@ -190,7 +194,7 @@ describe("customer hierarchy management", () => {
         `${uiHref("customers/usage")}?org=org-1&${kind === "teams" ? "team" : "member"}=${id}`,
       );
       const activity = requestedUrls().filter((url) => url.pathname.endsWith("/daily/activity"));
-      expect(activity).toHaveLength(3);
+      expect(activity).toHaveLength(2);
       expect(
         activity
           .filter((url) => url.pathname.includes(collection))
@@ -199,19 +203,20 @@ describe("customer hierarchy management", () => {
     },
   );
 
-  it("should keep row actions without showing zero usage when analytics fails", async () => {
-    fetchMock.mockImplementation(async (input) =>
-      requestUrl(input).pathname.endsWith("/daily/activity")
-        ? json({ detail: "Usage unavailable" }, 503)
-        : serve(input),
-    );
-    renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });
-    const table = await screen.findByRole("table", { name: "Customer teams" });
-    expect(await screen.findByRole("alert")).toHaveTextContent("Usage unavailable");
-    expect(within(table).getByRole("status")).toHaveTextContent("Unavailable");
-    expect(within(table).queryByRole("meter")).not.toBeInTheDocument();
-    expect(within(table).getByRole("button", { name: "Edit Product" })).toBeEnabled();
-  });
+  it.each(["/daily/activity", "/daily/activity/aggregated"])(
+    "should keep row actions without showing zero usage when %s fails",
+    async (route) => {
+      fetchMock.mockImplementation(async (input) =>
+        requestUrl(input).pathname.endsWith(route) ? json({ detail: "Usage unavailable" }, 503) : serve(input),
+      );
+      renderWithProviders(<CustomerHierarchyManager />, { searchParams: "?org=org-1" });
+      const table = await screen.findByRole("table", { name: "Customer teams" });
+      expect(await screen.findByRole("alert")).toHaveTextContent("Usage unavailable");
+      expect(within(table).getByRole("status")).toHaveTextContent("Unavailable");
+      expect(within(table).queryByRole("meter")).not.toBeInTheDocument();
+      expect(within(table).getByRole("button", { name: "Edit Product" })).toBeEnabled();
+    },
+  );
 
   it("should preserve a draft on refresh and conflict, then reload and save the current configuration", async () => {
     const user = userEvent.setup();

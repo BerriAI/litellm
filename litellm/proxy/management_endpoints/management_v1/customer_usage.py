@@ -140,10 +140,10 @@ router: Final = APIRouter(
 
 
 def bounded_organizations(value: str) -> str:
-    ids: Final = tuple(part.strip() for part in value.split(",") if part.strip())
-    if not ids or len(ids) > 100:
-        raise ValueError("Provide between 1 and 100 customer organization IDs")
-    return ",".join(ids)
+    ids: Final = tuple(value.split(","))
+    if "" in ids or len(ids) > 100:
+        raise ValueError("Provide between 1 and 100 nonempty customer organization IDs")
+    return value
 
 
 @router.get(

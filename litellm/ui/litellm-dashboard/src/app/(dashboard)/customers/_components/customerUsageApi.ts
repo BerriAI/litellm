@@ -149,6 +149,26 @@ const activityPages = async (
   throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
 };
 
+const organizationActivityTotals = async (
+  organizationId: string,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+) => {
+  const result = await apiClient.get<DailyActivityAggregatedResponse>(
+    `${PREFIX}/customer_organizations/daily/activity/aggregated`,
+    {
+      accessToken: request.accessToken,
+      signal: request.signal,
+      query: {
+        start_date: request.startDate,
+        end_date: request.endDate,
+        customer_org_ids: organizationId,
+      },
+    },
+  );
+  if (!result.metadata) throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
+  return { ...result, metadata: result.metadata };
+};
+
 export const customerChildSpendCall = async ({
   organizationId,
   kind,
@@ -164,13 +184,14 @@ export const customerChildSpendCall = async ({
 }) => {
   const ids = entities.map((item) => item.id);
   if (ids.length === 0) return { monthly: [], yearly: [], organizationSpend: 0 };
+  assertIdentifiers([organizationId, ...ids]);
   const resource = kind === "teams" ? "customer_teams" : "customer_members";
   const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
   const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };
-  const [monthlyPages, yearlyPages, organizationPages] = await Promise.all([
+  const [monthlyPages, yearlyPages, organizationActivity] = await Promise.all([
     activityPages(resource, ids, monthRequest),
     activityPages(resource, ids, yearRequest),
-    activityPages("customer_organizations", [organizationId], monthRequest),
+    organizationActivityTotals(organizationId, monthRequest),
   ]);
   const monthly = mergeCustomerActivityPages(monthlyPages);
   const yearly = mergeCustomerActivityPages(yearlyPages);
@@ -179,7 +200,7 @@ export const customerChildSpendCall = async ({
   return {
     monthly: customerEntityRankings(monthly.results, labels, monthly.metadata, options),
     yearly: customerEntityRankings(yearly.results, labels, yearly.metadata, options),
-    organizationSpend: mergeCustomerActivityPages(organizationPages).metadata.total_spend,
+    organizationSpend: organizationActivity.metadata.total_spend,
   };
 };
 
@@ -284,7 +305,10 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   };
   const activity = await batches(jobs, async (job) => ({
     dimension: job.dimension,
-    pages: await activityPages(job.resource, job.ids, requests[job.dimension]),
+    pages:
+      job.dimension === "monthlyOrganization"
+        ? [await organizationActivityTotals(request.scope.org, monthRequest)]
+        : await activityPages(job.resource, job.ids, requests[job.dimension]),
   }));
   const primary = mergeCustomerActivityPages(
     activity.filter((result) => result.dimension === "scope").flatMap((result) => result.pages),
