@@ -1,4 +1,5 @@
 import contextlib
+import re
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +17,7 @@ from litellm.llms.gemini.common_utils import (
 )
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
+from tests.unit.conftest import in_operator_error
 
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -497,6 +499,18 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+    @pytest.mark.parametrize(
+        ("part", "message"),
+        [
+            (7, in_operator_error(7)),
+            (frozenset({"functionResponse"}), "'frozenset' object is not subscriptable"),
+            ({"functionResponse": "done"}, "FunctionResponse() argument after ** must be a mapping, not str"),
+        ],
+    )
+    def test_clean_contents_for_gemini_api_rejects_a_malformed_part(self, part: object, message: str) -> None:
+        with pytest.raises(TypeError, match=re.escape(message)):
+            GeminiCountTokensHandler()._clean_contents_for_gemini_api([{"role": "user", "parts": [part]}])
 
 
 def _map_image_config(raw_image_config: str) -> dict[str, object]:

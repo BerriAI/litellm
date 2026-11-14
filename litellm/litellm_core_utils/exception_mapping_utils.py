@@ -3,6 +3,7 @@ import json
 import re
 import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
@@ -11,12 +12,13 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
+from litellm.litellm_core_utils.agentic_followup_failure import carry_agentic_followup_mark
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, json_contains, subscript
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
@@ -98,6 +100,7 @@ class ExceptionCheckers:
         known_exception_substrings: Final = [
             "exceed context limit",
             "this model's maximum context length is",
+            "requested token count exceeds the model's maximum context length",
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",
@@ -106,6 +109,7 @@ class ExceptionCheckers:
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
             '"code": "context_length_exceeded"',
+            "prompt is too long",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -603,6 +607,11 @@ def _map_openai_exception(
         )
 
 
+def _anthropic_overload_status(original_exception: _ProviderHTTPException) -> int | None:
+    upstream_status: Final = getattr(original_exception, "status_code", None)
+    return 529 if isinstance(upstream_status, int) and upstream_status >= 500 else None
+
+
 def _map_anthropic_exception(
     *,
     model: str,
@@ -628,6 +637,7 @@ def _map_anthropic_exception(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
+            provider_status_code=_anthropic_overload_status(original_exception),
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
@@ -692,6 +702,7 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
                 response=getattr(original_exception, "response", None),
+                provider_status_code=original_exception.status_code,
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
@@ -1849,26 +1860,32 @@ def _map_together_ai_exception(
     extra_information: str,
 ) -> None:
     try:
-        error_response = json.loads(error_str)
+        error_response = _DECODED_ERROR_BODY.validate_python(json.loads(error_str))
     except Exception:
         error_response = {"error": error_str}
-    if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
+    if json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "`inputs` tokens + `max_new_tokens` must be <="
+    ):
         raise ContextWindowExceededError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "invalid private key" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "invalid private key"
+    ):
         raise AuthenticationError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             llm_provider="together_ai",
             model=model,
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "INVALID_ARGUMENT"
+    ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1880,13 +1897,13 @@ def _map_together_ai_exception(
             llm_provider="together_ai",
         )
     elif (
-        "error" in error_response
-        and "API key doesn't match expected format." in error_response["error"]
-        or "error_type" in error_response
-        and error_response["error_type"] == "validation"
+        json_contains(error_response, "error")
+        and json_contains(subscript(error_response, "error"), "API key doesn't match expected format.")
+        or json_contains(error_response, "error_type")
+        and subscript(error_response, "error_type") == "validation"
     ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1900,7 +1917,7 @@ def _map_together_ai_exception(
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
-                message=f"TogetherAIException - {error_response['error']}",
+                message=f"TogetherAIException - {subscript(error_response, 'error')}",
                 model=model,
                 llm_provider="together_ai",
                 response=getattr(original_exception, "response", None),
@@ -2262,7 +2279,7 @@ def _map_azure_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         raise APIConnectionError(
-            message=f"{exception_provider} APIConnectionError - {message}\n{redact_string(traceback.format_exc())}",
+            message=f"{exception_provider} APIConnectionError - {message or type(original_exception).__name__}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
@@ -2498,13 +2515,111 @@ _HOST_WITH_OPTIONAL_PORT: Final = re.compile(
 )
 
 
+def _router_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
+    litellm_metadata: Final = as_str_mapping(params.get("litellm_metadata")) or _NO_LITELLM_PARAMS
+    return MappingProxyType({**metadata, **litellm_metadata})
+
+
+def _deployment_api_base(metadata: Mapping[str, object]) -> str | None:
+    api_base: Final = metadata.get("api_base")
+    return api_base if isinstance(api_base, str) and api_base else None
+
+
 def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
     params: Final = as_str_mapping(litellm_params) or _NO_LITELLM_PARAMS
-    metadata: Final = as_str_mapping(params.get("metadata"))
-    deployment_api_base: Final = None if metadata is None else metadata.get("api_base")
-    if not isinstance(deployment_api_base, str) or not deployment_api_base:
+    deployment_api_base: Final = _deployment_api_base(_router_metadata(params))
+    if deployment_api_base is None:
         return params
     return MappingProxyType({**params, "api_base": deployment_api_base})
+
+
+_DEBUG_INFO_ATTRIBUTE: Final = "litellm_debug_info"
+_DEBUG_INFO_CALL_ID_ATTRIBUTE: Final = "_litellm_debug_info_call_id"
+_RAISED_BY_SEVERAL_CALLS: Final = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestDebugInfo:
+    with_prompt: str
+    without_prompt: str
+    call_id: str
+
+
+_NO_REQUEST_DEBUG_INFO: Final = _RequestDebugInfo(with_prompt="", without_prompt="", call_id="")
+
+
+def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: object) -> _RequestDebugInfo:
+    params: Final = as_str_mapping(extra_kwargs) or _NO_LITELLM_PARAMS
+    try:
+        metadata: Final = _router_metadata(params)
+        api_base: Final = litellm.get_api_base(model=model, optional_params=params) or _deployment_api_base(metadata)
+        messages: Final = litellm.get_first_chars_messages(
+            kwargs=as_str_mapping(completion_kwargs) or _NO_LITELLM_PARAMS
+        )
+        shown_api_base: Final = _api_base_without_credentials(api_base) if api_base else ""
+        head: Final = f"\nModel: {model}" + (f"\nAPI Base: `{shown_api_base}`" if shown_api_base else "")
+        prompt: Final = (
+            f"\nMessages: `{messages}`" if messages and litellm.redact_messages_in_exceptions is False else ""
+        )
+        labelled_values: Final = (
+            ("model_group", metadata.get("model_group")),
+            ("deployment", metadata.get("deployment")),
+            ("vertex_project", params.get("vertex_project")),
+            ("vertex_location", params.get("vertex_location")),
+        )
+        tail: Final = "".join(f"\n{label}: `{value}`\n" for label, value in labelled_values if value is not None)
+        call_id: Final = params.get("litellm_call_id")
+        return _RequestDebugInfo(
+            with_prompt=add_key_name_and_team_to_alert(request_info=head + prompt + tail, metadata=metadata),
+            without_prompt=add_key_name_and_team_to_alert(request_info=head + tail, metadata=metadata),
+            call_id=call_id if isinstance(call_id, str) else "",
+        )
+    except Exception:
+        return _NO_REQUEST_DEBUG_INFO
+
+
+def _attach_debug_info(exception: Exception, request_debug_info: _RequestDebugInfo) -> None:
+    attached_call_id: Final = getattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, None)
+    if attached_call_id is _RAISED_BY_SEVERAL_CALLS:
+        return
+    if (
+        isinstance(attached_call_id, str)
+        and attached_call_id
+        and request_debug_info.call_id
+        and attached_call_id != request_debug_info.call_id
+    ):
+        setattr(exception, _DEBUG_INFO_ATTRIBUTE, None)
+        setattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, _RAISED_BY_SEVERAL_CALLS)
+        return
+    if request_debug_info.without_prompt and getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None:
+        setattr(exception, _DEBUG_INFO_ATTRIBUTE, request_debug_info.without_prompt)
+        setattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, request_debug_info.call_id)
+
+
+def mapped_stream_exception(
+    original_exception: Exception, model: str, custom_llm_provider: str, litellm_params: object
+) -> Exception:
+    try:
+        return exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=original_exception,
+            completion_kwargs={},
+            extra_kwargs=with_deployment_api_base(litellm_params),
+        )
+    except Exception as mapped_exception:
+        return mapped_exception
+
+
+def with_deployment_debug_info(
+    error: Exception, model: str, custom_llm_provider: str, litellm_params: object
+) -> Exception:
+    if not (model or custom_llm_provider):
+        return error
+    request_debug_info: Final = _request_debug_info(model, with_deployment_api_base(litellm_params), _NO_LITELLM_PARAMS)
+    _attach_debug_info(error, request_debug_info)
+    return error
 
 
 def _api_base_without_credentials(api_base: str) -> str:
@@ -2530,11 +2645,17 @@ def exception_type(
     model,
     original_exception,
     custom_llm_provider,
-    completion_kwargs={},
-    extra_kwargs={},
+    completion_kwargs: object = _NO_LITELLM_PARAMS,
+    extra_kwargs: object = _NO_LITELLM_PARAMS,
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
-    if any(isinstance(original_exception, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+    request_debug_info: Final = (
+        _request_debug_info(model, extra_kwargs, completion_kwargs)
+        if model or custom_llm_provider
+        else _NO_REQUEST_DEBUG_INFO
+    )
+    if isinstance(original_exception, tuple(litellm.LITELLM_EXCEPTION_TYPES)):
+        _attach_debug_info(original_exception, request_debug_info)
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
@@ -2556,11 +2677,11 @@ def exception_type(
         print()  # noqa: T201
 
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
+    extra_information: Final = request_debug_info.with_prompt
     try:
         error_str = (
             redact_secret_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
         )
-        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2573,47 +2694,8 @@ def exception_type(
             else:
                 exception_type = ""
 
-            ################################################################################
-            # Common Extra information needed for all providers
-            # We pass num retries, api_base, vertex_deployment etc to the exception here
-            ################################################################################
-            try:
-                _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
-                messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-                _vertex_project: Final = extra_kwargs.get("vertex_project")
-                _vertex_location: Final = extra_kwargs.get("vertex_location")
-                _metadata: Final = extra_kwargs.get("metadata", {}) or {}
-                _model_group: Final = _metadata.get("model_group")
-                _deployment: Final = _metadata.get("deployment")
-                extra_information = f"\nModel: {model}"
-
-                if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
-                    exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
-
-                shown_api_base: Final = _api_base_without_credentials(_api_base) if _api_base else ""
-                if shown_api_base:
-                    extra_information += f"\nAPI Base: `{shown_api_base}`"
-                if messages and len(messages) > 0 and litellm.redact_messages_in_exceptions is False:
-                    extra_information += f"\nMessages: `{messages}`"
-
-                if _model_group is not None:
-                    extra_information += f"\nmodel_group: `{_model_group}`\n"
-                if _deployment is not None:
-                    extra_information += f"\ndeployment: `{_deployment}`\n"
-                if _vertex_project is not None:
-                    extra_information += f"\nvertex_project: `{_vertex_project}`\n"
-                if _vertex_location is not None:
-                    extra_information += f"\nvertex_location: `{_vertex_location}`\n"
-
-                # on litellm proxy add key name + team to exceptions
-                extra_information = add_key_name_and_team_to_alert(request_info=extra_information, metadata=_metadata)
-            except Exception:
-                # DO NOT LET this Block raising the original exception
-                pass
-
-            ################################################################################
-            # End of Common Extra information Needed for all providers
-            ################################################################################
+            if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
+                exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
             ################################################################################
             #################### Start of Provider Exception mapping ####################
@@ -2893,6 +2975,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
+        carry_agentic_followup_mark(source=original_exception, mapped=e)
         # LOGGING
         exception_logging(
             logger_fn=None,
@@ -2906,18 +2989,22 @@ def exception_type(
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
+            _attach_debug_info(e, request_debug_info)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
+                    _attach_debug_info(e, request_debug_info)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",
                 llm_provider="",
                 model="",
             )
+            _attach_debug_info(raised_exc, request_debug_info)
             setattr(raised_exc, "litellm_response_headers", litellm_response_headers)
+            carry_agentic_followup_mark(source=original_exception, mapped=raised_exc)
             raise raised_exc
 
 

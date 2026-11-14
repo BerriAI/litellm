@@ -1149,6 +1149,108 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
         _assert_converse_stream_text_and_finish_reason(sync_chunks)
 
 
+_CONVERSE_PROSE: Final = "Let me work this out. "
+
+
+async def _stream_chunks(
+    request: Mapping[str, object], transport: httpx.MockTransport, async_mode: bool
+) -> tuple[ModelResponseStream, ...]:
+    if not async_mode:
+        return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+    async_stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+    return tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(
+    ("tool_block", "stop_reason", "expected_content", "expected_tools", "expected_finish_reason"),
+    [
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "json_tool_call", "input": {"answer": 120}}},
+            "tool_use",
+            '{"answer": 120}',
+            (),
+            "stop",
+            id="prose_then_json_tool",
+        ),
+        pytest.param(
+            {"toolUse": {"toolUseId": "tooluse_1", "name": "get_weather", "input": {"city": "Paris"}}},
+            "tool_use",
+            _CONVERSE_PROSE,
+            (("get_weather", '{"city": "Paris"}'),),
+            "tool_calls",
+            id="prose_then_caller_tool",
+        ),
+        pytest.param(None, "end_turn", _CONVERSE_PROSE, (), "stop", id="json_tool_skipped"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_converse_json_schema_stream_sends_claude_prose_only_when_claude_skips_the_json_tool(
+    _aws_test_credentials: None,
+    async_mode: bool,
+    tool_block: Mapping[str, object] | None,
+    stop_reason: str,
+    expected_content: str,
+    expected_tools: tuple[tuple[str, str], ...],
+    expected_finish_reason: str,
+) -> None:
+    converse_reply: Final = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": _CONVERSE_PROSE}, *((tool_block,) if tool_block is not None else ())],
+            }
+        },
+        "stopReason": stop_reason,
+        "usage": {"inputTokens": 30, "outputTokens": 20, "totalTokens": 50},
+        "metrics": {"latencyMs": 1},
+    }
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert "toolChoice" not in body["toolConfig"]
+        assert "json_tool_call" in [tool["toolSpec"]["name"] for tool in body["toolConfig"]["tools"]]
+        return httpx.Response(200, json=converse_reply)
+
+    transport: Final = httpx.MockTransport(handle_request)
+    request: Final = {
+        "model": "bedrock/anthropic.claude-opus-5",
+        "messages": [{"role": "user", "content": "What is the LCM of 24 and 120? Reply in JSON."}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+            },
+        },
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        "stream": True,
+    }
+    chunks: Final = await _stream_chunks(request, transport, async_mode)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content
+    tool_calls: Final = tuple(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    )
+    named_calls: Final = tuple(
+        (call.function.name, "".join(c.function.arguments or "" for c in tool_calls))
+        for call in tool_calls
+        if call.function.name
+    )
+    assert named_calls == expected_tools
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
+        expected_finish_reason
+    ]
+
+
 def test_mistral_invoke_stream_yields_text_and_finish_reason(
     _aws_test_credentials: None,
 ) -> None:
@@ -1437,16 +1539,23 @@ async def test_aiter_bytes_stream_error_carries_only_the_provider_request_id_hea
 
 
 @pytest.mark.parametrize("request_id", ("req-\u00fc-1", "req-\udcfc-1"), ids=("latin-1", "surrogate-escaped"))
-def test_iter_bytes_streams_and_fails_normally_with_a_non_ascii_provider_request_id(request_id: str) -> None:
+def test_iter_bytes_streams_the_served_tier_and_fails_normally_with_a_non_ascii_provider_request_id(
+    request_id: str,
+) -> None:
     decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
-    headers: Final = {"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": request_id}
+    headers: Final = {
+        "content-type": "application/vnd.amazon.eventstream",
+        "x-amzn-RequestId": request_id,
+        "X-AMZN-BEDROCK-SERVICE-TIER": "flex",
+    }
 
     chunks: Final = list(decoder.iter_bytes(iter(_CONVERSE_CONTENT_FRAMES), response_headers=headers))
     with pytest.raises(BedrockError) as exc_info:
         list(decoder.iter_bytes(iter([_unknown_event_frame()]), response_headers=headers))
 
-    texts: Final = [chunk.choices[0].delta.content for chunk in chunks if isinstance(chunk, ModelResponseStream)]
-    assert "".join(text or "" for text in texts) == "hi"
+    stream_chunks: Final = [chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream_chunks) == "hi"
+    assert {chunk.service_tier for chunk in stream_chunks} == {"flex"}
     assert exc_info.value.status_code == 502
     assert exc_info.value.headers is None
 
@@ -1982,3 +2091,110 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
     assert traced.provider_specific_fields is not None
     assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+NOVA_INVOKE_STREAM_EVENTS: Final = (
+    {"messageStart": {"role": "assistant"}},
+    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000}, "metrics": {}}},
+)
+
+
+def _nova_invoke(served_tier: str | None) -> httpx.MockTransport:
+    tier_header: Final = {} if served_tier is None else {"X-Amzn-Bedrock-Service-Tier": served_tier}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/invoke-with-response-stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/vnd.amazon.eventstream", **tier_header},
+                content=b"".join(_bedrock_event_stream_frame(event) for event in NOVA_INVOKE_STREAM_EVENTS),
+            )
+        return httpx.Response(
+            200,
+            headers=tier_header,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1000, "outputTokens": 1000, "totalTokens": 2000},
+            },
+        )
+
+    return httpx.MockTransport(reply)
+
+
+async def _nova_invoke_calls(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> tuple[litellm.ModelResponse, Sequence[ModelResponseStream], Sequence[ModelResponseStream]]:
+    def completion(stream: bool) -> object:
+        return litellm.completion(
+            model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            client=HTTPHandler(client=httpx.Client(transport=_nova_invoke(served_tier))),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            **requested_tier,
+        )
+
+    async_stream: Final = await litellm.acompletion(
+        model="bedrock/invoke/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=AsyncHTTPHandler(transport=_nova_invoke(served_tier)),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **requested_tier,
+    )
+    non_streaming: Final = completion(stream=False)
+    assert isinstance(non_streaming, litellm.ModelResponse)
+    return non_streaming, tuple(completion(stream=True)), tuple([chunk async for chunk in async_stream])
+
+
+@pytest.mark.parametrize(
+    ("requested_tier", "served_tier"),
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, "flex", id="native"),
+        pytest.param({"service_tier": "priority"}, "flex", id="openai"),
+        pytest.param({"service_tier": "flex"}, "priority", id="openai-served-priority"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_reports_and_bills_the_tier_bedrock_served_like_a_non_streaming_call(
+    requested_tier: Mapping[str, object], served_tier: str
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+    sync_streamed: Final = litellm.stream_chunk_builder(list(sync_chunks))
+    async_streamed: Final = litellm.stream_chunk_builder(list(async_chunks))
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {served_tier}
+    assert sync_streamed.service_tier == async_streamed.service_tier == non_streaming.service_tier == served_tier
+    assert (
+        litellm.completion_cost(sync_streamed)
+        == litellm.completion_cost(async_streamed)
+        == non_streaming._hidden_params["response_cost"]
+    )
+
+
+@pytest.mark.parametrize(
+    "requested_tier",
+    [
+        pytest.param({"serviceTier": {"type": "priority"}}, id="native"),
+        pytest.param({"service_tier": "priority"}, id="openai"),
+    ],
+)
+@pytest.mark.parametrize("served_tier", [pytest.param(None, id="no-header"), pytest.param("", id="empty-header")])
+@pytest.mark.asyncio
+async def test_a_nova_invoke_stream_without_a_served_tier_reports_no_tier(
+    requested_tier: Mapping[str, object], served_tier: str | None
+) -> None:
+    non_streaming, sync_chunks, async_chunks = await _nova_invoke_calls(requested_tier, served_tier)
+
+    assert {getattr(chunk, "service_tier", None) for chunk in (*sync_chunks, *async_chunks)} == {None}
+    assert getattr(litellm.stream_chunk_builder(list(sync_chunks)), "service_tier", None) is None
+    assert getattr(litellm.stream_chunk_builder(list(async_chunks)), "service_tier", None) is None
+    assert getattr(non_streaming, "service_tier", None) is None

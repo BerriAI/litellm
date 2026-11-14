@@ -4,17 +4,19 @@ import copy
 import logging
 import math
 import re
-from collections.abc import Collection, Iterable, Iterator, Mapping
+import sys
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
@@ -96,11 +98,73 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
     return float(seconds / denominator)
 
 
-_DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+_LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
+
+
+def as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
+_Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
+_Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
+
+
+INCLUDE_COST_IN_STREAMING_USAGE_HEADER: Final = "x-litellm-include-cost-in-streaming-usage"
+
+
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
+def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
+    """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
+    if litellm.include_cost_in_streaming_usage:
+        return True
+    if not request_headers:
+        return False
+    header_value: Final = next(
+        (value for name, value in request_headers.items() if name.lower() == INCLUDE_COST_IN_STREAMING_USAGE_HEADER),
+        None,
+    )
+    return isinstance(header_value, str) and header_value.strip().lower() == "true"
+
+
+def without(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` without ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key not in keys}
+
+
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
@@ -117,7 +181,7 @@ class _SupportsIter(Protocol):
 
 @runtime_checkable
 class _SupportsGetItem(Protocol):
-    def __getitem__(self, index: int, /) -> object: ...
+    def __getitem__(self, key: str | int, /) -> object: ...
 
 
 def attribute_or_none(source: object, name: str) -> object:
@@ -142,7 +206,24 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
+class KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
 def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
     if isinstance(value, _SupportsIter):
         return value
     if isinstance(value, _SupportsGetItem):
@@ -150,18 +231,44 @@ def iter_items(value: object) -> Iterable[object]:
     raise TypeError(f"'{type(value).__name__}' object is not iterable")
 
 
+@runtime_checkable
+class _SupportsContains(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+
+
+def json_contains(value: object, key: object) -> bool:
+    if isinstance(value, _SupportsContains):
+        return key in value
+    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
+        return key in tuple(iter_items(value))
+    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+
+
+def subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
 def attribute_items(source: object, name: str) -> Iterable[object]:
     value: Final = attribute_or_none(source, name)
     return iter_items(value) if value else ()
 
 
-def normalize_drop_params(value: object) -> bool | None:
+def lax_bool(value: object) -> bool | None:
     if value is None or isinstance(value, bool):
         return value
     try:
-        return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
+        return _LAX_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
     except ValidationError:
         return None
+
+
+def normalize_drop_params(value: object) -> bool | None:
+    return lax_bool(value)
 
 
 def drops_unsupported_params(drop_params: object) -> bool:
@@ -178,17 +285,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(
@@ -310,9 +419,12 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    "pause_turn": "length",
     "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI
@@ -679,17 +791,22 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
-):
+def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
+    chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
+    if chunk_model is None:
+        raise AttributeError(
+            f"type object '{type(original_chunk).__name__}' has no attribute 'model_fields'",
+            name="model_fields",
+            obj=type(original_chunk),
+        )
     candidate_keys: Final = tuple(
         key
-        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
@@ -699,7 +816,7 @@ def preserve_upstream_non_openai_attributes(
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(original_chunk, key),
+                getattr(chunk_model, key),
             ),
         )
         for key in candidate_keys
@@ -707,12 +824,12 @@ def preserve_upstream_non_openai_attributes(
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
         _assign_attributes(model_response, candidate_values)
         return
-    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
 
 
-def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
     for key, value in values:
-        setattr(target, key, value)
+        set_extra_attribute(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -982,25 +1099,36 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _cost_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def single_log_line(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
+def finite_reported_cost(value: object) -> float | None:
+    cost: Final = finite_cost(value)
+    if cost is None and isinstance(value, float):
+        verbose_logger.warning("Ignoring a non-finite provider-reported cost %s", value)
+    return cost
 
 
 def _reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _cost_number(_usage_field(raw, "total_cost"))
-    return _cost_number(value)
+        return finite_reported_cost(_usage_field(raw, "total_cost"))
+    return finite_reported_cost(value)
 
 
 def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
     additional_headers: Final[object] = response.hidden_params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+    return finite_reported_cost(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
 
 
 def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
@@ -1061,9 +1189,14 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
 
 
+def reports_native_messages_cost(custom_llm_provider: object) -> bool:
+    """Whether a Messages upstream is one whose own reported cost litellm bills from instead of the price map."""
+    return isinstance(custom_llm_provider, str) and custom_llm_provider in _MESSAGES_REPORTED_COST_PROVIDERS
+
+
 def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
     """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
-    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+    if not isinstance(custom_llm_provider, str) or not reports_native_messages_cost(custom_llm_provider):
         return None
     return provider_reported_usage_cost(usage, custom_llm_provider)
 

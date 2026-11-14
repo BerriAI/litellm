@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import io
+import selectors
+import socket
 import ssl
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import BinaryIO, Final
+from typing import TYPE_CHECKING, BinaryIO, Final
+
+from tests.integration._support.ports import allocate_port
+
+if TYPE_CHECKING:
+    from collections.abc import Buffer
+
+_POLL_SECONDS: Final = 0.05
+_WRITE_PIECE_BYTES: Final = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,12 +108,108 @@ def _await_release(
     return gate.is_set()
 
 
+class _RequestReader(io.BufferedReader):
+    cut = False
+
+    def readline(self, size: int | None = -1, /) -> bytes:
+        line: Final = super().readline(size)
+        self.cut = self.cut or not line.endswith(b"\n")
+        return line
+
+
+@dataclass(frozen=True, slots=True)
+class _Blocked:
+    since: float
+    writing: bool
+
+
+class _Connection(io.BufferedIOBase):
+    blocked: _Blocked | None = None
+
+    def __init__(self, connection: socket.socket, closing: threading.Event) -> None:
+        super().__init__()
+        self.connection = connection
+        self.closing = closing
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(connection, selectors.EVENT_READ)
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Buffer, /) -> int:
+        if not self._wait_for_bytes():
+            return 0
+        with self._blocking(writing=False):
+            return self.connection.recv_into(buffer)
+
+    def write(self, buffer: Buffer, /) -> int:
+        view: Final = memoryview(buffer).cast("B")
+        for start in range(0, view.nbytes, _WRITE_PIECE_BYTES):
+            with self._blocking(writing=True):
+                self.connection.sendall(view[start : start + _WRITE_PIECE_BYTES])
+        return view.nbytes
+
+    def close(self) -> None:
+        self.selector.close()
+        super().close()
+
+    def stalled(self, grace: float, teardown_started: float) -> _Blocked | None:
+        blocked: Final = self.blocked
+        if blocked is None or time.monotonic() - max(blocked.since, teardown_started) < grace:
+            return None
+        return blocked
+
+    def shut(self) -> None:
+        with suppress(OSError):
+            self.connection.shutdown(socket.SHUT_RDWR)
+
+    def _wait_for_bytes(self) -> bool:
+        while not self.closing.is_set():
+            if self._has_bytes(_POLL_SECONDS):
+                return True
+        return self._has_bytes(0)
+
+    def _has_bytes(self, timeout: float) -> bool:
+        decrypted: Final = isinstance(self.connection, ssl.SSLSocket) and self.connection.pending() > 0
+        return decrypted or bool(self.selector.select(timeout))
+
+    @contextmanager
+    def _blocking(self, writing: bool) -> Iterator[None]:
+        self.blocked = _Blocked(time.monotonic(), writing)
+        try:
+            yield
+        finally:
+            self.blocked = None
+
+
+def _close_unless_stalled(
+    close: Callable[[], None], connections: SimpleQueue[_Connection], grace: float, errors: SimpleQueue[Exception]
+) -> None:
+    teardown_started: Final = time.monotonic()
+    closer: Final = threading.Thread(target=close)
+    closer.start()
+    while closer.is_alive():
+        for connection in tuple(connections.get_nowait() for _ in range(connections.qsize())):
+            stalled: Final = connection.stalled(grace, teardown_started)
+            if stalled is None:
+                connections.put(connection)
+                continue
+            if stalled.writing:
+                errors.put(TimeoutError(f"a reply write made no progress for {grace} s"))
+            connection.shut()
+        closer.join(timeout=_POLL_SECONDS)
+
+
 @contextmanager
 def wire_server(
     respond: Callable[[Request], Reply],
     tls: ssl.SSLContext | None = None,
     port: int = 0,
     keep_alive: bool = False,
+    teardown_grace: float = 10,
 ) -> Generator[Wire, None, None]:
     """Owned TCP peer; requests traverse the real HTTP client and serialization. With `keep_alive` the
     peer honours HTTP/1.1 persistent connections so `connections()` counts the client's TCP sessions."""
@@ -111,14 +218,20 @@ def wire_server(
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
     connected: Final[SimpleQueue[str]] = SimpleQueue()
     closed: Final[SimpleQueue[str]] = SimpleQueue()
+    streams: Final[SimpleQueue[_Connection]] = SimpleQueue()
     closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
-        timeout = 5
+        request: socket.socket
+        reader: _RequestReader
 
         def setup(self) -> None:
-            super().setup()
+            stream: Final = _Connection(self.request, closing)
+            self.reader = _RequestReader(stream)
+            self.rfile = self.reader
+            self.wfile = stream
+            streams.put(stream)
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def finish(self) -> None:
@@ -130,6 +243,9 @@ def wire_server(
             self.wfile.flush()
 
         def respond(self) -> None:
+            if self.reader.cut:
+                self.close_connection = True
+                return
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
             try:
                 body: Final = read_body(headers, self.rfile)
@@ -220,8 +336,8 @@ def wire_server(
             if tls is not None:
                 self.socket = tls.wrap_socket(self.socket, server_side=True)
 
-    with OwnedHTTPServer(("127.0.0.1", port), Handler) as server:
-        thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+    with OwnedHTTPServer(("127.0.0.1", port or allocate_port()), Handler) as server:
+        thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": _POLL_SECONDS})
         thread.start()
         try:
             yield Wire(
@@ -236,6 +352,6 @@ def wire_server(
             server.shutdown()
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"
-            server.server_close()
+            _close_unless_stalled(server.server_close, streams, teardown_grace, errors)
             failure: Final = None if errors.empty() else errors.get_nowait()
             assert failure is None, f"Owned HTTP peer failed: {failure!r}"

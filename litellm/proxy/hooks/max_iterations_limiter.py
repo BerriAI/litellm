@@ -191,7 +191,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         """
         if self.increment_script is not None:
             try:
-                result: Final = await self.increment_script(
+                result: Final[int] = await self.increment_script(
                     keys=[cache_key],
                     args=[self.ttl],
                 )
@@ -207,7 +207,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     async def _in_memory_increment(self, cache_key: str) -> int:
         """Increment counter in in-memory cache with TTL."""
-        current: Final = await self.internal_usage_cache.async_get_cache(
+        current: Final[int | None] = await self.internal_usage_cache.async_get_cache(
             key=cache_key,
             litellm_parent_otel_span=None,
             local_only=True,

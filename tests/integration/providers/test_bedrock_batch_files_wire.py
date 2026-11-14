@@ -88,10 +88,17 @@ _SCHEMA: Final = {
 
 
 @pytest.mark.parametrize(
-    "backend", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-4-8"], ids=["haiku_5_5", "opus_4_8"]
+    ("backend", "native_output"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", False),
+        ("us.anthropic.claude-haiku-5-5", True),
+        ("us.anthropic.claude-opus-4-7", False),
+        ("us.anthropic.claude-opus-4-8", True),
+    ],
+    ids=["opt_in_native_output_model", "native_output_model", "opus_4_7", "opus_4_8"],
 )
-def test_json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output(
-    gateway: Gateway, backend: str
+def test_json_schema_batch_record_with_thinking_uploads_native_output_only_on_models_that_always_take_it(
+    gateway: Gateway, backend: str, native_output: bool
 ) -> None:
     record: Final = {
         "custom_id": "schema-record",
@@ -125,7 +132,16 @@ def test_json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_nat
         (upload,) = wire.drain()
     (stored,) = tuple(JSON_OBJECT.validate_json(line) for line in upload.body.decode().splitlines() if line.strip())
     model_input: Final = object_value(stored["modelInput"])
-    assert "format" not in object_value(model_input.get("output_config", {})), model_input
-    (tool,) = (object_value(entry) for entry in list_value(model_input["tools"]))
+    output_format: Final = object_value(model_input.get("output_config", {})).get("format")
+    tools: Final = tuple(object_value(entry) for entry in list_value(model_input.get("tools", [])))
+    if native_output:
+        assert model_input["output_config"] == {"format": {"type": "json_schema", "schema": _SCHEMA}}, model_input
+        assert model_input["anthropic_beta"] == ["structured-outputs-2025-11-13"], model_input
+        assert "tools" not in model_input, model_input
+        assert model_input["thinking"] == {"type": "adaptive"}, model_input
+        assert not tools, model_input
+        return
+    assert output_format is None, model_input
+    (tool,) = tools
     assert tool["name"] == _JSON_TOOL, model_input
     assert object_value(tool["input_schema"])["properties"] == _SCHEMA["properties"], model_input

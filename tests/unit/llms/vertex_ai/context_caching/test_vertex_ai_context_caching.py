@@ -1,3 +1,4 @@
+import json
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2507,3 +2508,46 @@ def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
 
     assert cache_name == "cachedContents/created"
     assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
+
+
+def _recording_gemini_client(calls: list[httpx.Request]) -> HTTPHandler:
+    def route(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/cachedContents"):
+            return httpx.Response(200, json={} if request.method == "GET" else _created_cache_body(3000))
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "OK"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 3000, "candidatesTokenCount": 1, "totalTokenCount": 3001},
+            },
+        )
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(route)))
+
+
+def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(local_model_cost_map) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "plain system prefix " * 3000, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "Reply with OK only."},
+                ],
+            },
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert "system_instruction" not in generated

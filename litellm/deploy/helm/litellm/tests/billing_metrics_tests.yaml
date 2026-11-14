@@ -1,0 +1,135 @@
+suite: test bearer-only billingMetrics wiring
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - backend/configmap.yaml
+  - migrations-job.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: is disabled by default
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics
+
+  - it: wires gateway URLs and bearer credentials from Secret keys
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_TOKEN_URL
+            value: https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-secret
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics
+
+  - it: wires billing metrics on the backend without volumes
+    template: backend/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-secret
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics
+
+  - it: does not add billing metrics to migrations
+    template: migrations-job.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+
+  - it: renders an optional export interval
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        exportIntervalMs: 5000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+            value: "5000"
+
+  - it: requires the endpoint when enabled
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        endpoint: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: billingMetrics.endpoint is required when billingMetrics.enabled is true
+
+  - it: requires the token URL when enabled
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        tokenUrl: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: billingMetrics.tokenUrl is required when billingMetrics.enabled is true
+
+  - it: requires the secret name when enabled
+    template: gateway/deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        secretName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: billingMetrics.secretName is required when billingMetrics.enabled is true

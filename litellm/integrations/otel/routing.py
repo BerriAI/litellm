@@ -1,8 +1,11 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, TypeVar
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 RoutingAttributeValue: TypeAlias = str | int | float | bool
+_Model = TypeVar("_Model")  # rebind-ok: a TypeVar cannot be Final
 
 _ROUTING_SCALAR_FIELDS: Final = frozenset(
     {
@@ -21,6 +24,11 @@ _ROUTING_SCALAR_FIELDS: Final = frozenset(
         "classifier_cost",
         "classifier_failure_reason",
         "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
         "classifier_confidence",
         "classifier_primary_rule",
         "classifier_capability_boundary",
@@ -55,3 +63,12 @@ def routing_decision_attributes(decision: Mapping[str, object] | None) -> Mappin
             if isinstance(value := decision.get(key), (str, int, float, bool))
         }
     )
+
+
+def routed_model_name(model: _Model, requested_model: object, decision: object) -> _Model | str:
+    """The model an auto router picked when ``model`` is only the name the caller requested, else ``model``."""
+    fields: Final = as_str_mapping(decision)
+    routed: Final = fields.get("routed_model") if fields is not None else None
+    if model and model == requested_model and isinstance(routed, str) and routed:
+        return routed
+    return model

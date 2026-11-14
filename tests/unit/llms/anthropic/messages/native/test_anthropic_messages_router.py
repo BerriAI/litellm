@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
 import time
 import uuid
@@ -17,6 +18,7 @@ import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.router import Router
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTextParam,
@@ -219,6 +221,11 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
 @pytest.mark.asyncio
 async def test_router_aanthropic_messages_non_streaming_posts_anthropic_body(respx_mock):
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
@@ -361,7 +368,7 @@ async def test_acreate_non_streaming_returns_dict_content_blocks(
 ):
     _set_fake_aws_env(monkeypatch)
     route: Final = respx_mock.post(url__regex=url).mock(return_value=httpx.Response(200, json=body))
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         messages=[{"role": "user", "content": _PROMPT}],
         model=model,
         max_tokens=100,
@@ -601,7 +608,7 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
             },
         )
     )
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         model=f"bedrock/converse/{_BEDROCK_SONNET}",
         messages=[{"role": "user", "content": "What are the key terms?"}],
         system=_cached_system(),
@@ -631,7 +638,7 @@ async def test_bedrock_invoke_system_prompt_caching_returns_cache_tokens(respx_m
             },
         )
     )
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         model=f"bedrock/invoke/{_BEDROCK_SONNET}",
         messages=[{"role": "user", "content": "What are the key terms?"}],
         system=_cached_system(),
@@ -663,7 +670,7 @@ async def test_bedrock_streaming_message_start_carries_cache_usage_fields(
     route: Final = respx_mock.post(url__regex=url).mock(
         return_value=httpx.Response(200, content=body, headers={"content-type": "application/vnd.amazon.eventstream"})
     )
-    stream: Final = await litellm.anthropic.messages.acreate(
+    stream: Final = await python_messages.anthropic_messages(
         model=model,
         messages=[
             {
@@ -733,7 +740,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
             },
         )
     )
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": prompt}],
         tools=[dict(tool) for tool in _tool_search_tools()],
@@ -891,24 +898,32 @@ async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thin
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("drop_globally", [False, True])
-async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = await _native_opus_body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = await _native_opus_body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = await _native_opus_body_sent(
         respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
     )
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
 
 
 _MIXED_GROUP: Final = "gpt-5.6-mixed"

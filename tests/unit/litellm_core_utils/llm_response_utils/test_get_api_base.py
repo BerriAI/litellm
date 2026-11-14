@@ -1,11 +1,15 @@
-import json
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.fixture
@@ -53,17 +57,20 @@ class TestDeclaredAuthenticatingProvider:
         assert resolution_lookups == []
         assert api_base == expected
 
-    def test_copilot_keeps_the_enterprise_endpoint_from_disk(self, isolated_token_dirs, resolution_lookups):
+    def test_copilot_uses_the_user_endpoint_for_an_enterprise_api_base(self, isolated_token_dirs, resolution_lookups):
         token_dir = isolated_token_dirs / "github_copilot"
         token_dir.mkdir()
-        (token_dir / "api-key.json").write_text(
-            json.dumps({"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}})
-        )
-
-        api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
+        token = f"gho_{isolated_token_dirs.name}"
+        (token_dir / "access-token").write_text(token)
+        with respx.mock(assert_all_called=True) as router:
+            route = router.get("https://api.github.com/copilot_internal/user").respond(
+                json={"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}}
+            )
+            api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
 
         assert resolution_lookups == []
         assert api_base == "https://api.enterprise.githubcopilot.com"
+        assert route.calls.last.request.headers["authorization"] == f"token {token}"
 
     def test_explicit_api_base_still_wins(self, isolated_token_dirs, resolution_lookups):
         api_base = litellm.get_api_base(
@@ -110,3 +117,47 @@ def test_base_url_alias_is_reported_as_the_api_base():
         litellm.get_api_base(model="groq/whisper-large-v3", optional_params={"base_url": ""})
         == "https://api.groq.com/openai/v1"
     )
+
+
+@pytest.mark.usefixtures("isolated_token_dirs")
+def test_github_app_deployment_reports_the_copilot_host_it_calls_over_a_configured_api_base():
+    model: Final = "github_copilot/gpt-5.5"
+    params: Final = {
+        "api_base": "https://admin-set.internal/v1",
+        "github_copilot_auth_type": "github_app",
+        "github_copilot_app_id": "test-client",
+        "github_copilot_app_installation_id": 123,
+        "github_copilot_app_private_key_ref": "os.environ/TEST_APP_KEY",
+    }
+    called_api_base: Final = litellm.get_llm_provider(
+        model=model, api_base=params["api_base"], litellm_params=GenericLiteLLMParams(**params)
+    )[3]
+
+    assert called_api_base != params["api_base"]
+    assert litellm.get_api_base(model=model, optional_params=params) == called_api_base
+
+
+@pytest.mark.usefixtures("isolated_token_dirs")
+@pytest.mark.parametrize(
+    "app_settings",
+    [
+        {"github_copilot_auth_type": "github_app", "litellm_credential_name": "never-loaded"},
+        {"github_copilot_app_id": "left-over-client"},
+    ],
+)
+def test_incomplete_github_app_settings_report_the_configured_api_base_instead_of_raising(
+    app_settings: Mapping[str, str],
+):
+    params: Final = {"api_base": "https://admin-set.internal/v1", **app_settings}
+
+    assert litellm.get_api_base(model="github_copilot/gpt-5.5", optional_params=params) == params["api_base"]
+
+
+@pytest.mark.usefixtures("isolated_token_dirs")
+def test_per_user_session_still_reports_the_configured_api_base():
+    params: Final = {
+        "api_base": "https://admin-set.internal/v1",
+        "github_copilot_user_session": GithubCopilotUserSession("user-token", "https://api.business.githubcopilot.com"),
+    }
+
+    assert litellm.get_api_base(model="github_copilot/gpt-5.5", optional_params=params) == params["api_base"]

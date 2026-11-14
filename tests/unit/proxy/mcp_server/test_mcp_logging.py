@@ -1,25 +1,305 @@
 import asyncio
+import json
 import os
 import subprocess
 import sys
+from collections.abc import Generator
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from queue import SimpleQueue
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from mcp.types import CallToolResult, TextContent
+from fastapi import HTTPException
+from mcp import Client
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.context import ServerRequestContext
+from mcp.server.session import ServerSession
+from mcp.shared.exceptions import MCPError
+from mcp.types import CallToolResult, EmptyResult, InitializeRequestParams, Request, RequestParams, TextContent
 from mcp.types import Tool as MCPTool
+from pydantic import ConfigDict, ValidationError
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy._types import AlertType, LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
 from litellm.proxy.mcp_server.server import (
+    _log_sdk_rejection,
     mcp_server_tool_call,
+    server,
     set_auth_context,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
+
+
+class SDKRejectionParams(RequestParams):
+    model_config = ConfigDict(frozen=True)
+    name: int | None = None
+    arguments: dict[str, str] | None = None
+    level: int | str | None = None
+
+
+class SDKRejectionLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: list[dict[str, object]] = []
+        self.pre_calls = 0
+        self.post_failures = 0
+        self.fail_post_hook = False
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        self.pre_calls += 1
+        return data
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failures.append(kwargs)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.post_failures += 1
+        if self.fail_post_hook:
+            raise RuntimeError("callback unavailable")
+
+
+@pytest.fixture
+def sdk_rejection_logger() -> Generator[SDKRejectionLogger, None, None]:
+    logger: Final = SDKRejectionLogger()
+    token: Final = auth_context_var.set(None)
+    set_auth_context(
+        user_api_key_auth=UserAPIKeyAuth(
+            api_key="sk-sdk-rejection-unit-test", user_id="sdk-rejection-user", team_id="sdk-rejection-team"
+        )
+    )
+    try:
+        with patch("litellm.callbacks", [logger]):
+            yield logger
+    finally:
+        auth_context_var.reset(token)
+        litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params,code,message",
+    [
+        ("tools/call-2", {"arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32601, "Method not found"),
+        ("tools/call", {"name": 123, "arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32602, "Invalid request parameters"),
+        ("tools/call", {"arguments": {"secret": "DO_NOT_LOG_THIS"}}, -32602, "Invalid request parameters"),
+        ("logging/setLevel", {"level": 123}, -32602, "Invalid request parameters"),
+        ("logging/setLevel", {"level": "info"}, -32601, "Method not found"),
+        ("completion/complete", {}, -32602, "Invalid request parameters"),
+        ("server/discover", {}, -32601, "Method not found"),
+        ("subscriptions/listen", {}, -32601, "Method not found"),
+    ],
+)
+async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
+    sdk_rejection_logger: SDKRejectionLogger, method: str, params: dict[str, object], code: int, message: str
+) -> None:
+    async with Client(server, mode="legacy") as client:
+        with pytest.raises(MCPError) as rejected:
+            await client.session.send_request(
+                Request(method=method, params=SDKRejectionParams.model_validate(params)), EmptyResult
+            )
+        assert rejected.value.code == code
+        assert rejected.value.message == message
+        await client.session.send_ping()
+
+    assert sdk_rejection_logger.pre_calls == 0
+    assert sdk_rejection_logger.post_failures == 1
+    assert len(sdk_rejection_logger.failures) == 1
+    payload: Final = sdk_rejection_logger.failures[0]["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert payload["response_cost"] == 0
+    assert payload["prompt_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+    assert payload["model"] == "MCP: request_rejected"
+    assert payload["metadata"]["user_api_key_user_id"] == "sdk-rejection-user"
+    assert payload["metadata"]["user_api_key_team_id"] == "sdk-rejection-team"
+    rejection: Final = payload["metadata"]["spend_logs_metadata"]["mcp_sdk_rejection"]
+    assert rejection["method"] == method
+    assert rejection["request_id"]
+    assert rejection["error_code"] == code
+    assert rejection["error_message"] == message
+    assert rejection["stage"] == "sdk_dispatch"
+    assert "DO_NOT_LOG_THIS" not in json.dumps(payload, default=str)
+    assert "sk-sdk-rejection-unit-test" not in json.dumps(payload, default=str)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params,code",
+    [
+        ("tools/call-2", {}, -32601),
+        ("tools/call", {"name": 123}, -32602),
+    ],
+)
+async def test_sdk_caller_errors_do_not_trigger_llm_alerts(
+    sdk_rejection_logger: SDKRejectionLogger, method: str, params: dict[str, object], code: int
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    with (
+        patch.object(proxy_logging_obj, "alert_types", [AlertType.llm_exceptions]),
+        patch.object(proxy_logging_obj, "alerting_handler", new_callable=AsyncMock) as alerts,
+    ):
+        async with Client(server, mode="legacy") as client:
+            with pytest.raises(MCPError) as rejected:
+                await client.session.send_request(
+                    Request(method=method, params=SDKRejectionParams.model_validate(params)), EmptyResult
+                )
+            assert rejected.value.code == code
+        await asyncio.sleep(0)
+        alerts.assert_not_awaited()
+        assert len(sdk_rejection_logger.failures) == 1
+        assert sdk_rejection_logger.post_failures == 1
+        assert sdk_rejection_logger.pre_calls == 0
+
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={},
+            original_exception=HTTPException(status_code=500, detail="upstream unavailable"),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        await asyncio.sleep(0)
+        alerts.assert_awaited_once()
+        assert alerts.await_args.kwargs["level"] == "High"
+        assert alerts.await_args.kwargs["alert_type"] == AlertType.llm_exceptions
+
+
+@pytest.mark.asyncio
+async def test_sdk_rejection_sync_logging_allows_concurrent_ping(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    ping_responses: Final = SimpleQueue[EmptyResult]()
+    async with Client(server, mode="legacy") as client:
+        def sync_failure(
+            kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            ping_responses.put(asyncio.run_coroutine_threadsafe(client.session.send_ping(), loop).result(timeout=10))
+
+        with patch("litellm.failure_callback", [sync_failure]):
+            with pytest.raises(MCPError) as rejected:
+                await client.session.send_request(Request(method="unknown/method", params=RequestParams()), EmptyResult)
+            assert rejected.value.code == -32601
+
+    assert ping_responses.qsize() == 1
+    assert isinstance(ping_responses.get_nowait(), EmptyResult)
+    assert len(sdk_rejection_logger.failures) == 1
+    assert sdk_rejection_logger.post_failures == 1
+    assert sdk_rejection_logger.pre_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_handler_method_not_found_does_not_emit_sdk_rejection(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    context: Final = ServerRequestContext(
+        session=MagicMock(spec=ServerSession),
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="tools/list",
+        params={},
+        request_id="handler-error",
+    )
+    handler_error: Final = MCPError(code=-32601, message="Handler rejected the request")
+    with pytest.raises(MCPError) as rejected:
+        await _log_sdk_rejection(context, AsyncMock(side_effect=handler_error))
+    assert rejected.value is handler_error
+    assert sdk_rejection_logger.failures == []
+    assert sdk_rejection_logger.post_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_sdk_initialization_errors_are_not_logged_as_tool_rejections(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    context: Final = ServerRequestContext(
+        session=MagicMock(spec=ServerSession),
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="initialize",
+        params={},
+        request_id="bad-init",
+    )
+    with pytest.raises(ValidationError) as sdk_error:
+        InitializeRequestParams.model_validate({})
+    with pytest.raises(ValidationError) as rejected:
+        await _log_sdk_rejection(context, AsyncMock(side_effect=sdk_error.value))
+    assert rejected.value is sdk_error.value
+    assert sdk_rejection_logger.pre_calls == 0
+    assert sdk_rejection_logger.failures == []
+    assert sdk_rejection_logger.post_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_sdk_response_survives_failure_callback_error(sdk_rejection_logger: SDKRejectionLogger) -> None:
+    sdk_rejection_logger.fail_post_hook = True
+    async with Client(server, mode="legacy") as client:
+        with pytest.raises(MCPError) as rejected:
+            await client.session.send_request(Request(method="tools/call-2", params=RequestParams()), EmptyResult)
+        assert rejected.value.code == -32601
+        assert rejected.value.message == "Method not found"
+    assert sdk_rejection_logger.post_failures == 1
+    assert len(sdk_rejection_logger.failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_sdk_rejection_without_admitted_identity_is_not_attributed(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    token: Final = auth_context_var.set(None)
+    try:
+        async with Client(server, mode="legacy") as client:
+            with pytest.raises(MCPError) as rejected:
+                await client.session.send_request(Request(method="tools/call-2", params=RequestParams()), EmptyResult)
+            assert rejected.value.code == -32601
+    finally:
+        auth_context_var.reset(token)
+    assert sdk_rejection_logger.failures == []
+    assert sdk_rejection_logger.post_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_sdk_rejection_keeps_concurrent_caller_identity(sdk_rejection_logger: SDKRejectionLogger) -> None:
+    async def reject_as(user: str) -> None:
+        token: Final = auth_context_var.set(None)
+        set_auth_context(user_api_key_auth=UserAPIKeyAuth(user_id=user, team_id=f"{user}-team"))
+        try:
+            async with Client(server, mode="legacy") as client:
+                with pytest.raises(MCPError) as rejected:
+                    await client.session.send_request(
+                        Request(method=f"unknown/{user}", params=RequestParams()), EmptyResult
+                    )
+                assert rejected.value.code == -32601
+        finally:
+            auth_context_var.reset(token)
+
+    await asyncio.gather(reject_as("caller-a"), reject_as("caller-b"))
+    assert len(sdk_rejection_logger.failures) == 2
+    assert sdk_rejection_logger.post_failures == 2
+    assert {
+        failure["standard_logging_object"]["metadata"]["user_api_key_user_id"]
+        for failure in sdk_rejection_logger.failures
+    } == {"caller-a", "caller-b"}
+    for failure in sdk_rejection_logger.failures:
+        metadata: Final = failure["standard_logging_object"]["metadata"]
+        identity: Final = metadata["user_api_key_user_id"]
+        assert metadata["user_api_key_team_id"] == f"{identity}-team"
+        assert metadata["spend_logs_metadata"]["mcp_sdk_rejection"]["method"] == f"unknown/{identity}"
 
 
 def _mcp_request_ctx(**overrides):
