@@ -867,3 +867,77 @@ def test_a_driver_error_answers_as_a_problem_document_without_leaking_the_except
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json()["type"] == "urn:litellm:error:internal-server-error"
     assert "connection reset by peer" not in response.text
+
+
+class _RecordingDb:
+    def __init__(self, results: Sequence[Sequence[Mapping[str, object]]]) -> None:
+        self.calls: list[tuple[object, ...]] = []
+        self._results = iter(results)
+
+    async def query_raw(self, sql: str, *params: object) -> Sequence[Mapping[str, object]]:
+        self.calls.append((sql, *params))
+        return next(self._results)
+
+
+class _RecordingPrisma:
+    def __init__(self, results: Sequence[Sequence[Mapping[str, object]]]) -> None:
+        self.db = _RecordingDb(results)
+
+
+@pytest.mark.asyncio
+async def test_the_members_list_binds_the_team_and_every_caller_value_and_pages_in_sql():
+    from litellm.proxy.list_api.list_framework import AnyOf, Compare, QueryPlan, SortKey, Within
+    from litellm.proxy.management_endpoints.management_v1.teams import PrismaTeamMemberListExecutor
+
+    hostile: Final = "x' OR team_id <> '"
+    where: Final = (
+        Within(field="user_id", values=(hostile, "user-2")),
+        AnyOf(clauses=(Compare(field="user_email", op="contains", value="50%_off"),)),
+    )
+    prisma: Final = _RecordingPrisma(
+        ([{"count": 7}], [{"user_id": None, "user_email": "only@email.example", "user_alias": None, "role": "user"}])
+    )
+    executor: Final = PrismaTeamMemberListExecutor(
+        prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # only .db.query_raw is reached
+        team_id=TEAM_ID,
+        active_default_budget_id="default-budget",
+    )
+
+    assert await executor.count(where) == 7
+    rows: Final = await executor.find_many(
+        QueryPlan(where=where, order=(SortKey(field="spend", descending=True),), skip=40, take=20)
+    )
+
+    count_sql, *count_params = prisma.db.calls[0]
+    page_sql, *page_params = prisma.db.calls[1]
+    assert count_params == [TEAM_ID, hostile, "user-2", "%50\\%\\_off%"]
+    assert page_params == [*count_params, 20, 40]
+    for sql in (count_sql, page_sql):
+        assert isinstance(sql, str)
+        assert "WHERE t.team_id = $1" in sql
+        assert '"user_id" IN ($2, $3)' in sql and '"user_email" ILIKE $4' in sql
+        assert hostile not in sql and TEAM_ID not in sql and "50%" not in sql
+    assert isinstance(page_sql, str) and page_sql.endswith('ORDER BY "spend" DESC NULLS LAST LIMIT $5 OFFSET $6')
+    assert [row.model_dump() for row in rows] == [
+        {
+            "user_id": None,
+            "user_email": "only@email.example",
+            "user_alias": None,
+            "role": "user",
+            "team_id": TEAM_ID,
+            "spend": 0.0,
+            "total_spend": 0.0,
+            "budget_id": None,
+            "litellm_budget_table": None,
+            "budget_source": "team_default",
+        }
+    ]
+
+
+@pytest.mark.parametrize("route_list", ("info_routes", "management_routes", "self_managed_routes"))
+def test_the_members_list_is_registered_beside_team_info(route_list: str):
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    allowed: Final = LiteLLMRoutes[route_list].value
+    assert RouteChecks.check_route_access(route=f"/management/v1/teams/{TEAM_ID}/members", allowed_routes=allowed)

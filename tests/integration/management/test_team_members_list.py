@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import chain
 from typing import Final
@@ -21,7 +22,6 @@ from pydantic import JsonValue
 from tests.integration._support.client import (
     Gateway,
     Scenario,
-    eventually,
     held,
     list_value,
     object_value,
@@ -35,6 +35,7 @@ CUSTOM_BUDGETS: Final = 10
 OWN_BUDGET_MEMBER: Final = 1232
 DEFAULT_MEMBER_BUDGET: Final = 25.0
 MAX_PAGE_SIZE: Final = 100
+CONCURRENT_NUDGES: Final = 16
 DEFAULT_PAGE_SIZE: Final = 50
 
 # Member n (1-based) is `<prefix>-<n padded to 5>`. Even members carry an email in the roster JSON (their
@@ -386,11 +387,22 @@ def test_member_update_reads_a_handful_of_rows_not_the_roster(gateway: Gateway, 
     tables: Final = ("LiteLLM_TeamMembership", "LiteLLM_UserTable")
 
     def rows_read() -> tuple[int, ...]:
-        # The proxy's pooled backends report their counters as they cycle, so each poll sends them a request.
-        gateway.get("/management/v1/budgets", {"page_size": "1"})
+        # A backend reports its counters when it next goes idle, so each poll runs a statement on as many of the
+        # proxy's pooled connections as it can reach at once.
+        with ThreadPoolExecutor(max_workers=CONCURRENT_NUDGES) as pool:
+            tuple(
+                pool.map(lambda _: gateway.get("/management/v1/budgets", {"page_size": "1"}), range(CONCURRENT_NUDGES))
+            )
         return tuple(_rows_read(table) for table in tables)
 
-    before: Final = eventually(lambda: (rows_read(), rows_read()), lambda pair: pair[0] == pair[1])[1]
+    seen: Final[list[tuple[int, ...]]] = []
+
+    def unchanged(counts: tuple[int, ...]) -> bool:
+        seen.append(counts)
+        return len(seen) > 1 and seen[-2] == counts
+
+    # Reads earlier tests caused must have landed before the update is measured.
+    before: Final = held(rows_read, unchanged, holding=2, seconds=60)
     updated: Final = gateway.post(
         "/team/member_update", {"team_id": large_team.team_id, "user_id": target, "max_budget_in_team": 77.0}
     )
