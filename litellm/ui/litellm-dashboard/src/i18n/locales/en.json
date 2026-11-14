@@ -16663,7 +16663,9 @@
         "secretManagerSettingsDescription": "Enter secret manager configuration as a JSON object.",
         "secretManagerSettingsPremiumHint": "Premium feature - Upgrade to manage secret manager settings.",
         "cancel": "Cancel",
-        "save": "Save Changes"
+        "save": "Save Changes",
+        "budgetWindows": "Budget Windows",
+        "budgetWindowsHint": "Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks the team's spend separately and resets on its own schedule. Requests are blocked once any window is used up."
       },
       "settingsView": {
         "teamName": "Team Name",
@@ -16713,7 +16715,11 @@
         "status": "Status",
         "blocked": "Blocked",
         "active": "Active",
-        "secretManagerSettings": "Secret Manager Settings"
+        "secretManagerSettings": "Secret Manager Settings",
+        "budgetWindow": {
+          "line": "Budget Window ({{duration}}): ${{limit}}",
+          "lineWithReset": "Budget Window ({{duration}}): ${{limit}}, resets {{resetAt}}"
+        }
       },
       "backToTeams": "Back to Teams",
       "editMember": {
@@ -17173,7 +17179,11 @@
             "description": "Private skills keys on this team may see in the Claude Code marketplace.",
             "placeholder": "Select skills (optional)"
           },
-          "modelAliasesDescription": "Create custom aliases for models that can be used by team members in API calls. This allows you to create shortcuts for specific models."
+          "modelAliasesDescription": "Create custom aliases for models that can be used by team members in API calls. This allows you to create shortcuts for specific models.",
+          "budgetWindows": {
+            "label": "Budget Windows",
+            "hint": "Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks the team's spend separately and resets on its own schedule. Requests are blocked once any window is used up."
+          }
         }
       }
     },

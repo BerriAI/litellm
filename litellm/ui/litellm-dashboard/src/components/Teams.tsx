@@ -54,6 +54,8 @@ import BudgetDurationDropdown, {
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "./key_team_helpers/BudgetWindowsEditor";
+import { completeBudgetWindows } from "./key_team_helpers/budgetWindows";
 import { modelMaxBudgetUpdate } from "./key_team_helpers/modelMaxBudgetPayload";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
@@ -289,6 +291,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
@@ -371,6 +374,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
     setLoggingSettings([]);
     setModelAliases({});
     setModelMaxBudget({});
+    setBudgetLimits([]);
     setTeamMemberModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
@@ -551,6 +555,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
 
         if (Object.keys(modelMaxBudget).length > 0) {
           formValues.model_max_budget = modelMaxBudget;
+        }
+
+        const budgetWindows = completeBudgetWindows(budgetLimits);
+        if (budgetWindows.length > 0) {
+          formValues.budget_limits = budgetWindows;
         }
 
         // Add router_settings if any are defined
@@ -852,6 +861,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                       />
                     )}
                   </FormField>
+                  <Field className="mt-4">
+                    <FieldLabel>
+                      {labelWithHint(
+                        t("teams.page.create.fields.budgetWindows.label"),
+                        t("teams.page.create.fields.budgetWindows.hint"),
+                      )}
+                    </FieldLabel>
+                    <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+                  </Field>
                   <ModelMaxBudgetField
                     key={`model-max-budget-${routerSettingsKey}`}
                     premiumUser={premiumUser}
