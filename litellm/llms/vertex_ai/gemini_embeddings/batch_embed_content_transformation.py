@@ -482,6 +482,7 @@ def transform_openai_input_gemini_embed_content(
 
 _IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
 _Modality = Literal["text", "image", "audio", "video", "other"]
+_SOUND_MODALITIES: Final[frozenset[_Modality]] = frozenset(("audio", "video"))
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 _detail_entries_adapter: Final = TypeAdapter(tuple[object, ...])
 _detail_adapter: Final = TypeAdapter(PromptTokensDetails)
@@ -692,40 +693,76 @@ def _modality(
     return "other"
 
 
+def _parts(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> Sequence[GeminiEmbeddingElement]:
+    return (item,) if isinstance(item, str | Mapping) else item
+
+
 def _item_modalities(
     item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement],
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> frozenset[_Modality]:
-    parts: Final = (item,) if isinstance(item, str | dict) else item
-    return frozenset(_modality(part, resolved_files) for part in parts)
+    return frozenset(_modality(part, resolved_files) for part in _parts(item))
+
+
+def _sound_holders(item_modalities: Sequence[frozenset[_Modality]]) -> tuple[int, ...]:
+    return tuple(index for index, modalities in enumerate(item_modalities) if modalities & _SOUND_MODALITIES)
 
 
 def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
     holders: Final = tuple(index for index, modalities in enumerate(item_modalities) if modality in modalities)
-    return holders or tuple(range(len(item_modalities)))
+    sound_fallback: Final = _sound_holders(item_modalities) if modality in ("text", "audio") else ()
+    return holders or sound_fallback or tuple(range(len(item_modalities)))
+
+
+def _indicator(holders: tuple[int, ...], size: int) -> tuple[int, ...]:
+    return tuple(1 if index in holders else 0 for index in range(size))
 
 
 def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
-    holders: Final = _holders(item_modalities, modality)
-    return tuple(1 if index in holders else 0 for index in range(len(item_modalities)))
+    return _indicator(_holders(item_modalities, modality), len(item_modalities))
 
 
-def _local_text_tokens(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement], model: str) -> int:
-    parts: Final = (item,) if isinstance(item, str | dict) else item
-    texts: Final = tuple(part for part in parts if isinstance(part, str) and not _is_multimodal_element(part))
-    return token_counter(model=model, text=" ".join(texts)) if texts else 0
+def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
+    return sum(len(part) for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part))
 
 
 def _text_weights(
-    items: Sequence[GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement]],
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+) -> tuple[int, ...]:
+    lengths: Final = tuple(_text_length(item) for item in items)
+    return lengths if any(lengths) else _even_weights(item_modalities, "text")
+
+
+def _local_text_tokens(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement], model: str) -> int:
+    texts: Final = tuple(part for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part))
+    return token_counter(model=model, text=" ".join(texts)) if texts else 0
+
+
+def _text_shares(
+    total: int,
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
     item_modalities: Sequence[frozenset[_Modality]],
     model: str,
 ) -> tuple[int, ...]:
-    counted: Final = tuple(_local_text_tokens(item, model) for item in items)
-    return counted if any(counted) else _even_weights(item_modalities, "text")
+    sound_holders: Final = _sound_holders(item_modalities)
+    if not sound_holders:
+        return _weighted_shares(total, _text_weights(items, item_modalities))
+    local_tokens: Final = tuple(_local_text_tokens(item, model) for item in items)
+    claimed: Final = min(total, sum(local_tokens))
+    return tuple(
+        own + spill
+        for own, spill in zip(
+            _weighted_shares(claimed, local_tokens),
+            _weighted_shares(total - claimed, _indicator(sound_holders, len(items))),
+            strict=True,
+        )
+    )
 
 
 def _weighted_shares(total: int, weights: tuple[int, ...]) -> tuple[int, ...]:
+    if total == 0:
+        return tuple(0 for _ in weights)
     weight_sum: Final = sum(weights)
     floors: Final = tuple(total * weight // weight_sum for weight in weights)
     by_remainder: Final = tuple(
@@ -749,6 +786,19 @@ def _item_usage(text: int, image: int, audio: int, video: int, unattributed: int
     )
 
 
+def _text_only_item_usage(
+    items: Sequence[GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+    prompt_tokens: int,
+) -> tuple[Usage, ...]:
+    if any(modalities - {"text"} for modalities in item_modalities):
+        return ()
+    return tuple(
+        Usage(prompt_tokens=share, total_tokens=share)
+        for share in _weighted_shares(prompt_tokens, _text_weights(items, item_modalities))
+    )
+
+
 def _per_item_usage(
     input: GeminiEmbeddingInput,
     usage: Usage,
@@ -756,20 +806,22 @@ def _per_item_usage(
     model: str,
 ) -> tuple[Usage, ...]:
     items: Final = _top_level_elements(input)
-    details: Final = usage.prompt_tokens_details
-    if details is None or len(items) < 2:
+    if len(items) < 2:
         return ()
     modalities: Final = tuple(_item_modalities(item, resolved_files) for item in items)
+    details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
     text: Final = details.text_tokens or 0
     image: Final = details.image_tokens or 0
     audio: Final = details.audio_tokens or 0
     video: Final = details.video_tokens or 0
-    text_shares: Final = _weighted_shares(text, _text_weights(items, modalities, model))
+    if text + image + audio + video == 0:
+        return _text_only_item_usage(items, modalities, usage.prompt_tokens)
+    text_shares: Final = _text_shares(text, items, modalities, model)
     image_shares: Final = _weighted_shares(image, _even_weights(modalities, "image"))
     audio_shares: Final = _weighted_shares(audio, _even_weights(modalities, "audio"))
     video_shares: Final = _weighted_shares(video, _even_weights(modalities, "video"))
     unattributed_shares: Final = _weighted_shares(
-        usage.prompt_tokens - text - image - audio - video, tuple(1 for _ in items)
+        max(0, usage.prompt_tokens - text - image - audio - video), tuple(1 for _ in items)
     )
     return tuple(
         _item_usage(
