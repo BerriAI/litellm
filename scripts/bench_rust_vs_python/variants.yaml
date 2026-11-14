@@ -7,6 +7,8 @@ commits:
   m2: 70f399b8c5
   fixbase: 40debbb9c0
   fix: 8a3a54faf9
+  main2: 580203cce6
+  mainfix: cb1b2460d6
 
 variants:
   A0: {worktree: base, path: messages, env: {}}
@@ -24,3 +26,5 @@ variants:
   R1-chat: {worktree: router, path: chat, env: {LITELLM_RUST: "1"}}
   F0: {worktree: fixbase, path: messages, env: {PYTHONPATH: /home/user/bench/wt/fixbase}, expect_rust: true}
   F1: {worktree: fix, path: messages, env: {PYTHONPATH: /home/user/bench/wt/fix}, expect_rust: true}
+  M3: {worktree: main2, path: messages, env: {}, expect_rust: true}
+  M3F: {worktree: mainfix, path: messages, env: {PYTHONPATH: /home/user/bench/wt/mainfix}, expect_rust: true}
