@@ -4853,6 +4853,9 @@ def get_optional_params_embeddings(
 
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
+    resolved_drop_params = drop_params
+    if resolved_drop_params is None:
+        resolved_drop_params = normalize_drop_params(litellm.drop_params)
     passed_params.pop("additional_drop_params", None)
     passed_params.pop("allowed_openai_params", None)
     # Remove function objects from passed_params to avoid JSON serialization errors
@@ -4898,7 +4901,7 @@ def get_optional_params_embeddings(
             non_default_params=non_default_params,
             optional_params={},
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=resolved_drop_params,
         )
         # Provider-only params (e.g. Cohere input_type) are not in
         # OPENAI_EMBEDDING_PARAMS, so embedding_pre_process drops them from
@@ -5168,6 +5171,14 @@ def get_optional_params_embeddings(
             optional_params = non_default_params
     else:
         optional_params = non_default_params
+        if (
+            (litellm.drop_params is True or resolved_drop_params is True)
+            and (custom_llm_provider == "azure" or custom_llm_provider in litellm.openai_compatible_providers)
+            and "text-embedding-3" not in model
+            and "dimensions" in optional_params
+            and "dimensions" not in (allowed_openai_params or ())
+        ):
+            optional_params.pop("dimensions", None)
 
     final_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
