@@ -248,6 +248,14 @@ impl Uploader {
             .map_err(|error| error.to_string())
     }
 
+    async fn forget_credentials(&self) {
+        let environment = Arc::clone(&self.environment);
+        let lookup = move |name: &str| environment(name);
+        self.auth
+            .invalidate_credentials(self.settings.auth.clone(), &lookup)
+            .await;
+    }
+
     async fn attempt(
         &self,
         url: &str,
@@ -329,6 +337,9 @@ impl Uploader {
             let Some(reason) = self.retry_reason(&attempt) else {
                 break attempt;
             };
+            if matches!(&attempt, Attempt::Reply(reply) if reply.status == 403) {
+                self.forget_credentials().await;
+            }
             let wait = (self.backoff)(attempt_number);
             if in_flush {
                 tracing::debug!(

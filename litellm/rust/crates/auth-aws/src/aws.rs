@@ -294,6 +294,16 @@ impl AwsAuthService {
         self.fresh_credentials(&resolved, &flow).await
     }
 
+    pub async fn invalidate_credentials(
+        &self,
+        config: AwsAuthConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) {
+        self.credentials
+            .invalidate(&config.with_environment(env_lookup))
+            .await;
+    }
+
     /// The credentials botocore's default chain finds in `region`, without LiteLLM's Bedrock settings
     /// (`AWS_ROLE_NAME`, `AWS_PROFILE_NAME`, `AWS_SESSION_NAME`) that `resolve_credentials` also reads.
     pub async fn default_chain_credentials(&self, region: &str) -> Result<Credentials, Error> {
