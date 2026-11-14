@@ -126,8 +126,6 @@ def _successor(info: dict[str, object]) -> str | None:
     return successor if isinstance(successor, str) else None
 
 
-
-
 def test_together_backup_cost_map_in_sync(cost_map: CostMap):
     with open(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json") as f:
         backup = COST_MAP_ADAPTER.validate_python(json.load(f))
@@ -168,7 +166,7 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
 
 
 def test_together_dedicated_only_rows_are_past_their_deprecation_date(cost_map: CostMap):
-    listed = tuple(
+    listed: Final = tuple(
         model
         for model in DEDICATED_ONLY_MODELS
         if model in cost_map and not litellm._is_past_deprecation_date(cost_map[model])
@@ -177,7 +175,7 @@ def test_together_dedicated_only_rows_are_past_their_deprecation_date(cost_map: 
 
 
 def test_together_rows_only_use_modes_litellm_can_call(cost_map: CostMap):
-    unroutable = {
+    unroutable: Final = {
         model: info.get("mode")
         for model, info in cost_map.items()
         if model.startswith("together_ai/") and info.get("mode") not in ROUTED_MODES
@@ -189,18 +187,21 @@ def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap
     rows: Final = _together_rows(cost_map, "image_generation")
     assert rows
     for model, info in rows:
-        cost = default_image_cost_calculator(
-            model=model,
-            custom_llm_provider="together_ai",
-            size="1024x1024",
-            model_info=ModelInfo(**info),  # pyright: ignore[reportArgumentType]  # untyped cost map JSON
-        )
-        assert cost > 0, f"{model} has no usable image price"
+        assert (
+            default_image_cost_calculator(
+                model=model,
+                custom_llm_provider="together_ai",
+                size="1024x1024",
+                model_info=ModelInfo(**info),  # pyright: ignore[reportArgumentType]  # untyped cost map JSON
+            )
+            > 0
+        ), f"{model} has no usable image price"
 
 
 def test_together_transcription_rows_carry_a_per_second_rate(cost_map: CostMap):
     rows: Final = _together_rows(cost_map, "audio_transcription")
     assert rows
     for model, info in rows:
-        rate = info.get("input_cost_per_second")
-        assert isinstance(rate, float) and rate > 0, f"{model} has no usable transcription price"
+        assert isinstance(rate := info.get("input_cost_per_second"), float) and rate > 0, (
+            f"{model} has no usable transcription price"
+        )
