@@ -5,6 +5,7 @@ import contextvars
 import copy
 import functools
 import itertools
+import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -77,6 +78,7 @@ _FIREWORKS_ROUTER_ROUTES: Final = (
     f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
 )
 _FIREWORKS_RESOURCE_PATH_PREFIX: Final = "accounts/"
+_PROVIDER_BASE_URL_ENV_VAR_SUFFIXES: Final = ("_API_BASE", "_BASE_URL")
 _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE: Final = frozenset(
     provider.value for provider in (LlmProviders.TOGETHER_AI, LlmProviders.AZURE_AI, LlmProviders.WATSONX)
 )
@@ -408,12 +410,21 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
     )
 
 
-def _endpoint_serves_the_provider_catalog(provider: str, litellm_params: LiteLLM_Params | None) -> bool:
-    return (
-        litellm_params is None
-        or not litellm_params.api_base
-        or provider in _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE
+def _provider_base_url_is_set_in_env(provider: str) -> bool:
+    env_prefix: Final = provider.upper()
+    return any(
+        os.environ.get(f"{prefix}{suffix}")
+        for prefix, suffix in itertools.product(
+            (env_prefix, env_prefix.removesuffix("_AI")), _PROVIDER_BASE_URL_ENV_VAR_SUFFIXES
+        )
     )
+
+
+def _endpoint_serves_the_provider_catalog(provider: str, litellm_params: LiteLLM_Params | None) -> bool:
+    if provider in _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE:
+        return True
+    deployment_api_base: Final = litellm_params.api_base if litellm_params is not None else None
+    return not (deployment_api_base or litellm.api_base or _provider_base_url_is_set_in_env(provider))
 
 
 def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:

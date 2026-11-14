@@ -2106,12 +2106,64 @@ def test_wildcard_over_a_namespace_behind_a_custom_api_base_lists_the_bare_wildc
     assert straight_to_the_provider == []
 
 
+@pytest.mark.parametrize(
+    ("provider", "env_var"),
+    [
+        ("openai", "OPENAI_BASE_URL"),
+        ("openai", "OPENAI_API_BASE"),
+        ("anthropic", "ANTHROPIC_BASE_URL"),
+        ("fireworks_ai", "FIREWORKS_API_BASE"),
+        ("deepseek", "DEEPSEEK_API_BASE"),
+    ],
+)
+def test_wildcard_over_a_namespace_behind_a_gateway_set_in_the_env_lists_the_bare_wildcard_ids(
+    provider: str, env_var: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models({f"{provider}/env-gateway-namespace-model-g": provider}):
+        bare_listing: Final = get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/*"))
+        straight_to_the_provider: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/env-gateway-namespace/*")
+        )
+        monkeypatch.setenv(env_var, "https://gateway.example.test/v1")
+        behind_a_gateway: Final = get_known_models_from_wildcard(
+            f"{provider}/*", LiteLLM_Params(model=f"{provider}/env-gateway-namespace/*")
+        )
+
+    assert straight_to_the_provider == []
+    assert f"{provider}/env-gateway-namespace-model-g" in bare_listing
+    assert sorted(behind_a_gateway) == sorted(bare_listing)
+
+
+def test_wildcard_over_a_namespace_behind_the_global_api_base_lists_the_bare_wildcard_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models({"openai/global-gateway-namespace-model-g": "openai"}):
+        bare_listing: Final = get_known_models_from_wildcard("openai/*", LiteLLM_Params(model="openai/*"))
+        monkeypatch.setattr(litellm, "api_base", "https://gateway.example.test/v1")
+        behind_a_gateway: Final = get_known_models_from_wildcard(
+            "openai/*", LiteLLM_Params(model="openai/global-gateway-namespace/*")
+        )
+
+    assert "openai/global-gateway-namespace-model-g" in bare_listing
+    assert sorted(behind_a_gateway) == sorted(bare_listing)
+
+
 @pytest.mark.parametrize("provider", ["together_ai", "azure_ai", "watsonx"])
-def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no_catalog_id(provider: str) -> None:
+def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no_catalog_id(
+    provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     api_base: Final = "https://tenant-resource.example.test"
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", api_base)
     with _registered_chat_models({f"{provider}/tenant-org/model-t": provider}):
         listed_under_known_org: Final = get_known_models_from_wildcard(
             f"{provider}/*", LiteLLM_Params(model=f"{provider}/tenant-org/*", api_base=api_base)
