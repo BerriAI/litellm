@@ -5,6 +5,7 @@ Transformation for Calling Google models in their native format.
 from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+from litellm.llms.vertex_ai.common_utils import schema_budget_errors_as_context_window_errors
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -80,7 +81,8 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         Since Vertex AI natively supports Google GenAI format, we can pass most fields directly.
         """
         if generate_content_config_dict:
-            self._normalize_response_schema(generate_content_config_dict, model)
+            with schema_budget_errors_as_context_window_errors(model, self.custom_llm_provider):
+                self._normalize_response_schema(generate_content_config_dict, model)
 
         # Build the request in Google GenAI format that Vertex AI expects
         result: Final = {

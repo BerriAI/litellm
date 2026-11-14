@@ -1,5 +1,6 @@
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -14,7 +15,11 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
+    unpack_defs,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -715,7 +720,12 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-VERTEX_SCHEMAS_MAX_INLINED_BYTES: Final = 1_000_000
+@contextmanager
+def schema_budget_errors_as_context_window_errors(model: str, llm_provider: str) -> Generator[None, None, None]:
+    try:
+        yield
+    except DefsInliningBudgetExceededError as e:
+        raise litellm.ContextWindowExceededError(message=str(e), model=model, llm_provider=llm_provider) from e
 
 
 def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
@@ -733,7 +743,7 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     schema, _ = build_vertex_schema_within_budget(
         parameters,
-        max_inlined_bytes=VERTEX_SCHEMAS_MAX_INLINED_BYTES,
+        max_inlined_bytes=DEFS_MAX_INLINED_BYTES,
         schema_name="the response schema",
         add_property_ordering=add_property_ordering,
     )
@@ -748,20 +758,26 @@ def build_vertex_schema_within_budget(
 ) -> tuple[dict[str, object], int]:
     valid_schema_fields: Final = frozenset(get_type_hints(Schema).keys())
 
-    defs: Final = parameters.pop("$defs", {})
+    dollar_defs: Final = parameters.pop("$defs", {})
+    definitions: Final = parameters.pop("definitions", {})
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        raise VertexAIError(
+            status_code=400,
+            message=f"The $defs and definitions of {schema_name} must be JSON objects that map names to schemas.",
+        )
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     try:
         inlined_bytes: Final = unpack_defs(
-            parameters, defs if isinstance(defs, dict) else {}, max_inlined_bytes=max_inlined_bytes
+            parameters, {**dollar_defs, **definitions}, max_inlined_bytes=max_inlined_bytes
         )
-    except ValueError as e:
-        raise VertexAIError(
-            status_code=400,
-            message=f"Inlining the $ref definitions of {schema_name} pushes the request's Gemini schemas past "
-            f"{VERTEX_SCHEMAS_MAX_INLINED_BYTES:,} bytes. Reference shared $defs less often or flatten the schema.",
+    except DefsInliningBudgetExceededError as e:
+        raise DefsInliningBudgetExceededError(
+            f"Inlining the $ref definitions of {schema_name} copies more than {DEFS_MAX_INLINED_BYTES:,} bytes of "
+            "definitions, more than a model context window holds. Reference shared $defs less often or flatten the "
+            "schema."
         ) from e
 
     _convert_schema_types(parameters)

@@ -29,6 +29,7 @@ from litellm.constants import (
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
@@ -93,11 +94,11 @@ from litellm.utils import (
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ..common_utils import (
-    VERTEX_SCHEMAS_MAX_INLINED_BYTES,
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
     build_vertex_schema_within_budget,
+    schema_budget_errors_as_context_window_errors,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -146,6 +147,10 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _tool_schema_name(tool_name: str, earlier_tools_inlined_bytes: int) -> str:
+    return f"tool '{tool_name}' and the tools before it" if earlier_tools_inlined_bytes else f"tool '{tool_name}'"
 
 
 def _response_header(headers: Mapping[str, str], name: str) -> str | None:
@@ -316,6 +321,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    @property
+    def _llm_provider(self) -> str:
+        return "vertex_ai"
 
     def get_json_schema_from_pydantic_object(self, response_format: type["BaseModel"] | dict | None) -> dict | None:
         """
@@ -737,8 +746,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         deepcopy(
                             cast(dict[str, object], _openai_function_object["parameters"])  # cast-ok: JSON schema
                         ),
-                        max_inlined_bytes=VERTEX_SCHEMAS_MAX_INLINED_BYTES - inlined_bytes,
-                        schema_name=f"tool '{_openai_function_object.get('name', '')}'",
+                        max_inlined_bytes=DEFS_MAX_INLINED_BYTES - inlined_bytes,
+                        schema_name=_tool_schema_name(_openai_function_object.get("name", ""), inlined_bytes),
                     )
                     inlined_bytes += tool_inlined_bytes
 
@@ -1310,7 +1319,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
+                with schema_budget_errors_as_context_window_errors(model, self._llm_provider):
+                    self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1323,7 +1333,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = self._map_function(value=value, optional_params=optional_params)
+                with schema_budget_errors_as_context_window_errors(model, self._llm_provider):
+                    mapped_tools = self._map_function(value=value, optional_params=optional_params)
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(

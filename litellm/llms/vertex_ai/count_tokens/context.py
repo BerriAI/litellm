@@ -89,6 +89,8 @@ def _map_function_tools(
     if not all(_has_object_schema(tool) for tool in function_tools):
         return _INVALID_TOOLS
 
+    from litellm.litellm_core_utils.prompt_templates.common_utils import DefsInliningBudgetExceededError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     chat_tools: Final = tuple(
@@ -99,6 +101,10 @@ def _map_function_tools(
             value=[dict(tool) for tool in chat_tools],
             optional_params={},
         )
+    except DefsInliningBudgetExceededError as e:
+        return VertexGeminiCountContextError(error_message=str(e))
+    except VertexAIError as e:
+        return VertexGeminiCountContextError(error_message=e.message, status_code=e.status_code)
     except (AttributeError, TypeError, ValueError):
         return _INVALID_TOOLS
     return tuple(
