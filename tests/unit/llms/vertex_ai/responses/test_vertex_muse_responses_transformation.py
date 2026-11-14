@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -47,6 +48,21 @@ def _response(model: str) -> dict[str, object]:
     }
 
 
+def _event_stream(model: str) -> str:
+    events: Final = (
+        {"type": "response.created", "response": {**_response(model), "status": "in_progress", "output": []}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_muse",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello",
+        },
+        {"type": "response.completed", "response": _response(model)},
+    )
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+
+
 @pytest.fixture(autouse=True)
 def google_credentials(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch) -> Mock:
     monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
@@ -64,10 +80,33 @@ def test_muse_responses_select_a_native_vertex_adapter_only_under_the_meta_publi
     assert ProviderConfigManager.get_provider_responses_api_config("vertex_ai", "gemini-4-argon") is None
 
 
-def test_muse_responses_websocket_uses_the_managed_http_bridge() -> None:
-    config: Final = ProviderConfigManager.get_provider_responses_api_config("vertex_ai", "meta/muse-wonder-1.0")
-    assert config is not None
-    assert config.supports_native_websocket() is False
+@pytest.mark.asyncio
+async def test_muse_responses_websocket_streams_a_turn_over_the_vertex_http_endpoint(
+    respx_mock: respx.MockRouter,
+) -> None:
+    model: Final = "muse-wonder-1.0"
+    route: Final = respx_mock.post(ENDPOINT).mock(
+        return_value=httpx.Response(200, text=_event_stream(model), headers={"content-type": "text/event-stream"})
+    )
+    websocket: Final = Mock(send_text=AsyncMock(), receive_text=AsyncMock(side_effect=ConnectionError))
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        await litellm._aresponses_websocket(
+            model=f"vertex_ai/meta/{model}",
+            websocket=websocket,
+            vertex_project="unit-project",
+            first_message=json.dumps({"type": "response.create", "input": "Say hello", "store": False}),
+            client=client,
+        )
+    finally:
+        await client.close()
+    sent: Final = tuple(FIELDS.validate_json(call.args[0]) for call in websocket.send_text.await_args_list)
+    assert FIELDS.validate_json(route.calls.last.request.content)["model"] == model
+    assert [event["type"] for event in sent] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -119,20 +158,8 @@ def test_muse_responses_send_google_auth_and_a_bare_model_to_the_global_endpoint
 async def test_muse_async_streaming_preserves_output_and_completed_usage(
     model: str, respx_mock: respx.MockRouter
 ) -> None:
-    events: Final = (
-        {"type": "response.created", "response": {**_response(model), "status": "in_progress", "output": []}},
-        {
-            "type": "response.output_text.delta",
-            "item_id": "msg_muse",
-            "output_index": 0,
-            "content_index": 0,
-            "delta": "Hello",
-        },
-        {"type": "response.completed", "response": _response(model)},
-    )
-    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
     route: Final = respx_mock.post(ENDPOINT).mock(
-        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        return_value=httpx.Response(200, text=_event_stream(model), headers={"content-type": "text/event-stream"})
     )
     client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
     try:
@@ -381,11 +408,21 @@ def test_muse_accepts_the_global_location(location: str | None, respx_mock: resp
     assert route.called
 
 
-@pytest.mark.parametrize("api_base", ["https://vertex-gateway.example", "https://vertex-gateway.example/v1/"])
-def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(api_base: str, respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(
-        ENDPOINT.replace("https://aiplatform.googleapis.com", "https://vertex-gateway.example")
-    ).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
+@pytest.mark.parametrize(
+    ("api_base", "gateway"),
+    [
+        ("https://vertex-gateway.example", "https://vertex-gateway.example"),
+        ("https://vertex-gateway.example/v1/", "https://vertex-gateway.example"),
+        ("https://vertex-gateway.example/google-vertex/v1", "https://vertex-gateway.example/google-vertex"),
+        ("https://vertex-gateway.example/google-vertex?tenant=a", "https://vertex-gateway.example/google-vertex"),
+    ],
+)
+def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(
+    api_base: str, gateway: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT.replace("https://aiplatform.googleapis.com", gateway)).mock(
+        return_value=httpx.Response(200, json=_response("muse-wonder-1.0"))
+    )
     response: Final = litellm.responses(
         model="vertex_ai/meta/muse-wonder-1.0",
         input="Say hello",
@@ -393,7 +430,7 @@ def test_muse_sends_a_custom_api_base_to_the_meta_responses_path(api_base: str, 
         api_base=api_base,
         num_retries=0,
     )
-    assert route.called
+    assert route.calls.last.request.url.query.decode() == urlparse(api_base).query
     assert response.output_text == "Hello"
 
 
@@ -550,6 +587,7 @@ def test_muse_chat_completions_bridge_forwards_a_pdf_file_part(model: str, respx
         }
     ]
     assert response.choices[0].message.content == "Hello"
+    assert litellm.get_model_info(f"vertex_ai/meta/{model}")["supports_pdf_input"] is True
 
 
 def test_muse_chat_completions_bridge_falls_back_to_the_alias_when_the_project_is_blank(

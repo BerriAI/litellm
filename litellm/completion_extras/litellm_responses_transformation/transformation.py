@@ -200,7 +200,7 @@ _VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
 )
 
 
-def _first_set(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+def _first_non_empty(params: Mapping[str, object], names: tuple[str, ...]) -> object:
     return next((params[name] for name in names if params.get(name)), None)
 
 
@@ -209,7 +209,9 @@ def _vertex_credential_params(
 ) -> Mapping[str, object]:
     if custom_llm_provider != LlmProviders.VERTEX_AI.value or not is_vertex_muse_model(model):
         return {}
-    found: Final = {name: _first_set(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()}
+    found: Final = {
+        name: _first_non_empty(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()
+    }
     return {name: value for name, value in found.items() if value is not None}
 
 
