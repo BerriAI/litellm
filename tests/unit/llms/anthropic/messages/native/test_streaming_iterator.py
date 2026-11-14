@@ -1,5 +1,7 @@
 import asyncio
+import gc
 import json
+import tracemalloc
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal
@@ -643,6 +645,67 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
     await asyncio.sleep(0.05)
     assert detached_hook.exceptions == [], "the relay re-raised the error, so the proxy failure hook already ran"
+
+
+_DEPLOYMENT_PARAMS: Final = {
+    "metadata": {
+        "api_base": "https://relay.example/anthropic",
+        "model_group": "claude-alias",
+        "deployment": "anthropic/claude-opus-5-5",
+    }
+}
+
+
+def _assert_names_the_deployment(error: Exception) -> None:
+    debug_info: Final = getattr(error, "litellm_debug_info", None)
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/anthropic`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
+
+
+@pytest.mark.asyncio
+async def test_relayed_upstream_error_reaches_the_client_naming_the_deployment():
+    async def _cut_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        raise _ProviderStreamError("Response payload is not completed", status_code=529)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_upstream_error_names_the_deployment"),
+        request_body={},
+    )
+    iterator.litellm_logging_obj.model_call_details["litellm_params"] = _DEPLOYMENT_PARAMS
+
+    with pytest.raises(_ProviderStreamError) as excinfo:
+        async for _ in iterator.async_sse_wrapper(_cut_stream()):
+            pass
+
+    assert excinfo.value.status_code == 529
+    _assert_names_the_deployment(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_native_anthropic_stream_cut_reaches_the_client_naming_the_deployment() -> None:
+    logging_obj: Final = _make_logging_obj("native_anthropic_stream_cut")
+    logging_obj.model_call_details["litellm_params"] = _DEPLOYMENT_PARAMS
+    cut: Final = httpx.ReadError("Response payload is not completed")
+
+    async def _cut_upstream() -> AsyncIterator[bytes]:
+        yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        raise cut
+
+    stream: Final = AnthropicMessagesConfig().get_async_streaming_response_iterator(
+        model=logging_obj.model,
+        httpx_response=httpx.Response(200, content=_cut_upstream()),
+        request_body={"model": logging_obj.model},
+        litellm_logging_obj=logging_obj,
+    )
+
+    with pytest.raises(httpx.ReadError) as excinfo:
+        _ = [chunk async for chunk in stream]
+
+    assert excinfo.value is cut
+    _assert_names_the_deployment(cut)
 
 
 @pytest.mark.asyncio
@@ -1860,3 +1923,303 @@ async def test_safeguarded_sse_stream_reports_upstream_buffering_and_closes_the_
     assert SafeguardedAnthropicSSEStream(
         _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
     ).has_buffered_provider_output is False
+
+
+def _finite_stream(chunks: int) -> AsyncIterator[dict[str, object]]:
+    async def _stream() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        for i in range(chunks):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    return _stream()
+
+
+async def _wait_until_no_live_pumps() -> None:
+    for _ in range(300):
+        if not any(not task.done() for task in streaming_iterator_module._UPSTREAM_PUMP_TASKS):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("pump task is still alive")
+
+
+@pytest.mark.asyncio
+async def test_pump_exits_when_relay_generator_is_never_closed_and_queue_is_full(monkeypatch: pytest.MonkeyPatch):
+    """
+    Regression: a client that resets its connection while the relay queue is full
+    can leave the relay generator unfinalized, so client_detached is never set.
+    The pump must give up on the stalled client after the stall timeout instead of
+    waiting forever, then bill what it drained.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0.05)
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("pump_stall_full_queue"), request_body={})
+    gen = iterator.async_sse_wrapper(_finite_stream(50))
+    await gen.__anext__()
+
+    await _wait_until_no_live_pumps()
+
+    assert iterator.logging_call_count == 1
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+
+
+@pytest.mark.asyncio
+async def test_pump_keeps_streaming_to_slow_client_that_stays_within_stall_timeout(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 5)
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("pump_slow_client"), request_body={})
+    received = []
+    async for chunk in iterator.async_sse_wrapper(_finite_stream(20)):
+        received.append(chunk)
+        await asyncio.sleep(0.01)
+
+    assert any(c.startswith(b"event: message_stop\n") for c in received)
+    assert len(received) == 23
+
+
+@pytest.mark.asyncio
+async def test_pump_exits_when_queued_upstream_error_is_never_consumed_and_relay_is_never_closed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Regression: the pump waits for the relay to consume a queued upstream error.
+    If the relay generator is never finalized, that wait must time out and fire
+    the detached failure hook instead of hanging forever.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0.05)
+    upstream_errored = asyncio.Event()
+
+    async def _failing_stream() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        upstream_errored.set()
+        raise _ProviderStreamError("mid-stream failure", status_code=500)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("pump_stall_queued_error", _FailureRecorder()), request_body={}
+    )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
+
+    gen = iterator.async_sse_wrapper(_failing_stream())
+    await gen.__anext__()
+    await upstream_errored.wait()
+
+    await _wait_until_no_live_pumps()
+
+    assert len(detached_hook.exceptions) == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_client_that_resumes_after_an_unconsumed_upstream_error_still_gets_its_buffered_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Regression: when the pump gave up waiting for a stalled client to consume a queued provider
+    error, it emptied the whole relay queue to check whether the error was still in it, so a client
+    that resumed lost every chunk buffered ahead of the error. Only the error may be dropped.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    deltas: Final = tuple(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}} for i in range(3)
+    )
+
+    async def _failing_stream() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        for delta in deltas:
+            yield delta
+        raise _ProviderStreamError("mid-stream failure", status_code=500)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("resumed_client_queued_error", _FailureRecorder()), request_body={}
+    )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
+
+    gen = iterator.async_sse_wrapper(_failing_stream())
+    first_frame: Final = await gen.__anext__()
+    await _wait_until_no_live_pumps()
+
+    async def _read_rest() -> list[bytes]:
+        return [frame async for frame in gen]
+
+    rest: Final = await asyncio.wait_for(_read_rest(), timeout=5)
+
+    assert first_frame.startswith(b"event: message_start\n")
+    assert rest == [
+        *(iterator._convert_chunk_to_sse_format(delta) for delta in deltas),
+        _incomplete_stream_error_sse_event(),
+    ]
+    assert len(detached_hook.exceptions) == 1
+
+
+class _BilledChunkCountIterator(BaseAnthropicMessagesStreamingIterator):
+    def __init__(self, litellm_logging_obj: LiteLLMLoggingObj, billed_chunk_counts: list[int]):
+        super().__init__(litellm_logging_obj=litellm_logging_obj, request_body={})
+        self._billed_chunk_counts: Final = billed_chunk_counts
+
+    async def _handle_streaming_logging(self, collected_chunks: list[bytes], *, stream_teardown: bool = False) -> None:
+        self._billed_chunk_counts.append(len(collected_chunks))
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_releases_stalled_upstream_after_client_disconnect(monkeypatch: pytest.MonkeyPatch):
+    """
+    Regression: when the provider stalls after the client disconnects, the detached pump kept the
+    provider stream open and every chunk it had buffered for billing alive until the provider read
+    timed out, so each such request leaked its whole response. The drain must stop at its time
+    limit, bill what it read, close the provider stream and free the buffer.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 0)
+    requests: Final = 5
+    chunks_before_stall: Final = 50
+    payload: Final = "x" * 65536
+    response_bytes: Final = chunks_before_stall * len(payload)
+    provider_stalled: Final = asyncio.Event()
+    upstream_closed: Final = tuple(asyncio.Event() for _ in range(requests))
+    billed_chunk_counts: Final[list[int]] = []
+
+    async def _stalling_stream(closed: asyncio.Event) -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+            for _ in range(chunks_before_stall):
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": payload}}
+            await provider_stalled.wait()
+        finally:
+            closed.set()
+
+    gc.collect()
+    tracemalloc.start()
+    try:
+        baseline: Final = tracemalloc.get_traced_memory()[0]
+        for index, closed in enumerate(upstream_closed):
+            iterator = _BilledChunkCountIterator(_make_logging_obj(f"stalled_drain_{index}"), billed_chunk_counts)
+            gen = iterator.async_sse_wrapper(_stalling_stream(closed))
+            await gen.__anext__()
+            await gen.aclose()
+        try:
+            await asyncio.wait_for(asyncio.gather(*(closed.wait() for closed in upstream_closed)), timeout=5)
+        except asyncio.TimeoutError:
+            pass
+        gc.collect()
+        retained: Final = tracemalloc.get_traced_memory()[0] - baseline
+        closed_while_stalled: Final = sum(closed.is_set() for closed in upstream_closed)
+        billed_while_stalled: Final = tuple(billed_chunk_counts)
+    finally:
+        tracemalloc.stop()
+        provider_stalled.set()
+        await asyncio.gather(*tuple(streaming_iterator_module._UPSTREAM_PUMP_TASKS), return_exceptions=True)
+
+    assert closed_while_stalled == requests, f"only {closed_while_stalled}/{requests} stalled provider streams closed"
+    assert retained < response_bytes, f"{retained} bytes still held after {requests} disconnected stalled streams"
+    assert billed_while_stalled == (chunks_before_stall + 1,) * requests
+
+
+@pytest.mark.asyncio
+async def test_slow_client_that_resumes_after_the_stall_timeout_gets_an_error_instead_of_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Regression: once the pump gave up on a stalled client it stopped feeding the relay without an
+    end-of-stream sentinel, so a client that started reading again drained the queue and then
+    waited forever. It must get the incomplete-stream error and an ended stream.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("resumed_slow_client"), request_body={})
+    gen = iterator.async_sse_wrapper(_finite_stream(20))
+    first_frame: Final = await gen.__anext__()
+    await _wait_until_no_live_pumps()
+
+    async def _read_rest() -> list[bytes]:
+        return [frame async for frame in gen]
+
+    rest: Final = await asyncio.wait_for(_read_rest(), timeout=5)
+
+    assert first_frame.startswith(b"event: message_start\n")
+    assert rest[-1] == _incomplete_stream_error_sse_event()
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+
+
+
+@pytest.mark.asyncio
+async def test_pump_closes_a_stalled_upstream_after_giving_up_on_a_client_that_never_closes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Regression: a client that stops reading without closing its relay is detached by the stall
+    timeout, and the pump then drains on its own. If the provider stalls too, nothing else ever
+    ends that drain, so the drain time limit has to start when the stall timeout gives up.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 0)
+    provider_stalled: Final = asyncio.Event()
+    upstream_closed: Final = asyncio.Event()
+
+    async def _stalling_stream() -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+            for i in range(5):
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+            await provider_stalled.wait()
+        finally:
+            upstream_closed.set()
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("client_never_closes"), request_body={})
+    gen = iterator.async_sse_wrapper(_stalling_stream())
+    await gen.__anext__()
+    try:
+        await asyncio.wait_for(upstream_closed.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        pass
+    closed_while_stalled: Final = upstream_closed.is_set()
+    provider_stalled.set()
+    await _wait_until_no_live_pumps()
+
+    assert closed_while_stalled, "the stalled provider stream stayed open after the client was given up on"
+    assert iterator.logging_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pump_gives_up_on_the_end_sentinel_and_a_resumed_client_still_gets_a_clean_complete_stream(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Regression: when the upstream had already finished and only the end-of-stream sentinel was
+    left, a stalled client with a full relay queue kept the pump waiting on that last put. The
+    pump must give up at the stall timeout with the request already billed, and a client that
+    resumes must still get every chunk, ending at message_stop with no error event after it.
+    """
+    content_chunks: Final = 3
+    remaining_events: Final = content_chunks + 2
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", remaining_events)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    client_stopped_reading: Final = asyncio.Event()
+
+    async def _stream_that_finishes_after_the_client_stalls() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        await client_stopped_reading.wait()
+        for i in range(content_chunks):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("blocked_end_sentinel"), request_body={})
+    gen = iterator.async_sse_wrapper(_stream_that_finishes_after_the_client_stalls())
+    first_frame: Final = await gen.__anext__()
+    client_stopped_reading.set()
+    await _wait_until_no_live_pumps()
+    billed_before_resume: Final = iterator.logging_call_count
+
+    async def _read_rest() -> list[bytes]:
+        return [frame async for frame in gen]
+
+    frames: Final = [first_frame, *await asyncio.wait_for(_read_rest(), timeout=5)]
+
+    assert billed_before_resume == 1
+    assert len(frames) == remaining_events + 1
+    assert frames[-1].startswith(b"event: message_stop\n")
+    assert not any(frame.startswith(b"event: error\n") for frame in frames)

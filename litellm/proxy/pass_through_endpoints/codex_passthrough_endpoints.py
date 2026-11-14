@@ -32,6 +32,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
     CodexCatalogRow,
     bundled_codex_models,
+    codex_catalog_byte_limit,
     codex_catalog_etag,
     codex_entry_names_default_reasoning_level,
     merged_codex_catalog,
@@ -685,8 +686,13 @@ async def _catalog(
     etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
         return upstream
+    client_version: Final = request.query_params.get("client_version")
     merged: Final = await asyncio.to_thread(
-        merged_codex_catalog, upstream_body, rows, client_version=request.query_params.get("client_version")
+        merged_codex_catalog,
+        upstream_body,
+        rows,
+        byte_limit=codex_catalog_byte_limit(client_version),
+        client_version=client_version,
     )
     return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 

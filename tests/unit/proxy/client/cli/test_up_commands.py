@@ -372,6 +372,19 @@ class TestEnsureFreshLogin:
 
         assert login_calls == [("http://proxy-a:4000", True)]
 
+    def test_a_stale_pkce_credential_for_another_proxy_leaves_the_login_mode_to_the_saved_default(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        store = _FakeTokenStore(monkeypatch, _pkce_record("http://proxy-a:4000", seconds_left=-10), {})
+        monkeypatch.setattr(up_module, "pkce_default", lambda: False)
+        login_calls = _capture_login(
+            monkeypatch,
+            on_login=lambda: store.log_in(_pkce_record("http://proxy-b:4000", seconds_left=86_400), "sk-b"),
+        )
+
+        ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
+
+        assert login_calls == [("http://proxy-b:4000", False)]
+
     def test_logs_in_with_pkce_when_the_saved_pkce_default_is_on(self, monkeypatch):
         """`lite config set pkce true` is honoured by the login `lite up` starts, not only by `lite login`."""
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)

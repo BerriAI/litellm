@@ -1,9 +1,15 @@
+import base64
 import json
+from collections.abc import Mapping, Sequence
+from typing import Final
 
+import httpx
 import pytest
 
 import litellm
-from litellm.proxy.vector_store_endpoints.utils import get_litellm_managed_vector_store
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.vector_store_endpoints.utils import get_litellm_managed_vector_store, with_managed_search_file_ids
+from litellm.types.utils import SpecialEnums
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
@@ -92,3 +98,79 @@ async def test_registry_store_with_non_string_params_is_returned_as_is(
 
     assert resolved is store
     assert resolved["litellm_params"] is stored_params
+
+
+def _managed_file_id(provider_file_id: str) -> str:
+    unified_file_id: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "text/plain", "unified-1", "openai/team-provider", provider_file_id, "team-deployment"
+    )
+    return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+
+
+class _ManagedFileIds:
+    def __init__(self, unified_file_ids: Mapping[str, str]) -> None:
+        self.unified_file_ids: Final = unified_file_ids
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
+
+
+class _UnreachableManagedFilesTable:
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        raise httpx.ConnectError("database is unreachable")
+
+
+def _search_hit(file_id: str) -> Mapping[str, object]:
+    return {"file_id": file_id, "filename": f"{file_id}.txt", "score": 0.5, "content": []}
+
+
+def _search_page(*hits: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "object": "vector_store.search_results.page",
+        "search_query": "q",
+        "data": list(hits),
+        "has_more": False,
+        "next_page": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_hits_carry_the_managed_file_id_ingest_returned() -> None:
+    managed_ids: Final = _ManagedFileIds(
+        {"file-ingested": _managed_file_id("file-ingested"), "file-mismatched": _managed_file_id("file-other")}
+    )
+
+    mapped: Final = await with_managed_search_file_ids(
+        _search_page(_search_hit("file-ingested"), _search_hit("file-unregistered"), _search_hit("file-mismatched")),
+        managed_ids,
+        UserAPIKeyAuth(api_key="team-a-member-key", team_id="team-a"),
+    )
+
+    assert mapped == _search_page(
+        {**_search_hit("file-ingested"), "file_id": _managed_file_id("file-ingested")},
+        _search_hit("file-unregistered"),
+        _search_hit("file-mismatched"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_hits_keep_provider_file_ids_without_the_managed_files_hook() -> None:
+    page: Final = _search_page(_search_hit("file-ingested"))
+
+    assert await with_managed_search_file_ids(page, None, UserAPIKeyAuth(api_key="k", team_id="team-a")) == page
+
+
+@pytest.mark.asyncio
+async def test_search_hits_keep_provider_file_ids_when_the_managed_file_lookup_fails() -> None:
+    page: Final = _search_page(_search_hit("file-ingested"))
+
+    assert (
+        await with_managed_search_file_ids(
+            page, _UnreachableManagedFilesTable(), UserAPIKeyAuth(api_key="k", team_id="team-a")
+        )
+        == page
+    )

@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import TypeIs, assert_never  # noqa: TID251  # these are absent from typing on Python 3.10
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,10 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_none_values_from_message,
 )
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
     declared_reasoning_efforts_for_model,
     nearest_declared_reasoning_effort,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -78,22 +79,29 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
     return accepted
 
 
+def _thinking_as_reasoning_effort(thinking: object, *, model: str, drop_params: bool) -> str | None:
+    match thinking:
+        case {"type": "disabled"}:
+            return "none"
+        case {"type": "adaptive"}:
+            return "medium"
+        case _:
+            return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+
+
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
 _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _DECODED_JSON: Final = TypeAdapter(object)
-_REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
-_NON_LEVEL_EFFORT_REASON: Final = (
-    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
-)
+_REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
+_PROVIDER_DEFAULT_EFFORT: Final = "default"
+_NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 _UNUSABLE_TOOL_CHOICE_REASON: Final = (
     "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
     "or {'type': 'function', 'function': {'name': <tool name>}}."
 )
-_DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
-_REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
 
 
 def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
@@ -103,18 +111,18 @@ def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, obje
     return requested.get("effort"), requested.get("summary")
 
 
-def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) -> None:
-    if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
-        return
-    thinking: Final = as_str_mapping(value)
-    thinking_type: Final = thinking.get("type") if thinking is not None else None
-    if param == "thinking" and isinstance(thinking_type, str) and thinking_type in _REASONING_ON_THINKING_TYPES:
-        return
-    warn_dropped_reasoning(param, value, model, _REASONING_PROMPT_REASON, drop_params_gated=False)
-
-
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
     return isinstance(value, list)
+
+
+def _public_reasoning_level(result: str | UnsupportedParamsError | None) -> str | None:
+    match result:
+        case UnsupportedParamsError():
+            raise result
+        case str() | None:
+            return result
+        case _:
+            assert_never(result)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -141,8 +149,6 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
-
-    _is_base_class = False
 
     temperature: int | None = None
     top_p: int | None = None
@@ -240,33 +246,6 @@ class MistralConfig(OpenAIGPTConfig):
             model=model,
         )
 
-    @staticmethod
-    def _get_mistral_reasoning_system_prompt() -> str:
-        """
-        Returns the system prompt for Mistral reasoning models.
-        Based on Mistral's documentation: https://huggingface.co/mistralai/Magistral-Small-2506
-
-        Mistral recommends the following system prompt for reasoning:
-        """
-        return """
-        <s>[SYSTEM_PROMPT]system_prompt
-        A user will ask you to solve a task. You should first draft your thinking process (inner monologue) until you have derived the final answer. Afterwards, write a self-contained summary of your thoughts (i.e. your summary should be succinct but contain all the critical steps you needed to reach the conclusion). You should use Markdown to format your response. Write both your thoughts and summary in the same language as the task posed by the user. NEVER use \boxed{} in your response.
-
-        Your thinking process must follow the template below:
-        <think>
-        Your thoughts or/and draft, like working through an exercise on scratch paper. Be as casual and as long as you want until you are confident to generate a correct answer.
-        </think>
-
-        Here, provide a concise summary that reflects your reasoning and presents a clear final answer to the user. Don't mention that this is a summary.
-
-        Problem:
-
-        [/SYSTEM_PROMPT][INST]user_message[/INST]<think>
-        reasoning_traces
-        </think>
-        assistant_response</s>[INST]user_message[/INST]
-        """
-
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -274,6 +253,15 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
+        reasoning_level: Final = (
+            _public_reasoning_level(self._reasoning_level_to_send(model, requested, drop_params))
+            if "reasoning_effort" in requested
+            else None
+        )
+        leaves_level_to_mistral: Final = (
+            _reasoning_level_and_summary(requested.get("reasoning_effort"))[0] == _PROVIDER_DEFAULT_EFFORT
+        )
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -298,42 +286,42 @@ class MistralConfig(OpenAIGPTConfig):
                         optional_params["tool_choice"] = tool_choice
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
+            if param == "reasoning_effort" and reasoning_level is not None:
+                optional_params["reasoning_effort"] = reasoning_level
             if (
-                param == "reasoning_effort"
-                and "magistral" not in model.lower()
-                and (
-                    reasoning_level := self._reasoning_level_to_send(
-                        model, _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params), drop_params
-                    )
-                )
+                param == "thinking"
+                and reasoning_level is None
+                and not leaves_level_to_mistral
+                and (thinking_effort := _thinking_as_reasoning_effort(value, model=model, drop_params=drop_params))
                 is not None
             ):
-                optional_params["reasoning_effort"] = reasoning_level
-            if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
-                _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
+                optional_params["reasoning_effort"] = _accepted_reasoning_effort(
+                    model, thinking_effort, self.custom_llm_provider
+                )
             if param in ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
 
     def _reasoning_level_to_send(
         self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
-    ) -> str | None:
+    ) -> str | UnsupportedParamsError | None:
         requested_effort: Final = requested.get("reasoning_effort")
         level, summary = _reasoning_level_and_summary(requested_effort)
+        leaves_level_to_mistral: Final = level == _PROVIDER_DEFAULT_EFFORT
         sendable: Final = (
-            _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
+            _accepted_reasoning_effort(model, level, self.custom_llm_provider)
+            if isinstance(level, str) and level in _REASONING_LEVELS
+            else None
         )
-        if sendable is not None and summary is None:
+        if summary is None and (sendable is not None or leaves_level_to_mistral):
             return sendable
         if drop_params or litellm.drop_params is True:
-            if sendable is None and level is not None:
+            if sendable is None and level is not None and not leaves_level_to_mistral:
                 warn_dropped_reasoning(
                     "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
                 )
             return sendable
-        raise UnsupportedParamsError(
+        return UnsupportedParamsError(
             message=(
                 f"{self.custom_llm_provider} does not support parameters: ['reasoning_effort'], for model={model}, "
                 "since the Mistral API takes it only as a level such as 'high', with no reasoning summary. "
@@ -547,55 +535,8 @@ class MistralConfig(OpenAIGPTConfig):
         """
         return [self._with_mistral_file_ids(m) for m in messages]
 
-    def _add_reasoning_system_prompt_if_needed(
-        self, messages: list[AllMessageValues], optional_params: dict
-    ) -> list[AllMessageValues]:
-        """
-        Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
-        """
-        if not optional_params.get("_add_reasoning_prompt", False):
-            return messages
-
-        # Check if there's already a system message
-        has_system_message: Final = any(msg.get("role") == "system" for msg in messages)
-
-        if has_system_message:
-            # Prepend reasoning instructions to existing system message
-            for i, msg in enumerate(messages):
-                if msg.get("role") == "system":
-                    existing_content = msg.get("content", "")
-                    reasoning_prompt = self._get_mistral_reasoning_system_prompt()
-
-                    # Handle both string and list content, preserving original format
-                    if isinstance(existing_content, str):
-                        # String content - prepend reasoning prompt
-                        new_content: str | list = f"{reasoning_prompt}\n\n{existing_content}"
-                    elif isinstance(existing_content, list):
-                        # List content - prepend reasoning prompt as text block
-                        new_content = [{"type": "text", "text": reasoning_prompt + "\n\n"}] + existing_content
-                    else:
-                        # Fallback for any other type - convert to string
-                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
-
-                    messages[i] = cast(AllMessageValues, {**msg, "content": new_content})
-                    break
-        else:
-            # Add new system message with reasoning instructions
-            reasoning_message: Final[AllMessageValues] = cast(
-                AllMessageValues,
-                {
-                    "role": "system",
-                    "content": self._get_mistral_reasoning_system_prompt(),
-                },
-            )
-            messages = [reasoning_message] + messages
-
-        # Remove the internal flag
-        optional_params.pop("_add_reasoning_prompt", None)
-        return messages
-
     @classmethod
-    def _clean_tool_schema_for_mistral(cls, tools: list) -> list:
+    def _clean_tool_schema_for_mistral(cls, tools: list[JsonValue]) -> list[JsonValue]:
         """
         Clean tool schemas to remove fields that cause issues with Mistral API.
 
@@ -955,15 +896,10 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
-        For magistral models, adds reasoning system prompt when reasoning_effort is specified.
 
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        # Add reasoning system prompt if needed (for magistral models)
-        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
-            messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
-
         cache_key_params: Final = _MISTRAL_CACHE_KEY_PARAMS.validate_python(optional_params)
         withheld_params: Final = (
             ("client_metadata", "prompt_cache_key")

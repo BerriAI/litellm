@@ -41,6 +41,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
@@ -48,6 +49,30 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binding", ["customer_org_id", "customer_team_id", "customer_member_id"])
+async def test_new_user_cannot_mint_customer_bound_keys_without_proxy_admin(binding: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        await new_user(
+            data=NewUserRequest(metadata={binding: "another-customer"}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "Only proxy admins can change a key's customer organization, team, or member binding."
+
+
+@pytest.mark.asyncio
+async def test_new_user_reports_missing_database_after_customer_binding_validation(mocker: MockerFixture) -> None:
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    with pytest.raises(ProxyException) as caught:
+        await new_user(
+            data=NewUserRequest(metadata={"customer_org_id": "org-1"}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(caught.value.code) == "400"
+    assert caught.value.message == CommonProxyErrors.db_not_connected_error.value
 
 
 @pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
@@ -2457,6 +2482,54 @@ async def test_user_status_update_refreshes_cached_user(
     )
     assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_fields", "role_default_duration", "stored_reset_at", "moves_reset"),
+    [
+        ({"budget_duration": "30d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ({"budget_duration": "7d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+    ],
+)
+async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    role_default_duration: str | None,
+    stored_reset_at: datetime,
+    moves_reset: bool,
+) -> None:
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    monkeypatch.setattr(litellm, "internal_user_budget_duration", role_default_duration)
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        budget_duration="30d",
+        budget_reset_at=stored_reset_at,
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id=saved_user.user_id, **request_fields),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    written: Final = prisma_client.update_data.call_args.kwargs["data"]
+    reset_at: Final = written.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in written) is moves_reset
 
 
 @pytest.mark.asyncio
