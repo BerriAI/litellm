@@ -153,6 +153,7 @@ def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, objec
 
 
 _DEFAULT_REASONING_EFFORT: Final = "default"
+_REASONING_CONTENT_MODEL_PREFIXES: Final = (AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX.casefold(), "kimi-")
 _FOUNDRY_REASONING_EFFORTS: Final = (*REASONING_EFFORT_ADVERTISEMENT_ORDER, "auto")
 
 
@@ -200,12 +201,13 @@ def _reasoning_effort_level(
         return {}
     if not isinstance(level, str) or level not in _FOUNDRY_REASONING_EFFORTS:
         return _unsupported_reasoning_effort(requested, model, drop_params)
-    if fields is not None and any(key != "effort" for key in fields):
+    dropped: Final = {key: value for key, value in fields.items() if key != "effort"} if fields is not None else {}
+    if dropped:
         warn_dropped_reasoning(
             "reasoning_effort",
-            requested,
+            dropped,
             model,
-            f"Azure AI Foundry takes only a level name, so {level!r} is sent without the other fields.",
+            f"Azure AI Foundry takes only a level name, so only {level!r} is sent.",
             drop_params_gated=False,
         )
     return {"reasoning_effort": level}
@@ -222,7 +224,7 @@ def _declared_reasoning_effort_param(
 
 def _message_fields_to_strip(model: str, base_model: str | None) -> tuple[str, ...]:
     names: Final = _capability_models(model, base_model)
-    if not any(name.upper().startswith(AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX) for name in names):
+    if not any(name.casefold().startswith(_REASONING_CONTENT_MODEL_PREFIXES) for name in names):
         return NON_OPENAI_SPEC_MESSAGE_FIELDS
     return tuple(field for field in NON_OPENAI_SPEC_MESSAGE_FIELDS if field != "reasoning_content")
 
@@ -439,8 +441,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
-               Fireworks-hosted FW- models accept reasoning_content and Kimi reads its
-               earlier reasoning back from it, so those models keep it.
+               Fireworks-hosted FW- models and Foundry's kimi- models accept reasoning_content,
+               and Kimi reads its earlier reasoning back from it, so those models keep it.
             2. Transforms list content to a string, except on deployments that read OpenAI explicit
                prompt cache breakpoints (the deployment's own model_info opt-in, else the cost-map entry
                of its base_model or name, as loaded and without a sibling deployment's opt-in): only a
