@@ -3119,9 +3119,10 @@ async def get_user_object(
                 from litellm.proxy.management_endpoints.internal_user_endpoints import (
                     add_new_user_to_default_team,
                     check_if_default_team_set,
+                    initial_budget_windows_json,
                 )
 
-                default_params: Final = litellm.default_internal_user_params or {}
+                default_params: Final[Mapping[str, object]] = litellm.default_internal_user_params or {}
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
@@ -3129,6 +3130,11 @@ async def get_user_object(
                     "user_id": user_id,
                     **({"user_email": user_email} if user_email is not None else {}),
                     **scalar_default_params,
+                    **(
+                        {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
+                        if "budget_limits" in scalar_default_params
+                        else {}
+                    ),
                 }
                 if (
                     new_user_params.get("budget_duration") is not None
@@ -7581,7 +7587,10 @@ async def _user_multi_budget_check(user_object: LiteLLM_UserTable | None) -> Non
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=window.max_budget,
-                message=f"ExceededBudget: User={user_object.user_id} over {window.budget_duration} budget",
+                message=(
+                    f"ExceededBudget: User={user_object.user_id} over {window.budget_duration} budget. "
+                    f"Spend=${spend:.4f}, Limit=${window.max_budget:.2f}"
+                ),
                 entity_type=Litellm_EntityType.USER.value,
                 entity_id=user_object.user_id,
             )

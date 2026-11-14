@@ -136,7 +136,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
-_STORED_BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
+_BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
@@ -1396,6 +1396,28 @@ def _budget_windows_json(
     )
 
 
+def initial_budget_windows_json(raw_windows: object) -> str:
+    return _budget_windows_json(
+        None if raw_windows is None else _BUDGET_WINDOWS_ADAPTER.validate_python(raw_windows), stored=None
+    )
+
+
+def _windows_by_user(
+    users: Sequence["prisma_models.LiteLLM_UserTable"], requested: Sequence[BudgetLimitEntry] | None
+) -> MappingProxyType[str, str]:
+    return MappingProxyType(
+        {
+            user.user_id: _budget_windows_json(
+                requested,
+                stored=None
+                if user.budget_limits is None
+                else _BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
+            )
+            for user in users
+        }
+    )
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -2090,25 +2112,6 @@ async def bulk_user_update(
         non_default_values.pop("user_id", None)
         non_default_values.pop("user_email", None)
 
-        windows_by_user: Final = MappingProxyType(
-            {
-                user.user_id: _budget_windows_json(
-                    data.user_updates.budget_limits,
-                    stored=None
-                    if user.budget_limits is None
-                    else _STORED_BUDGET_WINDOWS_ADAPTER.validate_python(user.budget_limits),
-                )
-                for user in all_users_in_db
-            }
-            if "budget_limits" in non_default_values
-            else {}
-        )
-        users_by_windows: Final = MappingProxyType(
-            {
-                windows_json: [uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json]
-                for windows_json in frozenset(windows_by_user.values())
-            }
-        )
         shared_values: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "budget_limits"})
 
         successful_updates = 0
@@ -2119,6 +2122,11 @@ async def bulk_user_update(
             # Perform bulk database update
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
+                windows_by_user: Final[Mapping[str, str]] = (
+                    _windows_by_user(await user_tx_db(transaction).find_many(), data.user_updates.budget_limits)
+                    if "budget_limits" in non_default_values
+                    else MappingProxyType({})
+                )
                 if shared_values:
                     _ = await user_tx_db(transaction).update_many(
                         where={},
@@ -2128,9 +2136,16 @@ async def bulk_user_update(
                             else dict(shared_values)
                         ),
                     )
-                for windows_json, user_ids in users_by_windows.items():
+                for windows_json in frozenset(windows_by_user.values()):
                     _ = await user_tx_db(transaction).update_many(
-                        where={"user_id": {"in": user_ids}}, data={"budget_limits": windows_json}
+                        where={
+                            "user_id": {
+                                "in": [
+                                    uid for uid, user_windows in windows_by_user.items() if user_windows == windows_json
+                                ]
+                            }
+                        },
+                        data={"budget_limits": windows_json},
                     )
 
             for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
@@ -2148,6 +2163,10 @@ async def bulk_user_update(
                         for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                         if user.user_id in windows_by_user
                     ),
+                    *(
+                        _invalidate_user_spend_counter_if_changed({**non_default_values, "user_id": user.user_id})
+                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
+                    ),
                 )
 
             # Create individual success results
@@ -2160,7 +2179,11 @@ async def bulk_user_update(
                         updated_user={
                             "user_id": user.user_id,
                             **non_default_values,
-                            **({"budget_limits": windows_by_user[user.user_id]} if windows_by_user else {}),
+                            **(
+                                {"budget_limits": windows_by_user[user.user_id]}
+                                if user.user_id in windows_by_user
+                                else {}
+                            ),
                         },
                     )
                 )
