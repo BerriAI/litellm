@@ -75,7 +75,6 @@ from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
@@ -2183,18 +2182,6 @@ def _get_call_type_from_public_name(function_name: str) -> str:
             return CallTypes.aresponses_websocket.value
         case _:
             return function_name
-
-
-def _mapping_value(value: object, key: str) -> object:
-    return cast(Mapping[str, object], value).get(key) if isinstance(value, Mapping) else None  # cast-ok: untyped dict
-
-
-def is_health_check_probe(metadata: object) -> bool:
-    return _mapping_value(metadata, "user_api_key_hash") == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
-
-
-def is_health_check_probe_log(standard_logging_object: object) -> bool:
-    return is_health_check_probe(_mapping_value(standard_logging_object, "metadata"))
 
 
 def _is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:

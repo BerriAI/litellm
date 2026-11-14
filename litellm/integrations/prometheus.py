@@ -25,6 +25,7 @@ from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -91,7 +92,6 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingZeroCostDiagnostic,
 )
-from litellm.utils import is_health_check_probe
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -595,6 +595,14 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     ):
         return requested_model
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
+
+
+def _is_health_check_probe(metadata: object) -> bool:
+    return (
+        isinstance(metadata, Mapping)
+        and cast(Mapping[str, object], metadata).get("user_api_key_hash")  # cast-ok: untyped logging metadata
+        == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    )
 
 
 class PrometheusLogger(CustomLogger):
@@ -3517,7 +3525,7 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
             # Only mark a deployment outage when one was actually picked.
-            if deployment_selected and not is_health_check_probe(_metadata):
+            if deployment_selected and not _is_health_check_probe(_metadata):
                 self.set_deployment_partial_outage(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
@@ -3764,7 +3772,7 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
-            if not is_health_check_probe(standard_logging_payload.get("metadata")):
+            if not _is_health_check_probe(standard_logging_payload.get("metadata")):
                 self.set_deployment_healthy(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id or "",
