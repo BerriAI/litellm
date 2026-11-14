@@ -1,6 +1,5 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
-import _hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -258,12 +257,6 @@ def _fips_keys(master_key: str) -> tuple[str, str, str]:
     )
 
 
-_needs_shared_openssl: Final = pytest.mark.skipif(
-    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
-)
-
-
-@_needs_shared_openssl
 @pytest.mark.usefixtures("fips_mode_on")
 def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
@@ -279,7 +272,6 @@ def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_eve
     )
 
 
-@_needs_shared_openssl
 @pytest.mark.usefixtures("fips_mode_on")
 def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
