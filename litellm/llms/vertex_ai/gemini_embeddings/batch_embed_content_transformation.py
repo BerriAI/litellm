@@ -401,6 +401,11 @@ def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[s
     return _STRING_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
 
 
+def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
+    request_fields: Final = {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
+    return embed_content_config_fields(request_fields).get("audioTrackExtraction") is True
+
+
 def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
     """The named config params under `embedContentConfig`, on top of any config the caller sent in `extra_body`."""
     named_config: Final = {
@@ -761,8 +766,12 @@ def _sound_holders(item_modalities: Sequence[frozenset[_Modality]]) -> tuple[int
 
 def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
     holders: Final = tuple(index for index, modalities in enumerate(item_modalities) if modality in modalities)
-    sound_fallback: Final = _sound_holders(item_modalities) if modality in ("text", "audio") else ()
+    sound_fallback: Final = _sound_holders(item_modalities) if modality == "audio" else ()
     return holders or sound_fallback or tuple(range(len(item_modalities)))
+
+
+def _audio_holders(item_modalities: Sequence[frozenset[_Modality]], audio_track_extraction: bool) -> tuple[int, ...]:
+    return (_sound_holders(item_modalities) if audio_track_extraction else ()) or _holders(item_modalities, "audio")
 
 
 def _indicator(holders: tuple[int, ...], size: int) -> tuple[int, ...]:
@@ -775,7 +784,9 @@ def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Mo
 
 def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
     return sum(
-        len(part.encode()) for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part)
+        len(part.encode(errors="surrogatepass"))
+        for part in _parts(item)
+        if isinstance(part, str) and not _is_multimodal_element(part)
     )
 
 
@@ -857,6 +868,7 @@ def _per_item_usage(
     usage: Usage,
     resolved_files: Mapping[str, Mapping[str, str]],
     model: str,
+    audio_track_extraction: bool,
 ) -> tuple[Usage, ...]:
     items: Final = _top_level_elements(input)
     if len(items) < 2:
@@ -871,7 +883,9 @@ def _per_item_usage(
         return _text_only_item_usage(items, modalities, usage.prompt_tokens)
     text_shares: Final = _text_shares(text, items, modalities, model)
     image_shares: Final = _weighted_shares(image, _even_weights(modalities, "image"))
-    audio_shares: Final = _weighted_shares(audio, _even_weights(modalities, "audio"))
+    audio_shares: Final = _weighted_shares(
+        audio, _indicator(_audio_holders(modalities, audio_track_extraction), len(items))
+    )
     video_shares: Final = _weighted_shares(video, _even_weights(modalities, "video"))
     unattributed_shares: Final = _weighted_shares(
         max(0, usage.prompt_tokens - text - image - audio - video), tuple(1 for _ in items)
@@ -894,6 +908,7 @@ def process_response(
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
+    audio_track_extraction: bool = False,
 ) -> EmbeddingResponse:
     usage: Final = _batch_embed_usage(input, model, _predictions.get("usageMetadata"), resolved_files or {})
     return EmbeddingResponse(
@@ -904,5 +919,5 @@ def process_response(
         ],
         usage=usage,
         hidden_params={**(get_hidden_params(model_response) or {})},
-        item_usage=_per_item_usage(input, usage, resolved_files or {}, model),
+        item_usage=_per_item_usage(input, usage, resolved_files or {}, model, audio_track_extraction),
     )

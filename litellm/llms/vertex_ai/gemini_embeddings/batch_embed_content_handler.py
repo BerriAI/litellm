@@ -3,9 +3,11 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -22,6 +24,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
+    audio_track_extraction_enabled,
     file_reference_name,
     flatten_media_sources,
     is_file_reference,
@@ -30,6 +33,8 @@ from .batch_embed_content_transformation import (
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -287,6 +292,9 @@ class GoogleBatchEmbeddings(VertexLLM):
                 _predictions=_json_response,
                 input=input,
                 resolved_files=resolved_files,
+                audio_track_extraction=audio_track_extraction_enabled(
+                    _OPTIONAL_PARAMS.validate_python(optional_params)
+                ),
             )
 
     async def async_batch_embeddings(
@@ -394,4 +402,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 _predictions=_json_response,
                 input=input,
                 resolved_files=resolved_files,
+                audio_track_extraction=audio_track_extraction_enabled(
+                    _OPTIONAL_PARAMS.validate_python(optional_params or {})
+                ),
             )
