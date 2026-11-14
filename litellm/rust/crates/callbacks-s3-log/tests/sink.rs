@@ -425,7 +425,10 @@ async fn without_a_region_param_the_host_resolves_the_signing_region(
         .respond_with(ResponseTemplate::new(200))
         .mount(&server)
         .await;
-    let (sink, host) = sink(&server, json!({"s3_region_name": null}));
+    let (sink, host) = sink(
+        &server,
+        json!({"s3_region_name": null, "s3_aws_session_token": "session"}),
+    );
     *host.region.lock().unwrap() = Some(region);
     submit(&sink, event(&host, "a", "{}")).await;
     sink.flush().await;
@@ -530,7 +533,10 @@ async fn a_panic_in_a_host_call_keeps_the_object_and_later_flushes_deliver_it() 
         .respond_with(ResponseTemplate::new(200))
         .mount(&server)
         .await;
-    let (sink, host) = sink(&server, json!({"s3_region_name": null}));
+    let (sink, host) = sink(
+        &server,
+        json!({"s3_region_name": null, "s3_aws_session_token": "session"}),
+    );
     host.region_panics.store(true, Ordering::Relaxed);
     submit(&sink, event(&host, "a", "{}")).await;
     sink.flush().await;
