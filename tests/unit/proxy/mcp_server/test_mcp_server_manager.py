@@ -1082,6 +1082,34 @@ class TestMCPServerManager:
 
         assert any("invalid alias 'bad/name'" in message for message in caplog.messages)
 
+    async def test_config_server_tool_overrides_rename_and_redescribe_listed_tools(
+        self, config_only_mcp_manager_factory
+    ):
+        from litellm.proxy.mcp_server.operations import (
+            _resolve_display_name_to_original,
+            apply_display_name_overrides,
+        )
+        from litellm.proxy.mcp_server.tool_catalog_guard import apply_description_overrides
+
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(
+            {
+                "example_server": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "tool_name_to_display_name": {"example_tool": "friendly_tool"},
+                    "tool_name_to_description": {"example_tool": "Admin description"},
+                }
+            }
+        )
+        (server,) = manager.config_mcp_servers.values()
+        upstream = MCPTool(name="example_server-example_tool", description="Upstream", inputSchema={})
+
+        (listed,) = apply_display_name_overrides(list(apply_description_overrides([upstream], server)), server)
+
+        assert (listed.name, listed.description) == ("friendly_tool", "Admin description")
+        assert _resolve_display_name_to_original("friendly_tool", [server]) == "example_server-example_tool"
+
     @pytest.mark.asyncio
     async def test_load_servers_from_config_accepts_valid_alias(self, config_only_mcp_manager_factory, caplog):
         """Valid aliases should be accepted and populate the registry."""
