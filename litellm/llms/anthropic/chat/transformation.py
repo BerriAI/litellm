@@ -1,4 +1,3 @@
-import copy
 import json
 import re
 import time
@@ -38,12 +37,11 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    DEFS_MAX_INLINED_BYTES,
+    defs_unpacked,
     invalid_type_message,
     is_present_non_string,
     is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
-    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -1866,14 +1864,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return json_schema
 
     @staticmethod
-    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
-        unpacked: Final = copy.deepcopy(dict(json_schema))
-        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
-        if isinstance(defs, dict) and defs:
-            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-        return unpacked
-
-    @staticmethod
     def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         if (
             schema_has_unresolvable_ref(json_schema)
@@ -1904,7 +1894,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return self.uses_native_structured_output(model) and not open_object_takes_json_tool
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+        return self.filter_anthropic_output_schema(dict(defs_unpacked(json_schema)))
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)

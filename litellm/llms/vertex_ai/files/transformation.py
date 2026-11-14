@@ -33,8 +33,14 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    iter_items,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.common_utils import JSON_SCHEMA_KEPT_REF_SIBLINGS, defs_unpacked
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
@@ -116,6 +122,14 @@ _BATCH_OUTPUT_FIRST_ROW_PEEK_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PASSTHROUGH_MANAGED_GCS_PREFIX: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}passthrough/"
 _RAW_UPLOAD_CHUNK_BYTES: Final = 1024 * 1024
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_SCHEMA_ANNOTATIONS: Final = frozenset({"$schema", "$id", "$comment", "$anchor"})
+_JSON_SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "example", "examples"})
+_JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS: Final = frozenset(
+    {"properties", "patternProperties", "dependentSchemas", "definitions", "$defs"}
+)
+_INLINABLE_JSON_SCHEMA_REF: Final = re.compile(r"#/(\$defs|definitions)/[^/]+")
+_INLINED_REF_SIBLINGS: Final = JSON_SCHEMA_KEPT_REF_SIBLINGS | frozenset({"$ref", "$defs", "definitions"})
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -844,6 +858,162 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     return {"custom_id": str(custom_id), "request": request}
 
 
+@dataclass(frozen=True, slots=True)
+class _SchemaObject:
+    pairs: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SchemaLiteral:
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _NamedSchemas:
+    value: object
+
+
+def _schema_object(pairs: Sequence[tuple[str, object]]) -> _SchemaObject:
+    return _SchemaObject(tuple(pairs))
+
+
+def _decoded_schema_object(node: _SchemaObject) -> Mapping[str, object]:
+    return dict(node.pairs)
+
+
+def _bigquery_loadable_literal(value: object) -> object:
+    items: Final = as_object_list(value)
+    if items is not None:
+        return tuple(_SchemaLiteral(item) for item in items)
+    if not isinstance(value, _SchemaObject):
+        return value
+    refused: Final = sorted(key for key, _ in value.pairs if "$" in key)
+    if refused:
+        raise ValueError(
+            f"json_schema keys {refused} inside a const, default, enum, or example value cannot go in a Vertex AI "
+            "batch, because BigQuery column names cannot hold '$'"
+        )
+    return {key: _SchemaLiteral(child) for key, child in value.pairs}
+
+
+def _bigquery_loadable_named_schemas(value: object) -> object:
+    if not isinstance(value, _SchemaObject):
+        return value
+    refused: Final = sorted(name for name, _ in value.pairs if "$" in name)
+    if refused:
+        raise ValueError(
+            f"json_schema property names {refused} cannot go in a Vertex AI batch, because BigQuery column names "
+            "cannot hold '$'"
+        )
+    return dict(value.pairs)
+
+
+def _schema_child(key: str, value: object) -> object:
+    if key in _JSON_SCHEMA_LITERAL_KEYWORDS:
+        return _SchemaLiteral(value)
+    if key in _JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS:
+        return _NamedSchemas(value)
+    return value
+
+
+def _inlinable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params: bool) -> Mapping[str, object]:
+    node: Final = dict(pairs)
+    if "$ref" not in node:
+        return {key: _schema_child(key, value) for key, value in pairs}
+    ref: Final = node["$ref"]
+    if not (isinstance(ref, str) and _INLINABLE_JSON_SCHEMA_REF.fullmatch(ref)):
+        shown: Final = ref if isinstance(ref, str) else json.dumps(ref, default=_decoded_schema_object)
+        raise ValueError(
+            f"json_schema refs {[shown]} cannot go in a Vertex AI batch, because only refs of the form "
+            "#/$defs/<name> are inlined and BigQuery column names cannot hold '$'"
+        )
+    dropped: Final = sorted(key for key in node if key not in _INLINED_REF_SIBLINGS)
+    if dropped and not drop_params:
+        raise ValueError(
+            f"json_schema keys {dropped} next to a $ref cannot go in a Vertex AI batch, because the ref is inlined "
+            "and only annotations and required carry over to its target. Remove them, or set drop_params to drop them"
+        )
+    return {key: _schema_child(key, value) for key, value in pairs}
+
+
+def _bigquery_loadable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params: bool) -> Mapping[str, object]:
+    annotations: Final = frozenset(
+        key for key, value in pairs if key in _JSON_SCHEMA_ANNOTATIONS and isinstance(value, str)
+    )
+    refused: Final = sorted(key for key, _ in pairs if "$" in key and key not in annotations)
+    if refused:
+        raise ValueError(
+            f"json_schema keys {refused} cannot go in a Vertex AI batch, because BigQuery column names cannot hold "
+            "'$'. Refs into $defs are inlined, so these are recursive refs, refs to a name no $defs block defines, "
+            "a nested $defs block, or other '$' keywords"
+        )
+    if annotations and not drop_params:
+        raise ValueError(
+            f"json_schema keys {sorted(annotations)} cannot go in a Vertex AI batch, because BigQuery column names "
+            "cannot hold '$'. Remove them, or set drop_params to drop them"
+        )
+    return {key: _schema_child(key, value) for key, value in pairs if key not in annotations}
+
+
+def _walked_schema_node(
+    node: _SchemaObject | _SchemaLiteral | _NamedSchemas,
+    schema_object: Callable[[tuple[tuple[str, object], ...]], Mapping[str, object]],
+) -> object:
+    if isinstance(node, _SchemaLiteral):
+        return _bigquery_loadable_literal(node.value)
+    if isinstance(node, _NamedSchemas):
+        return _bigquery_loadable_named_schemas(node.value)
+    return schema_object(node.pairs)
+
+
+def _walked_schema(
+    json_schema: Mapping[str, object], schema_object: Callable[[tuple[tuple[str, object], ...]], Mapping[str, object]]
+) -> Mapping[str, object]:
+    schema_tree: Final = _DECODED_JSON.validate_python(
+        json.loads(json.dumps(json_schema), object_pairs_hook=_schema_object)
+    )
+    return _JSON_OBJECT.validate_python(
+        json.loads(json.dumps(schema_tree, default=partial(_walked_schema_node, schema_object=schema_object)))
+    )
+
+
+def _bigquery_loadable_schema(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    inlinable: Final = _walked_schema(json_schema, partial(_inlinable_schema_object, drop_params=drop_params))
+    return _walked_schema(
+        defs_unpacked(inlinable, keep_ref_siblings=True),
+        partial(_bigquery_loadable_schema_object, drop_params=drop_params),
+    )
+
+
+def _with_json_schema_config_in_its_own_column(
+    vertex_request_body: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object]:
+    """
+    Vertex loads a batch file into one BigQuery table, so each row's `generationConfig` gains a null for every key
+    another row sets. `response_json_schema` is a `google.protobuf.Value`, so its null counts as set and fails the
+    row. Proto JSON takes both spellings of the field, so a row with a schema uses the one no other row shares.
+    BigQuery column names cannot hold `$` either, so the schema's `$defs` are inlined and any other `$` key is
+    dropped under drop_params when it is an annotation, else refused, and always refused inside a literal value.
+    Keys next to a `$ref` that do not carry over to its inlined target follow the same drop_params rule.
+    """
+    generation_config: Final = vertex_request_body.get("generationConfig")
+    if not isinstance(generation_config, Mapping) or "response_json_schema" not in generation_config:
+        return vertex_request_body
+    schema_config: Final = _JSON_OBJECT.validate_python(generation_config)
+    json_schema: Final = schema_config["response_json_schema"]
+    return {
+        **{key: value for key, value in vertex_request_body.items() if key != "generationConfig"},
+        "generation_config": {
+            **schema_config,
+            "response_json_schema": (
+                _bigquery_loadable_schema(_JSON_OBJECT.validate_python(json_schema), drop_params)
+                if isinstance(json_schema, Mapping)
+                else json_schema
+            ),
+        },
+    }
+
+
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: Mapping[str, object],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
@@ -906,7 +1076,16 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return ({"request": vertex_request_body},)
+    return (
+        {
+            "request": _with_json_schema_config_in_its_own_column(
+                vertex_request_body,
+                drop_params=drops_unsupported_params(
+                    chat_request_body.get("drop_params", deployment_params.get("drop_params"))
+                ),
+            )
+        },
+    )
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
