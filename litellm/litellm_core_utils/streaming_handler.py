@@ -2701,23 +2701,23 @@ class CustomStreamWrapper:
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
                 await self.aclose()
-                self._log_stream_failure_and_raise(self._stream_eof_error())
+                await self._alog_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            self._dispatch_stream_failure(e, traceback_exception)
+            await self._adispatch_stream_failure(e, traceback_exception)
             await self.aclose()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
                 await self.aclose()
-                self._log_stream_failure_and_raise(e)
+                await self._alog_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
             await self.aclose()
-            self._log_stream_failure_and_raise(e)
+            await self._alog_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2819,6 +2819,18 @@ class CustomStreamWrapper:
             self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)
         )
 
+    async def _alog_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+        await self._adispatch_stream_failure(e, traceback.format_exc())
+        self._handle_stream_fallback_error(e)
+
+    async def _adispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
+        # Same order as the sync siblings: usage is stashed before the raise,
+        # so whoever reads it next (the router, a fallback usage carrier) sees it.
+        await self._arecord_partial_usage_for_failure()
+        self._failure_logging = asyncio.create_task(
+            self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)
+        )
+
     @property
     def has_dispatched_failure_logging(self) -> bool:
         return self._failure_logging is not None
@@ -2863,23 +2875,56 @@ class CustomStreamWrapper:
         if self.logging_obj is None:
             return
         try:
-            partial_response: Final = self.partial_response()
-            if partial_response is None:
-                return
-            usage: Final[object] = getattr(partial_response, "usage", None)
-            if not isinstance(usage, Usage):
-                return
-            partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
-            if self._earlier_rounds_spend is None:
-                self.logging_obj.model_call_details["combined_usage_object"] = usage
-                self.logging_obj.model_call_details["response_cost"] = partial_cost
-                return
-            self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, usage, partial_cost)
+            self._stash_partial_usage_for_failure(self._partial_usage_for_failure())
         except Exception as recover_error:
             verbose_logger.debug(
                 "could not recover partial usage for interrupted stream: %s",
                 recover_error,
             )
+
+    async def _arecord_partial_usage_for_failure(self) -> None:
+        """Async sibling of `_record_partial_usage_for_failure`, for `__anext__`.
+
+        Without reported prompt tokens the builder counts the whole prompt,
+        which is tens to hundreds of ms on a large agentic conversation and
+        used to run on the event loop for every failed async stream.
+        """
+        if self.logging_obj is None:
+            return
+        try:
+            result = await asyncify(self._partial_usage_for_failure)()
+            self._stash_partial_usage_for_failure(result)
+        except Exception as recover_error:
+            verbose_logger.debug(
+                "could not recover partial usage for interrupted stream: %s",
+                recover_error,
+            )
+
+    def _partial_usage_for_failure(self) -> "tuple[Usage, ModelResponse | TextCompletionResponse] | None":
+        """The partial usage and the response it was built from, without touching the logging object, so the
+        async path can run the counting off the loop first. Cost stays out of here on purpose:
+        `response_cost_calculator` also clears a debug key on the logging object, so it belongs with the
+        writes in `_stash_partial_usage_for_failure`."""
+        partial_response: Final = self.partial_response()
+        if partial_response is None:
+            return None
+        usage: Final[object] = getattr(partial_response, "usage", None)
+        if not isinstance(usage, Usage):
+            return None
+        return usage, partial_response
+
+    def _stash_partial_usage_for_failure(
+        self, result: "tuple[Usage, ModelResponse | TextCompletionResponse] | None"
+    ) -> None:
+        if self.logging_obj is None or result is None:
+            return
+        usage, partial_response = result
+        partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.model_call_details["combined_usage_object"] = usage
+            self.logging_obj.model_call_details["response_cost"] = partial_cost
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, usage, partial_cost)
 
     # Delta fields a text-only prefill continuation cannot carry, so a stream
     # that emitted any of them is not eligible for mid-stream continuation.
