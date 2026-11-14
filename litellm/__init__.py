@@ -680,6 +680,7 @@ qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+token_kiosk_models: Final[Set[str]] = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
@@ -974,6 +975,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "token_kiosk":
+            token_kiosk_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
         elif value.get("litellm_provider") == "kyma":
@@ -1160,6 +1163,7 @@ model_list = list(
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | token_kiosk_models
     | openinfer_models
     | kyma_models
     | streamlake_models
@@ -1292,6 +1296,7 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "token_kiosk": token_kiosk_models,
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
