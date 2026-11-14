@@ -37,6 +37,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def is_native_messages_route(self) -> bool:
         return False
 
+    def supports_message_threads(self) -> bool:
+        return False
+
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return False
 

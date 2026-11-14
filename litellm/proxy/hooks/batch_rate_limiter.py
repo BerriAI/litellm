@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -103,6 +104,10 @@ else:
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
+
+
+class _FileContentFetchKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _batch_create_routing_model(data: Mapping[str, object]) -> str | None:
@@ -537,7 +542,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         custom_llm_provider: str,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Map proxy-facing file IDs to provider file IDs and credentials.
 
@@ -954,7 +959,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 file_content = await litellm.afile_content(
                     file_id=provider_file_id,
                     user_api_key_dict=user_api_key_dict,
-                    **fetch_kwargs,
+                    **_FileContentFetchKwargs(**fetch_kwargs),
                 )
 
             file_content_bytes: Final = getattr(file_content, "content", None)

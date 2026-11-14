@@ -56,6 +56,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
+    ChatCompletionAudioDelta,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -114,6 +115,7 @@ from ..context_caching.rejected_cache_retry import (
     post_with_fresh_cache_async,
     post_with_fresh_cache_sync,
 )
+from ..request_labels import vertex_request_label_fields, without_caller_labels_header
 from ..vertex_llm_base import VertexBase
 from .grounding_requests import calculate_grounding_requests
 from .long_decode import (
@@ -273,6 +275,7 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 
 
 _SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+_CALLER_HEADERS: Final = TypeAdapter(dict[str, str])
 
 
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -2442,7 +2445,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     @staticmethod
-    def is_candidate_token_count_inclusive(usage_metadata: UsageMetadata) -> bool:
+    def is_candidate_token_count_inclusive(usage_metadata: Mapping[str, object]) -> bool:
         """
         Check if the candidate token count is inclusive of the thinking token count
 
@@ -2452,12 +2455,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        non_thinking_tokens: Final = (
-            usage_metadata.get("promptTokenCount", 0)
-            + usage_metadata.get("candidatesTokenCount", 0)
-            + usage_metadata.get("toolUsePromptTokenCount", 0)
+        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
+        candidate_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
+        tool_use_prompt_tokens: Final = usage_metadata.get("toolUsePromptTokenCount", 0)
+        total_tokens: Final = usage_metadata.get("totalTokenCount", 0)
+        return (
+            isinstance(prompt_tokens, int)
+            and isinstance(candidate_tokens, int)
+            and isinstance(tool_use_prompt_tokens, int)
+            and isinstance(total_tokens, int)
+            and prompt_tokens + candidate_tokens + tool_use_prompt_tokens == total_tokens
         )
-        return non_thinking_tokens == usage_metadata.get("totalTokenCount", 0)
 
     @staticmethod
     def _response_has_search_grounding(
@@ -2797,6 +2805,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         functions: ChatCompletionToolCallFunctionChunk | None,
         chat_completion_logprobs: ChoiceLogprobs | None,
         image_response: list[ImageURLListItem] | None,
+        audio_response: ChatCompletionAudioResponse | None = None,
     ) -> StreamingChoices:
         """
         Helper method to create a streaming choice object for Vertex AI
@@ -2815,6 +2824,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 content=chat_completion_message.get("content"),
                 reasoning_content=chat_completion_message.get("reasoning_content"),
                 tool_calls=tools,
+                audio=ChatCompletionAudioDelta(data=audio_response.data) if audio_response is not None else None,
                 images=image_response,
                 function_call=functions,
                 annotations=annotations,
@@ -3025,6 +3035,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 continue
 
             image_response: list[ImageURLListItem] | None = None
+            audio_response: ChatCompletionAudioResponse | None = None
             chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
             chat_completion_logprobs: ChoiceLogprobs | None = None
             tools: list[ChatCompletionToolCallChunk] | None = None
@@ -3152,6 +3163,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     functions=functions,
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
+                    audio_response=audio_response,
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
@@ -3878,6 +3890,11 @@ class VertexLLM(VertexBase):
         api_base: str | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
         stream: Final[bool | None] = optional_params.pop("stream", None)
+        caller_headers: Final = (
+            dict(without_caller_labels_header(_CALLER_HEADERS.validate_python(extra_headers)))
+            if extra_headers is not None and custom_llm_provider != "gemini" and vertex_request_label_fields()
+            else extra_headers
+        )
 
         transform_request_params: Final = {
             "gemini_api_key": gemini_api_key,
@@ -3886,7 +3903,7 @@ class VertexLLM(VertexBase):
             "model": model,
             "client": client,
             "timeout": timeout,
-            "extra_headers": extra_headers,
+            "extra_headers": caller_headers,
             "optional_params": optional_params,
             "logging_obj": logging_obj,
             "custom_llm_provider": custom_llm_provider,
@@ -3917,7 +3934,7 @@ class VertexLLM(VertexBase):
                     vertex_credentials=vertex_credentials,
                     gemini_api_key=gemini_api_key,
                     custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
+                    extra_headers=caller_headers,
                 )
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -3940,7 +3957,7 @@ class VertexLLM(VertexBase):
                 vertex_credentials=vertex_credentials,
                 gemini_api_key=gemini_api_key,
                 custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
+                extra_headers=caller_headers,
             )
 
         _auth_header, vertex_project = self._ensure_access_token(
@@ -3966,7 +3983,7 @@ class VertexLLM(VertexBase):
         )
         headers: Final = VertexGeminiConfig().validate_environment(
             api_key=auth_header,
-            headers=extra_headers,
+            headers=caller_headers,
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -3991,7 +4008,7 @@ class VertexLLM(VertexBase):
         log_request(data)
 
         fresh_headers: Final = partial(
-            self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
+            self._fresh_headers, headers, caller_headers, vertex_credentials, vertex_project, custom_llm_provider
         )
 
         ## SYNC STREAMING CALL ##

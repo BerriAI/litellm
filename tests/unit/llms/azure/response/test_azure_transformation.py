@@ -93,13 +93,13 @@ def test_get_complete_url():
     """
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
     api_base = "https://litellm8397336933.openai.azure.com"
-    litellm_params = {"api_version": "2024-05-01-preview"}
+    litellm_params = {"api_version": "2025-04-01-preview"}
 
     result = azure_openai_responses_apiconfig.get_complete_url(
         api_base=api_base, litellm_params=litellm_params
     )
 
-    expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+    expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
 
     assert result == expected
 
@@ -167,6 +167,108 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
     assert result == f"https://gateway.example.com/foundry/openai/openai/v1/responses?api-version={expected_version}"
 
 
+_FOUNDRY_PROJECT: Final = "https://x.services.ai.azure.com/api/projects/proj"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "litellm_params", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT}/openai/v1", {}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1/", {"api_version": ""}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1", {"api_version": "v1"}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+            {"api_version": "2025-04-01-preview"},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1",
+            {"api_version": "2024-10-21", "responses_api_version": "preview"},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1?tenant=example&api-version=preview",
+            {},
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses?tenant=example",
+        ),
+        (_FOUNDRY_PROJECT, {}, f"{_FOUNDRY_PROJECT}/openai/v1/responses"),
+        (
+            "https://gw.example.com/foundry/api/projects/proj/openai/v1",
+            {"api_version": "preview"},
+            "https://gw.example.com/foundry/api/projects/proj/openai/v1/responses",
+        ),
+        (
+            _FOUNDRY_PROJECT,
+            {"api_version": "2025-11-15-preview"},
+            f"{_FOUNDRY_PROJECT}/openai/responses?api-version=2025-11-15-preview",
+        ),
+        (
+            "https://x.services.ai.azure.com/openai/v1",
+            {},
+            f"https://x.services.ai.azure.com/openai/v1/responses?api-version={AZURE_DEFAULT_RESPONSES_API_VERSION}",
+        ),
+    ],
+)
+def test_foundry_project_v1_responses_url_never_carries_an_api_version(
+    api_base: str, litellm_params: dict[str, str], expected_url: str
+) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    responses_url: Final = config.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+    get_url, _ = config.transform_get_response_api_request(
+        response_id="resp_1", api_base=responses_url, litellm_params=GenericLiteLLMParams(), headers={}
+    )
+
+    assert responses_url == expected_url
+    assert httpx.URL(get_url).params == httpx.URL(expected_url).params
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        ("https://apim.example.com/my-foundry/openai/v1", "none", "https://apim.example.com/my-foundry/openai/v1/responses"),
+        ("https://apim.example.com/my-foundry", "None", "https://apim.example.com/my-foundry/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai/responses", "none", "https://x.openai.azure.com/openai/v1/responses"),
+        ("https://x.openai.azure.com/openai", "none", "https://x.openai.azure.com/openai/v1/responses"),
+        (
+            "https://apim.example.com/my-foundry/openai/v1?tenant=example&api-version=preview",
+            "none",
+            "https://apim.example.com/my-foundry/openai/v1/responses?tenant=example",
+        ),
+    ],
+)
+def test_api_version_none_sends_responses_and_lifecycle_calls_with_no_api_version(
+    api_base: str, api_version: str, expected_url: str
+) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    responses_url: Final = config.get_complete_url(api_base=api_base, litellm_params={"api_version": api_version})
+    get_url, _ = config.transform_get_response_api_request(
+        response_id="resp_1", api_base=responses_url, litellm_params=GenericLiteLLMParams(), headers={}
+    )
+
+    assert responses_url == expected_url
+    assert "api-version" not in httpx.URL(get_url).params
+
+
+def test_gateway_v1_base_without_the_opt_out_keeps_its_api_version() -> None:
+    responses_url: Final = AzureOpenAIResponsesAPIConfig().get_complete_url(
+        api_base="https://apim.example.com/my-foundry/openai/v1", litellm_params={"api_version": "preview"}
+    )
+
+    assert httpx.URL(responses_url).params.get("api-version") == "preview"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (f"{_FOUNDRY_PROJECT}/openai/v1", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        (f"{_FOUNDRY_PROJECT}/openai/v1/", "wss://x.services.ai.azure.com/api/projects/proj/openai/v1/responses"),
+        ("https://x.services.ai.azure.com/openai/v1", "wss://x.services.ai.azure.com/openai/v1/responses"),
+    ],
+)
+def test_websocket_url_on_an_openai_v1_base_dials_v1_responses_once(api_base: str, expected_url: str) -> None:
+    assert AzureOpenAIResponsesAPIConfig().get_websocket_url(api_base=api_base, litellm_params={}) == expected_url
+
+
 @pytest.mark.serial
 @pytest.mark.parametrize(
     ("api_base", "api_version", "expected_url"),
@@ -185,6 +287,11 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
             "https://gw.example.com/foundry/openai/openai/v1?tenant=example",
             "v1",
             "https://gw.example.com/foundry/openai/openai/v1/responses/compact?tenant=example&api-version=v1",
+        ),
+        (
+            f"{_FOUNDRY_PROJECT}/openai/v1",
+            "preview",
+            f"{_FOUNDRY_PROJECT}/openai/v1/responses/compact",
         ),
     ],
 )
@@ -467,7 +574,12 @@ class TestAzureResponsesAPIConfig:
             litellm_params={"api_version": "2024-10-21", "responses_api_version": responses_api_version},
         )
 
-        assert url == api_base
+        expected: Final = (
+            "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=v1"
+            if responses_api_version is not None
+            else api_base
+        )
+        assert url == expected
 
     def test_api_version_in_env_api_base_query_wins_over_a_dated_ga_api_version(self, monkeypatch: pytest.MonkeyPatch):
         env_api_base: Final = (
@@ -1015,6 +1127,43 @@ def _unset_api_version_responses_url() -> httpx.URL:
     return httpx.URL(AzureOpenAIResponsesAPIConfig().get_complete_url(api_base=_AZURE_RESOURCE, litellm_params={}))
 
 
+@pytest.mark.parametrize("api_version", ["2025-02-01-preview", "2025-02-28", "2024-05-01-preview"])
+@pytest.mark.parametrize("source", ["params", "query", "both"])
+def test_pre_responses_api_version_uses_the_native_responses_default(api_version: str, source: str) -> None:
+    base: Final = (
+        f"{_AZURE_RESOURCE}?api-version={api_version}&tenant=test"
+        if source in ("query", "both")
+        else f"{_AZURE_RESOURCE}?tenant=test"
+    )
+    params: Final = {"api_version": api_version} if source in ("params", "both") else {}
+    url: Final = httpx.URL(AzureOpenAIResponsesAPIConfig().get_complete_url(api_base=base, litellm_params=params))
+    expected: Final = _unset_api_version_responses_url()
+
+    assert url.copy_with(query=None) == expected.copy_with(query=None)
+    assert dict(url.params) == {**dict(expected.params), "tenant": "test"}
+
+
+@pytest.mark.parametrize("api_version", ["2025-03-01-preview", "2025-04-01-preview", "preview", "latest", "v1"])
+@pytest.mark.parametrize("source", ["params", "query"])
+def test_supported_responses_api_versions_are_preserved(api_version: str, source: str) -> None:
+    base: Final = f"{_AZURE_RESOURCE}?api-version={api_version}" if source == "query" else _AZURE_RESOURCE
+    params: Final = {"api_version": api_version} if source == "params" else {}
+    url: Final = httpx.URL(AzureOpenAIResponsesAPIConfig().get_complete_url(api_base=base, litellm_params=params))
+
+    assert url.params["api-version"] == api_version
+
+
+@pytest.mark.parametrize("api_version", ["2025-02-01-preview", "2025-04-01-preview"])
+def test_responses_override_wins_over_query_and_chat_version(api_version: str) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    params: Final = {"api_version": api_version, "responses_api_version": "2025-03-01-preview"}
+    url: Final = config.get_complete_url(
+        api_base=f"{_AZURE_RESOURCE}?api-version={api_version}", litellm_params=params
+    )
+
+    assert url == f"{_AZURE_RESOURCE}/openai/responses?api-version=2025-03-01-preview"
+
+
 def _azure_responses_create(api_version: str) -> str | None:
     response: Final = litellm.responses(
         model="azure/gpt-5.4-nano",
@@ -1264,6 +1413,30 @@ def test_responses_api_version_routes_a_dated_chat_deployment_to_its_own_respons
     assert request_body["model"] == "gpt-5.4-nano"
     assert "responses_api_version" not in request_body
     assert "api_version" not in request_body
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "model",
+    ["azure/gpt5_series/my-deployment", "azure/responses/gpt5_series/my-deployment", "azure/my-deployment"],
+)
+def test_responses_sends_the_bare_deployment_name_without_the_gpt5_series_marker(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/responses", params={"api-version": "2025-04-01-preview"}
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    litellm.responses(
+        model=model,
+        input="hi",
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2025-04-01-preview",
+    )
+
+    assert route.call_count == 1
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(route.calls[0].request.content)["model"] == "my-deployment"
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -7,21 +7,12 @@ Handles retrieving secrets from different secret management systems.
 import base64
 import os
 from collections.abc import Mapping
-from typing import Any, Final, Generic, Protocol, TypeVar
-
-from typing_extensions import ReadOnly, TypedDict
+from typing import Final, Protocol
 
 import litellm
 from litellm._logging import print_verbose
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-
-_ClientT = TypeVar("_ClientT")
-
-
-class _SecretManagerClientView(TypedDict, Generic[_ClientT]):
-    """Typed read of the untyped secret manager handle configured for this key manager."""
-
-    client: ReadOnly[_ClientT]
 
 
 class _AzureKeyVaultSecret(Protocol):
@@ -74,7 +65,7 @@ def _is_base64(s: str) -> bool:
 
 
 def get_secret_from_manager(
-    client: Any,
+    client: object,
     key_manager: str,
     secret_name: str,
     key_management_settings: KeyManagementSettings | None = None,
@@ -96,16 +87,14 @@ def get_secret_from_manager(
         Exception: For other errors during secret retrieval
     """
     secret = None
-    raw_view: Final[_SecretManagerClientView[object]] = {"client": client}
-    client_object: Final = raw_view["client"]
+    client_object: Final = client
 
     if (
         key_manager == KeyManagementSystem.AZURE_KEY_VAULT.value
         or type(client_object).__module__ + "." + type(client_object).__name__
         == "azure.keyvault.secrets._client.SecretClient"
     ):  # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
-        azure_view: Final[_SecretManagerClientView[_AzureKeyVaultClient]] = {"client": client}
-        azure_client: Final = azure_view["client"]
+        azure_client: Final = require_attributes(client, _AzureKeyVaultClient, "get_secret")
         secret = azure_client.get_secret(secret_name).value
 
     elif (
@@ -122,8 +111,7 @@ def get_secret_from_manager(
             raise ValueError(
                 "Google KMS requires the encrypted secret to be encoded in base64"
             )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
-        google_kms_view: Final[_SecretManagerClientView[_GoogleKmsClient]] = {"client": client}
-        google_kms_client: Final = google_kms_view["client"]
+        google_kms_client: Final = require_attributes(client, _GoogleKmsClient, "decrypt")
         google_kms_response: Final = google_kms_client.decrypt(
             request={
                 "name": litellm._google_kms_resource_name,
@@ -143,8 +131,7 @@ def get_secret_from_manager(
         ciphertext_blob: Final = base64.b64decode(encrypted_value)
 
         # Perform the decryption
-        aws_kms_view: Final[_SecretManagerClientView[_AwsKmsClient]] = {"client": client}
-        aws_kms_client: Final = aws_kms_view["client"]
+        aws_kms_client: Final = require_attributes(client, _AwsKmsClient, "decrypt")
         aws_kms_response: Final = aws_kms_client.decrypt(CiphertextBlob=ciphertext_blob)
 
         # Extract and decode the plaintext
@@ -171,8 +158,9 @@ def get_secret_from_manager(
 
     elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
         try:
-            google_secret_manager_view: Final[_SecretManagerClientView[_GoogleSecretManagerClient]] = {"client": client}
-            google_secret_manager_client: Final = google_secret_manager_view["client"]
+            google_secret_manager_client: Final = require_attributes(
+                client, _GoogleSecretManagerClient, "get_secret_from_google_secret_manager"
+            )
             secret = google_secret_manager_client.get_secret_from_google_secret_manager(secret_name)
             print_verbose(f"secret from google secret manager: [set={secret is not None}]")
             if secret is None:
@@ -183,8 +171,7 @@ def get_secret_from_manager(
 
     elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
         try:
-            hashicorp_view: Final[_SecretManagerClientView[_SyncSecretReader]] = {"client": client}
-            hashicorp_client: Final = hashicorp_view["client"]
+            hashicorp_client: Final = require_attributes(client, _SyncSecretReader, "sync_read_secret")
             secret = hashicorp_client.sync_read_secret(secret_name=secret_name)
             if secret is None:
                 raise ValueError(f"No secret found in Hashicorp Secret Manager for {secret_name}")
@@ -194,8 +181,7 @@ def get_secret_from_manager(
 
     elif key_manager == KeyManagementSystem.CYBERARK.value:
         try:
-            cyberark_view: Final[_SecretManagerClientView[_SyncSecretReader]] = {"client": client}
-            cyberark_client: Final = cyberark_view["client"]
+            cyberark_client: Final = require_attributes(client, _SyncSecretReader, "sync_read_secret")
             secret = cyberark_client.sync_read_secret(secret_name=secret_name)
             if secret is None:
                 raise ValueError(f"No secret found in CyberArk Secret Manager for {secret_name}")
@@ -224,8 +210,7 @@ def get_secret_from_manager(
         secret = os.getenv(secret_name)
 
     else:  # assume the default is infisicial client
-        infisical_view: Final[_SecretManagerClientView[_InfisicalClient]] = {"client": client}
-        infisical_client: Final = infisical_view["client"]
+        infisical_client: Final = require_attributes(client, _InfisicalClient, "get_secret")
         secret = infisical_client.get_secret(secret_name).secret_value
 
     return secret

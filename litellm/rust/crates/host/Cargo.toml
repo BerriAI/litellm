@@ -1,0 +1,19 @@
+[package]
+name = "litellm-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+litellm-secret-value.workspace = true
+futures-util.workspace = true
+litellm-coroutine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+rstest.workspace = true

@@ -31,6 +31,9 @@ def normalized_audio_duration_seconds(value: object) -> float | None:
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
+LIBSNDFILE_UNKNOWN_FRAME_COUNT: Final = 2**63 - 1
+
+
 @dataclass
 class ProcessedAudioFile:
     """
@@ -340,7 +343,10 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            duration: Final = frames / audio.samplerate
             return duration
 
     except Exception:
