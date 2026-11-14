@@ -182,6 +182,7 @@ AZURE_RESPONSES_RESPONSE: Final[Mapping[str, JsonValue]] = {
     "object": "response",
     "created_at": 1792025514,
     "status": "completed",
+    "access_programs": None,
     "background": False,
     "completed_at": 1792025519,
     "content_filters": [
