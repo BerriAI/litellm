@@ -2578,10 +2578,11 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            mapped_exception: Exception = self._get_mapped_stream_exception(e)
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            threading.Thread(target=self.logging_obj.failure_handler, args=(mapped_exception, traceback_exception)).start()
             self.close()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(e, mapped_exception=mapped_exception)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2700,9 +2701,10 @@ class CustomStreamWrapper:
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            self._dispatch_stream_failure(e, traceback_exception)
+            mapped_exception = self._get_mapped_stream_exception(e)
+            self._dispatch_stream_failure(mapped_exception, traceback_exception)
             await self.aclose()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(e, mapped_exception=mapped_exception)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
                 await self.aclose()
@@ -2802,8 +2804,9 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        self._dispatch_stream_failure(e, traceback.format_exc())
-        self._handle_stream_fallback_error(e)
+        mapped_exception = self._get_mapped_stream_exception(e)
+        self._dispatch_stream_failure(mapped_exception, traceback.format_exc())
+        self._handle_stream_fallback_error(e, mapped_exception=mapped_exception)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
         self._record_partial_usage_for_failure()
@@ -2937,7 +2940,19 @@ class CustomStreamWrapper:
             extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
         )
 
-    def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
+    def _get_mapped_stream_exception(self, e: Exception) -> Exception:
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(e, MidStreamFallbackError):
+            return e.original_exception if e.original_exception is not None else e
+        if isinstance(e, OpenAIError):
+            return e
+        try:
+            return self._map_stream_exception(e)
+        except Exception as mapping_error:
+            return mapping_error
+
+    def _handle_stream_fallback_error(self, e: Exception, mapped_exception: Exception | None = None) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
 
@@ -2973,19 +2988,20 @@ class CustomStreamWrapper:
                 emitted_disqualifying_content=self._emitted_disqualifying_content or e.emitted_disqualifying_content,
             )
 
-        # Map to OpenAI exception format. Some providers' mappers (e.g.
+        # Map to OpenAI exception format if not already mapped. Some providers' mappers (e.g.
         # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
         # log a debug diagnostic (the raw status code) as part of mapping -
         # restore the consumer's outer context only after this completes, so
         # that diagnostic log line still carries the failing stream's own
         # trace_id/session_id instead of the consumer's (or an empty one).
-        if isinstance(e, OpenAIError):
-            mapped_exception: Exception = e
-        else:
-            try:
-                mapped_exception = self._map_stream_exception(e)
-            except Exception as mapping_error:
-                mapped_exception = mapping_error
+        if mapped_exception is None:
+            if isinstance(e, OpenAIError):
+                mapped_exception = e
+            else:
+                try:
+                    mapped_exception = self._map_stream_exception(e)
+                except Exception as mapping_error:
+                    mapped_exception = mapping_error
         self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:

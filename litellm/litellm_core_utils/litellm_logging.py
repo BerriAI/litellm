@@ -8066,6 +8066,15 @@ class StandardLoggingPayloadSetup:
         # ProxyException uses .code, LiteLLM exceptions use .status_code,
         # httpx.HTTPStatusError exposes status only as .response.status_code.
         # Stringified for Prisma JSON compatibility.
+        # If wrapped in MidStreamFallbackError (or similar wrapper carrying .original_exception),
+        # unwrap to the carried provider/mapped exception so error_class, status_code, and provider
+        # reflect the underlying failure rather than the internal wrapper.
+        current_exc: Exception | None = original_exception
+        while getattr(current_exc, "original_exception", None) is not None:
+            current_exc = getattr(current_exc, "original_exception")
+        if current_exc is not None:
+            original_exception = current_exc
+
         error_code_attr: Final[object] = getattr(original_exception, "code", None)
         if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
             error_status: str = str(error_code_attr)
