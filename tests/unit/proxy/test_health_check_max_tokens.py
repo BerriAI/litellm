@@ -1812,6 +1812,7 @@ _STATE_DEPLOYMENT: Final = {
         "api_base": "https://probe-upstream.invalid/v1",
         "api_key": "sk-fake",
         "tpm": 1000,
+        "rpm": 10,
     },
     "model_info": {"id": "standby-deployment", "mode": "chat"},
 }
@@ -1888,10 +1889,14 @@ async def test_a_background_probe_adds_no_second_limit_series_for_its_deployment
         await GLOBAL_LOGGING_WORKER.flush()
         await asyncio.sleep(0.2)
 
-    samples: Final = itertools.chain.from_iterable(
-        metric.samples for metric in logger.litellm_deployment_tpm_limit.collect()
+    metrics: Final = itertools.chain(
+        logger.litellm_deployment_tpm_limit.collect(), logger.litellm_deployment_rpm_limit.collect()
     )
+    samples: Final = itertools.chain.from_iterable(metric.samples for metric in metrics)
     assert "error" not in probe, probe
-    assert [(sample.labels["model_id"], sample.labels["model_group"], sample.value) for sample in samples] == [
-        ("standby-deployment", "plain", 1000.0)
+    assert [
+        (sample.name, sample.labels["model_id"], sample.labels["model_group"], sample.value) for sample in samples
+    ] == [
+        ("litellm_deployment_tpm_limit", "standby-deployment", "plain", 1000.0),
+        ("litellm_deployment_rpm_limit", "standby-deployment", "plain", 10.0),
     ]

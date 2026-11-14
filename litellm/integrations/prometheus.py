@@ -602,8 +602,8 @@ def _field(value: object, key: str) -> object:
 
 
 def _is_background_health_check_probe(request_kwargs: Mapping[str, object]) -> bool:
-    """Background probes log their deployment id only in litellm_metadata. Test Connection also carries it in
-    top-level model_info, which cooldowns read, so it keeps updating deployment gauges the way routed calls do."""
+    """Background probes log their deployment id only in litellm_metadata, while Test Connection also carries it
+    in top-level model_info."""
     logged_key: Final = _field(_field(request_kwargs.get("standard_logging_object"), "metadata"), "user_api_key_hash")
     top_level_id: Final = _field(_field(request_kwargs.get("litellm_params"), "model_info"), "id")
     return logged_key == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME and not top_level_id
