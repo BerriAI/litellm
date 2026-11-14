@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
-from typing import Awaitable, Callable, Final, Optional
+from typing import Awaitable, Callable, Final, Literal, Optional, assert_never
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
@@ -3032,6 +3032,16 @@ _CHAT_COMPLETION_BODY: Final = {
             "https://apim.example.com/my-foundry/openai/v1/chat/completions",
         ),
         (
+            "https://apim.example.com/team%2Fa/openai",
+            "none",
+            "https://apim.example.com/team%2Fa/openai/v1/chat/completions",
+        ),
+        (
+            "https://apim.example.com/team%3Fa/openai/v1",
+            "none",
+            "https://apim.example.com/team%3Fa/openai/v1/chat/completions",
+        ),
+        (
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/",
             "2025-04-01-preview",
             f"{_FOUNDRY_PROJECT_ROOT}/openai/v1/chat/completions",
@@ -3094,7 +3104,10 @@ _CHAT_STREAM_BODY: Final = (
 )
 
 
-async def _model_router_chat_text(mode: str, api_base: str, api_version: str) -> str:
+_ChatMode = Literal["sync_stream", "async", "async_stream"]
+
+
+async def _model_router_chat_text(mode: _ChatMode, api_base: str, api_version: str) -> str:
     messages: Final = [{"role": "user", "content": "hi"}]
     match mode:
         case "sync_stream":
@@ -3116,7 +3129,7 @@ async def _model_router_chat_text(mode: str, api_base: str, api_version: str) ->
                 messages=messages,
             )
             return response.choices[0].message.content
-        case _:
+        case "async_stream":
             async_chunks: Final = await litellm.acompletion(
                 model="azure/model-router",
                 api_base=api_base,
@@ -3126,6 +3139,8 @@ async def _model_router_chat_text(mode: str, api_base: str, api_version: str) ->
                 stream=True,
             )
             return "".join([chunk.choices[0].delta.content or "" async for chunk in async_chunks])
+        case _:
+            assert_never(mode)
 
 
 @pytest.mark.parametrize("mode", ["sync_stream", "async", "async_stream"])
@@ -3137,7 +3152,7 @@ async def _model_router_chat_text(mode: str, api_base: str, api_version: str) ->
     ],
 )
 async def test_async_and_streaming_chat_on_a_v1_base_send_no_api_version(
-    respx_mock, monkeypatch, mode: str, api_base: str, api_version: str
+    respx_mock, monkeypatch, mode: _ChatMode, api_base: str, api_version: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = (
