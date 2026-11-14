@@ -2424,6 +2424,15 @@ def _responses_ws_frame_guard(
     return guard
 
 
+def _socket_trace_id(socket: Mapping[str, object]) -> Mapping[str, str]:
+    logging_obj: Final = socket.get("litellm_logging_obj")
+    return (
+        MappingProxyType({"litellm_trace_id": logging_obj.litellm_trace_id})
+        if isinstance(logging_obj, LiteLLMLoggingObj)
+        else MappingProxyType({})
+    )
+
+
 def _turn_failure_row(
     metadata_key: str,
     socket: Mapping[str, object],
@@ -2432,7 +2441,6 @@ def _turn_failure_row(
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
     socket_bucket: Final = socket.get(metadata_key)
     socket_request: Final = socket.get("proxy_server_request")
-    socket_logging_obj: Final = socket.get("litellm_logging_obj")
     turn_bucket: Final = turn.get(metadata_key)
     turn_metadata: Final = _WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}
     request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
@@ -2445,11 +2453,7 @@ def _turn_failure_row(
     client_metadata: Final = _without_untrusted_metadata("metadata", turn.get("metadata"))
     return {
         **{key: turn[key] for key in _TURN_ROW_FIELDS if key in turn},
-        **(
-            {"litellm_trace_id": socket_logging_obj.litellm_trace_id}
-            if isinstance(socket_logging_obj, LiteLLMLoggingObj)
-            else {}
-        ),
+        **_socket_trace_id(socket),
         "metadata": (
             {
                 name: item
@@ -2829,6 +2833,7 @@ async def _responses_websocket_session(
     refused_turns: Final = _RefusedTurns()
     routed_data: Final = dict(
         data,
+        **_socket_trace_id(data),
         user_api_key_dict=user_api_key_dict,
         responses_ws_frame_guard=_responses_ws_frame_guard(
             data, user_api_key_dict, proxy_logging_obj, refused_turns.add

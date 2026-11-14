@@ -4096,6 +4096,9 @@ class TestResponsesWSFirstFrameModelAuth:
         )
         sent_at = {}
         rows_while_open = []
+        loop = asyncio.get_running_loop()
+        loop_clock = loop.time
+        clock_jumps = []
 
         async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
             recorded = [{"guardrail_cost": guardrail_costs[data["input"]]}]
@@ -4119,6 +4122,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 if ending == "crash":
                     raise crash
                 if ending == "session_limit":
+                    clock_jumps.append(3601.0)
                     await asyncio.Event().wait()
                 return refusal
 
@@ -4153,9 +4157,12 @@ class TestResponsesWSFirstFrameModelAuth:
                 new_callable=AsyncMock,
                 side_effect=route_request,
             ),
-            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
+            patch(  # test-quality-ok: a known session limit stands in for the configured one
                 "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
-                return_value=0.05 if ending == "session_limit" else 3600.0,
+                return_value=3600.0,
+            ),
+            patch.object(  # test-quality-ok: the session limit is a loop timer, so jumping the loop clock past it once the relay is parked fires it with no wall-clock race
+                loop, "time", lambda: loop_clock() + sum(clock_jumps)
             ),
             patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
                 "litellm.proxy.proxy_server.proxy_logging_obj",
@@ -4193,6 +4200,99 @@ class TestResponsesWSFirstFrameModelAuth:
             return
         assert [write["completion_response"] for write in close_writes] == [crash]
         assert _spend_log_row(close_writes[0])["spend"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_refused_turn_row_shares_the_session_id_of_the_turns_the_router_relays(self):
+        from datetime import datetime
+        from unittest.mock import create_autospec
+
+        from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+        from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+        from litellm.router_rust.invoke.endpoints import generic_plan, prepare_request
+
+        socket_logging_obj = Logging(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=True,
+            call_type="_aresponses_websocket",
+            start_time=datetime.now(),
+            litellm_call_id="socket-call",
+            function_id="socket-call",
+        )
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=(
+                {"model": "gpt-4o-mini", "litellm_metadata": {}, "litellm_logging_obj": socket_logging_obj},
+                socket_logging_obj,
+            )
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
+        relayed_turn_session_ids = []
+
+        def route_request(data, **kwargs):
+            async def relay():
+                relayed = prepare_request(generic_plan("_aresponses_websocket"), data, "gpt-4o-mini", {})
+                relayed_turn_session_ids.append(
+                    StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+                        logging_obj=socket_logging_obj, litellm_params=get_litellm_params(**relayed)
+                    )
+                )
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "hi"}))
+                await guarded.bill_refusal(refusal)
+                await drain_logging_tasks(timeout=1)
+                return None
+
+            return relay()
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]),
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the socket's logging object is its output
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam where the router stamps the relayed turns' trace id
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws, model=None, user_api_key_dict=UserAPIKeyAuth(api_key="sk-socket")
+            )
+
+        spend_writer.update_database.assert_awaited_once()
+        refused_row = _spend_log_row(spend_writer.update_database.await_args.kwargs)
+        assert relayed_turn_session_ids == [refused_row["session_id"]]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ending", ["client_closed", "crash"])
