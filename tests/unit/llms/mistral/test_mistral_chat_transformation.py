@@ -1,9 +1,11 @@
+import logging
 from collections.abc import Mapping
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -36,33 +38,41 @@ async def test_mistral_chat_transformation():
     )
 
 
+@pytest.fixture
+def fixed_reasoning_capabilities(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    declarations: Final = (
+        ("mistral-medium-latest", ("none", "high")),
+        ("mistral-small-latest", ("none", "high")),
+        ("mistral-vibe-cli-latest", ("none", "high")),
+        ("magistral-small-latest", ("none", "high")),
+        ("magistral-medium-latest", ("none", "high")),
+        ("zai-glm-5", ("none", "low", "high", "max")),
+        ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
+    )
+    for model, levels in declarations:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {
+                "litellm_provider": "mistral",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_effort_levels": levels,
+            },
+        )
+    for model in ("codestral-latest", "mistral-large-latest"):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"mistral/{model}",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": False},
+        )
+
+
+@pytest.mark.usefixtures("fixed_reasoning_capabilities")
 class TestMistralReasoningSupport:
     """Test suite for Mistral Magistral reasoning functionality."""
-
-    @pytest.fixture(autouse=True)
-    def fixed_reasoning_capabilities(self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
-        import litellm
-
-        declarations: Final = (
-            ("mistral-medium-latest", ("none", "high")),
-            ("mistral-small-latest", ("none", "high")),
-            ("mistral-vibe-cli-latest", ("none", "high")),
-            ("magistral-small-latest", ("none", "high")),
-            ("magistral-medium-latest", ("none", "high")),
-            ("zai-glm-5", ("none", "low", "high", "max")),
-            ("zai-glm-5-2", ("none", "low", "medium", "high", "xhigh", "max")),
-        )
-        for model, levels in declarations:
-            monkeypatch.setitem(
-                litellm.model_cost,
-                f"mistral/{model}",
-                {
-                    "litellm_provider": "mistral",
-                    "mode": "chat",
-                    "supports_reasoning": True,
-                    "reasoning_effort_levels": levels,
-                },
-            )
 
     def test_get_supported_openai_params_magistral_model(self):
         """Test that magistral models support reasoning parameters."""
@@ -904,3 +914,35 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+@pytest.mark.parametrize(
+    "param, value, sent",
+    (
+        ("reasoning_effort", "none", "none"),
+        ("reasoning_effort", "xhigh", "high"),
+        ("thinking", {"type": "disabled"}, "none"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}, "high"),
+        ("thinking", {"type": "adaptive"}, "high"),
+    ),
+)
+def test_magistral_reasoning_request_is_sent_as_a_level_without_a_drop_warning(
+    fixed_reasoning_capabilities: None, param: str, value: object, sent: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == sent
+    assert (
+        tuple(
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and f"Dropping {param}=" in record.getMessage()
+        )
+        == ()
+    )

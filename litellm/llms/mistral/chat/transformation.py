@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
-from typing_extensions import assert_never  # noqa: TID251  # assert_never is absent from typing on Python 3.10
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
