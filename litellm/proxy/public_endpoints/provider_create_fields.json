@@ -3815,7 +3815,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "soniox/stt-async-v5"
+    "default_model_placeholder": "soniox/stt-async-v6"
   },
   {
     "provider": "StrandsDecider",

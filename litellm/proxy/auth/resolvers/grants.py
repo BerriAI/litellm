@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     TeamNotFoundError,
+    forget_missing_user,
     get_team_membership,
     get_team_object,
     get_user_object,
@@ -246,6 +247,8 @@ class GrantResolver:
         return ResolvedGrants(user_object, team_object, membership, effective_user_id)
 
     async def _user(self, lookup: UserLookup) -> LiteLLM_UserTable | None:
+        if lookup.user_id is not None:
+            forget_missing_user(lookup.user_id)
         return await self._load_user(
             user_id=lookup.user_id,
             prisma_client=self._prisma,

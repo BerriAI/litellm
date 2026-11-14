@@ -24,12 +24,13 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -82,8 +83,10 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 
 
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or bool(
-        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, MissingMessageRoleError)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
 
 
@@ -104,6 +107,12 @@ def is_background_response_poll_not_found(exception: Exception, litellm_params: 
 def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
     """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
+
+
+def is_message_thread_not_found(exception: object) -> bool:
+    """Whether a message-thread continue failed with Anthropic's 404 ``thread_not_found``: the caller's
+    ``previous_message_id`` is stale and the SDK replays the conversation, the deployment is healthy."""
+    return getattr(exception, "status_code", None) == 404 and MESSAGE_THREAD_NOT_FOUND_ERROR_CODE in str(exception)
 
 
 # The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
@@ -140,7 +149,7 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 )
 
 
-def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
+def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
     are checked in order from most to least specific to that setting. Only a number

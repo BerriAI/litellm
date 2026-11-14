@@ -15,7 +15,7 @@ import datetime
 import itertools
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from functools import partial
@@ -62,6 +62,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
+from litellm.proxy.auth.model_checks import (
+    GLOBAL_ALIASES_ONLY,
+    OtherDeploymentsBill,
+    WildcardDeployment,
+    model_info_cost_map_entry,
+    wildcard_deployment_priced_model,
+    wildcard_row_filled_model,
+)
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -78,6 +86,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -286,7 +295,9 @@ class _TxModelTables(Protocol):
 
 @runtime_checkable
 class _TransactionFactory(Protocol):
-    def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
+    def __call__(
+        self, *, timeout: datetime.timedelta = ..., max_wait: datetime.timedelta = ...
+    ) -> AbstractAsyncContextManager[_TxModelTables]: ...
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
@@ -540,6 +551,21 @@ def _effective_complexity_router_config(
     return resolve_complexity_router_config_write(
         config_adapter.validate_python(incoming), config_adapter.validate_python(existing)
     ).effective
+
+
+def _encrypted_litellm_params(
+    dumped: Mapping[str, object],
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> Mapping[str, object]:
+    return {
+        name: (
+            _effective_complexity_router_config(incoming_params, existing_params)
+            if name == "complexity_router_config"
+            else encrypt_value_helper(value)
+        )
+        for name, value in dumped.items()
+    }
 
 
 def _dump_without_none(model: BaseModel) -> Mapping[str, object]:
@@ -1314,14 +1340,47 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+@dataclass(frozen=True, slots=True)
+class _ListedRow:
+    name: str | None = None
+    llm_router: Router | None = None
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
+
+
+_NO_LISTED_ROW: Final = _ListedRow()
+
+
+def _live_cost_map_model(db_model: Deployment, listed_row: _ListedRow) -> str | None:
+    stored_model: Final = _decrypted_model(db_model.litellm_params.model)
+    if stored_model is None or "*" not in stored_model or listed_row.name is None or listed_row.llm_router is None:
+        return stored_model
+    return wildcard_row_filled_model(
+        listed_row.llm_router, db_model.model_name, stored_model, listed_row.name, listed_row.caller_aliases
+    )
+
+
+def _cost_map_entry(
+    db_model: Deployment, incoming_model_info: Mapping[str, object], listed_row: _ListedRow = _NO_LISTED_ROW
+) -> Mapping[str, object]:
     base_model: Final = incoming_model_info.get("base_model")
-    lookup: Final = base_model if isinstance(base_model, str) else _decrypted_model(db_model.litellm_params.model)
-    if lookup is None:
+    lookup: Final = base_model if isinstance(base_model, str) else _live_cost_map_model(db_model, listed_row)
+    return MappingProxyType({}) if lookup is None else model_info_cost_map_entry(lookup)
+
+
+def _routed_cost_map_entry(db_model: Deployment, listed_row: _ListedRow) -> Mapping[str, object]:
+    stored_model: Final = _decrypted_model(db_model.litellm_params.model)
+    if stored_model is None or "*" not in stored_model or listed_row.name is None or listed_row.llm_router is None:
         return MappingProxyType({})
-    with suppress(Exception):
-        return MappingProxyType(dict(litellm.get_model_info(model=lookup)))
-    return MappingProxyType({})
+    priced_as: Final = wildcard_deployment_priced_model(
+        listed_row.llm_router,
+        WildcardDeployment(
+            db_model.model_info.id or "", db_model.model_name, stored_model, db_model.model_info.team_id
+        ),
+        listed_row.name,
+        listed_row.caller_aliases,
+    )
+    billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
+    return model_info_cost_map_entry(billed_model) if isinstance(billed_model, str) else MappingProxyType({})
 
 
 LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
@@ -1361,6 +1420,7 @@ def legacy_update_model_info_changes(
     incoming_model_info: ModelInfo,
     discovered_model_info: Mapping[str, object] = MappingProxyType({}),
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    listed_row: _ListedRow = _NO_LISTED_ROW,
 ) -> Mapping[str, object]:
     """The ``model_info`` fields ``POST /model/update`` persists from its request.
 
@@ -1380,7 +1440,8 @@ def legacy_update_model_info_changes(
     echoed: Final = frozenset(
         echoed_cost_map_fields(
             requested,
-            _cost_map_entry(db_model, {**stored, **sent}),
+            _cost_map_entry(db_model, {**stored, **sent}, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(requested, loaded_catalog),
             discovered_model_info,
         )
@@ -1399,9 +1460,10 @@ def _legacy_update_model_info_writes(
     incoming_model_info: ModelInfo,
     discovered_model_info: Mapping[str, object],
     member_marker: bool | None,
+    listed_row: _ListedRow,
 ) -> Mapping[str, object]:
     changes: Final = {
-        **legacy_update_model_info_changes(current, incoming_model_info, discovered_model_info),
+        **legacy_update_model_info_changes(current, incoming_model_info, discovered_model_info, listed_row=listed_row),
         **({"member_auto_router": member_marker} if member_marker is not None else {}),
     }
     return MappingProxyType({k: v for k, v in changes.items() if getattr(current.model_info, k, None) != v})
@@ -1413,13 +1475,14 @@ async def _locked_legacy_update_model_info_json(
     incoming_model_info: ModelInfo,
     discovered_model_info: Mapping[str, object],
     member_marker: bool | None,
+    listed_row: _ListedRow,
 ) -> str | None:
     row: Final = await table.find_unique(where={"model_id": model_id})
     if row is None:
         return None
     payload: Final = row.model_dump()
     writes: Final = _legacy_update_model_info_writes(
-        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker
+        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker, listed_row
     )
     if not writes:
         return None
@@ -1445,6 +1508,9 @@ def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    llm_router: Router | None = None,
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
+    listed_name: str | None = None,
 ) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -1460,23 +1526,22 @@ def update_db_model(
     # update litellm params
     if updated_patch.litellm_params:
         # Encrypt any sensitive values
-        encrypted_params: Final = {
-            k: (
-                _effective_complexity_router_config(updated_patch.litellm_params, db_model.litellm_params)
-                if k == "complexity_router_config"
-                else encrypt_value_helper(v)
-            )
-            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True).items()
-        }
+        encrypted_params: Final = _encrypted_litellm_params(
+            updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True),
+            updated_patch.litellm_params,
+            db_model.litellm_params,
+        )
 
         merged_litellm_params.update(encrypted_params)
 
     # update model info
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        listed_row: Final = _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
-            _cost_map_entry(db_model, incoming_model_info),
+            _cost_map_entry(db_model, incoming_model_info, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
@@ -1656,6 +1721,7 @@ async def patch_model(
         llm_router,
         premium_user,
         prisma_client,
+        request_caller_aliases,
         store_model_in_db,
         user_api_key_cache,
     )
@@ -1826,6 +1892,8 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             write_row=write_row,
+            llm_router=llm_router,
+            caller_aliases=await request_caller_aliases(user_api_key_dict),
         )
 
         if updated_model is None:
@@ -2181,6 +2249,8 @@ async def _update_team_model_in_db(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
+    llm_router: Router | None = None,
+    caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
 ) -> _RowT:
     """
     Handle team model updates with proper alias management.
@@ -2225,7 +2295,11 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+        return await write_row(
+            update_db_model(
+                db_model=db_model, updated_patch=patch_data, llm_router=llm_router, caller_aliases=caller_aliases
+            )
+        )
 
     # Determine public model name
     public_model_name: Final = _get_public_model_name(
@@ -2246,7 +2320,15 @@ async def _update_team_model_in_db(
             ),
         }
     )
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=team_patch))
+    row: Final = await write_row(
+        update_db_model(
+            db_model=db_model,
+            updated_patch=team_patch,
+            llm_router=llm_router,
+            caller_aliases=caller_aliases,
+            listed_name=patch_data.model_name,
+        )
+    )
 
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
@@ -2381,7 +2463,8 @@ async def delete_team_models(
     """
     deleted_model_ids: Final[list[str]] = []
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx(timeout=datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
+    tx_budget: Final = datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
+    async with transaction_client.tx(max_wait=tx_budget, timeout=tx_budget) as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -2392,12 +2475,12 @@ async def delete_team_models(
     if deleted_model_ids:
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
-    # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
+    # Under DB_RECONCILE_LOCK, for the same reason as delete_model: the rows are
     # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
     # onto this pod. The lock orders the eviction after any in-flight reconcile.
-    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, proxy_config
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, proxy_config
 
-    async with MODEL_RECONCILE_LOCK:
+    async with DB_RECONCILE_LOCK:
         proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
         if llm_router is not None:
             for model_id in deleted_model_ids:
@@ -2884,7 +2967,7 @@ async def delete_model(
         """
 
         from litellm.proxy.proxy_server import (
-            MODEL_RECONCILE_LOCK,
+            DB_RECONCILE_LOCK,
             general_settings_view,
             llm_router,
             premium_user,
@@ -2945,13 +3028,13 @@ async def delete_model(
                 )
 
             ## DELETE FROM ROUTER ##
-            # Under MODEL_RECONCILE_LOCK. The db row is already gone, but a reconcile
+            # Under DB_RECONCILE_LOCK. The db row is already gone, but a reconcile
             # that snapshotted the db BEFORE that delete still lists this id as desired,
             # and its _add_deployment upserts the deployment straight back -- leaving
             # this pod serving a model the database no longer has, until the next
             # reconcile. Taking the lock orders this eviction after any such in-flight
             # reconcile's re-add, so the eviction is the last word.
-            async with MODEL_RECONCILE_LOCK:
+            async with DB_RECONCILE_LOCK:
                 proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
                 if llm_router is not None:
                     llm_router.apply(ChangeSet(delete=[model_info.id]))
@@ -3292,6 +3375,7 @@ async def update_model(
         llm_router,
         premium_user,
         prisma_client,
+        request_caller_aliases,
         store_model_in_db,
         user_api_key_cache,
     )
@@ -3399,14 +3483,9 @@ async def update_model(
 
             ### ENCRYPT PARAMS ###
             encrypted_params: Final = MappingProxyType(
-                {
-                    k: (
-                        _effective_complexity_router_config(model_params.litellm_params, deployment.litellm_params)
-                        if k == "complexity_router_config"
-                        else encrypt_value_helper(value=v)
-                    )
-                    for k, v in _new_litellm_params_dict.items()
-                }
+                _encrypted_litellm_params(
+                    _new_litellm_params_dict, model_params.litellm_params, deployment.litellm_params
+                )
             )
 
             ### MERGE WITH EXISTING DATA ###
@@ -3429,8 +3508,11 @@ async def update_model(
                 if llm_router is not None
                 else MappingProxyType({})
             )
+            listed_row: Final = _ListedRow(
+                model_params.model_name, llm_router, await request_caller_aliases(user_api_key_dict)
+            )
             requested_model_info: Final = _legacy_update_model_info_writes(
-                deployment, _model_info, discovered_model_info, member_marker
+                deployment, _model_info, discovered_model_info, member_marker, listed_row
             )
             _raise_if_access_groups_malformed(requested_model_info)
             async with _auto_router_capability_slot(
@@ -3442,7 +3524,7 @@ async def update_model(
             ) as table:
                 model_info_json: Final = (
                     await _locked_legacy_update_model_info_json(
-                        table, _model_id, _model_info, discovered_model_info, member_marker
+                        table, _model_id, _model_info, discovered_model_info, member_marker, listed_row
                     )
                     if requested_model_info
                     else None
@@ -3892,7 +3974,7 @@ def reload_serving_verdict(
     Without it (no reconcile ran) every drop is reported, which is the safe direction.
 
     ``live_after`` is the router's serving state captured by the reload itself, while it
-    still held MODEL_RECONCILE_LOCK. Pass it whenever the caller has it: re-reading the
+    still held DB_RECONCILE_LOCK. Pass it whenever the caller has it: re-reading the
     router here instead means sampling it after the lock was released, where the NEXT
     reconcile's leading wipe (clear_cache un-serves every db model before reloading
     them) shows up as this reload having dropped them. Falling back to a fresh read is
@@ -3970,13 +4052,13 @@ async def clear_cache() -> ReconcileOutcome:
     Returns what the reload saw (see ReconcileOutcome) so callers can pass it to
     raise_if_reload_degraded_serving.
 
-    Runs under MODEL_RECONCILE_LOCK for its whole extent, not just the reload at the
-    end, so the auto-router reset and the reload that rebuilds those routers are atomic
-    to any other reconcile. The inner call is _add_deployment_locked because
+    Runs under DB_RECONCILE_LOCK for its whole extent, not just the reload at the
+    end, so concurrent model writes cannot interleave their reconciles.
+    The inner call is _add_deployment_locked because
     add_deployment would re-acquire the same non-reentrant lock and deadlock.
     """
     from litellm.proxy.proxy_server import (
-        MODEL_RECONCILE_LOCK,
+        DB_RECONCILE_LOCK,
         llm_router,
         prisma_client,
         proxy_config,
@@ -3988,79 +4070,26 @@ async def clear_cache() -> ReconcileOutcome:
         verbose_proxy_logger.debug("llm_router or prisma_client is None, skipping cache clear")
         return ReconcileOutcome(still_desired=None, live_after=None)
 
-    async with MODEL_RECONCILE_LOCK:
+    async with DB_RECONCILE_LOCK:
         try:
-            # Only clear DB models, preserve config models
-            verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+            verbose_proxy_logger.debug("Reconciling DB models, preserving config models")
 
             # Get current models and filter out DB models
             current_models: Final = llm_router.registry().all().copy()
             config_models: Final = []
             db_model_ids: Final = []
 
-            db_router_names: Final = set()
-
             for model in as_object_list(current_models) or ():
                 deployment = decoded_json_object(model)
                 model_info = decoded_json_object(deployment.get("model_info", {}))
                 if model_info.get("db_model", False):
                     db_model_ids.append(model_info.get("id"))
-                    # Auto-router deployments (and only those) are wiped here, in the
-                    # same pass, so the reload rebuilds them -- see the comment below.
-                    deployment_name = deployment.get("model_name")
-                    if isinstance(deployment_name, str) and str(
-                        decoded_json_object(deployment.get("litellm_params", {})).get("model", "")
-                    ).startswith("auto_router/"):
-                        db_router_names.add(deployment_name)
-                        router_model_id = model_info.get("id")
-                        if isinstance(router_model_id, str):
-                            llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
 
-            # ORDINARY db deployments are deliberately NOT wiped. This used to
-            # delete_deployment() every db model before the reload put them back, which
-            # left the router serving ZERO db models for the whole width of the reload
-            # -- a real data-plane hole that every inference request landing in it fell
-            # into. It was also redundant for them: the reload's _delete_deployment
-            # evicts exactly the ids the db no longer lists, and upsert_deployment
-            # pops-and-re-adds a deployment whose params changed while no-opping one
-            # that did not, so the reconcile converges on its own. Every mutation is
-            # visible to that comparison -- `blocked` and (for premium) `updated_at`
-            # are written into model_info.
-            #
-            # AUTO-ROUTER db deployments are the exception and ARE wiped -- in the
-            # classification pass above, together with the strategy entries popped
-            # just below. Their strategy registries are keyed
-            # by model_name, which no deployment-id reconcile touches, so they have to
-            # be popped and rebuilt here. But the rebuild only happens on the ADD path:
-            # Router.upsert_deployment returns early when a deployment is unchanged and
-            # never reaches add_deployment -> _add_deployment ->
-            # init_auto_router_deployment, which is what repopulates the registries.
-            # Popping without deleting would therefore strip every db-backed auto,
-            # complexity, adaptive and quality router on this pod and never put it back,
-            # so ANY unrelated model write would leave them unroutable until a restart.
-            # Deleting the deployment forces upsert down the add path, which rebuilds
-            # both the deployment and its strategy entry.
-            #
-            # That pass restricts the wipe to deployments whose model is actually an
-            # auto_router/* so a config router that merely shares a model_name with a
-            # regular db model isn't evicted -- config routers are never re-added by the
-            # reload (it only reloads db models) and would be permanently unroutable.
-            # The auto_router/ prefix also covers quality_router/ and adaptive_router/,
-            # so pop the name from every registry (no-op where absent); a missing
-            # quality/adaptive entry would otherwise make init raise "already exists"
-            # on reload and abort it.
-            for model_name in db_router_names:
-                llm_router.registry().plugins("auto").pop(model_name, None)
-                llm_router.registry().plugins("complexity").pop(model_name, None)
-                llm_router.registry().plugins("adaptive").pop(model_name, None)
-                llm_router.registry().plugins("quality").pop(model_name, None)
-                llm_router.registry().plugins("switchyard").pop(model_name, None)
-
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
-            # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
+            # coroutine already holds DB_RECONCILE_LOCK and asyncio.Lock is not
             # reentrant, so the public wrapper would deadlock against itself.
             outcome: Final = await proxy_config.add_deployment_locked(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj

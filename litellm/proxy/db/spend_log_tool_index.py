@@ -19,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain, groupby
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -175,7 +176,8 @@ class _ToolRollupTable(Protocol):
 
 
 class _ToolRollupBatch(Protocol):
-    litellm_dailytoolspend: _ToolRollupTable
+    @property
+    def litellm_dailytoolspend(self) -> _ToolRollupTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
@@ -183,7 +185,13 @@ class _ToolRollupBatch(Protocol):
 class _ToolRollupBatchManager(Protocol):
     async def __aenter__(self) -> _ToolRollupBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:

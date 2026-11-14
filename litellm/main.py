@@ -75,7 +75,9 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    raise_if_allowed_tools_tool_choice_unsupported,
+    drops_unsupported_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -88,8 +90,10 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception
 from litellm.litellm_core_utils.get_litellm_params import (
     AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -125,6 +129,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
@@ -151,7 +156,10 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    DeferredReasoningDropWarnings,
+    OpenAIGPT5Config,
+)
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -222,13 +230,15 @@ from litellm.utils import (
     token_counter as token_counter,  # noqa: PLC0414  # public re-export
 )
 
-from ._logging import verbose_logger
+from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
+    without,
 )
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -799,27 +809,29 @@ async def acompletion(
         prompt_management_logger, AnthropicCacheControlHook
     )
 
-    if (
-        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+    prompt_hook_result: Final = (
+        cast(  # cast-ok: the hook returns a bare dict of request params
+            "tuple[str, list[AllMessageValues], Mapping[str, object]]",
+            await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=kwargs.get("prompt_variables", None),
+                prompt_management_logger=prompt_management_logger,
+                tools=tools,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+                request_kwargs=kwargs,
+            ),
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and prompt_management_logger is not None
         and not each_fallback_writes_its_own_cache_dialect
-    ):
-        (
-            model,
-            messages,
-            _,
-        ) = await litellm_logging_obj.async_get_chat_completion_prompt(
-            model=model,
-            messages=messages,
-            non_default_params=kwargs,
-            prompt_id=prompt_id,
-            prompt_variables=kwargs.get("prompt_variables", None),
-            prompt_management_logger=prompt_management_logger,
-            tools=tools,
-            prompt_label=kwargs.get("prompt_label", None),
-            prompt_version=kwargs.get("prompt_version", None),
-            request_kwargs=kwargs,
-        )
+        else None
+    )
+    if prompt_hook_result is not None:
+        model, messages, _ = prompt_hook_result
         #########################################################
         # if the chat completion logging hook removed all tools,
         # set tools to None
@@ -888,8 +900,14 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
+    prompt_params: Final[Mapping[str, object]] = prompt_hook_result[2] if prompt_hook_result is not None else {}
+    prompt_overrides: Final = {
+        key: value
+        for key, value in prompt_params.items()
+        if key not in request_kwargs or request_kwargs[key] is not value
+    }
     if custom_llm_provider is None:
-        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -928,7 +946,9 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(
+            completion, **{**completion_kwargs, **prompt_overrides}, **without(request_kwargs, *prompt_overrides)
+        )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -969,7 +989,7 @@ async def acompletion(
                     messages=messages,
                     optional_params={
                         k: v
-                        for k, v in completion_kwargs.items()
+                        for k, v in {**completion_kwargs, **prompt_overrides}.items()
                         if v is not None
                         and k
                         not in (
@@ -1002,7 +1022,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=completion_kwargs,
+            completion_kwargs={**completion_kwargs, **prompt_overrides},
             extra_kwargs=kwargs,
         )
 
@@ -1026,7 +1046,7 @@ def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str
     return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
-async def _async_streaming(response, model, custom_llm_provider, args):
+async def _async_streaming(response, model, custom_llm_provider, litellm_params: Mapping[str, object]):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
         if asyncio.iscoroutine(response):
@@ -1035,11 +1055,11 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=e,
+        raise mapped_stream_exception(
+            e,
+            model if isinstance(model, str) else "",
+            custom_llm_provider if isinstance(custom_llm_provider, str) and custom_llm_provider else "openai",
+            litellm_params,
         )
 
 
@@ -3650,8 +3670,10 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         or get_secret_str("OR_API_KEY")
     )
 
-    openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-    openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+    openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("OR_SITE_URL") or "https://litellm.ai"
+    )
+    openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
     openrouter_headers: Final = {
         "HTTP-Referer": openrouter_site_url,
@@ -3755,8 +3777,10 @@ def _complete_vercel_ai_gateway(
 
     api_key = api_key or litellm.api_key or get_secret("VERCEL_AI_GATEWAY_API_KEY")
 
-    vercel_site_url: Final = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
-    vercel_app_name: Final = get_secret("VERCEL_APP_NAME") or "liteLLM"
+    vercel_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+    )
+    vercel_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("VERCEL_APP_NAME") or "liteLLM")
 
     vercel_headers: Final = {
         "http-referer": vercel_site_url,
@@ -5475,6 +5499,51 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _responses_bridge_optional_params(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    summary_alias: object,
+    requested: RequestedReasoningEffort,
+    *,
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if isinstance(requested, dict):
+        from litellm.responses.utils import (
+            RefusedReasoningFields,
+            bridge_reasoning,
+            raise_refused_reasoning_fields,
+        )
+
+        bridged_reasoning: Final = bridge_reasoning(
+            requested=requested,
+            effort_kept="reasoning_effort" in optional_params,
+            summary_alias=summary_alias,
+            model=model,
+            base_model=base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
+        )
+        if isinstance(bridged_reasoning, RefusedReasoningFields):
+            raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+        return {**optional_params, "reasoning_effort": bridged_reasoning}
+    if summary_alias is None:
+        return optional_params
+    kept_effort: Final = optional_params.get("reasoning_effort", requested)
+    if isinstance(kept_effort, dict):
+        return {**optional_params, "reasoning_effort": {**kept_effort, "summary": summary_alias}}
+    if kept_effort is None:
+        return {**optional_params, "reasoning_effort": {"summary": summary_alias}}
+    return {**optional_params, "reasoning_effort": {"effort": kept_effort, "summary": summary_alias}}
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -5608,10 +5677,21 @@ def completion(
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(
+        messages=messages, model=model, request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        drop_params=drops_unsupported_params(
+            cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
+        ),
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5818,6 +5898,7 @@ def completion(
             merge_with_first_system=True,
         )
 
+    reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
     try:
         if base_url is not None:
             api_base = base_url
@@ -5908,7 +5989,15 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
-        raise_if_allowed_tools_tool_choice_unsupported(
+        drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            drop_params=drop_unsupported_reasoning,
+        )
+        raise_if_hosted_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
             ),
@@ -5997,7 +6086,7 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
@@ -6031,7 +6120,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -6065,14 +6154,22 @@ def completion(
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
         mapping_special_params: Final = MappingProxyType(dict(provider_params))
 
-        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
-            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+        def optional_params_for_model_info(
+            deployment_info: Mapping[str, object] | None,
+            reasoning_drop_logger: WarningLogger = verbose_logger,
+        ) -> dict[str, object]:
+            return get_optional_params(
+                **mapping_args,
+                model_info=deployment_info,
+                _litellm_reasoning_drop_logger=reasoning_drop_logger,
+                **mapping_special_params,
+            )
 
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
         deployment_base_model: Final = base_model if isinstance(base_model, str) else None
-        optional_params = optional_params_for_model_info(validated_model_info)
+        optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
             model,
@@ -6220,7 +6317,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
+                    and parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    else {}
+                ),
+            },
+            control_options,
+        )
         affinity_api_base: Final = (
             str(client.base_url)
             if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
@@ -6258,6 +6366,7 @@ def completion(
         )
         if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
             return mock_completion(
                 model,
                 messages,
@@ -6306,41 +6415,19 @@ def completion(
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-
-            if isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import (
-                    RefusedReasoningFields,
-                    bridge_reasoning,
-                    raise_refused_reasoning_fields,
-                )
-
-                bridged_reasoning: Final = bridge_reasoning(
-                    requested=resolved_reasoning_effort,
-                    effort_kept="reasoning_effort" in optional_params,
-                    summary_alias=rs_val,
-                    model=model,
-                    base_model=base_model if isinstance(base_model, str) else None,
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
-                    deployment_model_info=typed_deployment_model_info,
-                    drop_params=drop_unsupported_reasoning,
-                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
-                )
-                if isinstance(bridged_reasoning, RefusedReasoningFields):
-                    raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
-                optional_params["reasoning_effort"] = bridged_reasoning
-            elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
-                if isinstance(eff, dict):
-                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
-                elif eff is not None:
-                    optional_params["reasoning_effort"] = {
-                        "effort": eff,
-                        "summary": rs_val,
-                    }
-                else:
-                    optional_params["reasoning_effort"] = {"summary": rs_val}
-
+            bridge_optional_params: Final = _responses_bridge_optional_params(
+                optional_params,
+                rs_val,
+                resolved_reasoning_effort,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                base_model=deployment_base_model,
+                api_base=api_base,
+                deployment_model_info=typed_deployment_model_info,
+                drop_params=drop_unsupported_reasoning,
+                additional_drop_params=routing_kwargs.get("additional_drop_params"),
+            )
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
@@ -6350,7 +6437,7 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
+                optional_params=bridge_optional_params,
                 litellm_params=litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
@@ -6359,7 +6446,9 @@ def completion(
                 stream=stream,
                 cache=kwargs.get("cache"),
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
@@ -6625,6 +6714,7 @@ def completion(
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
     except Exception as e:
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,
@@ -6637,6 +6727,16 @@ def completion(
 
 def _is_not_resent_failure(error: BaseException) -> bool:
     return isinstance(error, Exception) and not is_resent_failure(error)
+
+
+class _RetryCallState(Protocol):
+    kwargs: Mapping[str, object]
+
+
+def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
+    logging_obj: Final = retry_state.kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
 
 
 def completion_with_retries(*args, **kwargs):
@@ -6658,12 +6758,14 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6689,12 +6791,14 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6722,12 +6826,14 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -6754,12 +6860,14 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -7276,8 +7384,10 @@ def embedding(
                 or get_secret_str("OR_API_KEY")
             )
 
-            openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-            openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+            openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                get_secret("OR_SITE_URL") or "https://litellm.ai"
+            )
+            openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
             openrouter_headers: Final = {
                 "HTTP-Referer": openrouter_site_url,
@@ -8011,7 +8121,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                     response=response,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    args=args,
+                    litellm_params=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -8320,7 +8430,7 @@ async def aadapter_generate_content(
 
     coro: Final = cast(
         Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
-        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
+        GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True, custom_logging_obj=None),
     )
     return await coro
 
@@ -9003,7 +9113,7 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+    if custom_llm_provider in ("edenai", "dashscope", "replicate") and text_to_speech_provider_config is not None:
         litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
@@ -9432,6 +9542,7 @@ async def ahealth_check(
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+    from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -9476,6 +9587,24 @@ async def ahealth_check(
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
+        litellm_logging_obj.model = requested_model
+        litellm_logging_obj.call_type = {
+            "completion": "atext_completion",
+            "embedding": "aembedding",
+            "audio_speech": "aspeech",
+            "audio_transcription": "atranscription",
+            "image_generation": "aimage_generation",
+            "image_edit": "aimage_edit",
+            "video_generation": "avideo_generation",
+            "rerank": "arerank",
+            "realtime": "arealtime",
+            "responses": "aresponses",
+            "anthropic_messages": "anthropic_messages",
+            "ocr": "aocr",
+            "decisions": "asystemone",
+            "extraction": "aextraction",
+            "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
+        }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
