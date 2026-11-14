@@ -6,7 +6,7 @@ import pytest
 
 from litellm.integrations.custom_logger_v2 import Field, Hook, InvalidDeclarationError, InvalidPatchError, Patch
 from litellm.integrations.custom_logger_v2.hooks import Subscription
-from litellm.integrations.custom_logger_v2.sources import (
+from litellm.integrations.custom_logger_v2.field_sources import (
     HookArgs,
     FieldSource,
     SourcedFields,
