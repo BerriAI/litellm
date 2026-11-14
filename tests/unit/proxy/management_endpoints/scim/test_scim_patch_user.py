@@ -725,6 +725,30 @@ async def test_sync_requested_teams_warns_only_about_groups_it_left_out(
 
 
 @pytest.mark.asyncio
+async def test_sync_requested_teams_warning_stays_on_one_line_when_the_user_id_holds_line_breaks(
+    caplog: pytest.LogCaptureFixture,
+):
+    mock_client: Final = MagicMock()
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups\r\nCRITICAL forged line",
+            record_teams=[],
+            requested_teams=["team-new"],
+        )
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "\n" not in warnings[0] and "\r" not in warnings[0]
+    assert "user-groupsCRITICAL forged line" in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_patch_user_ignores_a_group_with_no_team_named_like_the_scim_admin_group():
     mock_user: Final = LiteLLM_UserTable(
         user_id="not-an-admin",

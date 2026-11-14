@@ -1202,7 +1202,9 @@ async def _sync_requested_teams(
     teamless: Final = changed - frozenset(team.team_id for team in rows)
     if teamless:
         verbose_proxy_logger.warning(
-            "SCIM: ignoring groups with no LiteLLM team for user %s: %s", user_id, sorted(teamless)
+            "SCIM: ignoring groups with no LiteLLM team for user %s: %s",
+            sanitize_for_log(user_id),
+            sanitize_for_log(sorted(teamless)),
         )
 
     teams_to_keep: Final = tuple(team for team in requested_teams if team not in teamless)
