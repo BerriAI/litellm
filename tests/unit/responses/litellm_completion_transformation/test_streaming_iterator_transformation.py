@@ -1826,6 +1826,45 @@ async def test_reasoning_item_keeps_one_id_across_bridged_events_and_completed_o
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+async def test_reasoning_added_item_includes_empty_summary_list(sync_mode: bool):
+    iterator: Final = _build_iterator(_reasoning_then_text_chunks())
+
+    events: Final = await _collect_events(iterator, sync_mode)
+    reasoning_added: Final = next(
+        event
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "reasoning"
+    )
+    assert reasoning_added.item.summary == []
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completed_output_replays_streamed_output_item_done_payloads(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("thinking"),
+            _tool_call_chunk(),
+            _chunk("Hello", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    done_by_index: Final = {
+        event.output_index: event.item.model_dump(exclude_none=True)
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    }
+    completed: Final = next(
+        event for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    for index, item in enumerate(completed.response.output):
+        assert item.model_dump(exclude_none=True) == done_by_index[index]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
 async def test_reasoning_only_stream_lists_no_message_item_it_never_announced(sync_mode: bool):
     iterator: Final = _build_iterator([_reasoning_chunk("thinking"), _chunk("", finish_reason="stop")])
 
