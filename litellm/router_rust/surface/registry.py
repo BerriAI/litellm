@@ -119,6 +119,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingPlugin,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
     validate_litellm_params_strictly,
 )
 from litellm.types.utils import (
@@ -1123,7 +1124,12 @@ class HostRegistry(HostModelInfo):
         found, written into the entry's params."""
         entry: Final = self._build_entry(build, index)
         references: Final = tuple(as_str_mapping(ref) or {} for ref in refs)
-        values: Final = tuple(get_secret(str(reference["name"])) for reference in references)
+        values: Final = tuple(
+            str(reference["name"])
+            if holds_secret_pointer(str(reference["key"]))
+            else get_secret(str(reference["name"]))
+            for reference in references
+        )
         entry.litellm_params.update(
             {str(reference["key"]): value for reference, value in zip(references, values, strict=True)}
         )

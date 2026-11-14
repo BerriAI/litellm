@@ -830,7 +830,7 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         {
             key: copy.deepcopy(value)
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs
+            if key not in kwargs and key != "github_copilot_app_private_key"
         }
     )
 
@@ -1493,7 +1493,7 @@ def function_setup(
             if isinstance(messages, list) and len(messages) > 0:
                 try:
                     from litellm.litellm_core_utils.get_llm_provider_logic import (
-                        get_llm_provider,
+                        resolve_model_and_provider_for_metadata,
                     )
                     from litellm.litellm_core_utils.prompt_templates.factory import (
                         THOUGHT_SIGNATURE_SEPARATOR,
@@ -1503,10 +1503,11 @@ def function_setup(
                     custom_llm_provider = kwargs.get("custom_llm_provider")
 
                     # If custom_llm_provider not in kwargs, try to determine it from the model
-                    if not custom_llm_provider and model:
+                    metadata_model: Final = _OPAQUE_VALUE.validate_python(model)
+                    if not custom_llm_provider and isinstance(metadata_model, str) and metadata_model:
                         try:
-                            _, custom_llm_provider, _, _ = get_llm_provider(
-                                model=model,
+                            _, custom_llm_provider = resolve_model_and_provider_for_metadata(
+                                model=metadata_model,
                                 custom_llm_provider=custom_llm_provider,
                             )
                         except Exception:

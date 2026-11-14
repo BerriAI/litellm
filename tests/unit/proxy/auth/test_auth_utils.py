@@ -474,10 +474,7 @@ def _client_router_config(placement: str, litellm_params: dict[str, str]) -> dic
 @pytest.mark.parametrize("placement", ["model_list", "default_litellm_params"])
 def test_every_server_owned_auth_param_is_refused_from_a_client_router_config(param: str, placement: str):
     user_config: Final = _client_router_config(placement, {"model": "openai/gpt-5.4-nano", param: "attacker-chosen"})
-    with pytest.raises(
-        ValueError,
-        match="server-owned workload identity federation or OAuth token exchange parameter",
-    ):
+    with pytest.raises(ValueError, match=f"{param} is a server-owned .* parameter and cannot be set in a request body"):
         is_request_body_safe(
             request_body={"model": "gpt-5.4-nano", "user_config": user_config},
             general_settings={"allow_client_side_credentials": True},

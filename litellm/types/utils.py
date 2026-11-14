@@ -4494,7 +4494,14 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
+github_copilot_oauth_litellm_params: Final = (
+    "github_copilot_auth_type",
+    "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
+)
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
@@ -4605,7 +4612,9 @@ server_owned_wif_litellm_params: Final = (
     + github_copilot_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
-secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+secret_bearing_wif_litellm_params: Final = tuple(
+    sorted(WIF_SECRET_BEARING_KEYS | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key"})
+)
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,

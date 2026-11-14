@@ -11325,6 +11325,7 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                     user_api_key_dict=non_admin,
                 )
             assert "proxy admin" in str(exc_info.value.message).lower()
+            assert "GitHub Copilot authentication" in str(exc_info.value.message)
             assert exc_info.value.param == "github_copilot_auth_type"
             mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
 

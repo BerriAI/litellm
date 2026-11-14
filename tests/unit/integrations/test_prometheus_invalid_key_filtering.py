@@ -11,7 +11,10 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from prometheus_client import REGISTRY
 from prometheus_client.samples import Sample
@@ -19,6 +22,7 @@ from prometheus_client.samples import Sample
 import litellm
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.github_copilot.app_auth import AppConfig, AppTokenManager
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
@@ -526,6 +530,23 @@ def _deployment_entra_rejection_kwargs() -> dict[str, object]:
         } | {"exception": raised}
 
 
+def _deployment_github_app_rejection_kwargs() -> dict[str, object]:
+    private_key: Final = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    github: Final = httpx.MockTransport(lambda _: httpx.Response(404, json={"message": "Not Found"}))
+    tokens: Final = AppTokenManager(
+        client_factory=lambda: httpx.Client(transport=github), secret_reader=lambda _: private_key
+    )
+    with pytest.raises(litellm.AuthenticationError) as rejected:
+        tokens.resolve(AppConfig("test-client", 123, "os.environ/TEST_APP_KEY"))
+    return {
+        key: value for key, value in _provider_auth_failure_kwargs().items() if key not in CALLED_THE_PROVIDER
+    } | {"exception": rejected.value}
+
+
 def _metric_values(name: str, model_id: str) -> list[float]:
     return [
         sample.value
@@ -561,6 +582,20 @@ class TestProviderAuthFailures:
     ):
         await prometheus_logger.async_log_failure_event(
             kwargs=_deployment_entra_rejection_kwargs(),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+        assert _metric_values("litellm_llm_api_failed_requests_metric_total", "deployment-1") == [1.0]
+        assert _metric_values("litellm_deployment_failure_responses_total", "deployment-1") == [1.0]
+
+    @pytest.mark.asyncio
+    async def test_log_failure_event_records_github_rejecting_the_app_installation_token_before_the_call(
+        self, prometheus_logger
+    ):
+        await prometheus_logger.async_log_failure_event(
+            kwargs=_deployment_github_app_rejection_kwargs(),
             response_obj=None,
             start_time=None,
             end_time=None,
