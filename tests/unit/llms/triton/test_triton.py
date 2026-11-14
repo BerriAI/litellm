@@ -155,8 +155,6 @@ def test_completion_triton_infer_api():
                 api_base="http://localhost:8000/infer",
             )
 
-            print("litellm response", response.model_dump_json(indent=4))
-
             # Verify the call was made
             mock_post.assert_called_once()
 
@@ -173,9 +171,7 @@ def test_completion_triton_infer_api():
             assert request_data["inputs"][0]["name"] == "text_input"
             assert request_data["inputs"][0]["shape"] == [1]
             assert request_data["inputs"][0]["datatype"] == "BYTES"
-            assert request_data["inputs"][0]["data"] == [
-                "0004900005025 0004900005026 0004900005027"
-            ]
+            assert request_data["inputs"][0]["data"] == ["0004900005025 0004900005026 0004900005027"]
 
             assert request_data["inputs"][1]["shape"] == [1]
             assert request_data["inputs"][1]["datatype"] == "INT32"
@@ -191,7 +187,6 @@ def test_completion_triton_infer_api():
             assert response.object == "chat.completion"
 
     except Exception as e:
-        print("exception", e)
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
 
@@ -305,3 +300,160 @@ def test_triton_generate_raw_request(monkeypatch, respx_mock):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_triton_generate_chat_template_kwargs_not_forwarded_to_triton():
+    """
+    chat_template_kwargs must be consumed by LiteLLM when rendering text_input
+    and must NOT appear in the parameters dict sent to Triton.
+
+    Triton's TritonSamplingParams raises on unknown kwargs:
+      Unexpected keyword argument 'chat_template_kwargs'
+    """
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "max_tokens": 50,
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    result = config.transform_request(
+        model="llama-3-8b-instruct",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={"api_base": "http://localhost:8000/generate"},
+        headers={},
+    )
+
+    # chat_template_kwargs must never reach Triton's parameters
+    assert "chat_template_kwargs" not in result["parameters"], (
+        "chat_template_kwargs leaked into Triton parameters; it must be consumed by LiteLLM when building text_input"
+    )
+    # Scalar params that Triton understands must still be forwarded
+    assert result["parameters"]["max_tokens"] == 50
+
+
+def test_triton_infer_chat_template_kwargs_not_forwarded_to_triton():
+    """
+    chat_template_kwargs must not appear in the inputs list sent to Triton's
+    /infer endpoint either.
+    """
+    from litellm.llms.triton.completion.transformation import TritonInferConfig
+
+    config = TritonInferConfig()
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "max_tokens": 20,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    result = config.transform_request(
+        model="llama-3-8b-instruct",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={"api_base": "http://localhost:8000/infer"},
+        headers={},
+    )
+
+    input_names = [inp["name"] for inp in result["inputs"]]
+    assert "chat_template_kwargs" not in input_names, (
+        "chat_template_kwargs leaked into Triton inputs; "
+        "it is a LiteLLM-only param and must not reach the Triton server"
+    )
+
+
+def test_generate_chat_template_kwargs_consumed_not_forwarded():
+    """chat_template_kwargs must reach prompt_factory and never the parameters dict."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    with patch(
+        "litellm.llms.triton.completion.transformation.prompt_factory",
+        return_value="rendered-prompt",
+    ) as mock_pf:
+        data = config.transform_request(
+            model="triton/qwen3",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={
+                "max_tokens": 10,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+    mock_pf.assert_called_once()
+    assert mock_pf.call_args.kwargs["chat_template_kwargs"] == {"enable_thinking": False}
+    assert data["text_input"] == "rendered-prompt"
+    # must not leak into the Triton parameters payload
+    assert "chat_template_kwargs" not in data["parameters"]
+    assert data["parameters"]["max_tokens"] == 10
+
+
+def test_generate_no_chat_template_kwargs_defaults_to_empty_mapping():
+    """Absent chat_template_kwargs must pass an empty mapping to prompt_factory."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    with patch(
+        "litellm.llms.triton.completion.transformation.prompt_factory",
+        return_value="p",
+    ) as mock_pf:
+        data = config.transform_request(
+            model="triton/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"max_tokens": 5},
+            litellm_params={},
+            headers={},
+        )
+
+    assert mock_pf.call_args.kwargs["chat_template_kwargs"] == {}
+    assert "chat_template_kwargs" not in data["parameters"]
+
+
+def test_generate_none_chat_template_kwargs_normalized_to_empty_mapping():
+    """chat_template_kwargs=None must be normalized, not passed as None."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    with patch(
+        "litellm.llms.triton.completion.transformation.prompt_factory",
+        return_value="p",
+    ) as mock_pf:
+        config.transform_request(
+            model="triton/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"max_tokens": 5, "chat_template_kwargs": None},
+            litellm_params={},
+            headers={},
+        )
+
+    assert mock_pf.call_args.kwargs["chat_template_kwargs"] == {}
+
+
+def test_infer_chat_template_kwargs_excluded_from_inputs():
+    """/infer inputs must skip stream, max_retries, and chat_template_kwargs."""
+    from litellm.llms.triton.completion.transformation import TritonInferConfig
+
+    config = TritonInferConfig()
+    data = config.transform_request(
+        model="triton/custom-model",
+        messages=[{"role": "user", "content": "text in"}],
+        optional_params={
+            "temperature": 0.5,
+            "stream": False,
+            "max_retries": 3,
+            "chat_template_kwargs": {"enable_thinking": True},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    input_names = [i["name"] for i in data["inputs"]]
+    assert "chat_template_kwargs" not in input_names
+    assert "stream" not in input_names
+    assert "max_retries" not in input_names
+    assert "temperature" in input_names

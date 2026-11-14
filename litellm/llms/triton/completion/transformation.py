@@ -3,8 +3,8 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Final, Literal
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
 from typing_extensions import ReadOnly, TypedDict
@@ -200,8 +200,12 @@ class TritonGenerateConfig(TritonConfig):
     ) -> dict:
         inference_params: Final = optional_params.copy()
         stream: Final = inference_params.pop("stream", False)
+        # chat_template_kwargs is a LiteLLM-level param: apply it here when
+        # rendering the prompt text. Triton (TritonSamplingParams) has no
+        # knowledge of this argument and will raise if it reaches the server.
+        chat_template_kwargs: Final[Mapping[str, Any]] = inference_params.pop("chat_template_kwargs", {}) or {}
         data_for_triton: Final[dict[str, object]] = {
-            "text_input": prompt_factory(model=model, messages=messages),
+            "text_input": prompt_factory(model=model, messages=messages, chat_template_kwargs=chat_template_kwargs),
             "parameters": {
                 "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
                 **inference_params,
@@ -258,8 +262,9 @@ class TritonInferConfig(TritonConfig):
             ]
         }
 
+        _LITELLM_ONLY_PARAMS = {"stream", "max_retries", "chat_template_kwargs"}
         for k, v in optional_params.items():
-            if not (k == "stream" or k == "max_retries"):
+            if k not in _LITELLM_ONLY_PARAMS:
                 datatype = "INT32" if isinstance(v, int) else "BYTES"
                 datatype = "FP32" if isinstance(v, float) else datatype
                 data_for_triton["inputs"].append({"name": k, "shape": [1], "datatype": datatype, "data": [v]})
