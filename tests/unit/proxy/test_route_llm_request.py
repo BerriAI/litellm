@@ -3618,3 +3618,54 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+@pytest.mark.asyncio
+async def test_streaming_comma_separated_models_raises_proxy_exception() -> None:
+    """Issue #51597: comma-separated models with stream=True must raise ProxyException(400) early."""
+    from litellm.proxy._types import ProxyException
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "model-a", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi a"}},
+            {"model_name": "model-b", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi b"}},
+        ]
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await route_request(
+            data={"model": "model-a, model-b", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert int(exc_info.value.code) == 400
+    assert "Streaming is not supported for comma-separated models without fastest_response=True" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_streaming_comma_separated_models_with_fastest_response_allowed() -> None:
+    """When fastest_response=True, comma-separated models with stream=True are allowed."""
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "model-a", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi a"}},
+            {"model_name": "model-b", "litellm_params": {"model": "openai/gpt-4o", "mock_response": "hi b"}},
+        ]
+    )
+
+    llm_call = await route_request(
+        data={
+            "model": "model-a, model-b",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "fastest_response": True,
+        },
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+    )
+    assert llm_call is not None
+    if asyncio.iscoroutine(llm_call):
+        await llm_call
+
