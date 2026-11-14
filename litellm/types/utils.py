@@ -486,6 +486,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
+    cost_per_credit: ReadOnly[float | None]
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
@@ -506,6 +507,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "audio_speech",
+            "video_generation",
+            "3d_generation",
             "responses",
             "decisions",
             "evaluation",
@@ -4305,6 +4308,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     ocr_cost_per_page: float | None = None
     ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
+    cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
     annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
@@ -4789,6 +4793,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    TRIPO = "tripo"
     AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"

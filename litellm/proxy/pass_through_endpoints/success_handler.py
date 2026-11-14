@@ -54,6 +54,7 @@ from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
     PassThroughLogDispatch,
     TranscribePassthroughLoggingHandler,
 )
+from .llm_provider_handlers.tripo_passthrough_logging_handler import TripoPassthroughLoggingHandler
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -127,6 +128,7 @@ class PassThroughEndpointLogging:
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
         self._injected_log_dispatch: Final = log_dispatch
+        self.tripo_handler: Final = TripoPassthroughLoggingHandler()
         self.background_response_settlement: Final[BackgroundResponseSettlementStore] = (
             background_response_settlement
             if background_response_settlement is not None
@@ -552,6 +554,18 @@ class PassThroughEndpointLogging:
     ) -> None:
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
+        if self.is_tripo_route(custom_llm_provider):
+            task_scheduled: Final = self.tripo_handler.schedule(
+                response=httpx_response,
+                response_body=response_body,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                request_body=request_body,
+                dispatch=self._log_dispatch,
+                kwargs=kwargs,
+            )
+            if task_scheduled:
+                return
         if self.is_tinyfish_route(url_route, custom_llm_provider):
             # polls and cancels never write spend rows; run-async bills once from the background poller
             if not TinyFishPassthroughLoggingHandler.should_log_request(httpx_response.request.method, url_route):
@@ -688,6 +702,9 @@ class PassThroughEndpointLogging:
         if parsed_url.hostname == "api.assemblyai.com" or "/transcript" in parsed_url.path:
             return True
         return False
+
+    def is_tripo_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "tripo"
 
     def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "comprehendmedical"

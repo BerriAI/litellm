@@ -7683,6 +7683,7 @@ def get_model_info_helper(
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
                 ocr_cost_per_page_batches=_model_info.get("ocr_cost_per_page_batches", None),
                 ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
+                cost_per_credit=_model_info.get("cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
                 annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
                 provider_specific_entry=_model_info.get("provider_specific_entry", None),

@@ -174,6 +174,7 @@
             }
         },
         "code_interpreter_cost_per_session": 0.0,
+        "cost_per_credit": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
         "computer_use_output_cost_per_1k_tokens": 0.0,
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD",
@@ -184,7 +185,7 @@
         "litellm_provider": "one of https://docs.litellm.ai/docs/providers",
         "max_input_tokens": "max input tokens, if the provider specifies it",
         "max_output_tokens": "max output tokens, if the provider specifies it",
-        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank, search",
+        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, video_generation, 3d_generation, moderation, rerank, search",
         "output_cost_per_reasoning_token": 0.0,
         "output_cost_per_token": 0.0,
         "search_context_cost_per_query": {
@@ -3797,6 +3798,11 @@
             "model": "anthropic.claude-sonnet-4-20250514-v1:0",
             "litellm_provider": "bedrock"
         }
+    },
+    "tripo/task": {
+        "cost_per_credit": 0.01,
+        "litellm_provider": "tripo",
+        "mode": "3d_generation"
     },
     "assemblyai/best": {
         "input_cost_per_second": 3.333e-05,

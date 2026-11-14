@@ -30,6 +30,22 @@ tests:
                 name: RELEASE-NAME-litellm-ui
                 port:
                   number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /tripo
+            pathType: Prefix
+            backend:
+              service:
+                name: litellm-gateway-51
+                port:
+                  name: use-annotation
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/actions.litellm-gateway-51"]
+          value: '{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"RELEASE-NAME-litellm-gateway","servicePort":"http"}]}}'
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/conditions.litellm-gateway-51"]
+          value: '[{"field":"path-pattern","pathPatternConfig":{"values":["/cn.tripo","/cn.tripo/*"]}}]'
 
   - it: fits the AWS Load Balancer Controller's one rule per path under the default 100 rules per ALB
     set:
@@ -85,6 +101,26 @@ tests:
           path: spec.rules[0].http.paths
           content:
             path: /eu.assemblyai
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /tripo
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /cn.tripo
             pathType: ImplementationSpecific
             backend:
               service:

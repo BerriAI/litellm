@@ -165,6 +165,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
+    pass_through_request,
     refuse_websocket,
     truncated_close_reason,
     websocket_passthrough_request,
@@ -632,6 +633,88 @@ async def fal_ai_proxy_route(
         is_streaming_request=False,
     )
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+def get_passthrough_endpoint_router() -> PassthroughEndpointRouter:
+    return passthrough_endpoint_router
+
+
+@router.api_route(
+    "/tripo/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    tags=["Tripo Pass-through", "pass-through"],
+    description="Forward native Tripo API requests and bill completed task creation calls.",
+    openapi_extra={"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+        "multipart/form-data": {"schema": {"type": "object", "additionalProperties": True}},
+    }}},
+    responses={200: {"description": "Native Tripo response", "content": {
+        "application/json": {"schema": {"type": "object", "additionalProperties": True}}
+    }}},
+)
+@router.api_route(
+    "/cn.tripo/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    tags=["Tripo China Pass-through", "pass-through"],
+    description="Forward native Tripo API requests and bill completed task creation calls.",
+    openapi_extra={"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+        "multipart/form-data": {"schema": {"type": "object", "additionalProperties": True}},
+    }}},
+    responses={200: {"description": "Native Tripo response", "content": {
+        "application/json": {"schema": {"type": "object", "additionalProperties": True}}
+    }}},
+)
+async def tripo_proxy_route(
+    endpoint: str,
+    request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    credentials_router: Annotated[PassthroughEndpointRouter, Depends(get_passthrough_endpoint_router)],
+) -> Response:
+    """Forward native Tripo API requests and bill completed task creation calls."""
+    route: Final = normalize_route_for_root_path(request.url.path) or request.url.path
+    region: Final = "cn" if route.startswith("/cn.tripo/") else "global"
+    credentials: Final = credentials_router.get_credentials_with_api_base("tripo", region)
+    if credentials is None or credentials.api_base is None:
+        raise HTTPException(503, f"No Tripo use_in_pass_through deployment configured for {region}")
+    if not credentials.model_name:
+        raise HTTPException(503, "Tripo deployment must have a model_name for access checks")
+    await can_key_call_resolved_model(
+        model=credentials.model_name,
+        llm_model_list=_proxy_model_list(),
+        valid_token=user_api_key_dict,
+        llm_router=credentials_router.llm_router_getter(),
+    )
+    base: Final = httpx.URL(credentials.api_base)
+    if base.path.rstrip("/") != "/v3" or base.query or base.fragment:
+        raise HTTPException(503, "Tripo deployment api_base must end in /v3 without a query or fragment")
+    if not endpoint.startswith("v3/") or any(part in ("", ".", "..") for part in endpoint.split("/")):
+        raise HTTPException(400, "Tripo paths must start with v3/ and contain no empty or relative segments")
+    if "%" in endpoint or "\\" in endpoint:
+        raise HTTPException(400, "Invalid Tripo path")
+    target: Final = base.copy_with(path=f"/v3/{endpoint.removeprefix('v3/')}")
+    authorization: Final = f"Bearer {credentials.api_key}"
+    content_type: Final = request.headers.get("content-type")
+    content_headers: Final = (
+        {"Content-Type": content_type}
+        if content_type and not HttpPassThroughEndpointHelpers.is_multipart(request)
+        else {}
+    )
+    if not HttpPassThroughEndpointHelpers.is_multipart(request):
+        if is_passthrough_request_streaming(await read_request_body(request)):
+            raise HTTPException(status_code=400, detail="Streaming is not supported for Tripo requests")
+    return await pass_through_request(
+        request=request,
+        target=str(target),
+        custom_headers={"Authorization": authorization, **content_headers},
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider="tripo",
+        stream=False,
+        upstream_headers_filter=lambda headers: {
+            **{key: value for key, value in headers.items() if key.lower() != "authorization"},
+            "Authorization": authorization,
+        },
+    )
 
 
 @router.api_route(

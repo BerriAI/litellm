@@ -94,6 +94,8 @@ PASSTHROUGH_PREFIXES: Final = frozenset(
         "vertex-ai",
         "assemblyai",
         "eu.assemblyai",
+        "tripo",
+        "cn.tripo",
         "milvus",
     }
 )

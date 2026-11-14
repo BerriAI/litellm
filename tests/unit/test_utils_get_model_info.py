@@ -619,3 +619,11 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+def test_get_model_info_preserves_credit_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    price: Final = 0.037
+    monkeypatch.setitem(litellm.model_cost, "tripo/test-credit-price", {
+        "litellm_provider": "tripo", "mode": "3d_generation", "cost_per_credit": price,
+    })
+    assert get_model_info("tripo/test-credit-price", custom_llm_provider="tripo")["cost_per_credit"] == price
