@@ -172,7 +172,8 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    realtime_request_body,
+    realtime_request_body,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
+    websocket_auth_request_body,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -1198,7 +1199,7 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
     except litellm.BudgetExceededError as e:
-        if request_data.get("model") != model_name:
+        if request_data.get("model") != model_name or fallbacks_disabled(request_data):
             raise e
         fallback_model: Final = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
@@ -1454,7 +1455,7 @@ async def user_api_key_auth_websocket_for_model(
     request._url = websocket.url  # pyright: ignore[reportPrivateUsage]  # Starlette WebSocket URL storage
 
     async def return_body():
-        return realtime_request_body(model)
+        return websocket_auth_request_body(model)
 
     request.body = return_body
 

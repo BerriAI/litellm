@@ -9911,6 +9911,27 @@ class TestCheckKeyModelBudgetWithFallback:
         assert cached_body["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    async def test_raises_when_the_request_disables_fallbacks(self):
+        valid_token = UserAPIKeyAuth(token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]})
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        request_data = {"model": "gpt-4o", "disable_fallbacks": True}
+
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=self._make_request(),
+            )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
     async def test_raises_when_every_fallback_also_exceeded(self):
         valid_token = UserAPIKeyAuth(token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]})
         limiter = AsyncMock()
@@ -13312,6 +13333,56 @@ async def test_translation_websocket_auth_enforces_the_default_model_budget(
     assert denied.value.status_code == 403
     assert model in str(denied.value.detail)
     assert "budget" in str(denied.value.detail).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_on_auth_error", (True, False), ids=("upgrade", "accepted_socket_frame"))
+async def test_websocket_auth_refuses_an_over_budget_model_instead_of_passing_on_its_budget_fallback(
+    monkeypatch: pytest.MonkeyPatch, close_on_auth_error: bool
+) -> None:
+    """The socket keeps the model it named, so a budget fallback chosen at auth time would never run"""
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    model: Final = "gpt-realtime"
+    fallback: Final = "gpt-realtime-mini"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        models=[model, fallback],
+        model_max_budget={model: {"max_budget": 5.0, "budget_duration": "1d"}},
+        budget_fallbacks={model: [fallback]},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={model: 10.0})
+    assert await limiter.get_fallback_model_within_budget(user_api_key_dict=token, model=model) == fallback
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": "/v1/realtime",
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": b"",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    with pytest.raises((HTTPException, ProxyException)) as denied:
+        await user_api_key_auth_websocket_for_model(websocket, model, close_on_auth_error=close_on_auth_error)
+
+    assert model in str(denied.value)
+    assert "budget" in str(denied.value).lower()
 
 
 @pytest.mark.asyncio

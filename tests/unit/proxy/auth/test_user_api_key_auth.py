@@ -1227,7 +1227,7 @@ async def test_user_api_key_auth_live_websocket_ignores_query_model():
         await user_api_key_auth_live_websocket(mock_websocket)
 
     request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-    assert json.loads(await request_arg.body()) == {"model": ""}
+    assert json.loads(await request_arg.body()) == {"model": "", "disable_fallbacks": True}
     mock_user_api_key_auth.assert_called_once()
 
 
@@ -1292,7 +1292,7 @@ async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing()
 
     assert raised.value is denial
     request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-    assert json.loads(await request_arg.body()) == {"model": "gpt-live-1"}
+    assert json.loads(await request_arg.body()) == {"model": "gpt-live-1", "disable_fallbacks": True}
     assert request_arg.scope.get("path") == "/v1/live/sessions"
     assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
     mock_websocket.close.assert_not_called()

@@ -5464,6 +5464,79 @@ async def _granted_model_lists(
     )
 
 
+async def _user_object_or_none(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_UserTable | None:
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return None
+
+
+async def enforced_model_allowlists(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[Sequence[str], ...]:
+    """One model allowlist per level that ``common_checks`` enforces on a request from this identity."""
+    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
+    if prisma_client is None:
+        return (key_models, tuple(valid_token.team_models or ()))
+    team_object: Final = (
+        None
+        if valid_token.team_id is None
+        else await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    user_object: Final = (
+        None
+        if team_object is not None
+        else await _user_object_or_none(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    project_object: Final = (
+        None
+        if valid_token.project_id is None
+        else await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    return (
+        key_models,
+        team_object.models if team_object is not None else (),
+        await _team_member_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        user_object.models if user_object is not None else (),
+        project_object.models if project_object is not None else (),
+    )
+
+
 async def collect_matched_model_access_groups(
     model: str | Sequence[str] | None,
     valid_token: UserAPIKeyAuth | None,
@@ -5809,6 +5882,45 @@ async def _can_key_call_resolved_model(
                 llm_router=llm_router,
                 valid_token=valid_token,
             )
+
+
+async def can_caller_call_resolved_model(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """``can_key_call_resolved_model`` plus the agent grant and a personal key owner's own models, which
+    ``common_checks`` applies to a model named at auth time and a model named after auth needs as well"""
+    await can_key_call_resolved_model(
+        model=model,
+        llm_model_list=None if llm_router is None else llm_router.registry().deployments(),
+        valid_token=valid_token,
+        llm_router=llm_router,
+    )
+    await can_agent_call_model(
+        model=model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if valid_token.team_id is not None or prisma_client is None:
+        return
+    await can_user_call_model(
+        model=model,
+        llm_router=llm_router,
+        user_object=await _user_object_or_none(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+    )
 
 
 def can_org_access_model(
