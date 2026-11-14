@@ -816,7 +816,8 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
         if model_id is None:
             continue
 
-        model_info = registry.deployment_model_info(model_id, litellm_params.get("model") or "")
+        model_name = litellm_params.get("model")
+        model_info = registry.deployment_model_info(str(model_id), model_name if isinstance(model_name, str) else "")
         if model_info is not None and _entry_has_priced_metric(model_info):
             return True
 
@@ -7620,7 +7621,7 @@ async def _team_soft_budget_check(
     native: Final = _native_budget_decision(
         {"check": "team_soft", "spend": team_object.spend, "soft_budget": team_object.soft_budget}
     )
-    if native.alerts:
+    if native.alerts and team_object.spend is not None:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
             team_object.team_id,

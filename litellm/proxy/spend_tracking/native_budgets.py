@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 import weakref
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeGuard
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -103,7 +103,7 @@ def pending_native_reservation(
                 **{
                     name: dict(bucket)
                     for name in ("metadata", "litellm_metadata")
-                    if isinstance(bucket := request_data.get(name), Mapping)
+                    if _str_mapping(bucket := request_data.get(name))
                 },
             },
             window_resets=window_resets,
@@ -264,20 +264,30 @@ def _reservation_record(reservation: object) -> BudgetReservation | None:
     return budget_reservation(HookArgs(auth=_Reserved(reservation)))
 
 
+def _str_mapping(
+    value: object,
+) -> TypeGuard[Mapping[str, object]]:  # guard-ok: reservations and request metadata are str-keyed JSON objects
+    return isinstance(value, Mapping)
+
+
+def _object_sequence(value: object) -> TypeGuard[Sequence[object]]:  # guard-ok: reservation entries are a JSON array
+    return isinstance(value, list | tuple)
+
+
 def _with_window_reset(entry: object, window_resets: Mapping[str, str]) -> object:
-    if not isinstance(entry, Mapping):
+    if not _str_mapping(entry):
         return entry
-    reset: Final = window_resets.get(str(entry.get("counter_key")))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # an entry the native wrote
-    return entry if reset is None else {**entry, "window_reset_at": reset}  # pyright: ignore[reportUnknownVariableType]  # an entry the native wrote
+    reset: Final = window_resets.get(str(entry.get("counter_key")))
+    return entry if reset is None else {**entry, "window_reset_at": reset}
 
 
 def _with_window_resets(value: object, window_resets: Mapping[str, str]) -> object:
-    if not window_resets or not isinstance(value, Mapping):
+    if not window_resets or not _str_mapping(value):
         return value
-    entries: Final = value.get("entries")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the reservation the native wrote
-    if not isinstance(entries, list | tuple):
-        return value  # pyright: ignore[reportUnknownVariableType]  # the reservation the native wrote
-    return {**value, "entries": [_with_window_reset(entry, window_resets) for entry in entries]}  # pyright: ignore[reportUnknownVariableType]  # the reservation the native wrote
+    entries: Final = value.get("entries")
+    if not _object_sequence(entries):
+        return value
+    return {**value, "entries": [_with_window_reset(entry, window_resets) for entry in entries]}
 
 
 def _stamped(outcome: Patch | Abort | None, window_resets: Mapping[str, str]) -> Patch | Abort | None:

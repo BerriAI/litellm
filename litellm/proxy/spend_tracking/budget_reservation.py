@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeGuard, cast
 
 from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
@@ -198,13 +198,15 @@ def _raise_reservation_unavailable(counter_key: str) -> NoReturn:
     )
 
 
-def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
+def get_reserved_counter_keys(budget_reservation: dict | None) -> frozenset[str]:
     if not budget_reservation:
-        return set()
-    entries: Final = budget_reservation.get("entries") or []
-    return {
-        entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
-    }
+        return frozenset()
+    entries: Final[object] = budget_reservation.get("entries") or []
+    if not _is_entry_sequence(entries):
+        return frozenset()
+    return frozenset(
+        str(entry["counter_key"]) for entry in entries if _is_held_entry(entry) and entry.get("counter_key") is not None
+    )
 
 
 _lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
@@ -462,7 +464,7 @@ async def _native_budget_plan(
     input_token_counts: Mapping[str, int],
     input_cost: float | None,
     fail_closed_budget_enforcement: bool,
-) -> dict | None:  # mutable-ok: settlement stamps finalized on the reservation it returns
+) -> dict[str, object] | None:  # mutable-ok: settlement stamps finalized on the reservation it returns
     with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
         reservable: Final = await _initialize_reservation_counters(
             counters=counters,
@@ -502,7 +504,7 @@ async def _native_budget_plan(
 
 
 async def reconcile_budget_reservation(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: settlement stamps finalized on the caller's reservation
     actual_cost: float | None,
     finalize: bool = True,
     apply_consistent: bool = True,
@@ -514,7 +516,7 @@ async def reconcile_budget_reservation(
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return ()
 
-    reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
+    reserved_cost: Final = _float_or_zero(budget_reservation.get("reserved_cost"))
     actual: Final = float(actual_cost or 0.0)
     native: Final = is_native_reservation(budget_reservation)
     if native:
@@ -523,7 +525,7 @@ async def reconcile_budget_reservation(
         ()
         if native
         else await _set_reserved_entries_actual_cost(
-            entries=budget_reservation.get("entries") or [],
+            entries=_held_entries(budget_reservation.get("entries")),
             actual_cost=actual,
             default_reserved_cost=reserved_cost,
             apply_consistent=apply_consistent,
@@ -557,7 +559,7 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,  # mutable-ok: reconciling stamps finalized on it
 ) -> None:
     """Reconcile a still-open reservation when the request is cancelled mid-flight.
 
@@ -584,7 +586,7 @@ async def release_budget_reservation_on_cancel(
             _ = await asyncio.shield(admission)
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    incurred_cost: Final = _float_or_zero(budget_reservation.get("input_cost"))
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -1939,6 +1941,40 @@ def _is_input_only_route(route: str) -> bool:
             "moderations",
         )
     )
+
+
+def _float_or_zero(value: object) -> float:
+    if not value:
+        return 0.0
+    if not isinstance(value, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
+        raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+    return float(value)
+
+
+def _is_entry_sequence(
+    value: object,
+) -> TypeGuard[Sequence[object]]:  # guard-ok: the held entries are a JSON array the reservation wrote
+    return isinstance(value, list | tuple)
+
+
+def _is_held_entry(
+    value: object,
+) -> TypeGuard[Mapping[str, object]]:  # guard-ok: a held entry is a str-keyed JSON object the reservation wrote
+    return isinstance(value, dict)
+
+
+def _is_held_entries(
+    value: object,
+) -> TypeGuard[list[dict[str, object]]]:  # guard-ok: str-keyed JSON entries  # mutable-ok: settlement stamps each entry
+    return isinstance(value, list) and all(isinstance(entry, dict) for entry in value)
+
+
+def _held_entries(value: object) -> list[dict[str, object]]:  # mutable-ok: settlement stamps each held entry in place
+    if not value:
+        return []
+    if not _is_held_entries(value):
+        raise TypeError(f"reservation entries must be a list of objects, not '{type(value).__name__}'")
+    return value
 
 
 def _to_float(value: object) -> float | None:
