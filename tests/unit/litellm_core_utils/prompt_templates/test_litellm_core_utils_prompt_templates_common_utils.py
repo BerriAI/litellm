@@ -2525,6 +2525,36 @@ def test_unpack_defs_resolves_refs_under_a_property_named_ref() -> None:
     assert schema["properties"] == {"$ref": {"type": "string"}}
 
 
+def test_unpack_defs_reads_defs_and_refs_only_where_a_schema_sits() -> None:
+    word: Final = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "examples": [{"text": "run", "definitions": ["to move fast"]}],
+        "default": {"$ref": "#/$defs/Word"},
+    }
+    tag: Final = {"const": {"definitions": "x"}, "enum": [{"definitions": "y"}], "example": {"definitions": "z"}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"definitions": True, "word": {"$ref": "#/$defs/Word"}, "tag": tag},
+        "patternProperties": {"definitions": True},
+        "dependentSchemas": {"definitions": True},
+        "$defs": {"Word": word, "definitions": True},
+        "definitions": {"definitions": True},
+    }
+
+    unpack_defs(schema, {})
+
+    assert schema["properties"] == {"definitions": True, "word": word, "tag": tag}
+
+
+def test_unpack_defs_inlines_a_ref_to_a_true_definition_as_the_empty_schema() -> None:
+    schema: Final = {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": True}}
+
+    unpack_defs(schema, {})
+
+    assert schema["properties"] == {"city": {}}
+
+
 @pytest.mark.parametrize(
     ("model", "defs_key", "credentials"),
     [
@@ -2546,7 +2576,7 @@ def test_ref_to_a_definition_that_is_not_a_schema_is_a_bad_request(
             "parameters": {
                 "type": "object",
                 "properties": {"city": {"$ref": f"#/{defs_key}/City"}},
-                defs_key: {"City": True},
+                defs_key: {"City": False},
             },
         },
     }

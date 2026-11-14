@@ -10107,6 +10107,72 @@ def test_root_definitions_are_inlined_once_against_the_budget() -> None:
     assert parameters["properties"]["wrapper"]["properties"]["shared"]["description"] == "x" * def_bytes
 
 
+def test_gemini_inlining_budget_counts_only_the_fields_gemini_receives() -> None:
+    def mapped(shared_extras: dict[str, object]) -> object:
+        tool: Final = _function_tool(
+            "noisy",
+            {
+                "type": "object",
+                "properties": {f"field{index}": {"$ref": "#/$defs/Shared"} for index in range(3)},
+                "$defs": {
+                    "Shared": {"type": "string", "description": "a shared field", **shared_extras},
+                    "Big": {"type": "string", "description": "w" * (DEFS_MAX_INLINED_BYTES // 2)},
+                },
+            },
+        )
+        return VertexGeminiConfig().map_openai_params(
+            non_default_params={"tools": [tool]}, optional_params={}, model="gemini-2.5-flash", drop_params=False
+        )["tools"]
+
+    dropped_by_gemini: Final = {
+        "examples": ["x" * (DEFS_MAX_INLINED_BYTES // 2)],
+        "$comment": "y" * (DEFS_MAX_INLINED_BYTES // 2),
+        "x-ui": {"widget": "z" * (DEFS_MAX_INLINED_BYTES // 2)},
+        "oneOf": [{"$ref": "#/$defs/Big"}],
+        "allOf": [{"$ref": "#/$defs/Big"}],
+    }
+
+    assert mapped(dropped_by_gemini) == mapped({})
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_gemini_tool_with_boolean_schemas_and_definitions_held_as_data_reaches_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=_gemini_reply()
+    )
+    word_default: Final = {"word": "go", "definitions": ["to leave"]}
+    tool: Final = _function_tool(
+        "define",
+        {
+            "type": "object",
+            "properties": {"definitions": True, "word": {"$ref": "#/$defs/Word"}, "city": {"$ref": "#/$defs/City"}},
+            "$defs": {
+                "City": True,
+                "Word": {
+                    "type": "object",
+                    "properties": {"word": {"type": "string"}},
+                    "examples": [{"word": "run", "definitions": ["to move fast"]}],
+                    "default": word_default,
+                },
+            },
+        },
+    )
+
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Define run"}],
+        tools=[tool],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)["tools"][0]["function_declarations"][0]["parameters"]
+    assert sent["properties"]["definitions"] == sent["properties"]["city"] == {"type": "object"}
+    assert sent["properties"]["word"]["default"] == word_default
+
+
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize(
     "parameters",
@@ -10127,9 +10193,9 @@ def test_root_definitions_are_inlined_once_against_the_budget() -> None:
                 }
             },
         },
-        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": True}},
+        {"type": "object", "properties": {"city": {"$ref": "#/$defs/City"}}, "$defs": {"City": False}},
     ],
-    ids=("root-defs-list", "root-definitions-list", "nested-defs-list", "boolean-def"),
+    ids=("root-defs-list", "root-definitions-list", "nested-defs-list", "false-def"),
 )
 def test_gemini_tool_whose_def_block_is_not_an_object_is_rejected_with_a_400(
     respx_mock: respx.MockRouter, parameters: dict[str, object]
