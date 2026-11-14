@@ -9,11 +9,7 @@ from pydantic import TypeAdapter
 from litellm.accounting.delivery_projection import project_deliveries
 from litellm.accounting.projection import project
 from litellm.accounting.snapshot import build_accounting_payload
-from litellm.constants import (
-    BILLED_RETRY_ATTEMPT_METADATA_KEY,
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-)
+from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -490,24 +486,6 @@ def test_report_only_or_invalid_guardrail_prices_remain_untracked(cost_fields: M
     model: Final = next(item for item in contributions if item.table == "LiteLLM_DailyModelUsage")
     assert dict(guardrail.increments) == {"units": 2, "cost": 0.0, "untracked_units": 2}
     assert dict(model.key)["task_type"] == "debugging"
-
-
-@pytest.mark.parametrize(
-    ("api_key", "model_group"),
-    [(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, "openai/gpt-4o"), ("hashed-user-key", "fast-chat")],
-)
-def test_a_health_check_probe_projects_under_its_model_not_its_deployments_group(api_key: str, model_group: str) -> None:
-    row: Final[Mapping[str, object]] = {
-        "startTime": _NOW,
-        "api_key": api_key,
-        "model": "openai/gpt-4o",
-        "model_group": "fast-chat",
-        "spend": 0.25,
-        "status": "success",
-    }
-    model: Final = next(item for item in project(row) if item.table == "LiteLLM_DailyModelUsage")
-    assert dict(model.key)["model_group"] == model_group
-    assert dict(model.increments)["spend"] == 0.25
 
 
 @pytest.mark.parametrize("organization_id", [None, "", "charged-org"])

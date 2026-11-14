@@ -604,11 +604,7 @@ async def _run_model_health_check(model: dict):
     deployment: Final = _MODEL_INFO_ADAPTER.validate_python(model)
     deployment_id: Final = _deployment_id(deployment)
     identity: Final[Mapping[str, object]] = (
-        {}
-        if deployment_id is None
-        else {
-            "litellm_metadata": {"model_info": {"id": deployment_id}, "model_group": deployment.get("model_name", "")}
-        }
+        {} if deployment_id is None else {"litellm_metadata": {"model_info": {"id": deployment_id}}}
     )
 
     return await run_with_timeout(

@@ -4,7 +4,6 @@ import json
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
@@ -138,7 +137,7 @@ def _probe_of(rig: _Rig, name: str, model_id: str) -> Sample:
 
 def test_a_succeeding_probe_counts_under_its_deployment(rig: _Rig) -> None:
     sample: Final = _probe_of(rig, _SUCCESSES, _SERVING_ID)
-    assert sample.labels["model_group"] == _GROUP
+    assert sample.labels["model_group"] == ""
     assert sample.labels["api_provider"] == "openai"
     assert sample.labels["api_base"] == f"{rig.upstream.url}/v1"
 
@@ -146,8 +145,8 @@ def test_a_succeeding_probe_counts_under_its_deployment(rig: _Rig) -> None:
 def test_a_failing_probe_counts_under_its_deployment(rig: _Rig) -> None:
     sample: Final = _probe_of(rig, _FAILURES, _PAYING_ID)
     assert sample.labels["exception_status"] == "402"
-    assert sample.labels["model_group"] == _GROUP
-    assert sample.labels["requested_model"] == _GROUP
+    assert sample.labels["model_group"] == ""
+    assert sample.labels["requested_model"] == _PAYING
     assert sample.labels["api_provider"] == "openai"
     assert sample.labels["api_base"] == f"{rig.upstream.url}/v1"
     assert _PAYING in sample.labels["litellm_model_name"]
@@ -193,47 +192,4 @@ def test_the_probe_spend_row_carries_its_deployment_and_the_health_check_key(rig
     )
     serving: Final = tuple(row for row in rows if row["model_id"] == _SERVING_ID)
     assert serving, rows
-    assert {(row["model_group"], row["api_key"]) for row in serving} == {(_GROUP, _HEALTH_CHECK_KEY)}
-
-
-def _user_requests_to_the_group(rig: _Rig) -> int:
-    rows: Final = read_rows(
-        'SELECT COUNT(*) AS n FROM "LiteLLM_SpendLogs" WHERE model_group = %s AND api_key != %s',
-        (_GROUP, _HEALTH_CHECK_KEY),
-        database_url=rig.database_url,
-    )
-    return int(str(rows[0]["n"]))
-
-
-def test_probe_spend_rows_stay_out_of_the_per_model_metrics(rig: _Rig) -> None:
-    eventually(
-        lambda: read_rows(
-            'SELECT 1 FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND model_group = %s',
-            (_HEALTH_CHECK_KEY, _GROUP),
-            database_url=rig.database_url,
-        ),
-        bool,
-        seconds=70,
-    )
-    today: Final = datetime.now(timezone.utc)
-    window: Final = {
-        "start_date": (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "end_date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
-    }
-    users: Final = _user_requests_to_the_group(rig)
-
-    slow: Final = rig.gateway.request(
-        "GET",
-        "/model/metrics/slow_responses",
-        params={
-            "_selected_model_group": _GROUP,
-            "startTime": (today - timedelta(days=1)).isoformat(),
-            "endTime": (today + timedelta(days=1)).isoformat(),
-        },
-    )
-    activity: Final = rig.gateway.request("GET", "/global/activity/model", params=window)
-
-    assert slow.status_code == 200, slow.text
-    assert activity.status_code == 200, activity.text
-    assert sum(int(row["total_count"]) for row in slow.json()) == users
-    assert sum(entry["sum_api_requests"] for entry in activity.json() if entry["model"] == _GROUP) == users
+    assert {(row["model_group"], row["api_key"]) for row in serving} == {("", _HEALTH_CHECK_KEY)}

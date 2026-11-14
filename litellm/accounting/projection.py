@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCos
 from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
-from litellm.proxy.db.model_usage_rollup import date_from_start_time, model_usage_group, utc_date_from_start_time
+from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
@@ -285,7 +285,7 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
             "LiteLLM_DailyModelUsage",
             (
                 ("date", date),
-                ("model_group", model_usage_group(_text(row.get("model_group")), model, row.get("api_key"))),
+                ("model_group", _text(row.get("model_group")) or model),
                 ("model", model),
                 ("custom_llm_provider", _text(row.get("custom_llm_provider")) or "unknown"),
                 ("task_type", _model_task(row)),

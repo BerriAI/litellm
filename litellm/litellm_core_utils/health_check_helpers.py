@@ -195,10 +195,8 @@ class HealthCheckHelpers:
         as_object: Final = TypeAdapter(dict[str, object]).validate_python
         params: Final = as_object(model_params)
         incoming: Final = as_object(params.get(_metadata_variable_name) or {})
-        model_group: Final = incoming.get("model_group")
         litellm_metadata: Final[Mapping[str, object]] = {
             **HealthCheckHelpers._get_metadata_for_health_check_call(),
-            **({} if model_group is None else {"model_group": model_group}),
             "model_info": {
                 **as_object(params.get("model_info") or {}),
                 **as_object(incoming.get("model_info") or {}),

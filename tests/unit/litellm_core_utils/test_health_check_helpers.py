@@ -228,7 +228,7 @@ def test_health_check_tracking_keeps_the_probed_deployment_identity_and_forces_t
 
     metadata: Final = result["litellm_metadata"]
     assert metadata["model_info"] == {"mode": "chat", "id": "standby-deployment"}
-    assert metadata["model_group"] == "plain"
+    assert "model_group" not in metadata
     assert metadata["tags"] == [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]
     assert metadata["user_api_key_alias"] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
     assert metadata.get("agent_id") is None

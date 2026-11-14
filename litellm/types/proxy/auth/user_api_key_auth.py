@@ -9,7 +9,6 @@ from typing import (
 from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
-from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -50,12 +49,6 @@ def hash_token(token: str) -> str:
     hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
-
-
-INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
-)
 
 
 _UntypedDict: TypeAlias = dict[Any, Any]

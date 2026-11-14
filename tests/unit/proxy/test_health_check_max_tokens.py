@@ -511,7 +511,7 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
 @pytest.mark.parametrize(
     ("model_info", "logged_identity"),
     [
-        ({"id": "standby-deployment", "mode": "chat"}, ("standby-deployment", "plain")),
+        ({"id": "standby-deployment", "mode": "chat"}, ("standby-deployment", "")),
         ({"mode": "chat"}, ("", "")),
     ],
 )

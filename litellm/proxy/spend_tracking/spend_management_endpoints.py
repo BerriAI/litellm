@@ -31,6 +31,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
@@ -82,7 +83,6 @@ from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.types.proxy.auth.user_api_key_auth import INTERNAL_HEALTH_CHECK_API_KEYS
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
@@ -124,6 +124,10 @@ _SPEND_LOG_LIST_COLUMNS: Final = """
                     (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
 """
 
+_INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
+)
 
 _RowT = TypeVar("_RowT")
 
@@ -999,12 +1003,9 @@ async def get_global_activity_model(
             FROM "LiteLLM_SpendLogs"
             WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
               AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-              AND "api_key" NOT IN ($3, $4)
             GROUP BY model_group, date_trunc('day', "startTime")
             """
-            db_response = await _query_raw_or_none(
-                prisma_client, sql_query, start_date_obj, end_date_obj, *INTERNAL_HEALTH_CHECK_API_KEYS
-            )
+            db_response = await _query_raw_or_none(prisma_client, sql_query, start_date_obj, end_date_obj)
         if db_response is None:
             return []
 
@@ -3001,7 +3002,7 @@ async def ui_view_spend_logs(
 
         if exclude_internal_health_checks:
             sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
-            sql_params.extend(INTERNAL_HEALTH_CHECK_API_KEYS)
+            sql_params.extend(_INTERNAL_HEALTH_CHECK_API_KEYS)
             p += 2  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Spend range

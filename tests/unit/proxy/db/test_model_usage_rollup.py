@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy.db import rollup_lock_timeout
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import (
@@ -18,7 +18,6 @@ from litellm.proxy.db.model_usage_rollup import (
     model_usage_task_type,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
-from litellm.types.proxy.auth.user_api_key_auth import hash_token
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
@@ -100,22 +99,6 @@ def test_build_model_usage_transaction_keys_on_day_model_and_task() -> None:
         completion_tokens=20,
         successful=False,
     )
-
-
-@pytest.mark.parametrize(
-    ("api_key", "model_group"),
-    [
-        (LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, "openai/gpt-5.4-mini"),
-        (hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME), "openai/gpt-5.4-mini"),
-        ("hashed-user-key", "fast-chat"),
-    ],
-)
-def test_a_health_check_probe_counts_under_its_model_not_its_deployments_group(api_key: str, model_group: str) -> None:
-    transaction = build_model_usage_transaction(_payload(api_key=api_key))
-
-    assert transaction is not None
-    assert transaction.key.model_group == model_group
-    assert transaction.spend == 0.25
 
 
 def test_build_model_usage_transaction_falls_back_for_missing_model_fields() -> None:
