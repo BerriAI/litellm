@@ -434,8 +434,7 @@ class TestOtelV2LangfuseGenerationOutput:
         assert response.pages and response.pages[0].markdown, f"/v1/ocr returned no page markdown: {response!r}"
 
         text: Final = _input_text(_generation(client, langfuse_creds, alias=alias, started=started))
-        encoded: Final = base64.b64encode(pdf).decode()
-        assert text == f"data:application/pdf;base64 ({len(encoded)} chars)", (
+        assert text == f"file (application/pdf) {DUMMY_PDF.name}", (
             f"OCR upload input is not the bounded document summary: {text!r}"
         )
 
