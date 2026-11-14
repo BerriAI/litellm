@@ -516,6 +516,31 @@ async def test_a_name_a_listing_callback_hides_stays_hidden_when_it_is_also_an_a
 
 
 @pytest.mark.asyncio
+@_LISTING_GATES
+async def test_an_alias_named_like_a_router_alias_to_a_hidden_model_is_listed_as_its_own_target(
+    router: Router, monkeypatch: pytest.MonkeyPatch, gate: type[_ListingGate | _V2ListingGate]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [gate(frozenset({"gpt-4.1"}))])
+    ProxyLogging._callback_capabilities_cache.clear()
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4.1-mini", "gpt-4.1"],
+        aliases={"legacy": "gpt-4.1-mini"},
+    )
+
+    listing: Final = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    rows: Final = {row["id"]: row for row in listing["data"]}
+    assert rows["legacy"] == {**rows["gpt-4.1-mini"], "id": "legacy"}
+    target: Final = await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=caller)
+    assert await proxy_server.model_info(model_id="legacy", user_api_key_dict=caller) == {**target, "id": "legacy"}
+    groups: Final = await _model_group_rows(caller)
+    assert groups["legacy"] == {**groups["gpt-4.1-mini"], "model_group": "legacy"}
+    assert await _model_group_rows(caller, model_group="legacy") == {"legacy": groups["legacy"]}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("model_group", "offered"), [("gpt-4.1-mini", {"gpt-4.1-mini"}), ("fast", {"gpt-4.1"})])
 async def test_model_group_info_for_one_group_offers_listing_callbacks_only_the_names_it_reads(
     router: Router, monkeypatch: pytest.MonkeyPatch, model_group: str, offered: set[str]

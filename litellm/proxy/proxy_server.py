@@ -12768,7 +12768,10 @@ class ProxyStartupEvent:
 async def _names_hidden_by_listing_callbacks(
     user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
 ) -> frozenset[str]:
-    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names)
+    return _with_router_aliases_to(await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names))
+
+
+def _with_router_aliases_to(hidden: frozenset[str]) -> frozenset[str]:
     if not hidden or llm_router is None:
         return hidden
     aliases: Final = llm_router.registry().aliases()
@@ -12895,9 +12898,10 @@ async def _key_model_listing(
     translated_entries: Final = TeamModelNameTranslator.listing_entries(
         [name for name in names if name not in excluded], llm_router, general_settings_view()
     )
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
         user_api_key_dict, tuple(response_id for response_id, _ in translated_entries)
     )
+    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
     listed_entries: Final = tuple(entry for entry in translated_entries if entry[0] not in callback_hidden_names)
     entries: Final = tuple(
         entry
@@ -12906,7 +12910,7 @@ async def _key_model_listing(
             caller_aliases,
             _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
         )
-        if entry[0] not in callback_hidden_names
+        if entry[0] not in names_callbacks_hid
     )
     return _KeyModelListing(
         rows=tuple(
@@ -13249,7 +13253,7 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
         user_api_key_dict,
         tuple(
             response_id
@@ -13258,6 +13262,7 @@ async def model_info(
             )
         ),
     )
+    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
     if hidden_names or callback_hidden_names:
         all_models = [
             m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
@@ -13271,7 +13276,7 @@ async def model_info(
     )
     aliased_model_id: Final = (
         None
-        if model_id in callback_hidden_names
+        if model_id in names_callbacks_hid
         else alias_target(
             model_id,
             caller_aliases,
@@ -19297,7 +19302,7 @@ async def model_group_info(
     )
 
     agent_groups: Final = await append_agents_to_model_group(model_groups=[], user_api_key_dict=user_api_key_dict)
-    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+    names_callbacks_hid: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
         user_api_key_dict,
         tuple(
             dict.fromkeys(
@@ -19308,6 +19313,7 @@ async def model_group_info(
             )
         ),
     )
+    callback_hidden_names: Final = _with_router_aliases_to(names_callbacks_hid)
     kept_entries: Final = tuple(
         (name, name) for name in listed_group_names if internal_to_public.get(name, name) not in callback_hidden_names
     )
@@ -19320,7 +19326,7 @@ async def model_group_info(
             caller_aliases,
             _describable_model_groups(kept_entries, blocked_names, user_api_key_dict, None),
         )
-        if (model_group is None or entry[0] == model_group) and entry[0] not in callback_hidden_names
+        if (model_group is None or entry[0] == model_group) and entry[0] not in names_callbacks_hid
     )
     lookup_ids: Final = tuple(dict.fromkeys(lookup_id for _, lookup_id in requested_entries))
     groups_by_lookup_id: Final = MappingProxyType(
