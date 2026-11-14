@@ -77,6 +77,10 @@ class SpendCounterStore:
             self._handle.attach(redis.client)
 
     @property
+    def handle(self) -> SpendCountersHandle:
+        return self._handle
+
+    @property
     def redis_ttl(self) -> float | None:
         """The TTL every Redis write gives a counter, None when there is no Redis."""
         return self._handle.redis_ttl_seconds

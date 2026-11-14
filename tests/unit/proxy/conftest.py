@@ -36,6 +36,7 @@ from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -244,6 +245,11 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)
 
 
 @pytest.fixture

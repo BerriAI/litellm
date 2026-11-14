@@ -2488,6 +2488,10 @@ class ProxyLogging:
 
     def _init_litellm_callbacks(self, llm_router: Router | None = None):
         self._add_proxy_hooks(llm_router)
+        from litellm.proxy.proxy_server import spend_counter_store
+        from litellm.proxy.spend_tracking.native_budgets import install_native_budgets
+
+        install_native_budgets(spend_counter_store, litellm.callbacks)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)
 
         # Track string callbacks and their initialized instances so we can
@@ -3159,8 +3163,11 @@ class ProxyLogging:
         is visible instead of silently forwarding unredacted content.
         """
         scans_raw_request: Final = callback.scan_raw_request
-        should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
-        input_data: Final = independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
+        input_data: Final = (
+            independent_snapshot(raw_request_snapshot)
+            if scans_raw_request and raw_request_snapshot is not None
+            else data
+        )
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
         # the dict regardless of whether the guardrail's own hook mutated

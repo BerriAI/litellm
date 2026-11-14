@@ -2313,6 +2313,9 @@ async def pass_through_request(
             headers={"x-litellm-call-id": litellm_call_id},
         )
     except Exception as e:
+        from litellm.proxy.spend_tracking.native_budgets import raise_native_admission_refusal
+
+        await raise_native_admission_refusal(e)
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=litellm_call_id,

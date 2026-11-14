@@ -106,6 +106,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_met
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import admit_native_plan, install_native_owner
 
 
 class _RoutingRequest:
@@ -5204,7 +5205,7 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_carries_team_and_user_budget_state_on_the_token():
+async def test_centralized_common_checks_carries_team_and_user_budget_state_on_the_token(native_budgets_on: None):
     """The team and user objects auth resolves are pinned on the token so the
     response path (Prometheus budget gauges) reads them from request metadata
     instead of calling get_team_object / get_user_object again."""
@@ -5245,6 +5246,7 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ):
+            _ = install_native_owner(_proxy_server_mod.spend_counter_store)
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
@@ -5267,7 +5269,7 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prometheus_registered", [True, False], ids=["prometheus_logger", "no_prometheus_logger"])
 async def test_centralized_common_checks_carry_the_committed_spend_beside_the_stale_cached_spend(
-    monkeypatch: pytest.MonkeyPatch, prometheus_registered: bool
+    monkeypatch: pytest.MonkeyPatch, prometheus_registered: bool, native_budgets_on: None
 ):
     """The enforcement counters also hold budget holds, the committed twins only charged spend."""
     from starlette.datastructures import URL
@@ -5306,6 +5308,7 @@ async def test_centralized_common_checks_carry_the_committed_spend_beside_the_st
     try:
         for attribute, value in attrs.items():
             setattr(_proxy_server_mod, attribute, value)
+        _ = install_native_owner(_proxy_server_mod.spend_counter_store)
         await run_centralized_common_checks(
             user_api_key_auth_obj=token,
             request=request,
@@ -6713,7 +6716,7 @@ def _chat_request():
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend():
+async def test_centralized_checks_enforce_token_end_user_budget_against_row_spend(native_budgets_on: None):
     """
     Regression: a token-supplied end-user budget must still be checked against the end user's
     recorded spend.
@@ -6742,17 +6745,20 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
                 "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
                 return_value=0.6,
             ),
-            pytest.raises(litellm.BudgetExceededError) as exc_info,
         ):
+            _ = install_native_owner(litellm.proxy.proxy_server.spend_counter_store)
+            request_data = {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=_chat_request(),
-                request_data={
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
+                request_data=request_data,
                 route="/chat/completions",
             )
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await admit_native_plan(token, request_data)
 
     assert exc_info.value.max_budget == 50.0
     assert exc_info.value.current_cost == pytest.approx(100.6)
@@ -7195,7 +7201,7 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_reserves_request_end_user_budget():
+async def test_centralized_common_checks_reserves_request_end_user_budget(native_budgets_on: None):
     """Regression: reservation runs before user_api_key_auth() copies the
     request end-user onto the token, so centralized checks must pass the
     locally extracted end_user_id/end_user_object into reservation."""
@@ -7242,12 +7248,14 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
         ):
             assert token.end_user_id is None
 
+            _ = install_native_owner(_proxy_server_mod.spend_counter_store)
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data=request_data,
                 route="/chat/completions",
             )
+            await admit_native_plan(token, request_data)
 
     finally:
         for k, v in originals.items():
@@ -7590,7 +7598,7 @@ async def test_centralized_common_checks_http_exception_without_team_id():
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_team_404_does_not_zero_other_contexts():
+async def test_centralized_common_checks_team_404_does_not_zero_other_contexts(native_budgets_on: None):
     """Per-fetch isolation: an HTTPException(404) from get_team_object
     (token references a deleted team) must reconstruct the team from the
     token but leave user_object / end_user_object / project_object intact.
@@ -7665,6 +7673,7 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
+            _ = install_native_owner(_proxy_server_mod.spend_counter_store)
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
@@ -8102,7 +8111,7 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_user_http_exception_isolates_to_user_only():
+async def test_centralized_common_checks_user_http_exception_isolates_to_user_only(native_budgets_on: None):
     """Per-fetch isolation, mirror of the team case: an HTTPException
     from get_user_object must zero only ``user_object``. The successfully
     fetched team / end_user / project / global_spend must reach
@@ -8169,6 +8178,7 @@ async def test_centralized_common_checks_user_http_exception_isolates_to_user_on
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
+            _ = install_native_owner(_proxy_server_mod.spend_counter_store)
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
@@ -12900,9 +12910,10 @@ def _viewer_inference_key(monkeypatch: pytest.MonkeyPatch, team_id: str | None, 
 @pytest.mark.parametrize("team_id", ["litellm-dashboard", None], ids=["dashboard-session", "virtual-key"])
 @pytest.mark.parametrize("route", ["/chat/completions", "/v1/chat/completions"])
 async def test_viewer_inference_uses_the_normal_key_authorization_path(
-    monkeypatch: pytest.MonkeyPatch, team_id: str | None, route: str
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, route: str, native_budgets_on: None
 ) -> None:
     key: Final = _viewer_inference_key(monkeypatch, team_id)
+    _ = install_native_owner(litellm.proxy.proxy_server.spend_counter_store)
     request: Final = _alias_request(route, {"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "usage"}]})
 
     result: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")

@@ -26,6 +26,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 
 # Helper function to mock async iteration
@@ -712,7 +713,7 @@ def test_openai_http_passthrough_bodies_are_left_to_the_http_handlers():
 @pytest.mark.parametrize("cancel_mode", ["once", "twice", "scope", "none"])
 @pytest.mark.parametrize("cancel_phase", ["allocation", "lock"])
 async def test_completed_passthrough_cancellation_preserves_accounting(
-    monkeypatch: pytest.MonkeyPatch, cancel_mode: str, cancel_phase: str
+    monkeypatch: pytest.MonkeyPatch, cancel_mode: str, cancel_phase: str, native_budgets_on: None
 ) -> None:
     from unittest.mock import create_autospec
 
@@ -720,6 +721,7 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
@@ -759,16 +761,20 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     monkeypatch.setattr(proxy_server, "general_settings", {})
     counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
-        counters.set_local(key, 1.9)
+        counters.set_local(key, 1.5)
     monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
-    reservation: Final = {
-        "reserved_cost": 0.4,
-        "callback_bound": False,
-        "entries": [
-            {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": 0.4}
+    reservation: Final = await native_reservation(
+        counters,
+        UserAPIKeyAuth(api_key="pass-through-key", team_id="pass-through-team"),
+        [
+            {"counter_key": key, "entity_type": "Key", "entity_id": key}
             for key in ("spend:key:pass-through-key", "spend:team:pass-through-team")
         ],
-    }
+        0.4,
+    )
+    assert reservation["callback_bound"] is False
+    for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
+        assert counters.get_local(key) == pytest.approx(1.9)
     writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging.db_spend_update_writer = writer

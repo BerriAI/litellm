@@ -6,10 +6,13 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.integrations.custom_logger_v2.rust import RustHandle
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.integrations.custom_logger_v2 import BudgetReservation
+from litellm.types.proxy.native_budgets import BudgetCheck
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -534,6 +537,21 @@ class PostCallSettlement:
     def settled(self) -> bool: ...
 
 @final
+class NativeBudgets:
+    def __new__(cls, spend_counters: NativeSpendCounters) -> NativeBudgets: ...
+    def callback(self) -> RustHandle: ...
+    def settle(
+        self,
+        reservation: BudgetReservation,
+        window_resets: tuple[str | None, ...],
+        observed: tuple[float | None, ...],
+        actual: float,
+        apply_consistent: bool,
+    ) -> Future[JsonValue]: ...
+
+def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
+
+@final
 class NativeSpendCounters:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSpendCounters: ...
     def attach(self, client: NativeRedisClient) -> bool: ...
@@ -757,6 +775,7 @@ __all__ = [
     "LocalSizes",
     "NativeAdmission",
     "NativeAuthCache",
+    "NativeBudgets",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -803,6 +822,7 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "budget_check_decision",
     "bundled_model_cost_map",
     "completion",
     "embedding",

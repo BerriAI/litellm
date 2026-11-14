@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
 from unittest.mock import MagicMock
@@ -25,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
 
 _ProxyObject = (
     LiteLLM_TeamTableCachedObj
@@ -84,3 +86,8 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
     for name, value in proxy_globals.items():
         monkeypatch.setattr(proxy_server, name, value)
     return ProxyAuthState(cache=cache, monkeypatch=monkeypatch)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)

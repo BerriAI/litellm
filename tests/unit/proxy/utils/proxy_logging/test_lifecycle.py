@@ -416,13 +416,17 @@ def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, mon
 
     monkeypatch.setattr(utils_mod, "PROXY_HOOKS", [])
     proxy_logging._init_litellm_callbacks(llm_router=None)
+    from litellm.proxy.spend_tracking.native_budgets import NativeBudgetsLogger
+
     snapshot = {
-        "replaced_first_item": litellm.callbacks[0] is sentinel_instance,
+        "budgets_owner_first": isinstance(litellm.callbacks[0], NativeBudgetsLogger),
+        "replaced_configured_item": litellm.callbacks[1] is sentinel_instance,
         "callbacks_grew_with_service": len(litellm.callbacks) >= 2,
         "service_logging_appended": any("ServiceLogging" in type(c).__name__ for c in litellm.callbacks),
     }
     assert snapshot == {
-        "replaced_first_item": True,
+        "budgets_owner_first": True,
+        "replaced_configured_item": True,
         "callbacks_grew_with_service": True,
         "service_logging_appended": True,
     }
@@ -439,8 +443,8 @@ def test_init_litellm_callbacks_string_resolution_failure_keeps_string(proxy_log
     )
     monkeypatch.setattr(utils_mod, "PROXY_HOOKS", [])
     proxy_logging._init_litellm_callbacks(llm_router=None)
-    # Resolver returned None — original string remains in place at idx 0.
-    assert litellm.callbacks[0] == "unknown-logger"
+    # Resolver returned None — original string remains in place behind the budgets owner.
+    assert litellm.callbacks[1] == "unknown-logger"
 
 
 @pytest.mark.parametrize("callback_list", ["callbacks", "success_callback", "failure_callback"])

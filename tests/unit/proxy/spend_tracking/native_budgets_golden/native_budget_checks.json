@@ -1,0 +1,1029 @@
+{
+  "python": {
+    "access_group_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "access_group_refuses_at_the_boundary": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Model access group=group-checks Current cost: 3.0, Max budget: 3.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            3.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "group-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "model_access_group"
+          ],
+          "max_budget": [
+            "builtins.float",
+            3.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Model access group=group-checks Current cost: 3.0, Max budget: 3.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "access_group_skips_a_non_positive_budget": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "end_user_passes_a_nan_budget": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "end_user_passes_at_the_boundary": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "end_user_refuses_over": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "ExceededBudget: End User=customer-checks over budget. Spend=4.5, Budget=4.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            4.5
+          ],
+          "entity_id": [
+            "builtins.str",
+            "customer-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "end_user"
+          ],
+          "max_budget": [
+            "builtins.float",
+            4.0
+          ],
+          "message": [
+            "builtins.str",
+            "ExceededBudget: End User=customer-checks over budget. Spend=4.5, Budget=4.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_max_ignores_a_nan_budget": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": "nan",
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 12.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_max_passes": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 4.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_max_refuses": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 12.5,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Key=key Current cost: 12.5, Max budget: 10.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            12.5
+          ],
+          "entity_id": [
+            "builtins.str",
+            "hashed-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "key"
+          ],
+          "max_budget": [
+            "builtins.float",
+            10.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Key=key Current cost: 12.5, Max budget: 10.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_max_refuses_at_the_boundary": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 10.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            10.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "hashed-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "key"
+          ],
+          "max_budget": [
+            "builtins.float",
+            10.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_max_refuses_hiding_an_unmasked_key_name": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 12.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Key=key Current cost: 12.0, Max budget: 10.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            12.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "hashed-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "key"
+          ],
+          "max_budget": [
+            "builtins.float",
+            10.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Key=key Current cost: 12.0, Max budget: 10.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_max_refuses_naming_a_masked_key": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": "ops",
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 12.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Key=ops (sk-...abcd) Current cost: 12.0, Max budget: 10.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            12.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "hashed-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "key"
+          ],
+          "max_budget": [
+            "builtins.float",
+            10.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Key=ops (sk-...abcd) Current cost: 12.0, Max budget: 10.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_max_throttles_an_opted_in_key": {
+      "alerts": [
+        [
+          "token_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 12.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": [
+        "builtins.float",
+        0.25
+      ]
+    },
+    "key_soft_alerts_at_the_boundary": {
+      "alerts": [
+        [
+          "soft_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "key",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": 5.0,
+            "spend": 5.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_soft_ignores_a_zero_budget": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_soft_stays_quiet_under": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_window_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "key_window_refuses_at_the_boundary": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "ExceededBudget: Key over 1d budget. Spend=$5.0000, Limit=$5.00",
+        {
+          "current_cost": [
+            "builtins.float",
+            5.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "hashed-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "key"
+          ],
+          "max_budget": [
+            "builtins.float",
+            5.0
+          ],
+          "message": [
+            "builtins.str",
+            "ExceededBudget: Key over 1d budget. Spend=$5.0000, Limit=$5.00"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "key_window_rounds_like_python": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": [
+        "builtins.NoneType",
+        null
+      ]
+    },
+    "organization_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "organization_refuses_and_alerts_at_the_boundary": {
+      "alerts": [
+        [
+          "organization_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "organization",
+            "key_alias": null,
+            "max_budget": 5.0,
+            "max_budget_alert_emails": null,
+            "organization_id": "org-checks",
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 5.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Organization=org-checks Current cost: 5.0, Max budget: 5.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            5.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "org-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "organization"
+          ],
+          "max_budget": [
+            "builtins.float",
+            5.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Organization=org-checks Current cost: 5.0, Max budget: 5.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "organization_zero_budget_refuses": {
+      "alerts": [
+        [
+          "organization_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "organization",
+            "key_alias": null,
+            "max_budget": 0.0,
+            "max_budget_alert_emails": null,
+            "organization_id": "org-checks",
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 0.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Organization=org-checks Current cost: 0.0, Max budget: 0.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            0.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "org-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "organization"
+          ],
+          "max_budget": [
+            "builtins.float",
+            0.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Organization=org-checks Current cost: 0.0, Max budget: 0.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "project_max_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "project_max_refuses_and_alerts_at_the_boundary": {
+      "alerts": [
+        [
+          "project_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "project",
+            "key_alias": null,
+            "max_budget": 2.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 2.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Project=project-checks Current cost: 2.0, Max budget: 2.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            2.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "project-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "project"
+          ],
+          "max_budget": [
+            "builtins.float",
+            2.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Project=project-checks Current cost: 2.0, Max budget: 2.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "project_soft_alerts_at_the_boundary": {
+      "alerts": [
+        [
+          "soft_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "project",
+            "key_alias": null,
+            "max_budget": null,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": 2.0,
+            "spend": 2.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": null
+    },
+    "project_soft_stays_quiet_under": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "proxy_passes_at_the_boundary": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "proxy_refuses_over_an_int_budget": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Current cost: 100.5, Max budget: 100",
+        {
+          "current_cost": [
+            "builtins.float",
+            100.5
+          ],
+          "entity_id": [
+            "builtins.NoneType",
+            null
+          ],
+          "entity_type": [
+            "builtins.str",
+            "proxy"
+          ],
+          "max_budget": [
+            "builtins.int",
+            100
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Current cost: 100.5, Max budget: 100"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "tag_passes_at_the_boundary": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "tag_refuses_a_nan_budget": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Tag=tag-checks Current cost: 1.0, Max budget: nan",
+        {
+          "current_cost": [
+            "builtins.float",
+            1.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "tag-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "tag"
+          ],
+          "max_budget": "nan",
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Tag=tag-checks Current cost: 1.0, Max budget: nan"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "tag_refuses_over": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Tag=tag-checks Current cost: 3.5, Max budget: 3.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            3.5
+          ],
+          "entity_id": [
+            "builtins.str",
+            "tag-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "tag"
+          ],
+          "max_budget": [
+            "builtins.float",
+            3.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Tag=tag-checks Current cost: 3.5, Max budget: 3.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "team_max_passes_at_the_boundary": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "team_max_refuses_and_alerts": {
+      "alerts": [
+        [
+          "team_budget",
+          {
+            "alert_emails": null,
+            "customer_id": null,
+            "event_group": "team",
+            "key_alias": null,
+            "max_budget": 10.0,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": null,
+            "spend": 10.5,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! Team=team-checks Current cost: 10.5, Max budget: 10.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            10.5
+          ],
+          "entity_id": [
+            "builtins.str",
+            "team-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "team"
+          ],
+          "max_budget": [
+            "builtins.float",
+            10.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! Team=team-checks Current cost: 10.5, Max budget: 10.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "team_member_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "team_member_refuses_at_the_boundary": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! User=user-checks in Team=team-checks Current cost: 2.0, Max budget: 2.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            2.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "user-checks:team-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "team_member"
+          ],
+          "max_budget": [
+            "builtins.float",
+            2.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! User=user-checks in Team=team-checks Current cost: 2.0, Max budget: 2.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "team_member_zero_budget_refuses": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "Budget has been exceeded! User=user-checks in Team=team-checks Current cost: 0.0, Max budget: 0.0",
+        {
+          "current_cost": [
+            "builtins.float",
+            0.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "user-checks:team-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "team_member"
+          ],
+          "max_budget": [
+            "builtins.float",
+            0.0
+          ],
+          "message": [
+            "builtins.str",
+            "Budget has been exceeded! User=user-checks in Team=team-checks Current cost: 0.0, Max budget: 0.0"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    },
+    "team_soft_alerts_at_the_boundary": {
+      "alerts": [
+        [
+          "soft_budget",
+          {
+            "alert_emails": [
+              "a@b.c"
+            ],
+            "customer_id": null,
+            "event_group": "team",
+            "key_alias": null,
+            "max_budget": null,
+            "max_budget_alert_emails": null,
+            "organization_id": null,
+            "projected_exceeded_date": null,
+            "projected_spend": null,
+            "soft_budget": 2.0,
+            "spend": 2.0,
+            "team_alias": null,
+            "team_id": "team-checks",
+            "token": "hashed-checks",
+            "user_email": null,
+            "user_id": "user-checks"
+          }
+        ]
+      ],
+      "error": null,
+      "throttle_pct": null
+    },
+    "team_soft_stays_quiet_under": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "team_window_passes": {
+      "alerts": [],
+      "error": null,
+      "throttle_pct": null
+    },
+    "team_window_refuses_at_the_boundary": {
+      "alerts": [],
+      "error": [
+        "litellm.exceptions.BudgetExceededError",
+        "ExceededBudget: Team=team-checks over 7d budget. Spend=$3.0000, Limit=$3.00",
+        {
+          "current_cost": [
+            "builtins.float",
+            3.0
+          ],
+          "entity_id": [
+            "builtins.str",
+            "team-checks"
+          ],
+          "entity_type": [
+            "builtins.str",
+            "team"
+          ],
+          "max_budget": [
+            "builtins.float",
+            3.0
+          ],
+          "message": [
+            "builtins.str",
+            "ExceededBudget: Team=team-checks over 7d budget. Spend=$3.0000, Limit=$3.00"
+          ],
+          "status_code": [
+            "builtins.int",
+            422
+          ]
+        }
+      ],
+      "throttle_pct": null
+    }
+  },
+  "recorded_from": "0c096c484d1a03f116aa53d7b94409b909dd4682"
+}

@@ -3696,6 +3696,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-budgets"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-coroutine",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-tracing",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
@@ -4435,7 +4453,9 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-callbacks-budgets",
  "litellm-callbacks-legacy-python",
+ "litellm-callbacks-python",
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",

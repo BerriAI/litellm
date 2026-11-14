@@ -50,6 +50,9 @@ from .conftest import normalize
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 
 def _spend_counters(monkeypatch: pytest.MonkeyPatch, **fake: object) -> FakeSpendCounters:
@@ -717,12 +720,20 @@ def _prisma_with_key_spend(spend: float) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypatch):
+async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypatch, native_budgets_on):
     """The key counter holds the DB spend 10.0, this request's 2.0 reservation and another request's 1.0 hold."""
-    spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 13.0})
+    spend: Final = SpendCounterStore(connect(None).spend_counters())
+    spend.set_local("spend:key:hashed", 11.0)
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(ps, "prisma_client", _prisma_with_key_spend(10.0))
-    reservation: Final = {"reserved_cost": 2.0, "entries": [{"counter_key": "spend:key:hashed"}], "finalized": False}
+    reservation: Final = await native_reservation(
+        spend,
+        UserAPIKeyAuth(token="hashed"),
+        [{"counter_key": "spend:key:hashed", "entity_type": "Key", "entity_id": "hashed"}],
+        2.0,
+    )
+    assert spend.get_local("spend:key:hashed") == pytest.approx(13.0)
     scope: Final = EntitySpendCounterKeys(key="spend:key:hashed")
 
     await ps.increment_spend_counters(
@@ -737,7 +748,8 @@ async def test_committed_twin_takes_the_charge_but_never_a_budget_hold(monkeypat
         token="hashed", team_id=None, user_id=None, response_cost=0.25, committed_spend_scope=scope
     )
 
-    assert spend.memory == pytest.approx({"spend:key:hashed": 11.75, committed_spend_key("spend:key:hashed"): 10.75})
+    assert spend.get_local("spend:key:hashed") == pytest.approx(11.75)
+    assert spend.get_local(committed_spend_key("spend:key:hashed")) == pytest.approx(10.75)
 
 
 @pytest.mark.asyncio

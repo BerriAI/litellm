@@ -195,6 +195,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             self._access_group_rule_grants = frozenset(grants)
             self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
 
+    def bind_budget_reservation(
+        self,
+        reservation: dict[str, object] | None,  # mutable-ok: the shared reservation dict settlement stamps
+        plan: BudgetPlan | None,
+    ) -> None:
+        self.budget_reservation = reservation
+        self.budget_plan = plan
+
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None

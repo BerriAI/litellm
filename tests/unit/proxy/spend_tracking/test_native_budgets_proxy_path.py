@@ -1,0 +1,1023 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from dataclasses import dataclass, field
+from typing import Final, TypeAlias
+
+import httpx
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocket, WebSocketDisconnect
+
+import litellm
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import cache_key_object, cache_team_object
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket_for_model
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.pass_through_endpoints import pass_through_endpoints
+from litellm.proxy.spend_tracking import budget_reservation, native_budgets
+from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+from litellm.proxy.utils import ProxyLogging, hash_token
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.router import Router
+from litellm.types.utils import CallTypesLiteral
+from tests.unit.proxy.spend_tracking.native_budgets_golden.golden import NATIVE_BUDGETS_PROXY_PATH, Golden
+
+API_KEY: Final = "sk-native-path"
+TOKEN: Final = hash_token(API_KEY)
+KEY_COUNTER: Final = f"spend:key:{TOKEN}"
+BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+
+
+RequestData: TypeAlias = dict[str, object]
+
+
+class _NoDatabase:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Proxy:
+    store: SpendCounterStore
+    cache: UserApiKeyCache
+    logging: ProxyLogging
+
+
+@pytest.fixture
+def proxy(monkeypatch: pytest.MonkeyPatch) -> Iterator[Proxy]:
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    cache: Final = UserApiKeyCache()
+    logging: Final = ProxyLogging(user_api_key_cache=cache)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", _NoDatabase())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    yield Proxy(store=store, cache=cache, logging=logging)
+    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # later tests run without a native owner
+
+
+@pytest.fixture
+def golden(request: pytest.FixtureRequest) -> Golden:
+    return Golden(NATIVE_BUDGETS_PROXY_PATH, request.node.name)
+
+
+def _use_native(proxy: Proxy) -> None:
+    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each run installs its owner over a fresh store
+    litellm.callbacks.clear()
+    proxy.store.flush_local()
+    native_budgets.install_native_budgets(proxy.store, litellm.callbacks)
+
+
+def _request(path: str = "/v1/chat/completions", body: Mapping[str, object] = BODY) -> Request:
+    raw: Final = json.dumps(body).encode()
+
+    async def receive() -> Mapping[str, object]:
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path.partition("?")[0],
+            "root_path": "",
+            "query_string": path.partition("?")[2].encode(),
+            "headers": [(b"authorization", f"Bearer {API_KEY}".encode()), (b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 1),
+            "server": ("proxy", 4000),
+            "scheme": "http",
+        },
+        receive,
+    )
+
+
+async def _authenticate(
+    proxy: Proxy, max_budget: float | None, path: str = "/v1/chat/completions", body: Mapping[str, object] = BODY
+) -> UserAPIKeyAuth:
+    await cache_key_object(
+        hashed_token=TOKEN,
+        user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=max_budget, spend=0.0),
+        user_api_key_cache=proxy.cache,
+        proxy_logging_obj=None,
+    )
+    return await user_api_key_auth(
+        request=_request(path, body),
+        api_key=f"Bearer {API_KEY}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        custom_litellm_key_header=None,
+    )
+
+
+async def _admit(
+    proxy: Proxy, call_id: str
+) -> tuple[UserAPIKeyAuth, dict[str, object]]:  # mutable-ok: the request data the proxy hands its hooks
+    auth: Final = await _authenticate(proxy, max_budget=1.0)
+    data: Final = {
+        **BODY,
+        "litellm_call_id": call_id,
+        "metadata": {"user_api_key_budget_reservation": auth.budget_reservation},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
+    return auth, data
+
+
+async def _success(auth: UserAPIKeyAuth, _data: RequestData) -> None:
+    reservation: Final = auth.budget_reservation
+    _ = await reconcile_budget_reservation(reservation, 0.0007, finalize=False, apply_consistent=False)
+    await proxy_server.increment_spend_counters(
+        token=TOKEN, team_id=None, user_id=None, response_cost=0.0007, budget_reservation=reservation
+    )
+
+
+async def _failure(auth: UserAPIKeyAuth, data: RequestData) -> None:
+    await _ProxyDBLogger().async_post_call_failure_hook(
+        request_data=data, original_exception=RuntimeError("upstream failed"), user_api_key_dict=auth
+    )
+
+
+Exit: TypeAlias = Callable[[UserAPIKeyAuth, RequestData], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class Run:
+    entries_after_pre_call: object
+    held_after_pre_call: Mapping[str, float]
+    settled: Mapping[str, float]
+
+
+async def _run(proxy: Proxy, exit_path: Exit) -> Run:
+    _use_native(proxy)
+    auth, data = await _admit(proxy, "call-path")
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    entries: Final = [
+        {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+        for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+    ]
+    held: Final = dict(proxy.store.snapshot())
+    await exit_path(auth, data)
+    return Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot()))
+
+
+EXITS: Final[Mapping[str, Exit]] = {"success": _success, "failure": _failure}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
+async def test_a_request_through_auth_and_pre_call_settles_like_python(
+    proxy: Proxy, exit_path: Exit, golden: Golden
+) -> None:
+    native: Final = await _run(proxy, exit_path=exit_path)
+
+    assert native.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+@pytest.mark.asyncio
+async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy, golden: Golden) -> None:
+    _use_native(proxy)
+    proxy.store.set_local(KEY_COUNTER, 2.0)
+    with pytest.raises(ProxyException) as refused:
+        await _authenticate(proxy, max_budget=1.0)
+    refusal: Final = (refused.value.type, refused.value.code, refused.value.message, refused.value.param)
+
+    assert refusal[0] == "budget_exceeded"
+    assert golden.canonical(refusal) == golden.recorded("python", refusal)
+
+
+async def _websocket_auth(proxy: Proxy, path: str = "/v1/responses", model: str = "gpt-4o") -> UserAPIKeyAuth:
+    _use_native(proxy)
+    await cache_key_object(
+        hashed_token=TOKEN,
+        user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=1.0, spend=0.0),
+        user_api_key_cache=proxy.cache,
+        proxy_logging_obj=None,
+    )
+
+    async def receive() -> Mapping[str, object]:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Mapping[str, object]) -> None:
+        return None
+
+    websocket: Final = WebSocket(
+        {
+            "type": "websocket",
+            "path": path,
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"authorization", f"Bearer {API_KEY}".encode())],
+            "client": ("127.0.0.1", 1),
+            "server": ("proxy", 4000),
+            "scheme": "ws",
+        },
+        receive,
+        send,
+    )
+    return await user_api_key_auth_websocket_for_model(websocket, model)
+
+
+async def _websocket_session_held(proxy: Proxy) -> tuple[object, Mapping[str, float]]:
+    auth: Final = await _websocket_auth(proxy)
+    reservation: Final = auth.budget_reservation
+    entries: Final = None if reservation is None else reservation.get("entries")
+    return entries, dict(proxy.store.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_session_holds_its_admission_at_connect_like_python(
+    proxy: Proxy, golden: Golden
+) -> None:
+    native: Final = await _websocket_session_held(proxy)
+
+    assert native[1][KEY_COUNTER] > 0.0, "the run must hold the admission at connect"
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+SOCKET_ROUTES: Final = {
+    "responses": ("/v1/responses", "gpt-4o"),
+    "realtime": ("/v1/realtime", "gpt-realtime"),
+    "realtime_translations": ("/v1/realtime/translations", "gpt-realtime"),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", SOCKET_ROUTES.values(), ids=SOCKET_ROUTES.keys())
+async def test_the_native_owner_holds_a_websocket_admission_at_connect_like_python(
+    proxy: Proxy, golden: Golden, route: tuple[str, str]
+) -> None:
+    native: Final = await _websocket_auth(proxy, *route)
+
+    assert native_budgets.is_native_reservation(native.budget_reservation)
+    assert native.budget_reservation is not None
+    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at connect"
+    assert golden.canonical(held) == golden.recorded("python", held)
+
+
+def _python_shaped(reservation: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in reservation.items() if key != native_budgets.NATIVE_CALL_ID_KEY}
+
+
+async def _second_turn(_auth: UserAPIKeyAuth, _data: RequestData) -> None:
+    await proxy_server.increment_spend_counters(
+        token=TOKEN, team_id=None, user_id=None, response_cost=0.0003, budget_reservation=None
+    )
+
+
+async def _websocket_turns(proxy: Proxy) -> tuple[Mapping[str, float], ...]:
+    auth: Final = await _websocket_auth(proxy)
+    data: Final = {"model": "gpt-4o", "metadata": {"user_api_key_budget_reservation": auth.budget_reservation}}
+    at_connect: Final = dict(proxy.store.snapshot())
+    await _success(auth, data)
+    after_first: Final = dict(proxy.store.snapshot())
+    await _second_turn(auth, data)
+    return at_connect, after_first, dict(proxy.store.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_settles_its_first_turn_against_the_connect_hold_like_python(
+    proxy: Proxy, golden: Golden
+) -> None:
+    native: Final = await _websocket_turns(proxy)
+
+    assert native[0][KEY_COUNTER] > native[1][KEY_COUNTER] > 0.0, "the first turn must settle the connect hold"
+    assert native[2][KEY_COUNTER] == pytest.approx(native[1][KEY_COUNTER] + 0.0003)
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+AUTH_ADMITTED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
+    "vector_store_search": ("/v1/vector_stores/vs-1/search", {"model": "gpt-4o", "query": "q"}),
+    "containers": ("/v1/containers", {"model": "gpt-4o", "name": "c"}),
+    "realtime_calls": ("/v1/realtime/calls", {"model": "gpt-realtime"}),
+    "rag_query": ("/v1/rag/query", {"model": "gpt-4o", "query": "q"}),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", AUTH_ADMITTED_ROUTES.values(), ids=AUTH_ADMITTED_ROUTES.keys())
+async def test_a_route_without_a_native_pre_call_is_admitted_at_auth_by_the_native_owner_like_python(
+    proxy: Proxy, golden: Golden, route: tuple[str, Mapping[str, object]]
+) -> None:
+    path, body = route
+    _use_native(proxy)
+    native: Final = await _authenticate(proxy, max_budget=1.0, path=path, body=body)
+
+    assert native_budgets.is_native_reservation(native.budget_reservation)
+    assert native.budget_reservation is not None
+    held: Final = (_python_shaped(native.budget_reservation), dict(proxy.store.snapshot()))
+    assert held[1][KEY_COUNTER] > 0.0, "the native owner must hold the admission at auth"
+    assert golden.canonical(held) == golden.recorded("python", held)
+
+
+@dataclass(frozen=True, slots=True)
+class SocketRun:
+    held_at_connect: Mapping[str, float] | None
+    closed: tuple[int, str] | None
+    counters_after_close: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class _Served:
+    app: ASGIApp
+    finished: threading.Event = field(default_factory=threading.Event)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.finished.set()
+
+
+def _responses_socket(proxy: Proxy, team_at_max: bool) -> SocketRun:
+    _use_native(proxy)
+
+    async def seed() -> None:
+        await cache_key_object(
+            hashed_token=TOKEN,
+            user_api_key_obj=UserAPIKeyAuth(
+                token=TOKEN, team_id=TEAM if team_at_max else None, max_budget=None if team_at_max else 1.0, spend=0.0
+            ),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+        await cache_team_object(
+            team_id=TEAM,
+            team_table=LiteLLM_TeamTableCachedObj(team_id=TEAM, max_budget=1.0, spend=0.0),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+
+    asyncio.run(seed())
+    if team_at_max:
+        proxy.store.set_local(TEAM_COUNTER, 1.0)
+    served: Final = _Served(proxy_server.app)
+    client: Final = TestClient(served, raise_server_exceptions=False)
+    try:
+        with client.websocket_connect(
+            "/v1/responses?model=gpt-4o", headers={"Authorization": f"Bearer {API_KEY}"}
+        ) as socket:
+            held: Final = dict(proxy.store.snapshot())
+            socket.close(1000)
+            assert served.finished.wait(10.0), "the proxy must finish the closed socket before the client tears it down"
+    except WebSocketDisconnect as refused:
+        return SocketRun(None, (refused.code, refused.reason), dict(proxy.store.snapshot()))
+    return SocketRun(held, None, dict(proxy.store.snapshot()))
+
+
+SOCKET_OUTCOMES: Final = {"admitted_then_disconnects": False, "refused_at_connect": True}
+
+
+@pytest.mark.parametrize("team_at_max", SOCKET_OUTCOMES.values(), ids=SOCKET_OUTCOMES.keys())
+def test_a_responses_websocket_over_the_proxy_reserves_refuses_and_releases_like_python(
+    proxy: Proxy, golden: Golden, team_at_max: bool
+) -> None:
+    native: Final = _responses_socket(proxy, team_at_max)
+
+    assert (native.closed is not None) == team_at_max
+    assert native.held_at_connect is None or native.held_at_connect[KEY_COUNTER] > 0.0
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+RACERS: Final = 24
+
+
+async def _race(proxy: Proxy, budget: float) -> tuple[int, float]:
+    _use_native(proxy)
+    await cache_key_object(
+        hashed_token=TOKEN,
+        user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=budget, spend=0.0),
+        user_api_key_cache=proxy.cache,
+        proxy_logging_obj=None,
+    )
+
+    async def one(index: int) -> bool:
+        try:
+            _, data = await _admit_with(proxy, budget, f"call-race-{index}")
+        except (ProxyException, litellm.BudgetExceededError):
+            return False
+        metadata: Final = data["metadata"]
+        assert isinstance(metadata, dict)
+        reservation: Final = metadata["user_api_key_budget_reservation"]
+        return isinstance(reservation, dict) and bool(reservation["entries"])
+
+    admitted: Final = await asyncio.gather(*(one(index) for index in range(RACERS)))
+    return sum(admitted), round(float(proxy.store.snapshot()[KEY_COUNTER]), 12)
+
+
+async def _admit_with(
+    proxy: Proxy, budget: float, call_id: str
+) -> tuple[UserAPIKeyAuth, dict[str, object]]:  # mutable-ok: the request data the proxy hands its hooks
+    auth: Final = await user_api_key_auth(
+        request=_request(),
+        api_key=f"Bearer {API_KEY}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        custom_litellm_key_header=None,
+    )
+    assert auth.max_budget == budget
+    data: Final = {
+        **BODY,
+        "litellm_call_id": call_id,
+        "metadata": {"user_api_key_budget_reservation": auth.budget_reservation},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
+    return auth, data
+
+
+@pytest.mark.asyncio
+async def test_racing_requests_for_the_last_of_a_budget_admit_like_python(proxy: Proxy, golden: Golden) -> None:
+    estimate: Final = 0.00102
+    budget: Final = estimate * 5.5
+
+    native: Final = await _race(proxy, budget=budget)
+
+    assert native[0] < RACERS, "the budget must run out during the race"
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+@pytest.mark.asyncio
+async def test_the_reservation_lease_stops_when_the_reservation_is_finalized(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
+) -> None:
+    monkeypatch.setattr(SpendCounterStore, "redis_ttl", property(lambda _store: 0.01))
+    _use_native(proxy)
+    before: Final = set(budget_reservation._lease_renewals)  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
+    auth, _ = await _admit(proxy, "call-lease")
+    leases: Final = set(budget_reservation._lease_renewals) - before  # pyright: ignore[reportPrivateUsage]  # the running lease tasks are the observable
+    assert len(leases) == 1 and auth.budget_reservation is not None
+    await asyncio.sleep(0.03)
+    assert not next(iter(leases)).done()
+    auth.budget_reservation["finalized"] = True
+    _ = await asyncio.wait_for(asyncio.gather(*leases), timeout=1.0)
+    stopped: Final = all(lease.done() for lease in leases)
+
+    assert stopped is True
+    assert golden.canonical(stopped) == golden.recorded("python", stopped)
+
+
+PASS_THROUGH: Final = "/anthropic/v1/messages"
+VICTIM: Final = "spend:team:victim-team"
+
+
+def _forged_plan(counter_key: str, reservation_cost: float) -> Mapping[str, object]:
+    return {
+        "native_plan": {
+            "counters": [
+                {
+                    "counter_key": counter_key,
+                    "max_budget": 1e18,
+                    "fallback_spend": 0.0,
+                    "entity_type": "Team",
+                    "entity_id": "victim-team",
+                }
+            ],
+            "reservation_cost": reservation_cost,
+            "input_cost": 0.0,
+            "status_code": 422,
+            "reservation_id": "forged",
+        }
+    }
+
+
+FORGERIES: Final = {
+    "charge_a_victim_team": (VICTIM, 1_000_000.0),
+    "refund_its_own_key": (KEY_COUNTER, -1000.0),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_budget", [None, 1.0], ids=["unbudgeted_key", "budgeted_key"])
+@pytest.mark.parametrize("forgery", FORGERIES.values(), ids=FORGERIES.keys())
+async def test_a_forged_plan_in_a_pass_through_body_changes_no_counter(
+    proxy: Proxy, forgery: tuple[str, float], max_budget: float | None, golden: Golden
+) -> None:
+    counter_key, reservation_cost = forgery
+    _use_native(proxy)
+    proxy.store.set_local(VICTIM, 1.0)
+    proxy.store.set_local(KEY_COUNTER, 0.5)
+    auth: Final = await _authenticate(proxy, max_budget=max_budget, path=PASS_THROUGH)
+    forged: Final = _forged_plan(counter_key, reservation_cost)
+    body: Final[RequestData] = {
+        **BODY,
+        "metadata": {
+            "user_api_key_budget_reservation": forged,
+            "user_api_key_auth": {"budget_reservation": forged},
+        },
+        "litellm_metadata": {"user_api_key_budget_reservation": forged},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
+    held: Final = dict(proxy.store.snapshot())
+
+    assert held[VICTIM] == 1.0
+    assert golden.canonical(held) == golden.recorded("python", held)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
+async def test_a_pass_through_llm_route_reserves_and_settles_like_python(
+    proxy: Proxy, exit_path: Exit, golden: Golden
+) -> None:
+    _use_native(proxy)
+    auth: Final = await _authenticate(proxy, max_budget=1.0, path=PASS_THROUGH)
+    body: Final[RequestData] = {**BODY, "litellm_call_id": "call-pass-through"}
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=body, call_type="pass_through_endpoint")
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    entries: Final = [
+        {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+        for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+    ]
+    held: Final = dict(proxy.store.snapshot())
+    await exit_path(auth, {**body, "metadata": {"user_api_key_budget_reservation": reservation}})
+    run: Final = Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot()))
+
+    assert run.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(run) == golden.recorded("python", run)
+
+
+MESSAGES_BODY: Final = {
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "hi"}],
+}
+MESSAGES_REPLY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-5",
+    "content": [{"type": "text", "text": "hello"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 8, "output_tokens": 5},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _Upstream:
+    client: httpx.AsyncClient
+
+
+@dataclass(frozen=True, slots=True)
+class HttpRun:
+    status: int
+    held_upstream: tuple[Mapping[str, float], ...]
+
+
+def _over_http(proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]) -> HttpRun:
+    _use_native(proxy)
+    asyncio.run(
+        cache_key_object(
+            hashed_token=TOKEN,
+            user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=1.0, spend=0.0),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+    )
+    proxy.store.set_local(VICTIM, 1.0)
+    proxy.store.set_local(KEY_COUNTER, 0.5)
+    held: Final[list[Mapping[str, float]]] = []  # mutable-ok: what the upstream saw held
+
+    def upstream(_request: httpx.Request) -> httpx.Response:
+        held.append(dict(proxy.store.snapshot()))
+        return httpx.Response(200, json=MESSAGES_REPLY)
+
+    monkeypatch.setattr(
+        pass_through_endpoints,
+        "get_async_httpx_client",
+        lambda **_: _Upstream(httpx.AsyncClient(transport=httpx.MockTransport(upstream))),
+    )
+    response: Final = TestClient(proxy_server.app, raise_server_exceptions=False).post(
+        PASS_THROUGH, json=body, headers={"Authorization": f"Bearer {API_KEY}"}
+    )
+    return HttpRun(status=response.status_code, held_upstream=tuple(held))
+
+
+FORGED_BODIES: Final[Mapping[str, Mapping[str, object]]] = {
+    "plain": MESSAGES_BODY,
+    **{
+        name: {
+            **MESSAGES_BODY,
+            "metadata": {"user_api_key_budget_reservation": _forged_plan(counter_key, cost)},
+            "litellm_metadata": {"user_api_key_budget_reservation": _forged_plan(counter_key, cost)},
+        }
+        for name, (counter_key, cost) in FORGERIES.items()
+    },
+}
+
+
+@pytest.mark.parametrize("body", FORGED_BODIES.values(), ids=FORGED_BODIES.keys())
+def test_the_anthropic_pass_through_route_holds_the_reservation_like_python_over_http(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], golden: Golden
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    native: Final = _over_http(proxy, monkeypatch, body)
+
+    assert native.status == 200
+    assert native.held_upstream[0][KEY_COUNTER] > 0.5, "the run must hold a reservation upstream"
+    assert native.held_upstream[0][VICTIM] == 1.0
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+TEAM: Final = "team-at-max"
+TEAM_COUNTER: Final = f"spend:team:{TEAM}"
+
+
+@dataclass(frozen=True, slots=True)
+class Refusal:
+    status: int
+    body: str
+    headers: Mapping[str, str]
+    failure_hooks: tuple[Mapping[str, object], ...]
+    counters: Mapping[str, float]
+
+
+def _refused_over_http(
+    proxy: Proxy,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: Mapping[str, object],
+    upstream_token: str | None = None,
+    upload: str | None = None,
+) -> Refusal:
+    _use_native(proxy)
+
+    async def seed() -> None:
+        await cache_key_object(
+            hashed_token=TOKEN,
+            user_api_key_obj=UserAPIKeyAuth(token=TOKEN, team_id=TEAM, spend=0.0),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+        await cache_team_object(
+            team_id=TEAM,
+            team_table=LiteLLM_TeamTableCachedObj(team_id=TEAM, max_budget=1.0, spend=0.0),
+            user_api_key_cache=proxy.cache,
+            proxy_logging_obj=None,
+        )
+
+    asyncio.run(seed())
+    proxy.store.set_local(TEAM_COUNTER, 1.0)
+    hooks: Final[list[Mapping[str, object]]] = []  # mutable-ok: one entry per failure hook call
+    original: Final = proxy.logging.post_call_failure_hook
+
+    async def recording(
+        request_data: dict[str, object],  # mutable-ok: the hook's own signature
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        error_type: ProxyErrorTypes | None = None,
+        route: str | None = None,
+        traceback_str: str | None = None,
+        dispatched_call_type: str | None = None,
+    ) -> HTTPException | None:
+        hooks.append(
+            {
+                "exception": (type(original_exception).__name__, str(original_exception)),
+                "llm_provider": getattr(original_exception, "llm_provider", None),
+                "error_type": error_type,
+                "route": route,
+                "dispatched_call_type": dispatched_call_type,
+                "identity": (user_api_key_dict.token, user_api_key_dict.team_id, user_api_key_dict.request_route),
+                "budget_reservation": user_api_key_dict.budget_reservation,
+                "request_keys": sorted(request_data),
+            }
+        )
+        return await original(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+            error_type=error_type,
+            route=route,
+            traceback_str=traceback_str,
+            dispatched_call_type=dispatched_call_type,
+        )
+
+    monkeypatch.setattr(proxy.logging, "post_call_failure_hook", recording)
+    headers: Final = (
+        {"Authorization": f"Bearer {API_KEY}"}
+        if upstream_token is None
+        else {"x-litellm-api-key": API_KEY, "Authorization": f"Bearer {upstream_token}"}
+    )
+    client: Final = TestClient(proxy_server.app, raise_server_exceptions=False)
+    response: Final = (
+        client.post(path, json=body, headers=headers)
+        if upload is None
+        else client.post(
+            path,
+            data={name: str(value) for name, value in body.items()},
+            files={upload: ("upload.bin", b"\x00" * 16, "application/octet-stream")},
+            headers=headers,
+        )
+    )
+    return Refusal(
+        status=response.status_code,
+        body=response.text,
+        headers=dict(response.headers),
+        failure_hooks=tuple(hooks),
+        counters=dict(proxy.store.snapshot()),
+    )
+
+
+REFUSED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
+    "chat_completions": ("/v1/chat/completions", BODY),
+    "anthropic_pass_through": (PASS_THROUGH, MESSAGES_BODY),
+    "messages": ("/v1/messages", MESSAGES_BODY),
+    "responses": ("/v1/responses", {"model": "gpt-4o", "input": "hello", "max_output_tokens": 100}),
+    "text_completions": ("/v1/completions", {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "max_tokens": 10}),
+    "batches": (
+        "/v1/batches",
+        {
+            "input_file_id": "file-abc",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "gpt-4o",
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("route", REFUSED_ROUTES.values(), ids=REFUSED_ROUTES.keys())
+def test_a_reservation_refusal_reaches_the_client_like_the_auth_refusal(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]], golden: Golden
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    path, body = route
+    native: Final = _refused_over_http(proxy, monkeypatch, path, body)
+
+    assert native.status == 422
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+@dataclass(frozen=True, slots=True)
+class _GatedHandle:
+    handled: Callable[..., Awaitable[object]] | None
+    entered: asyncio.Event
+    opened: asyncio.Event
+
+    async def __call__(self, *arguments: object) -> object:
+        assert self.handled is not None
+        returned: Final = await self.handled(*arguments)
+        self.entered.set()
+        _ = await self.opened.wait()
+        return returned
+
+
+async def _cancel_during_pre_call(proxy: Proxy, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, float]:
+    _use_native(proxy)
+    auth: Final = await _authenticate(proxy, max_budget=1.0)
+    data: Final = {**BODY, "litellm_call_id": "call-cancel"}
+    gate: Final = _GatedHandle(getattr(litellm.callbacks[0], "_handled", None), asyncio.Event(), asyncio.Event())
+    monkeypatch.setattr(litellm.callbacks[0], "_handled", gate)
+    pre_call: Final = asyncio.ensure_future(
+        proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
+    )
+    _ = await gate.entered.wait()
+    _ = pre_call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pre_call
+    release: Final = asyncio.ensure_future(
+        budget_reservation.release_budget_reservation_on_cancel(auth.budget_reservation)
+    )
+    await asyncio.sleep(0)
+    gate.opened.set()
+    await release
+    for _ in range(3):
+        await asyncio.sleep(0)
+    return dict(proxy.store.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_during_pre_call_leaves_no_hold_like_python(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, golden: Golden
+) -> None:
+    native: Final = await _cancel_during_pre_call(proxy, monkeypatch)
+
+    assert native[KEY_COUNTER] > 0.0, "the run must charge the input cost on cancel"
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+async def _admit_twice(proxy: Proxy) -> Run:
+    _use_native(proxy)
+    auth, data = await _admit(proxy, "call-fallback")
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=dict(data), call_type="completion")
+    assert auth.budget_reservation is reservation
+    return Run(
+        entries_after_pre_call=[
+            {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+            for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+        ],
+        held_after_pre_call=dict(proxy.store.snapshot()),
+        settled={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_second_pre_call_for_the_same_auth_reserves_once_like_python(proxy: Proxy, golden: Golden) -> None:
+    native: Final = await _admit_twice(proxy)
+
+    assert native.entries_after_pre_call, "the run must hold a reservation for this comparison to mean anything"
+    assert golden.canonical(native) == golden.recorded("python", native)
+    assert native.held_after_pre_call[KEY_COUNTER] == pytest.approx(
+        sum(float(entry["reserved_cost"]) for entry in native.entries_after_pre_call)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownArgumentType, reportUnknownVariableType]  # entries are the dicts built above
+    )
+
+
+class _NextSubscriber(CustomLogger):
+    def __init__(self) -> None:
+        self.seen: list[tuple[object, object]] = []  # mutable-ok: what each pre_call saw
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> None:
+        reservation: Final = user_api_key_dict.budget_reservation
+        self.seen.append((reservation, None if reservation is None else list(reservation["entries"])))  # pyright: ignore[reportArgumentType]  # the entries list the reservation carries
+
+
+async def _seen_by_the_next_subscriber(proxy: Proxy) -> tuple[object, object]:
+    _use_native(proxy)
+    subscriber: Final = _NextSubscriber()
+    litellm.callbacks.append(subscriber)
+    auth: Final = await _authenticate(proxy, max_budget=1.0)
+    shared: Final = auth.budget_reservation
+    assert shared is not None
+    _ = await proxy.logging.pre_call_hook(
+        user_api_key_dict=auth, data={**BODY, "litellm_call_id": "call-next"}, call_type="completion"
+    )
+    assert len(subscriber.seen) == 1
+    reservation, entries = subscriber.seen[0]
+    assert reservation is shared
+    assert auth.budget_reservation is shared
+    return entries, shared["reserved_cost"]
+
+
+@pytest.mark.asyncio
+async def test_the_next_pre_call_subscriber_sees_the_reservation_written_into_the_auth_dict(
+    proxy: Proxy, golden: Golden
+) -> None:
+    native: Final = await _seen_by_the_next_subscriber(proxy)
+
+    assert native[0], "the run must hold a reservation before the next subscriber runs"
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+@pytest.mark.parametrize("route", REFUSED_ROUTES.values(), ids=REFUSED_ROUTES.keys())
+def test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal_like_python(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, route: tuple[str, Mapping[str, object]], golden: Golden
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    path, body = route
+    refusals: Final[dict[int, Refusal]] = {}  # mutable-ok: one refusal per status code
+    for code in (402, 429):
+        monkeypatch.setattr(litellm, "budget_exceeded_status_code", code)
+        refusals[code] = _refused_over_http(proxy, monkeypatch, path, body)
+
+    assert {code: refusal.status for code, refusal in refusals.items()} == {402: 402, 429: 429}
+    assert golden.canonical(refusals) == golden.recorded("python", refusals)
+
+
+ROUTED_MODELS: Final = (
+    ("gpt-realtime", "openai/gpt-realtime"),
+    ("gpt-image-1", "openai/gpt-image-1"),
+    ("gpt-4o-transcribe", "openai/gpt-4o-transcribe"),
+    ("gemini-2.5-pro", "gemini/gemini-2.5-pro"),
+    ("llama-rank", "together_ai/Salesforce/Llama-Rank-V1"),
+    ("gpt-4o-mini-tts", "openai/gpt-4o-mini-tts"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Family:
+    path: str
+    body: Mapping[str, object]
+    call_type: CallTypesLiteral
+    upstream_token: str | None = None
+    upload: str | None = None
+
+
+FAMILIES: Final[Mapping[str, Family]] = {
+    "batches": Family(*REFUSED_ROUTES["batches"], call_type="acreate_batch"),
+    "realtime_client_secrets": Family(
+        "/v1/realtime/client_secrets", {"model": "gpt-realtime"}, call_type="acreate_realtime_client_secret"
+    ),
+    "images": Family(
+        "/v1/images/generations", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_generation"
+    ),
+    "speech": Family(
+        "/v1/audio/speech", {"model": "gpt-4o-mini-tts", "input": "hello", "voice": "alloy"}, call_type="aspeech"
+    ),
+    "rerank": Family("/v1/rerank", {"model": "llama-rank", "query": "q", "documents": ["a", "b"]}, call_type="arerank"),
+    "google": Family(
+        "/v1beta/models/gemini-2.5-pro:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="agenerate_content",
+    ),
+    "google_stream": Family(
+        "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="agenerate_content_stream",
+    ),
+    "azure_pass_through": Family(
+        "/azure/openai/deployments/gpt-4o/chat/completions", BODY, call_type="pass_through_endpoint"
+    ),
+    "gemini_pass_through": Family(
+        f"/gemini/v1beta/models/gemini-2.5-pro:generateContent?key={API_KEY}",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="pass_through_endpoint",
+    ),
+    "vertex_pass_through": Family(
+        "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        call_type="pass_through_endpoint",
+        upstream_token="ya29.upstream",
+    ),
+    "realtime_translation_client_secrets": Family(
+        "/v1/realtime/translations/client_secrets",
+        {"model": "gpt-realtime"},
+        call_type="acreate_realtime_translation_client_secret",
+    ),
+    "transcriptions": Family(
+        "/v1/audio/transcriptions", {"model": "gpt-4o-transcribe"}, call_type="atranscription", upload="file"
+    ),
+    "image_edit": Family(
+        "/v1/images/edits", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_edit", upload="image"
+    ),
+}
+
+
+def _route_the_family_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_API_BASE", "https://upstream.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_KEY", "sk-upstream")
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-upstream")
+    model_list: Final = [
+        {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-upstream"}}
+        for name, model in ROUTED_MODELS
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+
+
+async def _family_run(proxy: Proxy, family: Family, exit_path: Exit) -> Run:
+    _use_native(proxy)
+    auth: Final = await _authenticate(proxy, max_budget=10.0, path=family.path, body=family.body)
+    data: Final = {
+        **family.body,
+        "litellm_call_id": f"call-{family.call_type}",
+        "metadata": {"user_api_key_budget_reservation": auth.budget_reservation},
+    }
+    _ = await proxy.logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type=family.call_type)
+    reservation: Final = auth.budget_reservation
+    assert reservation is not None
+    entries: Final = [
+        {key: entry[key] for key in ("counter_key", "entity_type", "reserved_cost")}
+        for entry in reservation["entries"]  # pyright: ignore[reportGeneralTypeIssues]  # the entries list the reservation carries
+    ]
+    held: Final = dict(proxy.store.snapshot())
+    await exit_path(auth, data)
+    return Run(entries_after_pre_call=entries, held_after_pre_call=held, settled=dict(proxy.store.snapshot()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_path", EXITS.values(), ids=EXITS.keys())
+@pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
+async def test_a_widened_route_family_reserves_and_settles_like_python(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, exit_path: Exit, golden: Golden
+) -> None:
+    _route_the_family_models(monkeypatch)
+    native: Final = await _family_run(proxy, family, exit_path)
+
+    assert native.entries_after_pre_call, "the native owner must hold a reservation on this route"
+    assert native_budgets.native_budget_route(family.path.partition("?")[0])
+    assert golden.canonical(native) == golden.recorded("python", native)
+
+
+@pytest.mark.parametrize("family", FAMILIES.values(), ids=FAMILIES.keys())
+def test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch, family: Family, golden: Golden
+) -> None:
+    _route_the_family_models(monkeypatch)
+    native: Final = _refused_over_http(
+        proxy, monkeypatch, family.path, family.body, family.upstream_token, family.upload
+    )
+
+    assert native.status == 422
+    assert golden.canonical(native) == golden.recorded("python", native)

@@ -6,6 +6,7 @@ import asyncio
 import gc
 import warnings
 from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SpendCounterBatch,
@@ -28,6 +29,15 @@ from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from tests.unit.proxy.spend_tracking.native_budgets_replica import (
+    RespRedis,
+    install_native_owner,
+    native_reservation,
+    reserve_budget_for_request as native_reserve_budget_for_request,
+    resp_store,
+)
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 TOKEN = UserAPIKeyAuth(token="hashed", team_id="team", user_id="user", org_id="org")
 TOKEN_KEYS = frozenset(
@@ -457,22 +467,40 @@ RESERVED_KEYS = frozenset(
 )
 
 
-def _reservation(reserved_cost: float, counter_keys: frozenset[str] = RESERVED_KEYS) -> dict[str, object]:
-    return {
-        "reserved_cost": reserved_cost,
-        "entries": [
-            {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": reserved_cost}
-            for key in sorted(counter_keys)
-        ],
-    }
+def _local_store(values: Mapping[str, float]) -> SpendCounterStore:
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    for key, value in values.items():
+        store.set_local(key, value)
+    return store
+
+
+def _local_values(spend: SpendCounterStore, keys: frozenset[str]) -> dict[str, float | None]:
+    return {key: None if (value := spend.get_local(key)) is None else round(value, 6) for key in keys}
+
+
+async def _held(spend: SpendCounterStore, reserved_cost: float, counter_keys: frozenset[str]) -> dict[str, object]:
+    return await native_reservation(
+        spend,
+        UserAPIKeyAuth(token="hashed"),
+        [{"counter_key": key, "entity_type": "Key", "entity_id": key} for key in sorted(counter_keys)],
+        reserved_cost,
+    )
+
+
+def _adjustments(reservation: Mapping[str, object]) -> list[float]:
+    entries: Final = reservation["entries"]
+    assert isinstance(entries, list)
+    return [round(entry["applied_adjustment"], 6) for entry in entries]
 
 
 @pytest.mark.asyncio
-async def test_post_call_with_a_reservation_costs_one_mget_and_one_pipeline_for_reconcile_and_increments(monkeypatch):
-    spend = FakeSpendCounters(redis={key: 1.0 for key in POST_CALL_KEYS})
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+async def test_post_call_with_a_reservation_costs_one_mget_and_one_pipeline_for_reconcile_and_increments(
+    monkeypatch, native_budgets_on
+):
+    spend = _local_store({key: (0.6 if key in RESERVED_KEYS else 1.0) for key in POST_CALL_KEYS})
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "prisma_client", None)
-    reservation = _reservation(reserved_cost=0.4)
+    reservation = await _held(spend, reserved_cost=0.4, counter_keys=RESERVED_KEYS)
 
     await ps.increment_spend_counters(
         token="hashed",
@@ -486,13 +514,10 @@ async def test_post_call_with_a_reservation_costs_one_mget_and_one_pipeline_for_
         budget_reservation=reservation,
     )
 
-    assert [c.split()[0] for c in spend.commands] == ["MGET", "PIPELINE"], spend.commands
-    assert set(spend.commands[0].split()[1:]) == POST_CALL_KEYS, "reconcile and warm checks share the MGET"
-    assert set(spend.commands[1].split()[1:]) == POST_CALL_KEYS, "reconcile adjustments ride the increment pipeline"
-    assert {key: round(spend.redis[key], 6) for key in POST_CALL_KEYS} == {
+    assert _local_values(spend, POST_CALL_KEYS) == {
         key: (1.1 if key in RESERVED_KEYS else 1.5) for key in POST_CALL_KEYS
     }
-    assert [round(entry["applied_adjustment"], 6) for entry in reservation["entries"]] == [0.1] * len(RESERVED_KEYS)
+    assert _adjustments(reservation) == [0.1] * len(RESERVED_KEYS)
     assert reservation["finalized"] is True
 
 
@@ -511,66 +536,67 @@ async def test_a_stale_counter_repair_updates_the_open_batch_instead_of_forcing_
 
 
 @pytest.mark.asyncio
-async def test_reconcile_settles_a_flushed_counter_on_its_own_after_the_shared_pipeline(monkeypatch):
+async def test_reconcile_settles_a_flushed_counter_on_its_own_after_the_shared_pipeline(monkeypatch, native_budgets_on):
     from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
 
-    spend = FakeSpendCounters(redis={key: 1.0 for key in RESERVED_KEYS - {"spend:team:team"}})
+    spend = _local_store({key: 0.6 for key in RESERVED_KEYS})
     prisma = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=MagicMock(spend=4.0))
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "prisma_client", prisma)
-    reservation = _reservation(reserved_cost=0.4)
+    reservation = await _held(spend, reserved_cost=0.4, counter_keys=RESERVED_KEYS)
+    spend.delete_local("spend:team:team")
 
     await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.5)
 
-    assert [c.split()[0] for c in spend.commands] == ["MGET", "PIPELINE", "SETMAX", "INCRBYFLOAT"], spend.commands
-    assert set(spend.commands[1].split()[1:]) == RESERVED_KEYS - {"spend:team:team"}
-    assert spend.commands[2] == "SETMAX spend:team:team 4.0"
-    assert spend.commands[3] == "INCRBYFLOAT spend:team:team 0.5"
-    assert all(round(entry["applied_adjustment"], 6) == 0.1 for entry in reservation["entries"])
+    assert _local_values(spend, RESERVED_KEYS) == {
+        key: (4.5 if key == "spend:team:team" else 1.1) for key in RESERVED_KEYS
+    }, "the flushed counter is reseeded from the database and charged the actual cost"
+    assert _adjustments(reservation) == [0.1] * len(RESERVED_KEYS)
 
 
 @pytest.mark.asyncio
-async def test_pre_call_resize_against_an_inconsistent_counter_writes_nothing_and_denies(monkeypatch):
-    from litellm.proxy.spend_tracking.budget_reservation import _resize_applied_reservation
+async def test_pre_call_resize_against_an_inconsistent_counter_writes_nothing_and_denies(
+    monkeypatch, native_budgets_on
+):
+    redis = RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 19.8})
+    redis.expires_after_increment = "spend:team:team"
+    token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 1.0})
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
-    monkeypatch.setattr(ps, "prisma_client", None)
-    entries = _reservation(reserved_cost=0.4, counter_keys=frozenset({"spend:key:hashed", "spend:team:team"}))[
-        "entries"
-    ]
+    with resp_store(redis) as spend:
+        _native_reservation_fixture(monkeypatch, spend)
+        with pytest.raises(ProxyException, match="inconsistent counter spend:team:team"):
+            await _reserve_native(spend, token, team_max_budget=20.0)
 
-    with pytest.raises(RuntimeError, match="spend:team:team"):
-        await _resize_applied_reservation(entries=entries, current_reserved_cost=0.4, new_reserved_cost=0.9)
-
-    assert [c.split()[0] for c in spend.commands] == ["MGET"], spend.commands
-    assert spend.redis["spend:key:hashed"] == 1.0
-    assert all("applied_adjustment" not in entry for entry in entries)
+    assert redis.values == {"spend:key:hashed": 1.0}, redis.commands
+    assert token.budget_reservation is not None and token.budget_reservation["entries"] == []
 
 
 @pytest.mark.asyncio
-async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_and_stamps_nothing(monkeypatch):
-    spend = FakeSpendCounters(redis={key: 1.0 for key in POST_CALL_KEYS}, fail_pipelines=True)
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
-    monkeypatch.setattr(ps, "prisma_client", None)
-    reservation = _reservation(reserved_cost=0.4)
+async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_and_stamps_nothing(
+    monkeypatch, native_budgets_on
+):
+    redis = RespRedis(values={key: (0.6 if key in RESERVED_KEYS else 1.0) for key in POST_CALL_KEYS})
 
-    with pytest.raises(NativeRedisStoreError):
-        await ps.increment_spend_counters(
-            token="hashed",
-            team_id="team",
-            user_id="user",
-            org_id="org",
-            end_user_id="eu",
-            response_cost=0.5,
-            budget_reservation=reservation,
-        )
+    with resp_store(redis) as spend:
+        monkeypatch.setattr(ps, "spend_counter_store", spend)
+        monkeypatch.setattr(ps, "prisma_client", None)
+        reservation = await _held(spend, reserved_cost=0.4, counter_keys=RESERVED_KEYS)
+        redis.failing = frozenset({"INCRBYFLOAT"})
+        with pytest.raises(NativeRedisStoreError):
+            await ps.increment_spend_counters(
+                token="hashed",
+                team_id="team",
+                user_id="user",
+                org_id="org",
+                end_user_id="eu",
+                response_cost=0.5,
+                budget_reservation=reservation,
+            )
 
-    assert [c.split()[0] for c in spend.commands if not c.startswith("DEL ")] == ["MGET"], spend.commands
-    assert {c.split()[1] for c in spend.commands if c.startswith("DEL ")} == RESERVED_KEYS | {"spend:user:user"}
-    assert all("applied_adjustment" not in entry for entry in reservation["entries"])
-    assert spend.redis == {"spend:tag:prod": 1.0, "spend:model_access_group:premium": 1.0}
+    assert redis.deleted() == RESERVED_KEYS | {"spend:user:user"}, redis.commands
+    assert _adjustments(reservation) == [0.0] * len(RESERVED_KEYS)
+    assert redis.values == {"spend:tag:prod": 1.0, "spend:model_access_group:premium": 1.0}
 
 
 def test_a_scope_opened_inside_an_open_scope_joins_its_batch_and_a_closed_one_gets_its_own():
@@ -590,82 +616,50 @@ def test_a_scope_opened_inside_an_open_scope_joins_its_batch_and_a_closed_one_ge
 
 
 @pytest.mark.asyncio
-async def test_reservation_inside_the_admission_scope_reuses_its_mget_and_reserves_in_one_pipeline(monkeypatch):
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
+async def test_reservation_inside_the_admission_scope_reuses_its_mget_and_reserves_in_one_pipeline(
+    monkeypatch, native_budgets_on
+):
+    spend = _local_store({"spend:key:hashed": 1.0, "spend:team:team": 2.0})
+    _native_reservation_fixture(monkeypatch, spend)
 
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 1.0, "spend:team:team": 2.0})
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
-    monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
-    token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
-
-    with spend_counter_batch_scope(spend.store(), counter_keys=admission_counter_keys(token, end_user_id=None)):
-        reservation = await reserve_budget_for_request(
-            request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=token,
-            team_object=LiteLLM_TeamTableCachedObj(team_id="team", max_budget=20.0),
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=DualCache(),
-            proxy_logging_obj=MagicMock(),
-        )
+    reservation = await _reserve_native(
+        spend, UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0), team_max_budget=20.0
+    )
 
     assert reservation is not None
-    assert [c.split()[0] for c in spend.commands] == ["MGET", "PIPELINE"], spend.commands
-    assert set(spend.commands[0].split()[1:]) == {"spend:key:hashed", "spend:team:team"}
-    assert spend.commands[1] == "PIPELINE spend:key:hashed spend:team:team"
-    assert spend.redis == {"spend:key:hashed": 1.5, "spend:team:team": 2.5}
+    assert _local_values(spend, frozenset({"spend:key:hashed", "spend:team:team"})) == {
+        "spend:key:hashed": 1.5,
+        "spend:team:team": 2.5,
+    }
     assert [entry["counter_key"] for entry in reservation["entries"]] == ["spend:key:hashed", "spend:team:team"]
 
 
 @pytest.mark.asyncio
-async def test_a_failed_reservation_pipeline_drops_every_counter_and_reserves_nothing(monkeypatch):
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
-
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 1.0, "spend:team:team": 2.0}, fail_pipelines=True)
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
-    monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
+async def test_a_failed_reservation_pipeline_drops_every_counter_and_reserves_nothing(monkeypatch, native_budgets_on):
+    redis = RespRedis(values={"spend:key:hashed": 1.0, "spend:team:team": 2.0}, failing=frozenset({"INCRBYFLOAT"}))
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    reservation = await reserve_budget_for_request(
-        request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-        route="/chat/completions",
-        llm_router=None,
-        valid_token=token,
-        team_object=LiteLLM_TeamTableCachedObj(team_id="team", max_budget=20.0),
-        user_object=None,
-        prisma_client=None,
-        user_api_key_cache=DualCache(),
-        proxy_logging_obj=MagicMock(),
-    )
+    with resp_store(redis) as spend:
+        _native_reservation_fixture(monkeypatch, spend)
+        reservation = await _reserve_native(spend, token, team_max_budget=20.0)
 
     assert reservation is None
-    assert {c.split()[1] for c in spend.commands if c.startswith("DEL ")} == {"spend:key:hashed", "spend:team:team"}
-    assert spend.redis == {}
+    assert redis.deleted() == {"spend:key:hashed", "spend:team:team"}, redis.commands
+    assert redis.values == {}
 
 
 @pytest.mark.asyncio
-async def test_post_call_lifecycle_reads_the_counters_after_the_db_update_and_writes_one_pipeline(monkeypatch):
+async def test_post_call_lifecycle_reads_the_counters_after_the_db_update_and_writes_one_pipeline(
+    monkeypatch, native_budgets_on
+):
     from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
 
-    spend = FakeSpendCounters(redis={key: 1.0 for key in POST_CALL_KEYS})
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    spend = _local_store({key: (0.6 if key in RESERVED_KEYS else 1.0) for key in POST_CALL_KEYS})
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "prisma_client", None)
     proxy_logging_obj = MagicMock()
-
-    async def _update_database(**kwargs: object) -> bool:
-        spend.commands.append("DB")
-        return True
-
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=_update_database)
-    reservation = _reservation(reserved_cost=0.4)
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    reservation = await _held(spend, reserved_cost=0.4, counter_keys=RESERVED_KEYS)
 
     charged = await _update_database_and_spend_counters(
         proxy_logging_obj=proxy_logging_obj,
@@ -687,31 +681,29 @@ async def test_post_call_lifecycle_reads_the_counters_after_the_db_update_and_wr
 
     assert charged is True
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
-    assert [c.split()[0] for c in spend.commands] == ["MGET", "DB", "MGET", "PIPELINE"], spend.commands
-    assert set(spend.commands[0].split()[1:]) == RESERVED_KEYS
-    assert set(spend.commands[2].split()[1:]) == POST_CALL_KEYS
-    assert set(spend.commands[3].split()[1:]) == POST_CALL_KEYS
-    assert {key: round(spend.redis[key], 6) for key in POST_CALL_KEYS} == {
+    assert _local_values(spend, POST_CALL_KEYS) == {
         key: (1.1 if key in RESERVED_KEYS else 1.5) for key in POST_CALL_KEYS
     }
-    assert [round(entry["applied_adjustment"], 6) for entry in reservation["entries"]] == [0.1] * len(RESERVED_KEYS)
+    assert _adjustments(reservation) == [0.1] * len(RESERVED_KEYS)
     assert reservation["finalized"] is True
     assert active_spend_counter_batch() is None
 
 
-def _reservation_fixture(monkeypatch, spend: FakeSpendCounters) -> None:
-    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+def _native_reservation_fixture(monkeypatch, spend: SpendCounterStore) -> None:
+    monkeypatch.setattr(ps, "spend_counter_store", spend)
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
+    _ = install_native_owner(spend)
 
 
-async def _reserve(spend: FakeSpendCounters, token: UserAPIKeyAuth, team_max_budget: float) -> dict[str, object] | None:
+async def _reserve_native(
+    spend: SpendCounterStore, token: UserAPIKeyAuth, team_max_budget: float
+) -> dict[str, object] | None:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
 
-    with spend_counter_batch_scope(spend.store(), counter_keys=admission_counter_keys(token, end_user_id=None)):
-        return await reserve_budget_for_request(
+    with spend_counter_batch_scope(spend, counter_keys=admission_counter_keys(token, end_user_id=None)):
+        return await native_reserve_budget_for_request(
             request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
             route="/chat/completions",
             llm_router=None,
@@ -725,30 +717,65 @@ async def _reserve(spend: FakeSpendCounters, token: UserAPIKeyAuth, team_max_bud
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_counter_is_charged_alone_so_the_counters_after_it_are_never_touched(monkeypatch):
-    """Only counters the admission MGET says still fit the estimate share the reservation pipeline; a counter that
-    does not is charged on its own first, so its rejection never inflates a sibling counter, not even briefly."""
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 10.0, "spend:team:team": 2.0})
-    _reservation_fixture(monkeypatch, spend)
+async def test_a_rejected_counter_is_charged_alone_so_the_counters_after_it_are_never_touched(
+    monkeypatch, native_budgets_on
+):
+    redis = RespRedis(values={"spend:key:hashed": 10.0, "spend:team:team": 2.0})
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    with pytest.raises(litellm.BudgetExceededError):
-        await _reserve(spend, token, team_max_budget=20.0)
+    with resp_store(redis) as spend:
+        _native_reservation_fixture(monkeypatch, spend)
+        with pytest.raises(litellm.BudgetExceededError):
+            await _reserve_native(spend, token, team_max_budget=20.0)
 
-    writes = [c for c in spend.commands if not c.startswith("MGET")]
-    assert writes and all("spend:team:team" not in c for c in writes), spend.commands
-    assert spend.redis == {"spend:key:hashed": 10.0, "spend:team:team": 2.0}
+    writes = redis.writes()
+    assert writes and all("spend:team:team" not in command for command in writes), redis.commands
+    assert redis.values == {"spend:key:hashed": 10.0, "spend:team:team": 2.0}
 
 
 @pytest.mark.asyncio
-async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_counters_charged_after_it(monkeypatch):
-    spend = FakeSpendCounters(redis={"spend:key:hashed": 9.8, "spend:team:team": 2.0})
-    _reservation_fixture(monkeypatch, spend)
+async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_counters_charged_after_it(
+    monkeypatch, native_budgets_on
+):
+    spend = SpendCounterStore(connect(None).spend_counters())
+    spend.set_local("spend:key:hashed", 9.8)
+    spend.set_local("spend:team:team", 2.0)
+    _native_reservation_fixture(monkeypatch, spend)
     token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
 
-    reservation = await _reserve(spend, token, team_max_budget=2.1)
+    reservation = await _reserve_native(spend, token, team_max_budget=2.1)
 
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(0.1)
-    assert spend.redis["spend:key:hashed"] == pytest.approx(9.9)
-    assert spend.redis["spend:team:team"] == pytest.approx(2.1)
+    assert spend.get_local("spend:key:hashed") == pytest.approx(9.9)
+    assert spend.get_local("spend:team:team") == pytest.approx(2.1)
+
+
+@pytest.mark.asyncio
+async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(monkeypatch, native_budgets_on):
+    from fastapi import HTTPException
+
+    from litellm.caching.dual_cache import DualCache
+
+    redis = RespRedis(values={}, failing=frozenset({"INCRBYFLOAT"}))
+    token = UserAPIKeyAuth(token="key-budget-reserve-fail-closed", spend=0.0, max_budget=1.0)
+
+    with resp_store(redis) as spend:
+        _native_reservation_fixture(monkeypatch, spend)
+        with pytest.raises(HTTPException) as exc_info:
+            await native_reserve_budget_for_request(
+                request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=MagicMock(),
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert redis.deleted() == {"spend:key:key-budget-reserve-fail-closed"}, redis.commands
+    assert redis.values == {}

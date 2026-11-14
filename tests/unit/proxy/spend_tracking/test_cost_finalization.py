@@ -13,6 +13,7 @@ from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cos
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 MODEL: Final = "gemini-finalization-test"
@@ -427,6 +428,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     disable_error_logs: bool,
     reserved_cost: float,
     disable_spend_updates: bool,
+    native_budgets_on: None,
 ) -> None:
     from unittest.mock import create_autospec
 
@@ -485,26 +487,26 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:completed-key", "spend:team:completed-team"):
-        counters.set_local(key, 1.5 + reserved_cost)
+        counters.set_local(key, 1.5)
     counters.set_local("spend:tag:User-Agent: budget-client", 1.5)
     monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
-    reservation: Final = (
-        {
-            "reserved_cost": reserved_cost,
-            "entries": [
-                {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": reserved_cost}
-                for key in ("spend:key:completed-key", "spend:team:completed-team")
-            ],
-        }
-        if reserved_cost
-        else None
-    )
     auth: Final = UserAPIKeyAuth(
         request_route="/v1/chat/completions",
         api_key="completed-key",
         team_id="completed-team",
-        budget_reservation=reservation,
     )
+    if reserved_cost:
+        _ = await native_reservation(
+            counters,
+            auth,
+            [
+                {"counter_key": key, "entity_type": "Key", "entity_id": key}
+                for key in ("spend:key:completed-key", "spend:team:completed-team")
+            ],
+            reserved_cost,
+        )
+        for key in ("spend:key:completed-key", "spend:team:completed-team"):
+            assert counters.get_local(key) == pytest.approx(1.5 + reserved_cost)
     request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
     with scope, pytest.raises(asyncio.CancelledError if failure == "cancel_scope" else type(failure)):
         await processor._process_llm_request(

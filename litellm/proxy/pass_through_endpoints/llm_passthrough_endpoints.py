@@ -3548,7 +3548,9 @@ async def _base_vertex_proxy_route(
             user_api_key_dict,
         )
     except ProxyException as e:
-        if headers_passed_through:
+        from litellm.proxy.spend_tracking.native_budgets import is_native_admission_refusal
+
+        if headers_passed_through and not is_native_admission_refusal(e):
             e.message = f"No credentials found on proxy for project_name={vertex_project} + location={vertex_location}, check `/model/info` for allowed project + region combinations with `use_in_pass_through: true`. Headers were passed through directly but request failed with error: {e.message}"
         raise e
 

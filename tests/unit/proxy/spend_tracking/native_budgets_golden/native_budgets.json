@@ -1,0 +1,1612 @@
+{
+  "python": {
+    "test_a_cold_counter_is_reseeded_through_python_like_python[reseeded_spend_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Key=e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e Current cost: 100.01002, Max budget: 100.0",
+          {
+            "current_cost": 100.01002,
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "key",
+            "max_budget": 100.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 100.0,
+          "spend:team:team-1": 2.0
+        },
+        null
+      ]
+    },
+    "test_a_cold_counter_is_reseeded_through_python_like_python[room_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:team:team-1": 2.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[client_disconnect_keeps_the_input_cost-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00002
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[client_disconnect_keeps_the_input_cost-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.00002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00002
+        },
+        [
+          {
+            "applied_adjustment": -0.01,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_charges_the_row-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002,
+          "spend:team:team-1": 0.002,
+          "spend:team_member:user-1:team-1": 0.002,
+          "spend:user:user-1": 0.002
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.00802,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_charges_the_row-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002,
+          "spend:team:team-1": 0.002,
+          "spend:team_member:user-1:team-1": 0.002,
+          "spend:user:user-1": 0.002
+        },
+        [
+          {
+            "applied_adjustment": -0.00802,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.00802,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_releases_after_a_failed_write-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_releases_after_a_failed_write-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_releases_an_uncharged_row-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[db_logger_releases_an_uncharged_row-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[failure_hook_releases-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[failure_hook_releases-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[request_end_releases_an_unbound_hold-window_reset_before_settlement]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_customer_window_that_reset_before_settlement_settles_like_python[request_end_releases_an_unbound_hold-window_still_open]": {
+      "python": [
+        {
+          "<customer_member window counter>": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        [
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "<customer_member window counter>",
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "reserved_cost": 0.01002,
+            "window_reset_at": "<reset_at>"
+          },
+          {
+            "applied_adjustment": -0.01002,
+            "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "Key",
+            "reserved_cost": 0.01002
+          }
+        ]
+      ]
+    },
+    "test_a_reseed_that_raises_fails_the_admission_like_python": {
+      "python": [
+        "database unreachable",
+        {
+          "spend:team:team-1": 2.0
+        }
+      ]
+    },
+    "test_a_runtime_change_to_the_budget_exceeded_status_code_reaches_the_next_refusal": {
+      "python": {
+        "402": [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Team=team-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "team-1",
+            "entity_type": "team",
+            "max_budget": 10.0
+          },
+          402
+        ],
+        "429": [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Team=team-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "team-1",
+            "entity_type": "team",
+            "max_budget": 10.0
+          },
+          429
+        ]
+      }
+    },
+    "test_a_stream_settles_after_its_request_state_is_gone": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002,
+        "spend:team:team-1": 2.002,
+        "spend:team_member:user-1:team-1": 0.002,
+        "spend:user:user-1": 0.002
+      }
+    },
+    "test_a_throttled_key_holds_only_its_other_counters_on_both_sides": {
+      "python": [
+        [
+          "spend:team:team-1"
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 5.0,
+          "spend:team:team-1": 0.01002
+        }
+      ]
+    },
+    "test_a_warm_counter_is_read_by_the_native_without_asking_python": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:team:team-1": 2.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_an_expired_customer_window_is_reseeded_with_the_cost_its_window_settles_like_python[window_reset_before_settlement]": {
+      "python": [
+        [
+          "<customer_member window counter>"
+        ],
+        [
+          {
+            "<customer_member window counter>": 0.25,
+            "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002
+          },
+          [
+            {
+              "applied_adjustment": -0.01002,
+              "counter_key": "<customer_member window counter>",
+              "entity_id": "member:1",
+              "entity_type": "customer_member",
+              "reserved_cost": 0.01002,
+              "window_reset_at": "<reset_at>"
+            },
+            {
+              "applied_adjustment": -0.00802,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ]
+        ]
+      ]
+    },
+    "test_an_expired_customer_window_is_reseeded_with_the_cost_its_window_settles_like_python[window_still_open]": {
+      "python": [
+        [
+          "<customer_member window counter>"
+        ],
+        [
+          {
+            "<customer_member window counter>": 0.252,
+            "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002
+          },
+          [
+            {
+              "applied_adjustment": -0.00802,
+              "counter_key": "<customer_member window counter>",
+              "entity_id": "member:1",
+              "entity_type": "customer_member",
+              "reserved_cost": 0.01002,
+              "window_reset_at": "<reset_at>"
+            },
+            {
+              "applied_adjustment": -0.00802,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ]
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_member-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! customer_member=member:1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "member:1",
+            "entity_type": "customer_member",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "<customer_member window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_member-fits]": {
+      "python": [
+        null,
+        {
+          "<customer_member window counter>": 1.01002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_member window counter>",
+              "entity_id": "member:1",
+              "entity_type": "customer_member",
+              "reserved_cost": 0.01002,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_member-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "<customer_member window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_member window counter>",
+              "entity_id": "member:1",
+              "entity_type": "customer_member",
+              "reserved_cost": 0.0033399999999996766,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_org-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! customer_org=customer-org-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "customer-org-1",
+            "entity_type": "customer_org",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "<customer_org window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_org-fits]": {
+      "python": [
+        null,
+        {
+          "<customer_org window counter>": 1.01002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_org window counter>",
+              "entity_id": "customer-org-1",
+              "entity_type": "customer_org",
+              "reserved_cost": 0.01002,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_org-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "<customer_org window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_org window counter>",
+              "entity_id": "customer-org-1",
+              "entity_type": "customer_org",
+              "reserved_cost": 0.0033399999999996766,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_team-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! customer_team=customer-team-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "customer-team-1",
+            "entity_type": "customer_team",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "<customer_team window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_team-fits]": {
+      "python": [
+        null,
+        {
+          "<customer_team window counter>": 1.01002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_team window counter>",
+              "entity_id": "customer-team-1",
+              "entity_type": "customer_team",
+              "reserved_cost": 0.01002,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[customer_team-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "<customer_team window counter>": 10.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "<customer_team window counter>",
+              "entity_id": "customer-team-1",
+              "entity_type": "customer_team",
+              "reserved_cost": 0.0033399999999996766,
+              "window_reset_at": "<customer window reset>"
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[key_window-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Key=e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:1d Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "key",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:window:1d": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[key_window-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:window:1d": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:window:1d",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:1d",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[key_window-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:window:1d": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:window:1d",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e:1d",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[model_access_group-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Model access group=mag-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "mag-1",
+            "entity_type": "model_access_group",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:model_access_group:mag-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[model_access_group-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:model_access_group:mag-1": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:model_access_group:mag-1",
+              "entity_id": "mag-1",
+              "entity_type": "Model access group",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[model_access_group-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:model_access_group:mag-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:model_access_group:mag-1",
+              "entity_id": "mag-1",
+              "entity_type": "Model access group",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[organization-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Organization=org-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "org-1",
+            "entity_type": "organization",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:org:org-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[organization-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:org:org-1": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:org:org-1",
+              "entity_id": "org-1",
+              "entity_type": "Organization",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[organization-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:org:org-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:org:org-1",
+              "entity_id": "org-1",
+              "entity_type": "Organization",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[project-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Project=project-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "project-1",
+            "entity_type": "project",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:project:project-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[project-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:project:project-1": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:project:project-1",
+              "entity_id": "project-1",
+              "entity_type": "Project",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[project-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:project:project-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:project:project-1",
+              "entity_id": "project-1",
+              "entity_type": "Project",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[tag-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Tag=tag-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "tag-1",
+            "entity_type": "tag",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:tag:tag-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[tag-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:tag:tag-1": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:tag:tag-1",
+              "entity_id": "tag-1",
+              "entity_type": "Tag",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[tag-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:tag:tag-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:tag:tag-1",
+              "entity_id": "tag-1",
+              "entity_type": "Tag",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[team_member-at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! TeamMember=user-1:team-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "user-1:team-1",
+            "entity_type": "team_member",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:team_member:user-1:team-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[team_member-fits]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:team_member:user-1:team-1": 1.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team_member:user-1:team-1",
+              "entity_id": "user-1:team-1",
+              "entity_type": "TeamMember",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_counter_kind_admits_like_python[team_member-shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:team_member:user-1:team-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team_member:user-1:team-1",
+              "entity_id": "user-1:team-1",
+              "entity_type": "TeamMember",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[client_disconnect_keeps_the_input_cost]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00002,
+          "spend:team:team-1": 2.00002,
+          "spend:user:user-1": 0.5
+        },
+        true
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[db_logger_charges_the_row]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002,
+          "spend:team:team-1": 2.002,
+          "spend:team_member:user-1:team-1": 0.002,
+          "spend:user:user-1": 0.502
+        },
+        true
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[db_logger_releases_after_a_failed_write]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:team:team-1": 2.0,
+          "spend:user:user-1": 0.5
+        },
+        true
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[db_logger_releases_an_uncharged_row]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:team:team-1": 2.0,
+          "spend:user:user-1": 0.5
+        },
+        true
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[failure_hook_releases]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:team:team-1": 2.0,
+          "spend:user:user-1": 0.5
+        },
+        true
+      ]
+    },
+    "test_every_exit_settles_the_native_hold_like_python[request_end_releases_an_unbound_hold]": {
+      "python": [
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+          "spend:team:team-1": 2.0,
+          "spend:user:user-1": 0.5
+        },
+        true
+      ]
+    },
+    "test_native_admission_matches_python[end_user_over_budget]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! EndUser=customer-1 Current cost: 2.01002, Max budget: 2.0",
+          {
+            "current_cost": 2.01002,
+            "entity_id": "customer-1",
+            "entity_type": "end_user",
+            "max_budget": 2.0
+          },
+          422
+        ],
+        {
+          "spend:end_user:customer-1": 2.0,
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0
+        },
+        null
+      ]
+    },
+    "test_native_admission_matches_python[fail_closed_refuses_any_overshoot]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Team=team-1 Current cost: 9.99666, Estimated request cost: 0.01002, Max budget: 10.0",
+          {
+            "current_cost": 9.99666,
+            "entity_id": "team-1",
+            "entity_type": "team",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.0,
+          "spend:team:team-1": 9.99666
+        },
+        null
+      ]
+    },
+    "test_native_admission_matches_python[key_and_team_fit]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:team:team-1": 2.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_native_admission_matches_python[key_spent_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Key=e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e Current cost: 5.01002, Max budget: 5.0",
+          {
+            "current_cost": 5.01002,
+            "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+            "entity_type": "key",
+            "max_budget": 5.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 5.0
+        },
+        null
+      ]
+    },
+    "test_native_admission_matches_python[no_budget_reserves_nothing]": {
+      "python": [
+        null,
+        {},
+        null
+      ]
+    },
+    "test_native_admission_matches_python[team_at_max_refuses]": {
+      "python": [
+        [
+          "litellm.exceptions.BudgetExceededError",
+          "Budget has been exceeded! Team=team-1 Current cost: 10.01002, Max budget: 10.0",
+          {
+            "current_cost": 10.01002,
+            "entity_id": "team-1",
+            "entity_type": "team",
+            "max_budget": 10.0
+          },
+          422
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.0,
+          "spend:team:team-1": 10.0
+        },
+        null
+      ]
+    },
+    "test_native_admission_matches_python[team_shrinks_to_what_is_left]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00334,
+          "spend:team:team-1": 10.0
+        },
+        [
+          0.0033399999999996766,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.0033399999999996766
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.0033399999999996766
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_native_admission_matches_python[throttled_key_releases_its_hold]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 5.0,
+          "spend:team:team-1": 0.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_native_admission_matches_python[user_on_a_personal_key]": {
+      "python": [
+        null,
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:user:user-1": 3.01002
+        },
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:user:user-1",
+              "entity_id": "user-1",
+              "entity_type": "User",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ]
+      ]
+    },
+    "test_native_settlement_matches_python[cancel_keeps_the_input_cost]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.00002,
+        "spend:team:team-1": 2.00002
+      }
+    },
+    "test_native_settlement_matches_python[failure_refunds_the_hold]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.0,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_native_settlement_matches_python[success_charges_the_actual_cost]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.002,
+        "spend:team:team-1": 2.002
+      }
+    },
+    "test_python_reserves_again_once_the_native_owner_leaves_the_callbacks": {
+      "python": [
+        [
+          0.01002,
+          [
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_id": "e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e",
+              "entity_type": "Key",
+              "reserved_cost": 0.01002
+            },
+            {
+              "applied_adjustment": 0.0,
+              "counter_key": "spend:team:team-1",
+              "entity_id": "team-1",
+              "entity_type": "Team",
+              "reserved_cost": 0.01002
+            }
+          ],
+          2e-05,
+          8
+        ],
+        {
+          "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 1.01002,
+          "spend:team:team-1": 2.01002
+        }
+      ]
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[client_disconnect_keeps_the_input_cost-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25002,
+        "spend:team:team-1": 2.00002
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[client_disconnect_keeps_the_input_cost-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25002,
+        "spend:team:team-1": 2.00002
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_charges_the_row-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.252,
+        "spend:team:team-1": 2.002,
+        "spend:team_member:user-1:team-1": 0.002,
+        "spend:user:user-1": 0.002
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_charges_the_row-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.252,
+        "spend:team:team-1": 2.002,
+        "spend:team_member:user-1:team-1": 0.002,
+        "spend:user:user-1": 0.002
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_releases_after_a_failed_write-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_releases_after_a_failed_write-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_releases_an_uncharged_row-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[db_logger_releases_an_uncharged_row-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[failure_hook_releases-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[failure_hook_releases-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[request_end_releases_an_unbound_hold-counter_expired]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    },
+    "test_settling_a_counter_that_went_inconsistent_reseeds_it_like_python[request_end_releases_an_unbound_hold-counter_would_go_negative]": {
+      "python": {
+        "spend:key:e2e334f67f701e2e5c6521ebf66a60511702c063cf7444ce7e8d478b42ade91e": 0.25,
+        "spend:team:team-1": 2.0
+      }
+    }
+  },
+  "recorded_from": "719072af4b3cdda1dc12f7be3d4a917485a5a7de"
+}

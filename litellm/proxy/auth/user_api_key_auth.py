@@ -198,6 +198,7 @@ from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_tracked,
     read_admission_committed_spend,
 )
+from litellm.proxy.spend_tracking.native_budgets import bind_native_request, native_budget_decision
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -3420,7 +3421,16 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 fallback_spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                        if team_member_spend >= team_member_budget:
+                        native: Final = native_budget_decision(
+                            {
+                                "check": "team_member_positive",
+                                "spend": team_member_spend,
+                                "max_budget": team_member_budget,
+                                "user_id": valid_token.user_id,
+                                "team_id": valid_token.team_id,
+                            }
+                        )
+                        if native.refused:
                             # common_checks sends this alert on requests that get past here, so only the
                             # request rejected here sends it from the builder.
                             team_member_max_budget_alert_check(
@@ -3434,17 +3444,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                            _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
-                            raise litellm.BudgetExceededError(
-                                current_cost=team_member_spend,
-                                max_budget=team_member_budget,
-                                message=(
-                                    f"Budget has been exceeded! TeamMember={_entity_id} "
-                                    f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
-                                ),
-                                entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                entity_id=_entity_id,
-                            )
+                            raise native.error()
 
         # Check 3. If token is expired
         if valid_token.expires is not None:
@@ -4427,7 +4427,7 @@ async def _reserve_budget_after_common_checks(
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
 ) -> None:
-    user_api_key_auth_obj.budget_reservation = None
+    user_api_key_auth_obj.bind_budget_reservation(None, None)
     if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
         from litellm.proxy.spend_tracking.budget_reservation import (
             reserve_budget_for_request,
@@ -4453,7 +4453,10 @@ async def _reserve_budget_after_common_checks(
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
+            pre_call_admits=request is None or request.scope.get("method") != "GET",
         )
+        if request is not None:
+            bind_native_request(user_api_key_auth_obj, request)
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation
         request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware

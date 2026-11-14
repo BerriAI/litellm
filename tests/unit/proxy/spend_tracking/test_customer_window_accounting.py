@@ -30,8 +30,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.spend_tracking.budget_reservation import (
-    _counter_to_reservation_entry,
-    _reserve_counters,
     customer_window_counters,
     estimate_request_max_cost,
     release_budget_reservation,
@@ -95,88 +93,6 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
     second: Final = customer_window_counters("customer_member", "two", (expired,), now=november)
     assert first[0].window_start == second[0].window_start == datetime(2026, 11, 1, tzinfo=timezone.utc)
     assert expired.reset_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("ledger", (False, True))
-async def test_settlement_charges_each_window_once_and_selects_one_durable_writer(accounting_state, ledger):
-    backend, writer, _ = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0) for counter in counters]
-    for counter in counters:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    assert await _reserve_counters(counters, entries, 2.0) == (7.0, 7.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    backend.commands.clear()
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=counters,
-        windows_from_ledger=ledger,
-    )
-    assert tuple(backend.redis[counter.counter_key] for counter in counters) == (5.75, 5.75)
-    assert reservation["finalized"] is True
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert len(rows) == (0 if ledger else 2)
-    assert all(row["spend"] == 0.75 and row["entity_id"] == "member" for row in rows)
-    windows: Final = await ps.accounting_window_keys(None, None, counters)
-    assert {window["window_duration"] for window in windows} == {"1mo", "12mo"}
-    assert len([command for command in backend.commands if command.startswith("MGET")]) == 1
-
-
-@pytest.mark.asyncio
-async def test_completion_after_reset_refunds_old_hold_and_charges_current_period(accounting_state):
-    backend, writer, _ = accounting_state
-    old: Final = customer_window_counters(
-        "customer_member", "member", LIMITS, now=datetime(2000, 6, 15, tzinfo=timezone.utc)
-    )
-    current: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0) for counter in old]
-    for counter in old:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    await _reserve_counters(old, entries, 2.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=current,
-    )
-    assert tuple(backend.redis[counter.counter_key] for counter in old) == (5.0, 5.0)
-    assert tuple(backend.redis[counter.counter_key] for counter in current) == (0.75, 0.75)
-    assert tuple(entry["applied_adjustment"] for entry in entries) == (-2.0, -2.0)
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert {row["window_start"] for row in rows} == {
-        counter.window_start.replace(tzinfo=None).isoformat(timespec="microseconds") for counter in current
-    }
-
-
-@pytest.mark.asyncio
-async def test_eviction_between_reserve_and_settle_restores_durable_floor(accounting_state):
-    backend, _, prisma = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS[:1])
-    counter: Final = counters[0]
-    prisma.db.litellm_budgetwindowspend.find_unique.return_value = SimpleNamespace(
-        window_start=counter.window_start, spend=5.0
-    )
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0)]
-    await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    await _reserve_counters(counters, entries, 2.0)
-    await ps.spend_counter_store.delete((counter.counter_key,))
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation={"reserved_cost": 2.0, "entries": entries, "finalized": False},
-        customer_counters=counters,
-    )
-    assert backend.redis[counter.counter_key] == 5.75
 
 
 @pytest.mark.asyncio
@@ -313,56 +229,6 @@ async def test_real_cost_callback_keeps_customer_scalar_and_window_cost_once(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("limiting_duration", ("1mo", "12mo"))
-async def test_concurrent_requests_obey_both_caps_with_existing_reservation_engine(accounting_state, limiting_duration):
-    backend, _, prisma = accounting_state
-    request_body: Final = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 1000,
-    }
-    estimated: Final = estimate_request_max_cost(request_body, "/chat/completions", None)
-    assert estimated is not None and estimated > 0
-    limits: Final = tuple(
-        BudgetLimit(budget_duration=duration, max_budget=estimated * (1.5 if duration == limiting_duration else 100))
-        for duration in ("1mo", "12mo")
-    )
-    hierarchy: Final = CustomerHierarchyAuth(
-        customer_org_id="org",
-        customer_member_id="member",
-        scopes=(CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=limits),),
-    )
-    auth: Final = UserAPIKeyAuth().model_copy(update={"customer_hierarchy": hierarchy})
-    cache: Final = UserApiKeyCache()
-    logging: Final = ProxyLogging(user_api_key_cache=cache)
-
-    async def reserve():
-        return await reserve_budget_for_request(
-            request_body=dict(request_body),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=auth,
-            team_object=None,
-            user_object=None,
-            prisma_client=prisma,
-            user_api_key_cache=cache,
-            proxy_logging_obj=logging,
-            fail_closed_budget_enforcement=True,
-        )
-
-    results: Final = await asyncio.gather(reserve(), reserve(), return_exceptions=True)
-    accepted: Final = tuple(result for result in results if isinstance(result, dict))
-    rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
-    assert len(accepted) == len(rejected) == 1
-    counters: Final = customer_window_counters("customer_member", "member", limits)
-    assert all(
-        backend.redis[counter.counter_key] == pytest.approx(accepted[0]["reserved_cost"]) for counter in counters
-    )
-    await release_budget_reservation(accepted[0])
-    assert all(backend.redis[counter.counter_key] == pytest.approx(0.0) for counter in counters)
-
-
-@pytest.mark.asyncio
 async def test_outer_callback_resolves_cached_hierarchy_into_accounting(accounting_state, monkeypatch):
     backend, writer, prisma = accounting_state
     cache: Final = UserApiKeyCache()
@@ -474,7 +340,9 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
 @pytest.mark.parametrize("member", (False, True))
 @pytest.mark.parametrize("ledger", (False, True))
 @pytest.mark.parametrize("failure", (False, True))
-async def test_admitted_windows_are_charged_during_policy_outage(accounting_state, monkeypatch, member, ledger, failure):
+async def test_admitted_windows_are_charged_during_policy_outage(
+    accounting_state, monkeypatch, member, ledger, failure
+):
     backend, writer, prisma = accounting_state
     scopes: Final = (
         CustomerScopeAuth(key="customer_org", entity_id="org", budget_limits=LIMITS),
