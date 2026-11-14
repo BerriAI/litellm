@@ -1,12 +1,12 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter
@@ -16,8 +16,10 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
+from litellm.exceptions import RateLimitErrorCategory, RateLimitType, RequestOverDeploymentTpmError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.redis.stores.router_usage import (
@@ -53,6 +55,36 @@ _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 
 
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+
+
+RoutableCooling: TypeAlias = Callable[[], Sequence[Mapping[str, object]]]
+
+
+def no_routable_cooling() -> Sequence[Mapping[str, object]]:
+    return ()
+
+
+def _tpm_number(value: object) -> float | None:
+    match value:
+        case int() | float():
+            return value
+        case str():
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        case _:
+            return None
+
+
+def _deployment_tpm_limit(deployment: object) -> float:
+    fields: Final = as_str_mapping(deployment) or {}
+    candidates: Final = (
+        fields.get("tpm"),
+        (as_str_mapping(fields.get("litellm_params")) or {}).get("tpm"),
+        (as_str_mapping(fields.get("model_info")) or {}).get("tpm"),
+    )
+    return next((limit for limit in map(_tpm_number, candidates) if limit is not None), float("inf"))
 
 
 @dataclass(frozen=True)
@@ -107,7 +139,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
     def __init__(self, usage: RouterUsage, routing_args: dict = {}):
-        self.routing_args = RoutingArgs(**routing_args)
+        self.routing_args = RoutingArgs.model_validate(routing_args)
         BaseRoutingStrategy.__init__(
             self,
             usage=usage,
@@ -351,7 +383,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def _return_potential_deployments(
         self,
         healthy_deployments: list[dict],
-        all_deployments: dict,
+        all_deployments: dict[str, float | None],
         input_tokens: int,
         rpm_dict: dict,
     ):
@@ -369,15 +401,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif item_tpm is None:
                 continue  # skip if unhealthy deployment
 
-            _deployment_tpm = None
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = float("inf")
+            _deployment_tpm = _deployment_tpm_limit(_deployment)
 
             _deployment_rpm = None
             if _deployment_rpm is None:
@@ -411,6 +435,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_values: Sequence[float | None] | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
+        routable_cooling: RoutableCooling = no_routable_cooling,
     ) -> dict | None:
         """
         Common checks for get available deployment, across sync + async implementations
@@ -460,8 +485,25 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
         if len(potential_deployments) > 0:
             return random.choice(potential_deployments)
-        else:
+
+        largest_healthy_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
+        if input_tokens <= largest_healthy_tpm_limit:
             return None
+        largest_tpm_limit: Final = max((largest_healthy_tpm_limit, *map(_deployment_tpm_limit, routable_cooling())))
+        if input_tokens <= largest_tpm_limit:
+            return None
+        raise RequestOverDeploymentTpmError(
+            message=(
+                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
+                f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
+                f"of {largest_tpm_limit} in this model group, so retrying cannot help. "
+                "Send a smaller request or raise the deployment's tpm"
+            ),
+            llm_provider="",
+            model=model_group,
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+            rate_limit_type=RateLimitType.TOKENS,
+        )
 
     def usage_counters(
         self, healthy_deployments: Sequence[object]
@@ -491,6 +533,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
+        routable_cooling: RoutableCooling = no_routable_cooling,
     ):
         """
         Async implementation of get deployments.
@@ -531,6 +574,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
+            routable_cooling=routable_cooling,
         )
 
         try:
@@ -599,6 +643,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         parent_otel_span: Span | None = None,
+        routable_cooling: RoutableCooling = no_routable_cooling,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -623,6 +668,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
+            routable_cooling=routable_cooling,
         )
 
         try:

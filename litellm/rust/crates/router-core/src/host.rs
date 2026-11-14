@@ -371,7 +371,7 @@ pub struct RoutingContext<'a> {
     /// Whose selector a strategy stage reads.
     pub scope: StrategyScope,
     /// The deployments the name resolved to for this caller, before health filters
-    /// (`request_deployments`), for the tag stage.
+    /// (`request_deployments`), for the tag stage and the strategy stage's cooling check.
     pub pool: &'a [Arc<Deployment>],
     /// `_excluded_deployment_ids` a weighted failover hop put on the request, which the callback
     /// filters read (`deployment_ids_failed_in_request`).

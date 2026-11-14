@@ -29,7 +29,11 @@ from litellm.router_strategy.least_busy import (
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.lowest_tpm_rpm_v2 import (
+    LowestTPMLoggingHandler_v2,
+    RoutableCooling,
+    no_routable_cooling,
+)
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 if TYPE_CHECKING:
@@ -270,6 +274,7 @@ async def pick_async(
     input: object,
     request_kwargs: dict[str, object] | None,  # mutable-ok: the latency selector reads it as given
     reserve: bool = False,
+    routable_cooling: RoutableCooling = no_routable_cooling,
 ) -> object:
     """``_select_deployment_async``; ``reserve``: least-busy holds the pick for the request's call."""
     match selector:
@@ -287,10 +292,15 @@ async def pick_async(
                 messages=messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
                 input=input,  # pyright: ignore[reportArgumentType]  # same
             )
-        case LowestTPMLoggingHandler_v2() | LowestCostLoggingHandler() if strategy in (
-            "usage-based-routing-v2",
-            "cost-based-routing",
-        ):
+        case LowestTPMLoggingHandler_v2() if strategy == "usage-based-routing-v2":
+            return await selector.async_get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
+                model_group=model,
+                healthy_deployments=deployments,
+                messages=messages,  # pyright: ignore[reportArgumentType]  # same
+                input=input,  # pyright: ignore[reportArgumentType]  # same
+                routable_cooling=routable_cooling,
+            )
+        case LowestCostLoggingHandler() if strategy == "cost-based-routing":
             return await selector.async_get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
                 model_group=model,
                 healthy_deployments=deployments,
@@ -318,6 +328,7 @@ def pick_sync(
     input: object,
     request_kwargs: dict[str, object] | None,  # mutable-ok: see pick_async
     reserve: bool = False,
+    routable_cooling: RoutableCooling = no_routable_cooling,
 ) -> object:
     """``_select_deployment_sync``: cost-based routing has no sync pick."""
     match selector:
@@ -328,15 +339,20 @@ def pick_sync(
                 reserve=reserve,
                 call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
             )  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
-        case LowestTPMLoggingHandler() | LowestTPMLoggingHandler_v2() if strategy in (
-            "usage-based-routing",
-            "usage-based-routing-v2",
-        ):
+        case LowestTPMLoggingHandler() if strategy == "usage-based-routing":
             return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
                 model_group=model,
                 healthy_deployments=deployments,
                 messages=messages,  # pyright: ignore[reportArgumentType]  # same
                 input=input,  # pyright: ignore[reportArgumentType]  # same
+            )
+        case LowestTPMLoggingHandler_v2() if strategy == "usage-based-routing-v2":
+            return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts
+                model_group=model,
+                healthy_deployments=deployments,
+                messages=messages,  # pyright: ignore[reportArgumentType]  # same
+                input=input,  # pyright: ignore[reportArgumentType]  # same
+                routable_cooling=routable_cooling,
             )
         case LowestLatencyLoggingHandler() if strategy == "latency-based-routing":
             return selector.get_available_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selectors return untyped deployment dicts

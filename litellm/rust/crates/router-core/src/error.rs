@@ -424,6 +424,13 @@ impl AttemptError {
         self.class_names().contains(&name)
     }
 
+    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, and a
+    /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
+    /// over it. Its fallbacks still run.
+    pub fn ends_retries(&self) -> bool {
+        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError")
+    }
+
     #[must_use]
     pub fn with_retry_after(self, retry_after: Duration) -> Self {
         Self {
