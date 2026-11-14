@@ -693,10 +693,10 @@ def _modality(
 
 
 def _item_modalities(
-    item: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+    item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement],
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> frozenset[_Modality]:
-    parts: Final = item if isinstance(item, list) else (item,)
+    parts: Final = (item,) if isinstance(item, str | dict) else item
     return frozenset(_modality(part, resolved_files) for part in parts)
 
 
@@ -705,11 +705,34 @@ def _holders(item_modalities: Sequence[frozenset[_Modality]], modality: _Modalit
     return holders or tuple(range(len(item_modalities)))
 
 
-def _share(total: int, holders: tuple[int, ...], index: int) -> int:
-    if index not in holders:
-        return 0
-    quotient, remainder = divmod(total, len(holders))
-    return quotient + (1 if holders.index(index) < remainder else 0)
+def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Modality) -> tuple[int, ...]:
+    holders: Final = _holders(item_modalities, modality)
+    return tuple(1 if index in holders else 0 for index in range(len(item_modalities)))
+
+
+def _local_text_tokens(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement], model: str) -> int:
+    parts: Final = (item,) if isinstance(item, str | dict) else item
+    texts: Final = tuple(part for part in parts if isinstance(part, str) and not _is_multimodal_element(part))
+    return token_counter(model=model, text=" ".join(texts)) if texts else 0
+
+
+def _text_weights(
+    items: Sequence[GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement]],
+    item_modalities: Sequence[frozenset[_Modality]],
+    model: str,
+) -> tuple[int, ...]:
+    counted: Final = tuple(_local_text_tokens(item, model) for item in items)
+    return counted if any(counted) else _even_weights(item_modalities, "text")
+
+
+def _weighted_shares(total: int, weights: tuple[int, ...]) -> tuple[int, ...]:
+    weight_sum: Final = sum(weights)
+    floors: Final = tuple(total * weight // weight_sum for weight in weights)
+    by_remainder: Final = tuple(
+        sorted(range(len(weights)), key=lambda index: (-(total * weights[index] % weight_sum), index))
+    )
+    rounded_up: Final = frozenset(by_remainder[: total - sum(floors)])
+    return tuple(floor + (1 if index in rounded_up else 0) for index, floor in enumerate(floors))
 
 
 def _item_usage(text: int, image: int, audio: int, video: int, unattributed: int) -> Usage:
@@ -730,6 +753,7 @@ def _per_item_usage(
     input: GeminiEmbeddingInput,
     usage: Usage,
     resolved_files: Mapping[str, Mapping[str, str]],
+    model: str,
 ) -> tuple[Usage, ...]:
     items: Final = _top_level_elements(input)
     details: Final = usage.prompt_tokens_details
@@ -740,16 +764,22 @@ def _per_item_usage(
     image: Final = details.image_tokens or 0
     audio: Final = details.audio_tokens or 0
     video: Final = details.video_tokens or 0
-    every_item: Final = tuple(range(len(items)))
+    text_shares: Final = _weighted_shares(text, _text_weights(items, modalities, model))
+    image_shares: Final = _weighted_shares(image, _even_weights(modalities, "image"))
+    audio_shares: Final = _weighted_shares(audio, _even_weights(modalities, "audio"))
+    video_shares: Final = _weighted_shares(video, _even_weights(modalities, "video"))
+    unattributed_shares: Final = _weighted_shares(
+        usage.prompt_tokens - text - image - audio - video, tuple(1 for _ in items)
+    )
     return tuple(
         _item_usage(
-            text=_share(text, _holders(modalities, "text"), index),
-            image=_share(image, _holders(modalities, "image"), index),
-            audio=_share(audio, _holders(modalities, "audio"), index),
-            video=_share(video, _holders(modalities, "video"), index),
-            unattributed=_share(usage.prompt_tokens - text - image - audio - video, every_item, index),
+            text=text_shares[index],
+            image=image_shares[index],
+            audio=audio_shares[index],
+            video=video_shares[index],
+            unattributed=unattributed_shares[index],
         )
-        for index in every_item
+        for index in range(len(items))
     )
 
 
@@ -769,5 +799,5 @@ def process_response(
         ],
         usage=usage,
         hidden_params={**(get_hidden_params(model_response) or {})},
-        item_usage=_per_item_usage(input, usage, resolved_files or {}),
+        item_usage=_per_item_usage(input, usage, resolved_files or {}, model),
     )
