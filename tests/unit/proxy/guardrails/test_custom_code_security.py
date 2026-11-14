@@ -143,6 +143,31 @@ def test_documented_ssn_example_compiles_and_runs():
     assert blocked["reason"] == "SSN detected"
 
 
+def test_regex_primitives_string_flags_and_resilience():
+    code = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        '    text = inputs["texts"][0]\n'
+        '    replaced = regex_replace(text, r"litellm", "aigateway", flags="i")\n'
+        '    matched = regex_match(text, r"LITELLM", flags="i")\n'
+        '    matched_multi = regex_match(text, r"^second", flags="m")\n'
+        '    all_matches = regex_find_all(text, r"litellm", flags="i")\n'
+        '    safe_bad_flag = regex_replace(text, r"litellm", "ok", flags="invalid???")\n'
+        '    with_const = regex_replace(text, r"LITELLM", "ok", flags=IGNORECASE)\n'
+        "    return modify(texts=[replaced, str(matched), str(matched_multi), str(len(all_matches)), safe_bad_flag, with_const])\n"
+    )
+    guardrail = _compile(code)
+    fn = guardrail._compiled_function
+    assert fn is not None
+    res = fn({"texts": ["first line LiteLLM\nsecond line litellm"]}, {}, "request")
+    assert res["action"] == "modify"
+    assert res["texts"][0] == "first line aigateway\nsecond line aigateway"
+    assert res["texts"][1] == "True"
+    assert res["texts"][2] == "True"
+    assert res["texts"][3] == "2"
+    assert "LiteLLM" in res["texts"][4]
+    assert "first line ok" in res["texts"][5]
+
+
 @pytest.mark.asyncio
 async def test_async_guardrail_compiles_and_runs():
     code = "async def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"

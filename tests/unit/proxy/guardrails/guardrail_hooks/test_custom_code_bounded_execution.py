@@ -186,3 +186,44 @@ async def test_await_with_timeout_cancels_the_code_when_the_caller_is_cancelled(
         await waiting
 
     assert await asyncio.wait_for(interrupted.wait(), timeout=5)
+
+
+def test_custom_code_regex_primitives_with_string_flags():
+    import re
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+        _parse_regex_flags,
+        get_custom_code_primitives,
+        regex_find_all,
+        regex_match,
+        regex_match_all,
+        regex_replace,
+    )
+
+    assert _parse_regex_flags("i") == re.IGNORECASE
+    assert _parse_regex_flags("im") == (re.IGNORECASE | re.MULTILINE)
+    assert _parse_regex_flags("ignorecase") == re.IGNORECASE
+    assert _parse_regex_flags("re.I") == re.IGNORECASE
+    assert _parse_regex_flags("i|m") == (re.IGNORECASE | re.MULTILINE)
+    assert _parse_regex_flags(re.IGNORECASE) == re.IGNORECASE
+    assert _parse_regex_flags(None) == 0
+
+    assert regex_match("Hello World", "world", flags="i") is True
+    assert regex_match("Hello World", "world", flags=0) is False
+    assert regex_match_all("Hello", "HELLO", flags="ignorecase") is True
+    assert regex_replace("hello litellm", r"litellm", "aigateway", flags="i") == "hello aigateway"
+    assert regex_replace("Hello LITELLM", r"litellm", "aigateway", flags="i") == "Hello aigateway"
+    assert regex_find_all("foo FOO Foo", "foo", flags="i") == ["foo", "FOO", "Foo"]
+
+    primitives = get_custom_code_primitives()
+    assert primitives["IGNORECASE"] == re.IGNORECASE
+    assert primitives["MULTILINE"] == re.MULTILINE
+
+    # Incompatible flags and invalid flag characters must propagate ValueError to prevent security bypass
+    import pytest
+    with pytest.raises(ValueError, match="Incompatible regex flags"):
+        regex_replace("123-45-6789", r"\d{3}-\d{2}-\d{4}", "[REDACTED]", flags="au")
+
+    with pytest.raises(ValueError, match="Unsupported regex flag"):
+        regex_replace("test", "test", "replaced", flags="invalid_flag_xyz")
+
+

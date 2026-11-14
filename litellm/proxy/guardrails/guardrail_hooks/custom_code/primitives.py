@@ -5,6 +5,8 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import re
@@ -111,79 +113,156 @@ def modify(
 # Regex Primitives
 # =============================================================================
 
+_STRING_FLAG_MAP: Final[Mapping[str, int]] = {
+    "i": int(re.IGNORECASE),
+    "m": int(re.MULTILINE),
+    "s": int(re.DOTALL),
+    "x": int(re.VERBOSE),
+    "a": int(re.ASCII),
+    "u": int(re.UNICODE),
+    "l": int(re.LOCALE),
+    "ignorecase": int(re.IGNORECASE),
+    "multiline": int(re.MULTILINE),
+    "dotall": int(re.DOTALL),
+    "verbose": int(re.VERBOSE),
+    "ascii": int(re.ASCII),
+    "unicode": int(re.UNICODE),
+    "locale": int(re.LOCALE),
+    "re.i": int(re.IGNORECASE),
+    "re.m": int(re.MULTILINE),
+    "re.s": int(re.DOTALL),
+    "re.x": int(re.VERBOSE),
+    "re.a": int(re.ASCII),
+    "re.u": int(re.UNICODE),
+    "re.l": int(re.LOCALE),
+    "re.ignorecase": int(re.IGNORECASE),
+    "re.multiline": int(re.MULTILINE),
+    "re.dotall": int(re.DOTALL),
+    "re.verbose": int(re.VERBOSE),
+    "re.ascii": int(re.ASCII),
+    "re.unicode": int(re.UNICODE),
+    "re.locale": int(re.LOCALE),
+}
 
-def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
+
+def _parse_regex_flags(flags: int | str | re.RegexFlag | None = 0) -> int:
+    """Parse regex flags from integer, RegexFlag, or string format.
+
+    Supports:
+    - Standard integers or re.RegexFlag (e.g. re.IGNORECASE, 2)
+    - Single or multi-character strings (e.g. 'i', 'm', 's', 'im', 'ims')
+    - Full flag names (e.g. 'IGNORECASE', 'multiline', 're.I')
+    - Pipe-separated combinations (e.g. 'i|m')
+
+    Raises:
+        ValueError: If flags contain unsupported characters, incompatible combinations,
+                    or unsupported types.
     """
-    Check if a regex pattern matches anywhere in the text.
+    if flags is None:
+        return 0
+    if isinstance(flags, (int, re.RegexFlag)):
+        parsed = int(flags)
+    elif isinstance(flags, str):
+        cleaned = flags.strip().lower()
+        if not cleaned:
+            return 0
+        if "|" in cleaned:
+            parts = [p.strip() for p in cleaned.split("|") if p.strip()]
+            parsed = 0
+            for part in parts:
+                parsed |= _parse_regex_flags(part)
+        elif cleaned in _STRING_FLAG_MAP:
+            parsed = _STRING_FLAG_MAP[cleaned]
+        else:
+            parsed = 0
+            for char in cleaned:
+                if char in _STRING_FLAG_MAP:
+                    parsed |= _STRING_FLAG_MAP[char]
+                else:
+                    raise ValueError(f"Unsupported regex flag: {char!r}")
+    else:
+        raise ValueError(f"Unsupported regex flags type: {type(flags).__name__}")
+
+    try:
+        re.compile("", parsed)
+    except (ValueError, re.error) as e:
+        raise ValueError(f"Incompatible regex flags: {e}") from e
+
+    return parsed
+
+
+def regex_match(text: str, pattern: str, flags: int | str | re.RegexFlag | None = 0) -> bool:
+    """Check if a regex pattern matches anywhere in the text.
 
     Args:
         text: The text to search in
         pattern: The regex pattern to match
-        flags: Optional regex flags (default: 0)
+        flags: Optional regex flags (e.g. 0, 'i', 'im', re.IGNORECASE)
 
     Returns:
         True if pattern matches, False otherwise
     """
+    parsed_flags = _parse_regex_flags(flags)
     try:
-        return bool(re.search(pattern, text, flags))
+        return bool(re.search(pattern, text, parsed_flags))
     except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
 
-def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
-    """
-    Check if a regex pattern matches the entire text.
+def regex_match_all(text: str, pattern: str, flags: int | str | re.RegexFlag | None = 0) -> bool:
+    """Check if a regex pattern matches the entire text.
 
     Args:
         text: The text to match
         pattern: The regex pattern
-        flags: Optional regex flags
+        flags: Optional regex flags (e.g. 0, 'i', 'im', re.IGNORECASE)
 
     Returns:
         True if pattern matches entire text, False otherwise
     """
+    parsed_flags = _parse_regex_flags(flags)
     try:
-        return bool(re.fullmatch(pattern, text, flags))
+        return bool(re.fullmatch(pattern, text, parsed_flags))
     except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
 
-def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> str:
-    """
-    Replace all occurrences of a pattern in text.
+def regex_replace(text: str, pattern: str, replacement: str, flags: int | str | re.RegexFlag | None = 0) -> str:
+    """Replace all occurrences of a pattern in text.
 
     Args:
         text: The text to modify
         pattern: The regex pattern to find
         replacement: The replacement string
-        flags: Optional regex flags
+        flags: Optional regex flags (e.g. 0, 'i', 'im', re.IGNORECASE)
 
     Returns:
         The text with replacements applied
     """
+    parsed_flags = _parse_regex_flags(flags)
     try:
-        return re.sub(pattern, replacement, text, flags=flags)
+        return re.sub(pattern, replacement, text, flags=parsed_flags)
     except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
 
-def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
-    """
-    Find all occurrences of a pattern in text.
+def regex_find_all(text: str, pattern: str, flags: int | str | re.RegexFlag | None = 0) -> list[str]:
+    """Find all occurrences of a pattern in text.
 
     Args:
         text: The text to search
         pattern: The regex pattern to find
-        flags: Optional regex flags
+        flags: Optional regex flags (e.g. 0, 'i', 'im', re.IGNORECASE)
 
     Returns:
         List of all matches
     """
+    parsed_flags = _parse_regex_flags(flags)
     try:
-        return re.findall(pattern, text, flags)
+        return re.findall(pattern, text, parsed_flags)
     except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
@@ -857,6 +936,10 @@ def get_custom_code_primitives() -> dict[str, object]:
         "regex_match_all": regex_match_all,
         "regex_replace": regex_replace,
         "regex_find_all": regex_find_all,
+        "IGNORECASE": int(re.IGNORECASE),
+        "MULTILINE": int(re.MULTILINE),
+        "DOTALL": int(re.DOTALL),
+        "VERBOSE": int(re.VERBOSE),
         # JSON
         "json_parse": json_parse,
         "json_stringify": json_stringify,
