@@ -455,9 +455,7 @@ class BudgetDecision(BaseModel):
         )
 
 
-def native_budget_decision(check: Mapping[str, object]) -> BudgetDecision | None:
-    if native_budgets() is None:
-        return None
+def native_budget_decision(check: Mapping[str, object]) -> BudgetDecision:
     from litellm.rust_bridge._native import budget_check_decision
 
     return BudgetDecision.model_validate(budget_check_decision(_CHECK.validate_python(check)))

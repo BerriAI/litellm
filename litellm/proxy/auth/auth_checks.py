@@ -952,14 +952,8 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         native: Final = _native_budget_decision(
             {"check": "proxy", "spend": global_proxy_spend, "max_budget": litellm.max_budget}
         )
-        if native is not None and native.refused:
+        if native.refused:
             raise native.error()
-        if native is None and math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend,
-                max_budget=litellm.max_budget,
-                entity_type=Litellm_EntityType.PROXY.value,
-            )
 
 
 _GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
@@ -1498,16 +1492,8 @@ async def common_checks(
                     "user_id": user_object.user_id,
                 }
             )
-            if native is not None and native.refused:
+            if native.refused:
                 raise native.error()
-            if native is None and math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
-                    max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    entity_type=Litellm_EntityType.USER.value,
-                    entity_id=user_object.user_id,
-                )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -2052,16 +2038,8 @@ async def check_end_user_budget(
             "end_user_id": end_user_obj.user_id,
         }
     )
-    if native is not None and native.refused:
+    if native.refused:
         raise native.error()
-    if native is None and end_user_spend > end_user_budget:
-        raise litellm.BudgetExceededError(
-            current_cost=end_user_spend,
-            max_budget=end_user_budget,
-            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
-            entity_type=Litellm_EntityType.END_USER.value,
-            entity_id=end_user_obj.user_id,
-        )
 
 
 _check_end_user_budget: Final = check_end_user_budget
@@ -6973,13 +6951,6 @@ async def is_valid_fallback_model(
     return True
 
 
-# The shape abbreviate_api_key writes into LiteLLM_VerificationToken.key_name. The
-# last four characters are only barred from being whitespace or a control code,
-# because a custom key's can be anything else, punctuation and non-ASCII included;
-# a real key is at least MINIMUM_CUSTOM_KEY_LENGTH long, so it never fullmatches.
-_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?")
-
-
 def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     """
     Throttle an over-budget key instead of blocking it, when the key opted in
@@ -6998,7 +6969,7 @@ def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     return True
 
 
-def _native_budget_decision(check: Mapping[str, object]) -> "BudgetDecision | None":
+def _native_budget_decision(check: Mapping[str, object]) -> "BudgetDecision":
     from litellm.proxy.spend_tracking.native_budgets import native_budget_decision
 
     return native_budget_decision(check)
@@ -7079,31 +7050,10 @@ async def virtual_key_max_budget_check(
                 "throttle_pct": _budget_exceeded_throttle_pct(valid_token),
             }
         )
-        if native is not None and native.decision != "throttle":
-            if native.refused:
-                raise native.error()
+        if native.decision == "throttle" and _apply_budget_exceeded_throttle(valid_token):
             return
-        if native is not None and _apply_budget_exceeded_throttle(valid_token):
-            return
-        if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
-            if _apply_budget_exceeded_throttle(valid_token):
-                return
-            # This message is returned to the caller, and key_name has no enforced
-            # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
-            # when it still looks masked and fall back to the alias otherwise.
-            key_label: Final = valid_token.key_alias or "key"
-            key_descriptor: Final = (
-                f"{key_label} ({valid_token.key_name})"
-                if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
-                else key_label
-            )
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=valid_token.max_budget,
-                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
-                entity_type=Litellm_EntityType.KEY.value,
-                entity_id=valid_token.token,
-            )
+        if native.refused:
+            raise native.error()
 
 
 _virtual_key_max_budget_check: Final = virtual_key_max_budget_check
@@ -7149,19 +7099,8 @@ async def _virtual_key_multi_budget_check(
                 "token": valid_token.token,
             }
         )
-        if native is not None and native.refused:
+        if native.refused:
             raise native.error()
-        if native is None and math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
-            raise litellm.BudgetExceededError(
-                current_cost=window_spend,
-                max_budget=w["max_budget"],
-                message=(
-                    f"ExceededBudget: Key over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
-                ),
-                entity_type=Litellm_EntityType.KEY.value,
-                entity_id=valid_token.token,
-            )
 
 
 async def virtual_key_soft_budget_check(
@@ -7177,11 +7116,7 @@ async def virtual_key_soft_budget_check(
     native: Final = _native_budget_decision(
         {"check": "key_soft", "spend": valid_token.spend, "soft_budget": valid_token.soft_budget}
     )
-    if (
-        native.alerts
-        if native is not None
-        else valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget
-    ):
+    if native.alerts:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
             valid_token.token,
@@ -7493,7 +7428,7 @@ async def _check_team_member_budget(
                     "team_id": team_object.team_id,
                 }
             )
-            if native.skipped if native is not None else not math.isfinite(team_member_budget):
+            if native.skipped:
                 return
 
             team_member_max_budget_alert_check(
@@ -7508,16 +7443,8 @@ async def _check_team_member_budget(
                 max_budget=team_member_budget,
             )
 
-            if native is not None and native.refused:
+            if native.refused:
                 raise native.error()
-            if native is None and team_member_spend >= team_member_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=team_member_spend,
-                    max_budget=team_member_budget,
-                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
-                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
-                )
 
 
 async def check_team_member_model_access(
@@ -7615,11 +7542,7 @@ async def team_max_budget_check(
                 "team_id": team_object.team_id,
             }
         )
-        if (
-            native.refused
-            if native is not None
-            else math.isfinite(team_object.max_budget) and spend > team_object.max_budget
-        ):
+        if native.refused:
             if valid_token:
                 call_info: Final = CallInfo(
                     token=valid_token.token,
@@ -7638,15 +7561,7 @@ async def team_max_budget_check(
                     )
                 )
 
-            if native is not None:
-                raise native.error()
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=team_object.max_budget,
-                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
-                entity_type=Litellm_EntityType.TEAM.value,
-                entity_id=team_object.team_id,
-            )
+            raise native.error()
 
 
 _team_max_budget_check: Final = team_max_budget_check
@@ -7688,19 +7603,8 @@ async def _team_multi_budget_check(
                 "team_id": team_object.team_id,
             }
         )
-        if native is not None and native.refused:
+        if native.refused:
             raise native.error()
-        if native is None and math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
-            raise litellm.BudgetExceededError(
-                current_cost=window_spend,
-                max_budget=w["max_budget"],
-                message=(
-                    f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
-                ),
-                entity_type=Litellm_EntityType.TEAM.value,
-                entity_id=team_object.team_id,
-            )
 
 
 async def _team_soft_budget_check(
@@ -7711,21 +7615,12 @@ async def _team_soft_budget_check(
     """
     Triggers a budget alert if the team is over it's soft budget.
     """
-    native: Final = (
-        _native_budget_decision(
-            {"check": "team_soft", "spend": team_object.spend, "soft_budget": team_object.soft_budget}
-        )
-        if team_object is not None
-        else None
+    if team_object is None:
+        return
+    native: Final = _native_budget_decision(
+        {"check": "team_soft", "spend": team_object.spend, "soft_budget": team_object.soft_budget}
     )
-    if (
-        native.alerts
-        if native is not None
-        else team_object is not None
-        and team_object.soft_budget is not None
-        and team_object.spend is not None
-        and team_object.spend >= team_object.soft_budget
-    ) and team_object is not None:
+    if native.alerts:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
             team_object.team_id,
@@ -7821,7 +7716,7 @@ async def _project_max_budget_check(
             "project_id": project_object.project_id,
         }
     )
-    if native.refused if native is not None else project_spend >= max_budget:
+    if native.refused:
         if valid_token:
             call_info: Final = CallInfo(
                 token=valid_token.token,
@@ -7840,15 +7735,7 @@ async def _project_max_budget_check(
                 )
             )
 
-        if native is not None:
-            raise native.error()
-        raise litellm.BudgetExceededError(
-            current_cost=project_spend,
-            max_budget=max_budget,
-            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_spend}, Max budget: {max_budget}",
-            entity_type=Litellm_EntityType.PROJECT.value,
-            entity_id=project_object.project_id,
-        )
+        raise native.error()
 
 
 async def _project_soft_budget_check(
@@ -7871,11 +7758,7 @@ async def _project_soft_budget_check(
     native: Final = _native_budget_decision(
         {"check": "project_soft", "spend": project_object.spend, "soft_budget": soft_budget}
     )
-    if (
-        native.alerts
-        if native is not None
-        else soft_budget is not None and project_object.spend is not None and project_object.spend >= soft_budget
-    ):
+    if native.alerts:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for project %s, spend %s, soft_budget %s",
             project_object.project_id,
@@ -8041,7 +7924,7 @@ async def organization_max_budget_check(
     native: Final = _native_budget_decision(
         {"check": "organization", "spend": org_spend, "max_budget": org_max_budget, "org_id": org_id}
     )
-    if native.refused if native is not None else math.isfinite(org_max_budget) and org_spend >= org_max_budget:
+    if native.refused:
         # Trigger budget alert
         call_info: Final = CallInfo(
             token=valid_token.token,
@@ -8060,15 +7943,7 @@ async def organization_max_budget_check(
             )
         )
 
-        if native is not None:
-            raise native.error()
-        raise litellm.BudgetExceededError(
-            current_cost=org_spend,
-            max_budget=org_max_budget,
-            message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
-            entity_type=Litellm_EntityType.ORGANIZATION.value,
-            entity_id=org_id,
-        )
+        raise native.error()
 
 
 _organization_max_budget_check: Final = organization_max_budget_check
@@ -8140,19 +8015,8 @@ async def tag_max_budget_check_for_tags(
                     "tag": tag_name,
                 }
             )
-            if native is not None:
-                if native.refused:
-                    raise native.error()
-                continue
-            if tag_spend <= tag_object.litellm_budget_table.max_budget:
-                continue
-            raise litellm.BudgetExceededError(
-                current_cost=tag_spend,
-                max_budget=tag_object.litellm_budget_table.max_budget,
-                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
-                entity_type=Litellm_EntityType.TAG.value,
-                entity_id=tag_name,
-            )
+            if native.refused:
+                raise native.error()
 
 
 async def _model_access_group_max_budget_check(
@@ -8202,19 +8066,8 @@ async def _model_access_group_max_budget_check(
         native = _native_budget_decision(
             {"check": "model_access_group", "spend": group_spend, "max_budget": budget.max_budget, "group": group}
         )
-        if native is not None:
-            if native.refused:
-                raise native.error()
-            continue
-        if group_spend < budget.max_budget:
-            continue
-        raise litellm.BudgetExceededError(
-            current_cost=group_spend,
-            max_budget=budget.max_budget,
-            message=f"Budget has been exceeded! Model access group={group} Current cost: {group_spend}, Max budget: {budget.max_budget}",
-            entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
-            entity_id=group,
-        )
+        if native.refused:
+            raise native.error()
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:

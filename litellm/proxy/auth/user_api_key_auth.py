@@ -3430,7 +3430,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 "team_id": valid_token.team_id,
                             }
                         )
-                        if native.refused if native is not None else team_member_spend >= team_member_budget:
+                        if native.refused:
                             # common_checks sends this alert on requests that get past here, so only the
                             # request rejected here sends it from the builder.
                             team_member_max_budget_alert_check(
@@ -3444,19 +3444,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                                 spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
-                            if native is not None:
-                                raise native.error()
-                            _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
-                            raise litellm.BudgetExceededError(
-                                current_cost=team_member_spend,
-                                max_budget=team_member_budget,
-                                message=(
-                                    f"Budget has been exceeded! TeamMember={_entity_id} "
-                                    f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
-                                ),
-                                entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                entity_id=_entity_id,
-                            )
+                            raise native.error()
 
         # Check 3. If token is expired
         if valid_token.expires is not None:

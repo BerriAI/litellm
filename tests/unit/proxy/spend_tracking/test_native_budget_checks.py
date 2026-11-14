@@ -32,7 +32,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
     tag_cache_key,
 )
-from litellm.proxy.spend_tracking import native_budgets
 from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -80,7 +79,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[SpendCounterStore]:
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.25)
     yield spend_counter_store
-    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # later tests run without a native owner
 
 
 def _error_fields(error: BaseException | None) -> object:
@@ -131,11 +129,7 @@ def outcome_record(outcome: Outcome) -> object:
 GOLDEN: Final = Path(__file__).parent / "native_budgets_golden" / "native_budget_checks.json"
 
 
-async def _outcome(store: SpendCounterStore, case: Case, native: bool) -> Outcome:
-    native_budgets._installed.clear()  # pyright: ignore[reportPrivateUsage]  # each run picks its own side
-    if native:
-        callbacks: Final[list[object]] = []  # mutable-ok: install_native_budgets inserts into litellm.callbacks
-        native_budgets.install_native_budgets(store, callbacks)
+async def _outcome(store: SpendCounterStore, case: Case) -> Outcome:
     store.flush_local()
     for counter, value in case.counters.items():
         store.set_local(counter, value)
@@ -444,7 +438,7 @@ CASES: Final[Mapping[str, Case]] = {
 @pytest.mark.parametrize(("name", "case"), CASES.items(), ids=CASES.keys())
 async def test_native_check_decides_like_python(store: SpendCounterStore, name: str, case: Case) -> None:
     python: Final = json.loads(GOLDEN.read_text())["python"][name]
-    native: Final = await _outcome(store, case, native=True)
+    native: Final = await _outcome(store, case)
 
     refused: Final = isinstance(python["error"], list) and python["error"][0] == jsonable(litellm.BudgetExceededError)
     assert refused == ("_refuses" in name), f"the Python reference did not do what {name} says: {python['error']}"
