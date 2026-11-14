@@ -171,6 +171,10 @@ def _response_choice_index(response_obj: Mapping[str, object]) -> int:
     return _upstream_choice_index(response_obj.get("original_chunk"))
 
 
+def _carries_payload(choice: StreamingChoices) -> bool:
+    return choice.logprobs is not None or any(choice.delta.model_dump(exclude_none=True, exclude={"role"}).values())
+
+
 def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
     first_choice: Final = _upstream_first_choice(upstream_chunk)
     upstream_extras: Final = first_choice.model_extra if first_choice is not None else None
@@ -1392,7 +1396,9 @@ class CustomStreamWrapper:
                 # Some providers (like OpenRouter) send usage/cost in a chunk after the finish_reason
                 # chunk, repeating an empty choice the caller must not see after the finish
                 if getattr(model_response, "usage", None) is not None:
-                    return model_response.model_copy(update={"choices": []})
+                    return model_response.model_copy(
+                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
+                    )
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
