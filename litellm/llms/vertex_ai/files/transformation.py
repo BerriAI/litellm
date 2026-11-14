@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.common_utils import defs_unpacked
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
@@ -116,6 +117,7 @@ _BATCH_OUTPUT_FIRST_ROW_PEEK_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PASSTHROUGH_MANAGED_GCS_PREFIX: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}passthrough/"
 _RAW_UPLOAD_CHUNK_BYTES: Final = 1024 * 1024
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -849,12 +851,23 @@ def _with_json_schema_config_in_its_own_column(vertex_request_body: Mapping[str,
     Vertex loads a batch file into one BigQuery table, so each row's `generationConfig` gains a null for every key
     another row sets. `response_json_schema` is a `google.protobuf.Value`, so its null counts as set and fails the
     row. Proto JSON takes both spellings of the field, so a row with a schema uses the one no other row shares.
+    BigQuery column names cannot hold `$` either, so the schema's `$defs` are inlined.
     """
     generation_config: Final = vertex_request_body.get("generationConfig")
     if not isinstance(generation_config, Mapping) or "response_json_schema" not in generation_config:
         return vertex_request_body
+    schema_config: Final = _JSON_OBJECT.validate_python(generation_config)
+    json_schema: Final = schema_config["response_json_schema"]
     return {
-        ("generation_config" if key == "generationConfig" else key): value for key, value in vertex_request_body.items()
+        **{key: value for key, value in vertex_request_body.items() if key != "generationConfig"},
+        "generation_config": {
+            **schema_config,
+            "response_json_schema": (
+                defs_unpacked(_JSON_OBJECT.validate_python(json_schema))
+                if isinstance(json_schema, Mapping)
+                else json_schema
+            ),
+        },
     }
 
 

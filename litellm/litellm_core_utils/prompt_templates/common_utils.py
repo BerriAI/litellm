@@ -1069,6 +1069,16 @@ def _has_legacy_defs(schema: object) -> bool:
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
+def defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+    import copy
+
+    unpacked: Final = copy.deepcopy(dict(json_schema))
+    defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
+    if isinstance(defs, dict) and defs:
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+    return unpacked
+
+
 def unpack_legacy_defs(
     schema: dict,
     *,

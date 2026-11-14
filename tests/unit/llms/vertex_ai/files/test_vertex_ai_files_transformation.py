@@ -2535,3 +2535,52 @@ def test_a_responses_row_with_a_json_schema_uses_the_same_column_as_a_chat_row()
         ]
     )
     assert _config_columns(responses_row) == _config_columns(chat_row) == {"generation_config"}
+
+
+def test_a_json_schema_row_keeps_every_other_key_of_the_plain_row() -> None:
+    knobs: Final = {
+        "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        "tool_choice": "auto",
+    }
+    (plain_row, schema_row) = _wrap_entries(
+        [_chat_entry("gemini-2.5-flash", knobs), _chat_entry("gemini-2.5-flash", {**knobs, **_JSON_SCHEMA_KNOBS})]
+    )
+    plain_request: Final = _request_of(plain_row)
+    schema_request: Final = _request_of(schema_row)
+    assert {"labels", "system_instruction", "tools", "toolConfig"} <= plain_request.keys()
+    assert {k: v for k, v in schema_request.items() if k != "generation_config"} == {
+        k: v for k, v in plain_request.items() if k != "generationConfig"
+    }
+
+
+def _keys_anywhere(node: object) -> frozenset[str]:
+    if isinstance(node, Mapping):
+        return frozenset(str(key) for key in node).union(*(_keys_anywhere(value) for value in node.values()))
+    if isinstance(node, list):
+        return frozenset().union(*(_keys_anywhere(item) for item in node))
+    return frozenset()
+
+
+def test_a_json_schema_row_with_defs_holds_no_key_bigquery_refuses() -> None:
+    """Vertex loads a batch file into BigQuery, whose column names cannot hold `$`, so one `$defs` key failed the
+    whole batch with 'Invalid field name "$defs"'"""
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    schema_with_defs: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City"}, "largest": {"$ref": "#/$defs/City"}},
+        "required": ["capital", "largest"],
+        "$defs": {"City": city},
+    }
+    (row,) = _wrap_entries(
+        [
+            _chat_entry(
+                "gemini-2.5-flash",
+                {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": schema_with_defs}}},
+            )
+        ]
+    )
+    assert not any("$" in key for key in _keys_anywhere(row))
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == {"type": "object", "properties": {"capital": city, "largest": city}, "required": ["capital", "largest"]}
