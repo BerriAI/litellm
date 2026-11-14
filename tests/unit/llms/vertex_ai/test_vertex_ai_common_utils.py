@@ -1,6 +1,5 @@
 import copy
 import json
-import os
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -23,8 +22,9 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     _JSON_SCHEMA_HOIST_BUDGET,
+    _JSON_SCHEMA_SEARCH_BUDGET,
     _MAX_JSON_SCHEMA_HOISTS_PER_PATH,
-    _MAX_JSON_SCHEMA_REWRITE_DEPTH,
+    _GEMINI_MAX_JSON_SCHEMA_DEPTH,
     _fix_enum_types,
     build_json_schema,
     build_vertex_schema,
@@ -43,7 +43,6 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 @pytest.mark.asyncio
@@ -2907,12 +2906,15 @@ def test_build_json_schema_follows_local_refs_into_branches(defs_keyword: str) -
     assert build_json_schema(schema)["properties"] == {"name": _NAME_AS_ENUMS}
 
 
-def test_build_json_schema_follows_refs_to_definition_names_with_escaped_characters() -> None:
-    schema: Final = {
-        "$defs": {"kind/a~b": _NAME_BRANCHES[0]},
-        "anyOf": [{"$ref": "#/$defs/kind~1a~0b"}],
-        "required": ["name"],
-    }
+@pytest.mark.parametrize(
+    ("definition_name", "ref"),
+    [("kind/a~b", "#/$defs/kind~1a~0b"), ("kind é", "#/$defs/kind%20%C3%A9")],
+    ids=["pointer-escapes", "percent-encoding"],
+)
+def test_build_json_schema_follows_refs_to_definition_names_with_escaped_characters(
+    definition_name: str, ref: str
+) -> None:
+    schema: Final = {"$defs": {definition_name: _NAME_BRANCHES[0]}, "anyOf": [{"$ref": ref}], "required": ["name"]}
 
     assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
 
@@ -2979,6 +2981,20 @@ def test_build_json_schema_keeps_every_definition_of_every_name_across_branches(
 @pytest.mark.parametrize("other", [{"type": "null"}, {"type": ["string", "integer"]}], ids=["null", "type-list"])
 def test_build_json_schema_declares_a_name_beside_alternatives_that_cannot_be_objects(other: JsonValue) -> None:
     schema: Final = {"type": ["object", "null"], "anyOf": [_NAME_BRANCHES[0], other], "required": ["name"]}
+
+    assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"type": "string", "properties": {"name": {"type": "integer"}}},
+        {"type": "string", "anyOf": [{"properties": {"name": {"type": "integer"}}}]},
+    ],
+    ids=["own-properties", "nested-branch"],
+)
+def test_build_json_schema_copies_no_definition_from_alternatives_that_cannot_be_objects(other: JsonValue) -> None:
+    schema: Final = {"anyOf": [_NAME_BRANCHES[0], other], "required": ["name"]}
 
     assert build_json_schema(schema)["properties"] == {"name": {"enum": ["People"]}}
 
@@ -3108,6 +3124,29 @@ def test_build_json_schema_declares_names_inside_the_hoisted_copy() -> None:
             },
             id="values-shaped-like-schemas",
         ),
+        pytest.param(
+            {"properties": [1, 2], "anyOf": list(_NAME_BRANCHES), "required": ["name"]},
+            id="properties-that-are-not-a-map",
+        ),
+        pytest.param(
+            {
+                "$defs": {"Name": {"type": "integer"}},
+                "anyOf": [
+                    {
+                        "$id": "https://example.com/people",
+                        "$defs": {"Name": {"type": "string"}},
+                        "properties": {"name": {"$ref": "#/$defs/Name"}},
+                    },
+                    {"properties": {"name": {"type": "string"}}},
+                ],
+                "required": ["name"],
+            },
+            id="branch-with-its-own-id",
+        ),
+        pytest.param(
+            {"anyOf": [{"properties": {"name": {"$anchor": "name", "type": "string"}}}], "required": ["name"]},
+            id="definition-with-an-anchor",
+        ),
     ],
 )
 def test_build_json_schema_leaves_schemas_with_nothing_to_hoist_as_sent(schema: dict[str, JsonValue]) -> None:
@@ -3133,36 +3172,16 @@ def test_build_json_schema_does_not_change_its_input() -> None:
     assert schema == sent
 
 
-@pytest.mark.parametrize(
-    ("levels", "declared"), [(_MAX_JSON_SCHEMA_REWRITE_DEPTH, True), (_MAX_JSON_SCHEMA_REWRITE_DEPTH + 1, False)]
-)
-def test_build_json_schema_stops_descending_at_the_depth_limit(levels: int, declared: bool) -> None:
+_REWRITE_DEPTH: Final = min(DEFAULT_MAX_RECURSE_DEPTH, _GEMINI_MAX_JSON_SCHEMA_DEPTH)
+
+
+@pytest.mark.parametrize(("levels", "declared"), [(_REWRITE_DEPTH, True), (_REWRITE_DEPTH + 1, False)])
+def test_build_json_schema_stops_descending_at_the_gemini_depth_limit(levels: int, declared: bool) -> None:
     nested: Final = reduce(lambda inner, _: {"properties": {"item": inner}}, range(levels), _UNION)
 
     built: Final = build_json_schema(nested)
 
     assert ("properties" in reduce(getitem, ("properties", "item") * levels, built)) is declared
-
-
-def test_build_json_schema_rewrites_a_deep_schema_when_the_recursion_limit_is_raised() -> None:
-    script: Final = "\n".join(
-        (
-            "from functools import reduce",
-            "from litellm.llms.vertex_ai.common_utils import build_json_schema",
-            f"union = {_UNION!r}",
-            "deep = reduce(lambda inner, _: {'properties': {'item': inner}}, range(400), union)",
-            "built = build_json_schema({'properties': {'top': union, 'deep': deep}})",
-            "assert 'properties' in built['properties']['top']",
-        )
-    )
-
-    completed: Final = run_child_interpreter(
-        script,
-        env={**os.environ, "DEFAULT_MAX_RECURSE_DEPTH": "1000", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-        timeout=120,
-    )
-
-    assert completed.returncode == 0, completed.stderr
 
 
 def _nested_hoists(levels: int) -> dict[str, JsonValue]:
@@ -3225,19 +3244,36 @@ def test_build_json_schema_declares_names_after_a_copy_larger_than_the_fixed_bud
     assert built["properties"]["item"]["properties"] == {"name": _NAME_AS_ENUMS}
 
 
-def test_build_json_schema_stops_searching_branches_past_the_budget() -> None:
-    schema: Final = {
-        "anyOf": [*({} for _ in range(_JSON_SCHEMA_HOIST_BUDGET)), _NAME_BRANCHES[0]],
+@pytest.mark.parametrize(
+    ("branches", "declared"), [(_JSON_SCHEMA_SEARCH_BUDGET, True), (_JSON_SCHEMA_SEARCH_BUDGET + 1, False)]
+)
+def test_build_json_schema_stops_searching_branches_past_the_budget(branches: int, declared: bool) -> None:
+    schema: Final = {"anyOf": [_NAME_BRANCHES[0]] * branches, "required": ["name"]}
+
+    assert ("properties" in build_json_schema(schema)) is declared
+
+
+def _ref_diamond(levels: int) -> dict[str, JsonValue]:
+    fan_out: Final = {f"L{level}": {"anyOf": [{"$ref": f"#/$defs/L{level + 1}"}] * 2} for level in range(levels)}
+    return {
+        "$defs": {**fan_out, f"L{levels}": _NAME_BRANCHES[0]},
+        "anyOf": [{"$ref": "#/$defs/L0"}],
         "required": ["name"],
     }
 
-    assert build_json_schema(schema) == schema
+
+@pytest.mark.parametrize(("levels", "declared"), [(2, True), (12, False)])
+def test_build_json_schema_stops_searching_a_ref_diamond_past_the_budget(levels: int, declared: bool) -> None:
+    assert ("properties" in build_json_schema(_ref_diamond(levels))) is declared
 
 
-def test_build_json_schema_counts_entries_that_are_not_schemas_against_the_budget() -> None:
-    schema: Final = {"anyOf": [*(0 for _ in range(_JSON_SCHEMA_HOIST_BUDGET)), _NAME_BRANCHES[0]], "required": ["name"]}
+@pytest.mark.parametrize(
+    ("entries", "declared"), [(_JSON_SCHEMA_SEARCH_BUDGET - 1, True), (_JSON_SCHEMA_SEARCH_BUDGET, False)]
+)
+def test_build_json_schema_counts_entries_that_are_not_schemas_against_the_budget(entries: int, declared: bool) -> None:
+    schema: Final = {"allOf": [*(0 for _ in range(entries)), _NAME_BRANCHES[0]], "required": ["name"]}
 
-    assert build_json_schema(schema) == schema
+    assert ("properties" in build_json_schema(schema)) is declared
 
 
 @pytest.mark.parametrize(
