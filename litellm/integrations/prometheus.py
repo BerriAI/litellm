@@ -1882,7 +1882,7 @@ class PrometheusLogger(CustomLogger):
 
         label_context: Final = PrometheusLabelFactoryContext(enum_values)  # amortized per request.
 
-        if self._native_store is not None and native_store.companion_in_line(self, litellm._async_success_callback):
+        if self._native_store is not None:
             native_store.arm(
                 self.v2_companion,
                 kwargs,
@@ -1908,6 +1908,8 @@ class PrometheusLogger(CustomLogger):
                 input_sequence_length_label=self._emit_input_sequence_length_label,
                 now=datetime.now(timezone.utc).astimezone().replace(tzinfo=None),
             )
+            if not native_store.companion_in_line(self, litellm._async_success_callback):
+                await native_store.run_alone(self.v2_companion, kwargs, "success", response_obj, start_time, end_time)
             return
 
         # increment total LLM requests and spend metric
@@ -3010,7 +3012,7 @@ class PrometheusLogger(CustomLogger):
                     )
                 ),
             )
-            if self._native_store is not None and native_store.companion_in_line(self, litellm._async_failure_callback):
+            if self._native_store is not None:
                 native_store.arm(
                     self.v2_companion,
                     kwargs,
@@ -3023,6 +3025,10 @@ class PrometheusLogger(CustomLogger):
                         user_api_key_org_id,
                     ),
                 )
+                if not native_store.companion_in_line(self, litellm._async_failure_callback):
+                    await native_store.run_alone(
+                        self.v2_companion, kwargs, "failure", response_obj, start_time, end_time
+                    )
                 return
             PrometheusLogger._inc_labeled_counter(
                 self,

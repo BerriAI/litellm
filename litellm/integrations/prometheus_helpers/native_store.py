@@ -26,7 +26,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger_v2.call import CallContext
+from litellm.integrations.custom_logger_v2.derivations import DERIVED_ATTEMPT_FIELDS
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
+from litellm.integrations.custom_logger_v2.legacy import Admit, KwargsFields, hook_subscribers, run_subscribers
 from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
 from litellm.integrations.prometheus_helpers.forwarding_store import ForwardingStore, PrometheusKind, forwarded_metric
 from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
@@ -34,6 +37,7 @@ from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions
 )
 from litellm.litellm_core_utils.core_helpers import env_flag
 from litellm.rust_bridge import _native
+from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS, NoOpMetric, PrometheusMetricLabels
 
 if TYPE_CHECKING:
@@ -460,6 +464,48 @@ def arm(
             after=after,
             budget=budget,
         )
+    )
+
+
+def _no_legacy(_callback: object, _kwargs: object) -> None:
+    return None
+
+
+async def run_alone(
+    companion: object,
+    kwargs: Mapping[str, object],
+    event: NativeEvent,
+    response: object,
+    start_time: object,
+    end_time: object,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import LOGGING_KEYS, Logging
+
+    if not isinstance(companion, RustLogger):
+        return
+    owner: Final = Logging(
+        model=str(kwargs.get("model", "")),
+        messages=[],
+        stream=kwargs.get("stream") is True,
+        call_type=str(kwargs.get("call_type") or "acompletion"),
+        start_time=start_time if isinstance(start_time, datetime) else datetime.now(timezone.utc),
+        litellm_call_id=str(kwargs.get("litellm_call_id", "")),
+        function_id="prometheus",
+    )
+    owner.model_call_details = dict(kwargs)
+    args: Final = HookArgs(
+        request=kwargs,
+        result=response,
+        start_time=start_time,
+        end_time=end_time,
+        outcome=Outcome.success if event == "success" else Outcome.failure,
+        logging_obj=owner,
+    )
+    _ = await run_subscribers(
+        hook_subscribers(Hook.attempt_ended, (companion,), admit=Admit.every_entry),
+        with_sources(KwargsFields(kwargs, LOGGING_KEYS), DERIVED_ATTEMPT_FIELDS, args),
+        _no_legacy,
+        call=owner.v2_call_facts(end_time),
     )
 
 
