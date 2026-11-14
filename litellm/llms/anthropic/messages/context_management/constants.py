@@ -3,6 +3,7 @@
 from typing import Final
 
 CLEAR_TOOL_USES_EDIT_TYPE: Final = "clear_tool_uses_20250919"
+CLEAR_THINKING_EDIT_TYPE: Final = "clear_thinking_20251015"
 
 DEFAULT_INPUT_TOKENS_TRIGGER: Final = 100_000
 DEFAULT_KEEP_TOOL_USES: Final = 3
