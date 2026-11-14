@@ -154,6 +154,13 @@ def _a_destination_carries_the_trace() -> bool:
     return ExporterOwner.LANGFUSE_OTEL in destination_backends()
 
 
+def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_is_refused
+
+    return is_otel_v2_enabled() and langfuse_tenant_host_is_refused(params)
+
+
 class LangfuseOtelLogger(OpenTelemetry):
     def __init__(self, config=None, *args, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
@@ -527,7 +534,11 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
+        if (
+            dynamic_langfuse_public_key
+            and dynamic_langfuse_secret_key
+            and not _refused_on_otel_v2(standard_callback_dynamic_params)
+        ):
             auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
@@ -549,7 +560,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if not public_key or not secret_key:
+        if not public_key or not secret_key or _refused_on_otel_v2(standard_callback_dynamic_params):
             return None
 
         langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()

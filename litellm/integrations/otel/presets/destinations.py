@@ -60,6 +60,10 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     return (endpoint, None)
 
 
+def langfuse_tenant_host_is_refused(params: StandardCallbackDynamicParams) -> bool:
+    return bool(params.get("langfuse_host")) and _langfuse_destination(params) is None
+
+
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
