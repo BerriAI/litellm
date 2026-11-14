@@ -9,7 +9,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -1904,7 +1904,7 @@ class PrometheusLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ),
                 input_sequence_length_label=self._emit_input_sequence_length_label,
-                now=datetime.now(),
+                now=datetime.now(timezone.utc).astimezone().replace(tzinfo=None),
             )
             return
 
