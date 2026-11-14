@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -1134,6 +1135,14 @@ def _normalize_service_tier(service_tier: object) -> str | None:
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
 
 
+def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
+    return _resolve_billable_service_tier(
+        requested=None,
+        served=_served_service_tier(completion_response, usage_object),
+    )
+
+
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
     served_lower: Final = served.lower() if isinstance(served, str) else None
@@ -1499,6 +1508,14 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _model_is_none_error(completion_response_text: str, litellm_logging_obj: LitellmLoggingObject | None) -> ValueError:
+    message: Final = "Model is None and does not exist in passed completion_response."
+    model_call_details: Final = {} if litellm_logging_obj is None else litellm_logging_obj.model_call_details
+    if should_redact_message_logging(model_call_details) or model_call_details.get("query_image") is not None:
+        return ValueError(message)
+    return ValueError(f"{message} Passed completion_response={completion_response_text}, model=None")
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1751,9 +1768,7 @@ def completion_cost(
 
                 else:
                     if model is None:
-                        raise ValueError(
-                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                        )
+                        raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                     if len(messages) > 0:
                         prompt_tokens = token_counter(model=model, messages=messages)
                     elif len(prompt) > 0:
@@ -1767,9 +1782,7 @@ def completion_cost(
                     return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                 if custom_llm_provider is None:
                     try:
                         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1795,6 +1808,7 @@ def completion_cost(
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
+                        service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -1989,9 +2003,7 @@ def completion_cost(
                     return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
 
                 if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
                     # Calculate the prompt characters + response characters

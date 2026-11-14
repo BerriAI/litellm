@@ -8,7 +8,10 @@ calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 
 import json
 from importlib import import_module
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import JsonValue
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -17,7 +20,9 @@ import pytest
 import respx
 
 import litellm
+from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.responses.bridge_check import bridge_reasoning_effort, responses_api_bridge_check
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -478,6 +483,149 @@ class TestUseResponsesApiBridgeFlag:
         assert request.headers["authorization"] == "Bearer fake-azure-ad-token"
         assert "chat_template_kwargs" not in json.loads(request.read())
 
+    def test_bridge_rejects_a_responses_field_it_cannot_translate_when_drop_params_is_off(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.responses(
+                model="databricks/my-custom-model",
+                input="Hello",
+                max_tool_calls=5,
+                api_base="https://example.databricks.test/serving-endpoints",
+                api_key="fake-databricks-api-key",
+                num_retries=0,
+            )
+
+        assert upstream.call_count == 0, "the provider must not be called for a field the bridge cannot translate"
+        assert raised.value.status_code == 400
+        assert "max_tool_calls" in str(raised.value)
+        assert "drop_params" in str(raised.value)
+
+    @pytest.mark.parametrize("drop_params_source", ["request", "global"])
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_drop_params_is_on(
+        self, drop_params_source: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            chat_template_kwargs={"thinking": True},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "chat_template_kwargs": {"thinking": True},
+        }
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_the_deployment_sets_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "bridged",
+                    "litellm_params": {
+                        "model": "databricks/my-custom-model",
+                        "api_base": "https://example.databricks.test/serving-endpoints",
+                        "api_key": "fake-databricks-api-key",
+                        "drop_params": True,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        response: Final = router.responses(model="bridged", input="Hello", max_tool_calls=5)
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert "max_tool_calls" not in request_body
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_allowed_openai_params_sends_a_responses_field_through_the_bridge(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            allowed_openai_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read())["max_tool_calls"] == 5
+
+    def test_bridge_still_honors_additional_drop_params_for_a_responses_field_it_cannot_translate(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            additional_drop_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_still_quietly_drops_responses_fields_it_already_handles(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            store=False,
+            include=["reasoning.encrypted_content"],
+            truncation="auto",
+            metadata={"k": "v"},
+            background=False,
+            text={"verbosity": "low"},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+
     @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
     @patch.object(
         import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
@@ -645,3 +793,97 @@ class TestUseResponsesApiBridgeFlag:
 
         assert exc_info.value.param == "stream_chunk_size"
         send.assert_not_called()
+
+
+def _databricks_chat_upstream(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
+
+
+_FUNCTION_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize(("effort", "mode"), ((None, "chat"), ("medium", "responses")))
+def test_gpt_5_4_function_tools_route_by_explicit_effort(
+    custom_llm_provider: str, effort: str | None, mode: str
+) -> None:
+    info, model = responses_api_bridge_check(
+        model="gpt-5.4",
+        custom_llm_provider=custom_llm_provider,
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=effort,
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+    )
+    assert (info["mode"], model) == (mode, "gpt-5.4")
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize(
+    ("model", "effort", "extra_body", "expected"),
+    (
+        ("gpt-5.4-mini", None, None, "chat"),
+        ("gpt-5.4-nano", None, None, "chat"),
+        ("gpt-5.5", None, None, "chat"),
+        ("gpt-5.6", None, None, "responses"),
+        ("gpt-6.1-sol", None, None, "responses"),
+        ("gpt-5.4-mini", "none", None, "chat"),
+        ("gpt-5.4-mini", "medium", None, "responses"),
+        ("gpt-5.4-mini", {"effort": "medium"}, None, "responses"),
+        ("gpt-5.4-mini", None, {"reasoning_effort": "medium"}, "responses"),
+    ),
+)
+def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
+    provider: str,
+    model: str,
+    effort: str | Mapping[str, object] | None,
+    extra_body: Mapping[str, object] | None,
+    expected: str,
+) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=provider,
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=bridge_reasoning_effort(effort, extra_body),
+        api_base="https://api.openai.com/v1",
+    )
+    assert info.get("mode") == expected
+
+
+@pytest.mark.parametrize("region", ("us", "eu"))
+@pytest.mark.parametrize("model", ("gpt-5.4-mini", "gpt-5.4-nano"))
+def test_regional_azure_default_none_function_tools_stay_on_chat(region: str, model: str) -> None:
+    info, _ = responses_api_bridge_check(
+        model=f"{region}/{model}", custom_llm_provider="azure", tools=[_FUNCTION_TOOL]
+    )
+    assert info.get("mode") == "chat"
+    assert info.get("default_reasoning_effort") == litellm.model_cost[f"azure/{model}"]["default_reasoning_effort"]
+
+
+def test_registered_gpt_5_6_default_none_function_tools_stay_on_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "gpt-5.6-test-default-none"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {**litellm.model_cost["gpt-5.6"], "default_reasoning_effort": "none"},
+    )
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", tools=[_FUNCTION_TOOL], api_base="https://api.openai.com/v1"
+    )
+    assert info.get("mode") == "chat"

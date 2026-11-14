@@ -9446,8 +9446,12 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+            configs: Final = {
+                LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
+                LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+            }
+            return configs[provider]()
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
         return None
@@ -9823,6 +9827,8 @@ class ProviderConfigManager:
     ) -> BaseLLMModelInfo | None:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
@@ -9982,6 +9988,10 @@ class ProviderConfigManager:
             from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
 
             return MistralBatchesConfig()
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.batches.transformation import GeminiBatchesConfig
+
+            return GeminiBatchesConfig()
         return None
 
     @staticmethod

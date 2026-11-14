@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -21,6 +21,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
@@ -33,7 +34,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -465,16 +466,16 @@ def _bridges_to_chat_completions(
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
-def _bridge_kwargs(
-    kwargs: Mapping[str, object],
-    responses_api_provider_config: BaseResponsesAPIConfig | None,
-    allowed_openai_params: Sequence[str] | None,
-) -> Mapping[str, object]:
-    if responses_api_provider_config is None:
-        return MappingProxyType(
-            {key: value for key, value in kwargs.items() if key not in _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED}
-        )
-    forwarded_keys: Final = frozenset(
+_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+
+
+@dataclass(frozen=True, slots=True)
+class _UntranslatableResponsesFields:
+    fields: tuple[str, ...]
+
+
+def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None) -> frozenset[str]:
+    return frozenset(
         (
             *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -483,7 +484,49 @@ def _bridge_kwargs(
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
-    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+
+
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
+
+
+def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:
+    try:
+        return frozenset(_ADDITIONAL_DROP_PARAMS.validate_python(kwargs.get("additional_drop_params")))
+    except ValidationError:
+        return frozenset()
+
+
+def _bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+) -> Mapping[str, object] | _UntranslatableResponsesFields:
+    forwarded_keys: Final = _chat_completion_request_fields(allowed_openai_params)
+    if responses_api_provider_config is not None:
+        return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+    candidate_keys: Final = _RESPONSES_REQUEST_FIELDS.difference(forwarded_keys, _explicitly_dropped_fields(kwargs))
+    untranslatable: Final = tuple(sorted(key for key in candidate_keys if kwargs.get(key) is not None))
+    if untranslatable and not drops_unsupported_params(kwargs.get("drop_params")):
+        return _UntranslatableResponsesFields(untranslatable)
+    dropped_keys: Final = _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED.union(untranslatable)
+    return MappingProxyType({key: value for key, value in kwargs.items() if key not in dropped_keys})
+
+
+def _raise_untranslatable_responses_fields(
+    failure: _UntranslatableResponsesFields, model: str, custom_llm_provider: str | None
+) -> NoReturn:
+    fields: Final = list(failure.fields)
+    raise UnsupportedParamsError(
+        status_code=400,
+        model=model,
+        llm_provider=custom_llm_provider,
+        message=(
+            f"{custom_llm_provider} does not support parameters: {fields}, for model={model}. "
+            "The Responses API to chat completions bridge cannot translate them. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n "
+            f"If you want to use these params dynamically send allowed_openai_params={fields} in your request."
+        ),
+    )
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -1517,6 +1560,8 @@ def responses(
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+            if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
+                _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,

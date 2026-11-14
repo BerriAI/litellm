@@ -2040,6 +2040,36 @@ def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(
     assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
 
 
+@pytest.mark.parametrize("requested_tier", ["flex", "priority"])
+def test_vertex_gemini_image_generation_bills_only_the_tier_vertex_served(
+    _local_model_cost_map: None, requested_tier: str
+) -> None:
+    """Image requests never send service_tier upstream, so a request tier must not change the bill
+    when Vertex reports no trafficType, while a served ON_DEMAND_PRIORITY still bills priority rates."""
+    usage: Final = ImageUsage(
+        input_tokens=1000,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=1000),
+        output_tokens=1120,
+        total_tokens=2120,
+    )
+
+    def image_cost(traffic_type: str | None, service_tier: str | None) -> float:
+        response: Final = ImageResponse(data=[ImageObject(b64_json="img")], usage=usage)
+        response.hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type} if traffic_type else {}
+        return completion_cost(
+            completion_response=response,
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            optional_params={"service_tier": service_tier} if service_tier else {},
+        )
+
+    standard_cost: Final = image_cost(None, None)
+    assert standard_cost > 0
+    assert image_cost(None, requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND", requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND_PRIORITY", requested_tier) > standard_cost
+
+
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     """The regional-endpoint uplift multiplies whatever rate the request priced at,
     including the above-128k dynamic rates, so a synthetic model carrying both keys
@@ -10268,3 +10298,39 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    ("message_logging_off", "query_image", "echoes_response"),
+    [
+        (True, None, False),
+        (False, None, True),
+        (False, {"type": "base64", "media_type": "image/jpeg", "data": "cXVlcnk="}, False),
+    ],
+)
+def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_response_with_message_logging_on(
+    message_logging_off: bool,
+    query_image: Mapping[str, str] | None,
+    echoes_response: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+    logging_obj: Final = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="avector_store_search",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="unpriced-search",
+        function_id="f",
+    )
+    logging_obj.model_call_details["query_image"] = query_image
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(
+            completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert (image_data in str(exc_info.value)) is echoes_response

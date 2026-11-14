@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.108.5"
+version = "1.108.8"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -79,7 +79,7 @@ proxy = [
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.110",
-    "litellm-enterprise==0.1.79.post1",
+    "litellm-enterprise==0.1.79.post2",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -262,6 +262,7 @@ proxy-dev = [
 ]
 ci = [
     "psutil==7.2.2",
+    "tzdata==2026.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
@@ -396,7 +397,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.108.5"
+version = "1.108.8"
 version_files = [
     "pyproject.toml:^version",
 ]

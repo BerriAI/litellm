@@ -34,6 +34,10 @@ from litellm.llms.azure.passthrough.transformation import azure_router_model_in_
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
+from litellm.router_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list of deployment credential fields
+    clientside_credential_keys,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -306,6 +310,35 @@ def route_manages_mcp_servers(route: str | None) -> bool:
     return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
 
 
+_AZURE_ENTRA_CREDENTIAL_PARAMS: Final[tuple[str, ...]] = (
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_username",
+    "azure_password",
+    "azure_scope",
+)
+_MCP_OAUTH_CLIENT_FORM_FIELDS: Final[frozenset[str]] = frozenset(("client_id", "client_secret"))
+_TRANSCRIPTION_SESSION_ROUTES: Final[frozenset[str]] = frozenset(
+    (
+        "/v1/realtime/transcription_sessions",
+        "/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+    )
+)
+_TRANSCRIPTION_SESSION_FIELDS: Final[frozenset[str]] = frozenset(("client_secret",))
+_TOKEN_INTROSPECTION_ROUTE: Final = "/introspect"
+_BANNED_PARAMS_ALLOWED_IN_METADATA: Final[frozenset[str]] = frozenset(_AZURE_ENTRA_CREDENTIAL_PARAMS)
+
+
+def _entra_params_owned_by_route(route: str | None) -> frozenset[str]:
+    if route in _TRANSCRIPTION_SESSION_ROUTES:
+        return _TRANSCRIPTION_SESSION_FIELDS
+    if route_manages_mcp_servers(route) or route == _TOKEN_INTROSPECTION_ROUTE:
+        return _MCP_OAUTH_CLIENT_FORM_FIELDS
+    return frozenset()
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -405,6 +438,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # caller-supplied value is the same exfil shape as
     # ``aws_web_identity_token`` on the Bedrock path.
     "azure_ad_token",
+    *_AZURE_ENTRA_CREDENTIAL_PARAMS,
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
@@ -463,6 +497,36 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
+_SECRET_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("os.environ/", "oidc/")
+_SECRET_RESOLVING_PARAMS: Final[frozenset[str]] = frozenset(
+    (*_BANNED_REQUEST_BODY_PARAMS, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, *clientside_credential_keys)
+)
+
+
+def _reject_secret_references(body: Mapping[str, object]) -> None:
+    _reject_secret_reference_in(MappingProxyType({k: v for k, v in body.items() if k in _SECRET_RESOLVING_PARAMS}))
+
+
+def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
+    referencing: Final = next(
+        (
+            param
+            for param, value in params.items()
+            if isinstance(value, str) and value.startswith(_SECRET_REFERENCE_PREFIXES)
+        ),
+        None,
+    )
+    if referencing is not None:
+        raise ValueError(
+            f"Rejected Request: {referencing} holds a secret reference, which only a deployment or credential a "
+            "proxy admin configures can carry."
+        )
+
+
+_BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
+)
+
 
 def _check_banned_params(
     body: Mapping[str, object],
@@ -472,6 +536,9 @@ def _check_banned_params(
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    route_owned_params: frozenset[str] = frozenset(),
+    rejects_secret_references: bool = True,
+    banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -486,8 +553,12 @@ def _check_banned_params(
     reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
-    for param in _BANNED_REQUEST_BODY_PARAMS:
+        if rejects_secret_references:
+            _reject_secret_references(body)
+    for param in banned_params:
         if param not in body:
+            continue
+        if param in route_owned_params:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
             # Proxy-wide opt-in: every banned param is permitted, exit
@@ -574,6 +645,17 @@ def _iter_user_config_litellm_params(user_config: object) -> Iterator[Mapping[st
             and (params := _coerce_metadata_to_dict(deployment.get("litellm_params"))) is not None
         ):
             yield params
+
+
+def _user_config_search_tool_params(user_config: object) -> tuple[Mapping[str, object], ...]:
+    config: Final = _coerce_metadata_to_dict(user_config)
+    if config is None:
+        return ()
+    return tuple(
+        params
+        for entry in _mappings_in(config.get("search_tools"))
+        if (params := _coerce_metadata_to_dict(entry.get("litellm_params"))) is not None
+    )
 
 
 def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
@@ -683,6 +765,7 @@ def is_request_body_safe(
         model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        route_owned_params=_entra_params_owned_by_route(route),
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -691,7 +774,15 @@ def is_request_body_safe(
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                metadata,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
+            )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
@@ -699,6 +790,8 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
@@ -721,8 +814,42 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                rejects_secret_references=False,
             )
+    for user_config_params in (
+        *_iter_user_config_litellm_params(request_body.get("user_config")),
+        *_user_config_search_tool_params(request_body.get("user_config")),
+    ):
+        _reject_user_config_secret_references(user_config_params)
     return True
+
+
+def _reject_user_config_secret_references(litellm_params: Mapping[str, object]) -> None:
+    for params in (litellm_params, *_nested_configs(litellm_params), *_data_source_parameters(litellm_params)):
+        _reject_secret_reference_in(params)
+
+
+def _data_source_parameters(litellm_params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        parameters
+        for source in _mappings_in(litellm_params.get("dataSources"))
+        if (parameters := _coerce_metadata_to_dict(source.get("parameters"))) is not None
+    )
+
+
+def _nested_configs(params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        nested for key in _NESTED_CONFIG_KEYS if (nested := _coerce_metadata_to_dict(params.get(key))) is not None
+    )
+
+
+_LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _mappings_in(value: object) -> tuple[Mapping[str, object], ...]:
+    entries: Final = _LIST_ENTRIES.validate_python(value) if isinstance(value, list) else ()
+    return tuple(mapping for entry in entries if (mapping := _coerce_metadata_to_dict(entry)) is not None)
 
 
 def carries_client_side_overrides(request_body: object) -> bool:
