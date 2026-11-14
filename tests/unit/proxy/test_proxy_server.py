@@ -3591,17 +3591,11 @@ def _receive_until_closed(websocket: WebSocketTestSession) -> None:
         websocket.receive_text()
 
 
-@pytest.mark.parametrize(
-    ("path", "session_start"),
-    (
-        ("/v1/realtime?model=gpt-realtime", None),
-        ("/v1/realtime/translations?model=gpt-realtime", None),
-        ("/v1/live/sessions", {"type": "session.start", "session": {"model": "gpt-realtime"}}),
-    ),
-)
+@pytest.mark.parametrize("alias", ("gpt-realtime", "voice"))
+@pytest.mark.parametrize("route", ("/v1/realtime", "/v1/realtime/translations", "/v1/live/sessions"))
 def test_realtime_websocket_team_alias_selects_restricted_deployment(
-    path: str,
-    session_start: Mapping[str, object] | None,
+    alias: str,
+    route: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from starlette.websockets import WebSocketDisconnect
@@ -3644,7 +3638,7 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
         team_id="alias-team",
         models=["all-team-models"],
         team_models=["Restricted"],
-        team_model_aliases={provider_model: "restricted/realtime"},
+        team_model_aliases={alias: "restricted/realtime"},
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "master_key", None)
@@ -3659,12 +3653,14 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
     connect: Final = MagicMock(side_effect=RuntimeError("upstream selected"))
     monkeypatch.setattr("websockets.connect", connect)
 
-    with TestClient(app).websocket_connect(path) as websocket:
-        if session_start is not None:
-            websocket.send_json(session_start)
+    is_live_session: Final = route == "/v1/live/sessions"
+    with TestClient(app).websocket_connect(route if is_live_session else f"{route}?model={alias}") as websocket:
+        if is_live_session:
+            websocket.send_json({"type": "session.start", "session": {"model": alias}})
         with pytest.raises(WebSocketDisconnect):
             _receive_until_closed(websocket)
 
+    connect.assert_called_once()
     assert connect.call_args.kwargs["additional_headers"]["Authorization"] == "Bearer restricted-key"
 
 
