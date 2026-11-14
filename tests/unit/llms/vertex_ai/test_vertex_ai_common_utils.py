@@ -1,7 +1,9 @@
 import copy
+import functools
 import threading
 import time
-from collections.abc import Iterator, Mapping
+import tracemalloc
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
@@ -14,7 +16,11 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import anthropic_beta_headers_manager
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
+    MAX_VERTEX_SCHEMA_ONEOF_ADDED_CHARACTERS,
+    MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
@@ -797,6 +803,340 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
+def _branches() -> list[JsonValue]:
+    return [
+        {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+        {"properties": {"b": {"type": "integer"}}, "required": ["b"]},
+    ]
+
+
+def _payment_union(union: str) -> dict[str, JsonValue]:
+    return {
+        "$defs": {
+            "Card": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "number": {"type": "string"}},
+                "required": ["kind", "number"],
+            },
+            "Bank": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "iban": {"type": "string"}},
+                "required": ["kind", "iban"],
+            },
+        },
+        "type": "object",
+        "properties": {
+            "payment": {
+                union: [{"$ref": "#/$defs/Card"}, {"$ref": "#/$defs/Bank"}],
+                "discriminator": {"propertyName": "kind"},
+            }
+        },
+        "required": ["payment"],
+    }
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda union: {"type": "object", "properties": {"f": {union: _branches()}}},
+        lambda union: {"type": "object", "properties": {"f": {"type": "array", "items": {union: _branches()}}}},
+        lambda union: {
+            "type": "object",
+            "properties": {"f": {"anyOf": [{"type": "object", "properties": {"g": {union: _branches()}}}]}},
+        },
+        lambda union: {
+            "type": "object",
+            "properties": {"f": {union: [{"type": "object", "properties": {"g": {union: _branches()}}}]}},
+        },
+        _payment_union,
+    ],
+    ids=["untyped", "array-items", "inside-anyof", "inside-oneof", "pydantic-union"],
+)
+def test_vertex_schema_builds_oneof_branches_like_anyof_branches(shape: Callable[[str], dict[str, JsonValue]]):
+    assert build_vertex_schema(shape("oneOf")) == build_vertex_schema(shape("anyOf"))
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        (
+            {
+                "type": "object",
+                "required": ["a"],
+                "oneOf": [{"properties": {"a": {"type": "string"}}}, {"properties": {"b": {"type": "string"}}}],
+            },
+            [
+                {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+                {"type": "object", "properties": {"b": {"type": "string"}}},
+            ],
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"x": {"type": "string"}, "y": {"type": "integer"}},
+                "required": ["x"],
+                "oneOf": [{"required": ["x"]}, {"required": ["y"]}],
+            },
+            [
+                {"type": "object", "properties": {"x": {"type": "string"}, "y": {"type": "integer"}}, "required": ["x"]},
+                {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}, "y": {"type": "integer"}},
+                    "required": ["x", "y"],
+                },
+            ],
+        ),
+        (
+            {"type": "object", "required": [["a"], "a"], "oneOf": [{"properties": {"a": {"type": "string"}}}]},
+            [{"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}],
+        ),
+        (
+            {"type": "string", "description": "a letter", "oneOf": [{"enum": ["a"]}, {"enum": ["b"], "description": "b"}]},
+            [
+                {"type": "string", "description": "a letter", "enum": ["a"]},
+                {"type": "string", "description": "b", "enum": ["b"]},
+            ],
+        ),
+        (
+            {"type": ["object", "null"], "required": ["a"], "oneOf": [{"properties": {"a": {"type": "string"}}}]},
+            [{"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"], "nullable": True}]}],
+        ),
+    ],
+    ids=["required-on-the-node", "required-in-the-branches", "non-string-required", "scalar-node", "type-list-node"],
+)
+def test_vertex_schema_gives_every_oneof_branch_the_keywords_of_its_node(field: JsonValue, expected: JsonValue):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"f": field}})
+
+    assert schema["properties"]["f"] == {"anyOf": expected}
+
+
+def test_vertex_schema_gives_the_alternatives_of_a_oneof_branch_the_keywords_of_its_node():
+    field: Final[JsonValue] = {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id", "a"],
+        "oneOf": [
+            {"anyOf": [{"properties": {"a": {"type": "string"}}}, {"properties": {"b": {"type": "integer"}}}]},
+            {"properties": {"c": {"type": "boolean"}}},
+        ],
+    }
+
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"f": field}})
+
+    assert schema["properties"]["f"] == {
+        "anyOf": [
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}, "a": {"type": "string"}},
+                        "required": ["id", "a"],
+                    },
+                    {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}, "b": {"type": "integer"}},
+                        "required": ["id"],
+                    },
+                ]
+            },
+            {"type": "object", "properties": {"id": {"type": "string"}, "c": {"type": "boolean"}}, "required": ["id"]},
+        ]
+    }
+
+
+@pytest.mark.parametrize("union", ["oneOf", "anyOf"])
+def test_vertex_schema_replaces_empty_enum_values_inside_union_branches(union: str):
+    plain: Final = build_vertex_schema({"type": "object", "properties": {"f": {"type": "string", "enum": ["", "a"]}}})
+
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"f": {union: [{"type": "string", "enum": ["", "a"]}, {"type": "integer"}]}}}
+    )
+
+    assert schema["properties"]["f"]["anyOf"][0]["enum"] == plain["properties"]["f"]["enum"]
+
+
+def test_vertex_schema_keeps_every_oneof_branch_with_its_properties():
+    schema: Final = build_vertex_schema(_payment_union("oneOf"))
+
+    assert [branch["properties"] for branch in schema["properties"]["payment"]["anyOf"]] == [
+        {"kind": {"type": "string"}, "number": {"type": "string"}},
+        {"kind": {"type": "string"}, "iban": {"type": "string"}},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        (
+            {"anyOf": [{"type": "string"}], "oneOf": [{"type": "integer"}, {"type": "boolean"}]},
+            {"anyOf": [{"type": "string"}]},
+        ),
+        ({"type": "string", "oneOf": {"type": "integer"}}, {"type": "string"}),
+        ({"type": "object", "example": {"oneOf": ["x"]}}, {"type": "object", "example": {"oneOf": ["x"]}}),
+        ({"oneOf": [True, {"type": "string"}]}, {}),
+        ({"oneOf": ["x", {"type": "string"}]}, {}),
+        (
+            {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"], "oneOf": []},
+            {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+        ),
+    ],
+    ids=["anyof-wins-over-oneof", "non-list-oneof", "oneof-inside-example-data", "boolean-branch", "string-branch", "no-branches"],
+)
+def test_vertex_schema_leaves_oneof_alone_where_it_is_not_a_union_it_can_send(field: JsonValue, expected: JsonValue):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"f": field}})
+
+    assert schema["properties"]["f"] == expected
+
+
+@pytest.mark.parametrize(
+    ("root", "expected"),
+    [
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "string"},
+                    "y": {"type": "integer"},
+                    "u": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+                },
+                "oneOf": [{"required": ["x"]}, {"required": ["y"]}],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "string"},
+                    "y": {"type": "integer"},
+                    "u": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                },
+            },
+        ),
+        (
+            {
+                "oneOf": [
+                    {"type": "object", "properties": {"a": {"type": "string"}}},
+                    {"type": "object", "properties": {"b": {"type": "integer"}}},
+                ]
+            },
+            {},
+        ),
+    ],
+    ids=["object-root", "union-root"],
+)
+def test_vertex_schema_leaves_the_oneof_of_the_root_alone(root: dict[str, JsonValue], expected: JsonValue):
+    assert build_vertex_schema(root) == expected
+
+
+@pytest.mark.parametrize(("union", "ordering"), [("oneOf", ["b", "a"]), ("anyOf", None)])
+def test_vertex_schema_orders_union_branch_properties_only_where_oneof_made_the_branches(
+    union: str, ordering: JsonValue
+):
+    branch: Final[JsonValue] = {"type": "object", "properties": {"b": {"type": "string"}, "a": {"type": "string"}}}
+
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"f": {union: [branch, {"type": "string"}]}}}, add_property_ordering=True
+    )
+
+    assert schema["properties"]["f"]["anyOf"][0].get("propertyOrdering") == ordering
+
+
+def test_vertex_schema_rejects_oneof_nested_past_the_max_depth():
+    leaf: Final[dict[str, JsonValue]] = {"type": "string"}
+    deepest: Final = functools.reduce(
+        lambda child, _: {"oneOf": [{"type": "object", "properties": {"nested": child}}]},
+        range(DEFAULT_MAX_RECURSE_DEPTH * 10),
+        leaf,
+    )
+
+    with pytest.raises(ValueError, match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded"):
+        build_vertex_schema({"type": "object", "properties": {"f": deepest}})
+
+
+def _nested_object(levels: int, branches: list[JsonValue]) -> dict[str, JsonValue]:
+    return functools.reduce(
+        lambda child, _: {"type": "object", "properties": {"x": child}, **({"oneOf": branches} if branches else {})},
+        range(levels),
+        {"type": "string"},
+    )
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda nested: nested,
+        lambda nested: {"type": "array", "items": nested},
+        lambda nested: {"anyOf": [nested, {"type": "string"}]},
+    ],
+    ids=["properties", "items", "anyof-branch"],
+)
+def test_vertex_schema_drops_nested_oneof_whose_branches_repeat_their_parents_past_the_node_budget(
+    wrap: Callable[[JsonValue], JsonValue],
+):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"f": wrap(_nested_object(9, [{}, {}]))}})
+
+    assert schema == build_vertex_schema({"type": "object", "properties": {"f": wrap(_nested_object(9, []))}})
+
+
+def _bulk_object() -> dict[str, JsonValue]:
+    return {
+        "type": "object",
+        "properties": {f"p{index}": {"type": "string"} for index in range(MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES)},
+    }
+
+
+@pytest.mark.parametrize(
+    "bulk",
+    [
+        _bulk_object(),
+        {"type": "array", "items": _bulk_object()},
+        {"anyOf": [_bulk_object(), {"type": "string"}]},
+        {"oneOf": [_bulk_object(), {"type": "string"}]},
+        {"type": "string", "description": "x" * MAX_VERTEX_SCHEMA_ONEOF_ADDED_CHARACTERS},
+    ],
+    ids=["properties", "items", "anyof-branch", "oneof-branch", "long-description"],
+)
+def test_vertex_schema_budget_counts_only_what_oneof_adds(bulk: JsonValue):
+    union: Final[JsonValue] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"bulk": bulk, "f": union}})
+
+    assert schema["properties"]["f"] == {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+
+
+@pytest.mark.parametrize(
+    "keywords",
+    [
+        {"description": "x" * MAX_VERTEX_SCHEMA_ONEOF_ADDED_CHARACTERS},
+        {"enum": [f"v{index}" for index in range(MAX_VERTEX_SCHEMA_ONEOF_ADDED_CHARACTERS // 4)]},
+    ],
+    ids=["long-description", "long-enum"],
+)
+def test_vertex_schema_drops_oneof_whose_branches_would_repeat_too_many_characters(keywords: dict[str, JsonValue]):
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"f": {"type": "string", **keywords, "oneOf": [{}, {}]}}}
+    )
+
+    assert schema == build_vertex_schema({"type": "object", "properties": {"f": {"type": "string", **keywords}}})
+
+
+def test_vertex_schema_budget_check_copies_no_branch_before_dropping_the_oneof():
+    width: Final = 2 * MAX_VERTEX_SCHEMA_ONEOF_ADDED_NODES
+    field: Final[JsonValue] = {
+        "type": "object",
+        "properties": {f"p{index}": {"type": "string"} for index in range(width)},
+        "oneOf": [{} for _ in range(width)],
+    }
+
+    tracemalloc.start()
+    try:
+        schema: Final = build_vertex_schema({"type": "object", "properties": {"f": field}})
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert "anyOf" not in schema["properties"]["f"]
+    assert peak < 32 * 1024 * 1024
+
+
 def test_vertex_ai_complex_response_schema():
     from copy import deepcopy
 
@@ -976,11 +1316,13 @@ def test_vertex_ai_complex_response_schema():
     subfield2 = field3_items["properties"]["subfield2"]
     assert subfield2["type"] == "array"
 
-    # Check subfield2 items structure
-    subfield2_items = subfield2["items"]
-    assert subfield2_items["type"] == "object"
-    assert "propertyOrdering" in subfield2_items
-    assert subfield2_items["propertyOrdering"] == ["Type1", "Type3", "Type2"]
+    subfield2_branches = subfield2["items"]["anyOf"]
+    assert [(branch["type"], branch["propertyOrdering"], branch["required"]) for branch in subfield2_branches] == [
+        ("object", ["Type1", "Type3", "Type2"], ["Type1"]),
+        ("object", ["Type1", "Type3", "Type2"], ["Type2"]),
+        ("object", ["Type1", "Type3", "Type2"], ["Type3"]),
+    ]
+    subfield2_items = subfield2_branches[0]
 
     # Check Type1 structure
     type1 = subfield2_items["properties"]["Type1"]

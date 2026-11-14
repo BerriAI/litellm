@@ -100,6 +100,9 @@ IGNORE_FUNCTIONS = [
     "to_wire",  # router_rust model info: bounded by the nesting depth of a stored deployment or cost-map entry (finite JSON trees: pydantic refuses a cycle when it dumps a deployment).
     "from_wire",  # router_rust model info: walks only what router-core merged from to_wire's output, so it never goes deeper than to_wire did.
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
+    "_outermost_oneof_unions",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); stops descending past the cap, where _with_oneof_as_anyof raises.
+    "_expanded_size",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); stops descending past the cap, where _with_oneof_as_anyof raises.
+    "_schema_size",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); stops descending past the cap, where _with_oneof_as_anyof raises.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
 ]
 
