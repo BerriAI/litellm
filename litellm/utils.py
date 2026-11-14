@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
     as_str_mapping,
     bind_budget_reservation_to_callbacks,
     has_attributes,
@@ -1870,9 +1871,10 @@ async def async_pre_call_deployment_hook(
     route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
     resolved: Final = resolve_deployment_tool_fields(kwargs, route)
     if isinstance(resolved, MalformedField):
+        model: Final = kwargs.get("model")
         raise MalformedRequestFieldError(
             message=resolved.message,
-            model=kwargs.get("model"),
+            model=model if isinstance(model, str) else None,
             llm_provider=_deployment_provider(kwargs),
             body={"type": "invalid_request_error", "param": resolved.field},
         )
@@ -4854,7 +4856,6 @@ def get_optional_params_embeddings(
     drop_params = normalize_drop_params(drop_params)
     passed_params.pop("additional_drop_params", None)
     passed_params.pop("allowed_openai_params", None)
-    allowed_openai_params = allowed_openai_params or []
     # Remove function objects from passed_params to avoid JSON serialization errors
     passed_params.pop("get_supported_openai_params", None)
 
@@ -4918,7 +4919,7 @@ def get_optional_params_embeddings(
             model is not None
             and "text-embedding-3" not in model
             and "dimensions" in non_default_params
-            and "dimensions" not in (allowed_openai_params or [])
+            and "dimensions" not in allowed_openai_param_names(allowed_openai_params)
         ):
             # Honor drop_params (per-call) and litellm.drop_params (global) the same
             # way `_check_valid_arg` does above. The raised error message itself
@@ -5772,8 +5773,7 @@ def get_optional_params(
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
 
     supported_params = supported_params or []
-    allowed_openai_params = allowed_openai_params or []
-    supported_params.extend(allowed_openai_params)
+    supported_params.extend(allowed_openai_param_names(allowed_openai_params))
 
     _check_valid_arg(
         supported_params=supported_params or [],
@@ -6370,7 +6370,7 @@ def add_provider_specific_params_to_optional_params(
 def apply_openai_param_overrides(
     optional_params: dict[str, object],
     non_default_params: dict[str, object],
-    allowed_openai_params: list[str],
+    allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:
     """
     If user passes in allowed_openai_params, apply them to optional_params
@@ -6384,13 +6384,12 @@ def apply_openai_param_overrides(
     `AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'`).
     See https://github.com/BerriAI/litellm/issues/25697
     """
-    if allowed_openai_params:
-        for param in allowed_openai_params:
-            if param in optional_params:
-                continue
-            if param not in non_default_params:
-                continue
-            optional_params[param] = non_default_params.pop(param)
+    for param in allowed_openai_param_names(allowed_openai_params):
+        if param in optional_params:
+            continue
+        if param not in non_default_params:
+            continue
+        optional_params[param] = non_default_params.pop(param)
     return optional_params
 
 
