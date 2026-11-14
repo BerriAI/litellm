@@ -3829,6 +3829,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-fnmatch"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+]
+
+[[package]]
 name = "litellm-framer"
 version = "0.1.0"
 dependencies = [

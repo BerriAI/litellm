@@ -39,6 +39,7 @@ litellm-callbacks = { path = "crates/callbacks" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-callbacks-python = { path = "crates/callbacks-python" }
 litellm-framer = { path = "crates/framer" }
+litellm-fnmatch = { path = "crates/fnmatch" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-secret-value = { path = "crates/secret-value" }
