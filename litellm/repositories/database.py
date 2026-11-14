@@ -1,13 +1,16 @@
 import asyncio
 import urllib.parse
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.native_database import (
-    keep_writer_token_fresh,
+    NativeEndpointSettings,
+    TokenRotation,
+    keep_token_fresh,
+    reader_token_rotation,
     resolve_native_endpoint,
     writer_token_rotation,
 )
@@ -17,6 +20,24 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+def _token_refresh(
+    install: Callable[[str], None], rotation: TokenRotation | None, url: str
+) -> "tuple[asyncio.Task[None], ...]":
+    if rotation is None:
+        return ()
+    current: Final = urllib.parse.unquote(urllib.parse.urlsplit(url).password or "")
+    return (asyncio.create_task(keep_token_fresh(install, rotation, current)),)
+
+
+def _log_ignored_options(env_var: str, settings: NativeEndpointSettings) -> None:
+    if settings.ignored_options:
+        verbose_proxy_logger.error(
+            "Native database pool cannot send the %s options %s; only -c name=value settings carry over",
+            env_var,
+            settings.ignored_options,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Database:
     prisma: "PrismaClient"
@@ -24,33 +45,32 @@ class Database:
     tasks: "tuple[asyncio.Task[None], ...]" = ()
 
     @classmethod
-    async def open(cls, prisma: "PrismaClient", writer_url: str, native_connections: int) -> "Database":
+    async def open(
+        cls, prisma: "PrismaClient", writer_url: str, reader_url: str | None, native_connections: int
+    ) -> "Database":
         if native_connections == 0:
             return cls(prisma=prisma, native=None)
         try:
-            settings: Final = await resolve_native_endpoint(writer_url, native_connections)
-            native: Final = await NativeDatabase.connect(settings.endpoint)
+            writer: Final = await resolve_native_endpoint(writer_url, native_connections)
+            reader: Final = (
+                None if reader_url is None else await resolve_native_endpoint(reader_url, native_connections)
+            )
+            native: Final = await NativeDatabase.connect(writer.endpoint, None if reader is None else reader.endpoint)
         except BaseException:
             await prisma.aclose()
             raise
-        if settings.ignored_options:
-            verbose_proxy_logger.error(
-                "Native database pool cannot send the DATABASE_URL options %s; only -c name=value settings carry over",
-                settings.ignored_options,
-            )
-        rotation: Final = writer_token_rotation(writer_url)
-        token_refresh: Final = (
-            ()
-            if rotation is None
-            else (
-                asyncio.create_task(
-                    keep_writer_token_fresh(
-                        native, rotation, urllib.parse.unquote(urllib.parse.urlsplit(writer_url).password or "")
-                    )
-                ),
-            )
+        _log_ignored_options("DATABASE_URL", writer)
+        if reader is not None:
+            _log_ignored_options("DATABASE_URL_READ_REPLICA", reader)
+        writer_refresh: Final = _token_refresh(
+            native.set_writer_password, writer_token_rotation(writer_url), writer_url
         )
-        return cls(prisma=prisma, native=native, tasks=token_refresh)
+        reader_refresh: Final = (
+            ()
+            if reader_url is None
+            else _token_refresh(native.set_reader_password, reader_token_rotation(reader_url), reader_url)
+        )
+        return cls(prisma=prisma, native=native, tasks=(*writer_refresh, *reader_refresh))
 
     async def aclose(self) -> None:
         for task in self.tasks:

@@ -8,7 +8,9 @@ _NEVER_DIALED_URL: Final = "postgresql://litellm:secret@db.invalid:5432/proxy"
 
 
 async def connect_native_database() -> NativeDatabase:
-    return await NativeDatabase.connect(native_endpoint(_NEVER_DIALED_URL, tls_offered=True, max_connections=1).endpoint)
+    return await NativeDatabase.connect(
+        native_endpoint(_NEVER_DIALED_URL, tls_offered=True, max_connections=1).endpoint, None
+    )
 
 
 def native_database() -> NativeDatabase:

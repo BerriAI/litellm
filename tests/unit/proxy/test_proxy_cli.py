@@ -3650,6 +3650,23 @@ class TestReadReplicaConnectionParams:
         assert query["connection_limit"] == ["50"]
         assert query["pool_timeout"] == ["20"]
 
+    @pytest.mark.parametrize("pinned_limit", ["0", "abc"])
+    def test_replica_limit_that_is_not_a_positive_integer_is_left_to_prisma(
+        self, tmp_path: Path, pinned_limit: str
+    ) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
+
+        captured: Final = _CAPTURED_URLS.validate_python(
+            _run_server_and_capture_urls(
+                str(config_path),
+                read_replica_url=f"postgresql://t:t@reader:5432/t?connection_limit={pinned_limit}",
+            )
+        )
+
+        query: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["connection_limit"] == [pinned_limit]
+
     def test_connection_budget_line_counts_the_limits_the_final_urls_carry(
         self,
         tmp_path: Path,
