@@ -44,22 +44,38 @@ impl LicenseVerifier {
         })
     }
 
-    /// `None` when the key did not sign this license or it expired
-    fn verify_offline(&self, py: Python<'_>, license: &str) -> Option<License> {
-        self.public_key
-            .verify(license, jiff::Zoned::now().datetime())
-            .map(License)
-            .inspect_err(|error| {
-                crate::logger::capture(py).scope(|| {
-                    litellm_tracing::debug!("license not verified locally: {}", Report::new(error));
-                });
-            })
-            .ok()
+    /// A license the bundled key signed carries its claims. Any other license is enterprise only when the license
+    /// server vouches for it
+    fn entitlements(&self, py: Python<'_>, license: Option<String>) -> PyResult<Entitlements> {
+        let Some(license) = license else {
+            return Ok(Entitlements(litellm_license::Entitlements::Community));
+        };
+        let error = match self
+            .public_key
+            .verify(&license, jiff::Zoned::now().datetime())
+        {
+            Ok(signed) => {
+                return Ok(Entitlements(litellm_license::Entitlements::Enterprise(
+                    Some(signed),
+                )));
+            }
+            Err(error) => error,
+        };
+        crate::logger::capture(py).scope(|| {
+            litellm_tracing::debug!("license not verified locally: {}", Report::new(&error));
+        });
+        Ok(Entitlements(if self.ask_server(py, license)? {
+            litellm_license::Entitlements::Enterprise(None)
+        } else {
+            litellm_license::Entitlements::Community
+        }))
     }
+}
 
+impl LicenseVerifier {
     /// Runs on a throwaway runtime like the cost map fetch, since the proxy checks its license at import, before it
     /// may fork workers
-    fn verify_remote(&self, py: Python<'_>, license: String) -> PyResult<bool> {
+    fn ask_server(&self, py: Python<'_>, license: String) -> PyResult<bool> {
         let (config, server, timeout) = (self.http.clone(), self.server.clone(), self.timeout);
         let logger = crate::logger::capture(py);
         litellm_host_python::release_gil(py, move || {
@@ -82,38 +98,42 @@ impl LicenseVerifier {
     }
 }
 
-#[pyclass(frozen, name = "License", module = "litellm.rust_bridge._native")]
-pub(crate) struct License(litellm_license::License);
+#[pyclass(frozen, name = "Entitlements", module = "litellm.rust_bridge._native")]
+pub(crate) struct Entitlements(litellm_license::Entitlements);
 
 #[pymethods]
-impl License {
-    #[getter]
-    fn expiration_date(&self) -> String {
-        self.0.expiration_date.to_string()
+impl Entitlements {
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn COMMUNITY() -> Self {
+        Self(litellm_license::Entitlements::Community)
     }
 
-    #[getter]
-    fn user_id(&self) -> Option<&str> {
-        self.0.user_id.as_deref()
+    #[staticmethod]
+    fn remedy(feature: &str) -> PyResult<String> {
+        Ok(parse_feature(feature)?.remedy())
     }
 
+    fn is_enterprise(&self) -> bool {
+        self.0.is_enterprise()
+    }
+
+    fn grants(&self, feature: &str) -> PyResult<bool> {
+        Ok(self.0.grants(parse_feature(feature)?))
+    }
+
+    /// The signed claims as a dict, or `None` without a signed license
     #[getter]
-    fn allowed_features(&self) -> Vec<String> {
-        self.0.allowed_features.clone()
+    fn license(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.0
+            .license()
+            .map(|license| litellm_host_python::to_py(py, license))
+            .transpose()
     }
 
     #[getter]
     fn max_users(&self) -> Option<i64> {
-        self.0.max_users
-    }
-
-    #[getter]
-    fn max_teams(&self) -> Option<i64> {
-        self.0.max_teams
-    }
-
-    fn grants(&self, feature: &str) -> bool {
-        self.0.grants(feature)
+        self.0.max_users()
     }
 
     fn is_over_user_limit(&self, users: i64) -> bool {
@@ -123,4 +143,10 @@ impl License {
     fn is_over_team_limit(&self, teams: i64) -> bool {
         self.0.is_over_team_limit(teams)
     }
+}
+
+fn parse_feature(feature: &str) -> PyResult<litellm_license::Feature> {
+    feature
+        .parse()
+        .map_err(|_| PyValueError::new_err(format!("unknown license feature: {feature}")))
 }

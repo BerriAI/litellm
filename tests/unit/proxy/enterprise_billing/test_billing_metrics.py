@@ -8,9 +8,9 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Sum
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.proxy._types import EnterpriseLicenseData
 from litellm.proxy.enterprise_billing import billing_metrics as bm
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
-from tests._support.license import native_license
 
 
 class _RecordedRequest(BaseModel):
@@ -113,7 +113,7 @@ def test_http_urls_disable_metrics(
 def test_valid_config_contains_bearer_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_full_env(monkeypatch)
 
-    license_data: Final = native_license(user_id="org-1")
+    license_data: Final[EnterpriseLicenseData] = {"user_id": "org-1"}
     config: Final = bm.load_billing_metrics_config(license_data=license_data, litellm_version="1.0")
     assert config is not None
 
@@ -140,7 +140,7 @@ def test_not_premium_returns_none_without_warning(
 
 
 def test_premium_without_config_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert bm.build_billing_metrics_recorder(premium=True, license_data=native_license(user_id="x"), litellm_version="1.0") is None
+    assert bm.build_billing_metrics_recorder(premium=True, license_data={"user_id": "x"}, litellm_version="1.0") is None
 
 
 def test_premium_builds_recorder_and_logs_enabled(
@@ -155,7 +155,7 @@ def test_premium_builds_recorder_and_logs_enabled(
         http_mock.post(token_url, json={"access_token": "access-token", "expires_in": 3600})
         http_mock.post(export_url, status_code=200)
         recorder: Final = bm.build_billing_metrics_recorder(
-            premium=True, license_data=native_license(user_id="org-1"), litellm_version="1.0"
+            premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
         )
         assert recorder is not None
         assert "Enterprise billing metrics enabled: exporting to https://collector.example:4318 every 60000 ms" in caplog.text

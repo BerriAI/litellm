@@ -1,16 +1,21 @@
 use jiff::civil::Date;
 use serde_json::{Map, Value};
 
+use crate::Feature;
+
 const ALL_FEATURES: &str = "*";
 
 /// The signed claims of a verified license. A claim of an unexpected type reads as absent, as the proxy's
 /// `isinstance` checks did
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct License {
     pub expiration_date: Date,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
     pub allowed_features: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_users: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_teams: Option<i64>,
 }
 
@@ -37,7 +42,8 @@ impl License {
         }
     }
 
-    pub fn grants(&self, feature: &str) -> bool {
+    pub fn grants(&self, feature: Feature) -> bool {
+        let feature: &str = feature.into();
         self.allowed_features
             .iter()
             .any(|granted| granted == feature || granted == ALL_FEATURES)
@@ -110,14 +116,14 @@ mod tests {
     #[case::number(json!(5), false)]
     fn grants_a_listed_feature_or_the_wildcard(#[case] features: Value, #[case] granted: bool) {
         assert_eq!(
-            license(json!({"allowed_features": features})).grants("auto_router"),
+            license(json!({"allowed_features": features})).grants(Feature::AutoRouter),
             granted
         );
     }
 
     #[rstest]
     fn grants_nothing_without_allowed_features() {
-        assert!(!license(json!({})).grants("auto_router"));
+        assert!(!license(json!({})).grants(Feature::AutoRouter));
     }
 
     #[rstest]
@@ -129,6 +135,18 @@ mod tests {
 
         assert_eq!(license.is_over_user_limit(count), over);
         assert_eq!(license.is_over_team_limit(count), over);
+    }
+
+    #[rstest]
+    fn serializes_to_the_claims_the_proxy_reads() {
+        let license = license(
+            json!({"user_id": "u", "allowed_features": ["sso"], "max_users": 5, "dropped": 1}),
+        );
+
+        assert_eq!(
+            serde_json::to_value(license).unwrap(),
+            json!({"expiration_date": "2027-11-12", "user_id": "u", "allowed_features": ["sso"], "max_users": 5})
+        );
     }
 
     #[rstest]

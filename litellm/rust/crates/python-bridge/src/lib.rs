@@ -38,7 +38,7 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::license::{License, LicenseVerifier};
+    use crate::license::{Entitlements, LicenseVerifier};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
@@ -154,7 +154,7 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
-                "License",
+                "Entitlements",
                 "LicenseVerifier",
                 "NativeRedisClient",
                 "NativeRedisBreaker",

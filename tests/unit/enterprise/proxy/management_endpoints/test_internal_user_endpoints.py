@@ -5,8 +5,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from litellm_enterprise.proxy.management_endpoints.internal_user_endpoints import router
 
-from tests._support.license import native_license
-
 
 @pytest.fixture
 def client():
@@ -51,7 +49,7 @@ class TestAvailableEnterpriseUsers:
             ),
             patch(
                 "litellm.proxy.proxy_server.premium_user_data",
-                native_license(max_users=10),
+                {"max_users": 10},
             ),
         ):
             # Mock database count
@@ -88,7 +86,7 @@ class TestAvailableEnterpriseUsers:
             patch("litellm.proxy.proxy_server.premium_user", True),
             patch(
                 "litellm.proxy.proxy_server.premium_user_data",
-                native_license(max_users=10),
+                {"max_users": 10},
             ),
         ):
             mock_prisma.db.litellm_usertable.count = _user_count(5, deactivated=2)
@@ -157,7 +155,7 @@ class TestAvailableEnterpriseUsers:
             ),
             patch(
                 "litellm.proxy.proxy_server.premium_user_data",
-                native_license(),
+                {"key": "value"},
             ),
         ):
             # Mock database count higher than max_users to trigger the bug

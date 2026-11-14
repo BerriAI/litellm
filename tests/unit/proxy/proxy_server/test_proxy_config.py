@@ -15,7 +15,7 @@ import os
 import re
 import ssl
 import sys
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
@@ -2777,7 +2777,7 @@ def _booted_proxy(
     private_key: RSAPrivateKey,
     env_license: str | None,
     server_accepted_license: str | None = None,
-) -> Iterator[list[str]]:
+) -> Generator[list[str]]:
     """Yields the paths the license server was asked for"""
     from litellm.proxy.auth.litellm_license import LicenseCheck
 

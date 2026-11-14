@@ -143,6 +143,7 @@ from litellm.proxy._types import (
     ConfigList,
     ConfigYAML,
     CoordinationRedisParams,
+    EnterpriseLicenseData,
     FieldDetail,
     InvitationClaim,
     InvitationDelete,
@@ -458,7 +459,7 @@ from litellm.proxy.auth.fallback_model_access import router_fallback_access_chec
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
-from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, License, LicenseCheck
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
     declared_proxy_ranges,
@@ -1230,7 +1231,7 @@ except ImportError:
 server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: License | None = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
 
 
 def _set_premium_user(is_premium: bool) -> None:
@@ -1241,14 +1242,14 @@ def _set_premium_user(is_premium: bool) -> None:
 
 def _use_config_license(config_license: str, env_license_is_premium: bool) -> bool:
     env_license: Final = _license_check.license_str
-    env_license_data: Final = _license_check.airgapped_license_data
+    env_entitlements: Final = _license_check.entitlements
     _license_check.license_str = config_license
     if _license_check.is_premium():
         return True
     if not env_license_is_premium:
         return False
     _license_check.license_str = env_license
-    _license_check.airgapped_license_data = env_license_data
+    _license_check.entitlements = env_entitlements
     return True
 
 
