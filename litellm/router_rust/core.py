@@ -3387,15 +3387,17 @@ class RustCore(
 
     async def _answer_tags(self, step: Mapping[str, object], request: Mapping[str, object]) -> object:
         """``get_deployments_for_tag`` over the step's candidates (bridged: not ported to Rust yet)."""
-        from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-        from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+        from litellm.router_strategy.tag_based_routing import (
+            get_deployments_for_tag,
+            get_tag_metadata_variable_name_from_kwargs,
+        )
 
         kept: Final = await get_deployments_for_tag(
             ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # the filter reads registry() and settings()
             model=str(step.get("model")),
             healthy_deployments=self._records_of(step.get("candidates")),  # pyright: ignore[reportArgumentType]  # deployment dicts
             request_kwargs=dict(request),  # pyright: ignore[reportArgumentType]  # the request kwargs
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(dict(request)),
+            metadata_variable_name=get_tag_metadata_variable_name_from_kwargs(request),
             request_deployments=self._records_of(step.get("pool")),  # pyright: ignore[reportArgumentType]  # deployment dicts
         )
         return [found for record in kept if (found := picked_id(record)) is not None]
@@ -3713,10 +3715,12 @@ class RustCore(
         """The cooling deployments in ``routable`` that tag routing would send the request to, each
         pick counted along with the picks it falls back to once that one is unavailable, judged
         without recording a tag match on the request."""
-        from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-        from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+        from litellm.router_strategy.tag_based_routing import (
+            get_deployments_for_tag,
+            get_tag_metadata_variable_name_from_kwargs,
+        )
 
-        field: Final = get_metadata_variable_name_from_kwargs(dict(request))
+        field: Final = get_tag_metadata_variable_name_from_kwargs(request)
         metadata: Final = request.get(field)
         if field in request and not isinstance(metadata, Mapping):
             return frozenset()

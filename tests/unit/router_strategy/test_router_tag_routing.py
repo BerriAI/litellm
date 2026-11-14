@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, RouterRateLimitError
 
 
 async def _routed_model_ids(
@@ -269,9 +269,7 @@ async def test_error_from_tag_routing():
 
     from litellm.types.router import RouterErrors
 
-    with pytest.raises(
-        Exception, match=RouterErrors.no_deployments_with_tag_routing.value
-    ):
+    with pytest.raises(Exception, match=RouterErrors.no_deployments_with_tag_routing.value):
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -450,6 +448,75 @@ def test_get_tags_from_request_kwargs_reads_no_tags_from_a_non_dict_shape(reques
     from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
     assert get_tags_from_request_kwargs(request_kwargs) == []
+
+
+@pytest.mark.parametrize(
+    "modern_metadata, expected",
+    [
+        ({"user_api_key_user_id": "auth-user"}, ["region-b"]),
+        ({}, ["region-b"]),
+        ({"tags": ["region-a"]}, ["region-a"]),
+        ({"tags": []}, []),
+        ({"tags": None}, []),
+        ({"tags": "region-a"}, []),
+        ({"inherited_tags": [], "user_agent": "client"}, []),
+        (None, []),
+        ([], []),
+    ],
+)
+def test_auth_metadata_does_not_hide_legacy_tags(modern_metadata: object, expected: list[str]) -> None:
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
+
+    request_kwargs: Final = {
+        "metadata": {"tags": ["region-b"], "inherited_tags": []},
+        "litellm_metadata": modern_metadata,
+    }
+
+    assert get_tags_from_request_kwargs(request_kwargs) == expected
+    assert get_tags_from_request_kwargs(request_kwargs, metadata_variable_name="metadata") == ["region-b"]
+    assert get_tags_from_request_kwargs(request_kwargs, metadata_variable_name="litellm_metadata") == (
+        expected if isinstance(modern_metadata, dict) and "tags" in modern_metadata else []
+    )
+
+
+def test_auth_metadata_does_not_turn_baggage_tags_into_routing_tags() -> None:
+    from litellm.router_strategy.tag_based_routing import get_routing_tags_from_request_kwargs
+
+    metadata: Final = _baggage_mapped_metadata(["region-b"], [])
+    request_kwargs: Final = {"metadata": metadata, "litellm_metadata": {"user_api_key_user_id": "auth-user"}}
+
+    assert tuple(get_routing_tags_from_request_kwargs(request_kwargs)) == ("region-b",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tags", [["region-b"], ["&region-b"], ["!region-a"]])
+@pytest.mark.parametrize("inherited", [False, True])
+async def test_tag_filter_uses_policy_metadata_after_guardrail_enrichment(tags: list[str], inherited: bool) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "tags": ["default", "region-a"], "order": 1},
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "tags": ["default", "region-b"], "order": 2},
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    deployment: Final = await router.async_get_available_deployment(
+        model="chat",
+        request_kwargs={
+            "metadata": {"tags": tags, "inherited_tags": tags if inherited else []},
+            "litellm_metadata": {"user_api_key_user_id": "auth-user"},
+        },
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert deployment["model_info"]["id"] == "deployment-b"
 
 
 def test_get_tags_from_request_kwargs_keeps_only_string_tags():
@@ -665,7 +732,7 @@ async def test_negation_all_excluded_raises():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -708,7 +775,7 @@ async def test_negation_ban_only_cannot_escape_default_pool():
     # Sending only "!default" must NOT route to the paid deployment.
     # The base pool for ban-only is the default pool; banning the only
     # default deployment should raise rather than falling through to paid.
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -973,7 +1040,7 @@ async def test_negation_exhausts_entire_fallback_chain():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="primary",
             messages=[{"role": "user", "content": "hi"}],
@@ -1754,7 +1821,7 @@ async def test_required_and_unmatched_raises_by_default():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -1787,7 +1854,7 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -1856,9 +1923,7 @@ async def test_tag_fail_open_survives_deployment_narrowing(
         model=requested_model,
         request_kwargs={
             "litellm_metadata": {"tags": list(tags), "inherited_tags": [], "user_api_key_team_id": "team-a"},
-            **(
-                {"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}
-            ),
+            **({"previous_response_id": _response_id_for_remaining_deployment()} if narrowing == "affinity" else {}),
         },
     )
     assert isinstance(candidates, (list, tuple))
@@ -2145,7 +2210,7 @@ async def test_negation_combined_with_positive_unmatched_raises_by_default():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2303,7 +2368,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_raises_by_def
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2396,7 +2461,7 @@ async def test_allow_fail_open_denied_when_request_includes_unknown_tag():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2706,6 +2771,44 @@ def _cool_down(router: litellm.Router, *model_ids: str) -> None:
 
 
 @pytest.mark.asyncio()
+async def test_cooled_tag_probe_does_not_mutate_the_policy_bucket():
+    router: Final = _quality_high_cost_low_router()
+    _cool_down(router, "quality-high-1", "quality-high-2", "cost-low-1", "cost-low-2")
+    metadata: Final = {"tags": ["quality:high"], "inherited_tags": []}
+
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await router.async_get_available_deployment(
+            model="gpt-4",
+            request_kwargs={"metadata": metadata, "litellm_metadata": {"user_api_key_user_id": "auth-user"}},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert metadata == {"tags": ["quality:high"], "inherited_tags": []}
+    assert exc_info.value.cooldown_deployments is not None
+    assert {deployment["model_id"] for deployment in exc_info.value.cooldown_deployments} == {
+        "quality-high-1",
+        "quality-high-2",
+    }
+
+
+@pytest.mark.asyncio()
+async def test_modern_route_keeps_header_regex_metadata_separate_from_provider_metadata():
+    from tests.unit.router_strategy.test_router_tag_regex_routing import ALL_DEPLOYMENTS
+
+    router: Final = litellm.Router(model_list=ALL_DEPLOYMENTS, enable_tag_filtering=True)
+    deployment: Final = await router.async_get_available_deployment(
+        model="claude-sonnet",
+        request_kwargs={
+            "metadata": {"user_id": "provider-user", "tags": ["wrong"], "inherited_tags": ["wrong"]},
+            "litellm_metadata": {"user_agent": "claude-code/1.2.3", "inherited_tags": []},
+        },
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert deployment["model_info"]["id"] == "claude-code-deployment"
+
+
+@pytest.mark.asyncio()
 async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default():
     # Every deployment in the group is tagged "default" (a legitimate cross-cutting
     # safety-net pattern), so default_deployments is never empty on its own. With
@@ -2715,7 +2818,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     router = _quality_high_cost_low_router()
     _cool_down(router, "quality-high-1", "quality-high-2")
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2816,7 +2919,9 @@ def test_trusted_only_pool_discards_everything_when_inherited_sets_are_none():
     deployments = ({"litellm_params": {"tags": ["region:us"]}},)
     # No origin info at all -> reproduce the pre-provenance unconditional
     # fall-open: the trusted-only pool ignores excluded_set/required_set entirely.
-    assert _trusted_only_pool(deployments, frozenset({"region:eu"}), frozenset({"region:apac"}), None, None) == deployments
+    assert (
+        _trusted_only_pool(deployments, frozenset({"region:eu"}), frozenset({"region:apac"}), None, None) == deployments
+    )
 
 
 def test_trusted_only_pool_keeps_constraint_backed_by_inherited_tags():
@@ -2825,9 +2930,7 @@ def test_trusted_only_pool_keeps_constraint_backed_by_inherited_tags():
     eu = {"litellm_params": {"tags": ["region:eu"]}}
     us = {"litellm_params": {"tags": ["region:us"]}}
     # required_set={"region:eu"} IS in inherited_required_set -> protected, kept.
-    result = _trusted_only_pool(
-        (eu, us), frozenset(), frozenset({"region:eu"}), frozenset(), frozenset({"region:eu"})
-    )
+    result = _trusted_only_pool((eu, us), frozenset(), frozenset({"region:eu"}), frozenset(), frozenset({"region:eu"}))
     assert result == (eu,)
 
 
@@ -2940,7 +3043,7 @@ async def test_allow_fail_open_raises_when_inherited_constraint_alone_is_unsatis
     # allow_fail_open unset.
     router = _eu_region_router()
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="chat",
             messages=[{"role": "user", "content": "hi"}],
@@ -3076,7 +3179,8 @@ async def test_router_selecting_tag_is_not_reapplied_to_the_routed_tier():
 
 
 @pytest.mark.asyncio()
-async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_requests():
+@pytest.mark.parametrize("shadowed", [False, True])
+async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_requests(shadowed: bool):
     # /v1/messages (and other litellm_metadata endpoints) store proxy metadata,
     # including x-litellm-tags header tags, under "litellm_metadata"; consumption
     # must read and stamp that same bucket instead of only "metadata".
@@ -3084,7 +3188,14 @@ async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_reque
 
     deployment = await router.async_get_available_deployment(
         model="gpt4o",
-        request_kwargs={"litellm_metadata": {"tags": ["route"], "inherited_tags": []}},
+        request_kwargs=(
+            {
+                "metadata": {"tags": ["route"], "inherited_tags": []},
+                "litellm_metadata": {"user_api_key_user_id": "auth-user"},
+            }
+            if shadowed
+            else {"litellm_metadata": {"tags": ["route"], "inherited_tags": []}}
+        ),
         messages=[{"role": "user", "content": "What is the capital of France?"}],
     )
 
@@ -3097,7 +3208,7 @@ async def test_tagged_request_direct_to_plain_group_still_rejected():
     # tag filtering must reject exactly as before.
     router = _tagged_marker_router()
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gemini-flash",
             messages=[{"role": "user", "content": "hi"}],
@@ -3118,7 +3229,7 @@ async def test_caller_forged_consumption_stamp_is_neutralized_by_the_hook():
     # tag filtering runs.
     router = _tagged_marker_router()
 
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await router.acompletion(
             model="gemini-flash",
             messages=[{"role": "user", "content": "hi"}],
@@ -3140,7 +3251,7 @@ async def test_inherited_constraint_still_applies_to_the_routed_tier():
     # &region:eu comes from key/team policy (present in inherited_tags):
     # consuming the router-selecting "route" tag must not also discard the
     # inherited requirement, so a tier without the tag still raises...
-    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+    with pytest.raises(Exception, match="Not allowed to access model due to tags configuration\\.") as exc_info:
         await _tagged_marker_router().acompletion(
             model="gpt4o",
             messages=[{"role": "user", "content": "hi"}],

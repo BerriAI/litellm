@@ -123,9 +123,11 @@ async def test_budget_of_other_provider_is_untouched(disable_budget_sync):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shadowed", [False, True])
 async def test_tag_spend_is_incremented_for_request_metadata(
     disable_budget_sync: None,
     monkeypatch: pytest.MonkeyPatch,
+    shadowed: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "tag_budget_config", {"release": {"budget_limit": 5.0, "time_period": "1h"}})
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
@@ -136,7 +138,8 @@ async def test_tag_spend_is_incremented_for_request_metadata(
             provider_in_payload=None,
             response_cost=0.73,
         ),
-        "metadata": {"tags": ["release"]},
+        "metadata": {"tags": ["release"], "inherited_tags": []},
+        **({"litellm_metadata": {"user_api_key_user_id": "auth-user"}} if shadowed else {}),
     }
 
     await _log_success(limiter, kwargs)
@@ -503,7 +506,6 @@ async def test_batch_polls_charge_each_router_budget_once(monkeypatch, call_type
     assert tuple([await cache.async_get_cache(key) for key in keys]) == (1.0, 1.0, 1.0)
 
 
-
 @pytest.mark.asyncio
 async def test_a_batch_retrieve_before_its_cost_is_final_charges_no_router_budget_even_for_its_guardrail():
     from litellm.types.utils import LiteLLMBatch
@@ -626,6 +628,7 @@ async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pa
 
     keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
     assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.29, 0.29))
+
 
 @pytest.mark.asyncio
 async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():
