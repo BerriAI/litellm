@@ -106,10 +106,8 @@ def _items(value: object) -> Sequence[object] | None:
 
 
 def json_safe(value: object) -> object:
-    root: Final[list[object]] = [None]
-    pending: Final[list[tuple[Callable[[object], None], object, frozenset[int]]]] = [
-        (partial(root.__setitem__, 0), value, frozenset())
-    ]
+    root: Final = [value]
+    pending: Final = [(partial(root.__setitem__, 0), value, frozenset[int]())]
     while pending:
         assign, current, path = pending.pop()
         converted, children = _json_node(current)
@@ -122,7 +120,7 @@ def json_safe(value: object) -> object:
     return root[0]
 
 
-def _json_node(value: object) -> tuple[object, Sequence[tuple[Callable[[object], None], object]]]:
+def _json_node(value: object) -> tuple[object, Sequence[tuple[partial[None], object]]]:
     if value is None or isinstance(value, bool | str):
         return value, ()
     if isinstance(value, int):
@@ -133,11 +131,11 @@ def _json_node(value: object) -> tuple[object, Sequence[tuple[Callable[[object],
     if mapping is not None:
         if not all(isinstance(key, str) for key in mapping):
             return _opaque(value), ()
-        converted: Final[dict[str, object]] = {str(key): None for key in mapping}
+        converted: Final = {str(key): item for key, item in mapping.items()}
         return converted, [(partial(converted.__setitem__, str(key)), item) for key, item in mapping.items()]
     items: Final = _items(value)
     if items is not None:
-        listed: Final[list[object]] = [None] * len(items)
+        listed: Final = list(items)
         return listed, [(partial(listed.__setitem__, index), item) for index, item in enumerate(items)]
     return _opaque(value), ()
 
@@ -503,7 +501,7 @@ async def run_alone(
     )
 
 
-def replay_log(level: str, message: str, args: list[str]) -> None:
+def replay_log(level: str, message: str, args: Sequence[str]) -> None:
     (verbose_logger.debug if level == "debug" else verbose_logger.error)(message, *args)
 
 
