@@ -9383,11 +9383,15 @@
       "toolsLoadFailed": "Could not load tools for {{serverName}}",
       "empty": {
         "connectMode": "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access.",
+        "loadFailed": "Could not load your MCP servers. Reload the page to try again.",
         "noServers": "No MCP servers configured. Add servers in Tools -> MCP Servers.",
         "noneConnected": "No servers connected yet.",
         "noMatch": "No servers match your search."
       },
       "authorized": "Authorized",
+      "signInToUse": "Sign in to use",
+      "requiredByClient": "Required by this client",
+      "useServer": "Include {{serverName}} in this connection",
       "disconnect": "Disconnect",
       "back": "Back",
       "defaultDescription": "MCP server",
@@ -9397,13 +9401,15 @@
         "transport": "Transport",
         "status": "Status",
         "connected": "Connected",
-        "notConnected": "Not connected"
+        "notConnected": "Not connected",
+        "on": "On",
+        "off": "Off"
       },
       "availableTools": "Available Tools",
       "noTools": "No tools available",
       "title": "MCP Servers",
       "beta": "Beta",
-      "connectModeSubtitle": "Click a server to see its tools and connect",
+      "connectModeSubtitle": "Turn off any server this connection should not use. Click a server to see its tools or sign in",
       "subtitle": "Browse tools, authenticate once, use in chat",
       "loadingTools": "Loading tools...",
       "toolsAvailable_one": "{{count}} tool available",
@@ -9411,7 +9417,8 @@
       "searchPlaceholder": "Search servers...",
       "tabs": {
         "all": "All",
-        "connected": "Connected"
+        "connected": "Connected",
+        "on": "On"
       }
     },
     "connectFlowBanner": {
@@ -9423,7 +9430,8 @@
       },
       "unscoped": {
         "title": "Connect your MCP servers to {{client}}",
-        "description": "Authorize the servers you want to use below, then click Finish connecting to return to {{client}}."
+        "description": "{{client}} gets every server that is on. Turn off the ones it should not use, sign in where needed, then click Finish connecting.",
+        "fixed": "{{client}} will get every server you can reach. Sign in to the ones that need it below, then click Finish connecting to return to {{client}}."
       },
       "multi": {
         "title": "Allow {{client}} to use {{servers}}",
@@ -9437,6 +9445,7 @@
       },
       "connectServer": "Connect {{server}}",
       "finish": "Finish connecting",
+      "nothingOn": "Turn on at least one server to finish connecting.",
       "cancel": "Cancel",
       "manualDelivery": "My client is on a remote or SSH machine"
     },
