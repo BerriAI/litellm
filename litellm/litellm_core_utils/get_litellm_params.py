@@ -1,6 +1,7 @@
 import reprlib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
@@ -113,7 +114,12 @@ SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_hea
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
 _MAX_SHOWN_INT_BITS: Final = 64
-_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
+_EXPECTED: Final = MappingProxyType(
+    {
+        "stream_chunk_size": f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits",
+        "fake_stream": "expected true or false",
+    }
+)
 
 
 class _BoundedRepr(reprlib.Repr):
@@ -139,8 +145,17 @@ def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | Inva
     except ValidationError as e:
         param: Final = str(e.errors(include_url=False)[0]["loc"][0])
         return InvalidControlOption(
-            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED[param]}"
         )
+
+
+def valid_control_options(kwargs: Mapping[str, object]) -> ControlOptions:
+    valid: Final = {
+        name: kwargs[name]
+        for name in _CONTROL_OPTION_NAMES
+        if name in kwargs and isinstance(parse_control_options({name: kwargs[name]}), ControlOptions)
+    }
+    return _CONTROL_OPTIONS.validate_python(valid)
 
 
 def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:

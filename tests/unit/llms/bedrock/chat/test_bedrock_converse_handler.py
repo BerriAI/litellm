@@ -341,12 +341,14 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
             {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
+        ("bedrock/converse/meta.llama3-3-70b-instruct-v1:0", {"fake_stream": True}),
     ],
     ids=[
         "model_without_streaming",
         "request_shape_without_streaming",
         "json_schema_without_native_structured_output",
         "invoke_route_without_streaming",
+        "caller_fake_stream",
     ],
 )
 

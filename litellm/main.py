@@ -19,14 +19,14 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -100,6 +100,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     SUPPLEMENTAL_KWARGS_KEYS,
     InvalidControlOption,
     parse_control_options,
+    valid_control_options,
     with_control_options,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -141,6 +142,7 @@ from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
+    MockResponseIterator,
     convert_model_response_to_streaming,
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
@@ -180,6 +182,7 @@ from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_s
 from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
+    DynamicPromptManagementParamLiteral,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -412,7 +415,7 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             return control
         case InvalidControlOption(param=param, message=message):
             if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
-                return ControlOptions()
+                return valid_control_options(kwargs)
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
@@ -1415,10 +1418,11 @@ def _completion_fakes_stream(
     provider_config: BaseConfig | None,
     optional_params: Mapping[str, object],
     *,
+    fake_stream_requested: bool,
     base_model: str | None,
     bridges_to_responses_api: bool,
 ) -> bool:
-    if optional_params.get("fake_stream") is True:
+    if fake_stream_requested or optional_params.get("fake_stream") is True:
         return True
     if custom_llm_provider is None:
         return False
@@ -1442,6 +1446,60 @@ def _completion_fakes_stream(
     return provider_config is not None and provider_config.should_fake_stream(
         model=model, stream=True, custom_llm_provider=custom_llm_provider
     )
+
+
+def _replayed_stream(
+    response: ModelResponse, logging_obj: LiteLLMLoggingObj, stream_options: Mapping[str, object] | None
+) -> CustomStreamWrapper:
+    hidden_params: Final = get_hidden_params(response)
+    provider_headers: Final = hidden_params.get("additional_headers") if hidden_params is not None else None
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=response),
+        model=response.model,
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+        _response_headers=(
+            _RESPONSE_HEADERS_ADAPTER.validate_python(provider_headers)
+            if isinstance(provider_headers, Mapping)
+            else None
+        ),
+    )
+
+
+_DispatchedAnswer: TypeAlias = ModelResponse | TextCompletionResponse | CustomStreamWrapper
+
+
+def _replayed_answer(
+    done: _DispatchedAnswer, replay: Callable[[ModelResponse], CustomStreamWrapper]
+) -> ModelResponse | CustomStreamWrapper:
+    match done:
+        case ModelResponse():
+            return replay(done)
+        case TextCompletionResponse():
+            return replay(
+                litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=done, model_response_object=ModelResponse()
+                )
+            )
+        case CustomStreamWrapper():
+            return done
+
+
+async def _replayed_when_done(
+    pending: Awaitable[_DispatchedAnswer], replay: Callable[[ModelResponse], CustomStreamWrapper]
+) -> ModelResponse | CustomStreamWrapper:
+    return _replayed_answer(await pending, replay)
+
+
+def _replayed_as_stream(
+    dispatched: Awaitable[_DispatchedAnswer] | _DispatchedAnswer,
+    replay: Callable[[ModelResponse], CustomStreamWrapper] | None,
+) -> Awaitable[_DispatchedAnswer] | _DispatchedAnswer:
+    if replay is None:
+        return dispatched
+    if isinstance(dispatched, (ModelResponse, TextCompletionResponse, CustomStreamWrapper)):
+        return _replayed_answer(dispatched, replay)
+    return _replayed_when_done(dispatched, replay)
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -4379,6 +4437,7 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
@@ -5710,6 +5769,8 @@ def completion(
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
+    replays_stream: Final = stream is True and control_options.fake_stream is True
+    dispatch_stream: Final = False if replays_stream else stream
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -6101,8 +6162,8 @@ def completion(
             "temperature": temperature,
             "top_p": top_p,
             "n": n,
-            "stream": stream,
-            "stream_options": stream_options,
+            "stream": dispatch_stream,
+            "stream_options": None if replays_stream else stream_options,
             "stop": stop,
             "max_tokens": max_tokens,
             "max_completion_tokens": max_completion_tokens,
@@ -6174,6 +6235,7 @@ def completion(
             model,
             custom_llm_provider,
             provider_config,
+            fake_stream_requested=control_options.fake_stream is True,
             base_model=deployment_base_model,
             bridges_to_responses_api=bridges_to_responses_api is True,
         )
@@ -6410,6 +6472,9 @@ def completion(
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
+        replay_as_stream: Final = (
+            partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
+        )
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
@@ -6427,7 +6492,7 @@ def completion(
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
-            return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+            bridged: Final = responses_api_bridge.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -6442,8 +6507,11 @@ def completion(
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
-                stream=stream,
+                stream=dispatch_stream,
                 cache=kwargs.get("cache"),
+            )
+            return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                bridged, replay_as_stream
             )
 
         reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
@@ -6483,7 +6551,7 @@ def completion(
                 _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
             ),
             shared_session=shared_session,
-            stream=stream,
+            stream=dispatch_stream,
             temperature=temperature,
             text_completion=text_completion,
             timeout=timeout,
@@ -6711,7 +6779,9 @@ def completion(
 
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
-        return response
+        return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # a dispatch returns a coroutine on the acompletion path; awaited by the async caller
+            response, replay_as_stream
+        )
     except Exception as e:
         reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception
@@ -7092,7 +7162,9 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
-    non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
+    non_default_params: Final = filter_out_litellm_params(
+        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+    )
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 
