@@ -1,11 +1,14 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
+import hashlib
 import io
 import math
 import re
 import struct
+import threading
 from bisect import bisect_right
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
@@ -44,6 +47,8 @@ from litellm.constants import (
     PDF_MAX_FORM_XOBJECT_DEPTH,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+    TOKEN_COUNT_MEMO_MAX_ENTRIES,
+    TOKEN_COUNT_MEMO_MIN_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
@@ -1209,6 +1214,56 @@ def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
     )
 
 
+_MemoEntries: TypeAlias = OrderedDict[tuple[int, bytes], tuple[object, int]]
+
+
+class _TokenCountMemo:
+    """Counts of long texts, so the routing, pre-call and compaction counts of one prompt, and every turn an agent
+    session resends, tokenize each text once. An entry holds its tokenizer, so the `id` keying it is never reused."""
+
+    def __init__(self, max_entries: int) -> None:
+        self._max_entries: Final = max_entries
+        self._counts: Final[_MemoEntries] = OrderedDict()
+        self._lock: Final = threading.Lock()
+
+    def counted(self, tokenizer: object, text: str, count: TokenCounterFunction) -> int:
+        key: Final = (id(tokenizer), hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest())
+        with self._lock:
+            known: Final = self._counts.get(key)
+            if known is not None:
+                self._counts.move_to_end(key)
+                return known[1]
+        tokens: Final = count(text)
+        with self._lock:
+            self._counts[key] = (tokenizer, tokens)
+            if len(self._counts) > self._max_entries:
+                self._counts.popitem(last=False)
+        return tokens
+
+    def clear(self) -> None:
+        with self._lock:
+            self._counts.clear()
+
+
+_TOKEN_COUNT_MEMO: Final = _TokenCountMemo(TOKEN_COUNT_MEMO_MAX_ENTRIES)
+
+
+def _memoized_count_function(
+    tokenizer: object,
+    count_exactly: TokenCounterFunction,
+    memo: _TokenCountMemo = _TOKEN_COUNT_MEMO,
+    min_chars: int = TOKEN_COUNT_MEMO_MIN_CHARS,
+    max_entries: int = TOKEN_COUNT_MEMO_MAX_ENTRIES,
+) -> TokenCounterFunction:
+    if max_entries <= 0:
+        return count_exactly
+
+    def count_tokens(text: str) -> int:
+        return count_exactly(text) if len(text) < min_chars else memo.counted(tokenizer, text, count_exactly)
+
+    return count_tokens
+
+
 def _get_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
@@ -1232,7 +1287,7 @@ def _get_exact_count_function(
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _memoized_count_function(default_encoding, _get_tiktoken_count_function(encode_length))
     if tokenizer_json["type"] == "huggingface_tokenizer":
         tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
@@ -1241,14 +1296,14 @@ def _get_exact_count_function(
                 return tokenizer.count(text)
             return len(tokenizer.encode_batch_fast([text])[0])
 
-        return count_tokens
+        return _memoized_count_function(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
         encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _memoized_count_function(encoding, _get_tiktoken_count_function(encode_length))
     raise ValueError("Unsupported tokenizer type")
 
 

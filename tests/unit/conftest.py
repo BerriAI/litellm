@@ -457,6 +457,15 @@ def _provider_model_sets() -> tuple[set[str], ...]:
 
 
 @pytest.fixture(autouse=True)
+def isolate_token_count_memo() -> Iterator[None]:
+    from litellm.litellm_core_utils.token_counter import _TOKEN_COUNT_MEMO
+
+    _TOKEN_COUNT_MEMO.clear()
+    yield
+    _TOKEN_COUNT_MEMO.clear()
+
+
+@pytest.fixture(autouse=True)
 def isolate_model_catalog() -> Iterator[None]:
     model_cost: Final = litellm.model_cost
     model_cost_entries: Final = dict(model_cost)
