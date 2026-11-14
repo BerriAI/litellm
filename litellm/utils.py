@@ -3633,6 +3633,11 @@ def _register_on_current_map(
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
+def durable_model_cost_registration(key: str) -> Mapping[str, object] | None:
+    """What ``register_model`` recorded for ``key`` to replay on reload, never a router deployment's registration."""
+    return _runtime_registered_model_cost.get(key)
+
+
 def runtime_model_cost_registrations(
     model: str, custom_llm_provider: str
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -4798,6 +4803,34 @@ def pre_process_optional_params(
     return optional_params
 
 
+def _map_params_with_provider_config(
+    provider_config: BaseConfig,
+    *,
+    custom_llm_provider: str,
+    non_default_params: dict[str, object],  # mutable-ok: map_openai_params takes the caller's dicts
+    optional_params: dict[str, object],  # mutable-ok: map_openai_params fills and returns the caller's dict
+    model: str,
+    drop_params: bool,
+    base_model: str | None,
+    allowed_openai_params: Collection[str],
+) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            base_model=base_model,
+            allowed_openai_params=allowed_openai_params,
+        )
+    return provider_config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=drop_params,
+    )
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -4861,13 +4894,15 @@ def get_optional_params(
             provider=LlmProviders(custom_llm_provider),
             base_model=base_model,
         )
-    non_default_params: Final = pre_process_non_default_params(
-        passed_params=passed_params,
-        special_params=special_params,
-        custom_llm_provider=custom_llm_provider,
-        additional_drop_params=additional_drop_params,
-        model=model,
-        provider_config=provider_config,
+    non_default_params: Final[dict[str, object]] = (  # mutable-ok: provider map_openai_params take this dict
+        pre_process_non_default_params(
+            passed_params=passed_params,
+            special_params=special_params,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_params,
+            model=model,
+            provider_config=provider_config,
+        )
     )
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
@@ -5377,11 +5412,15 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
+        optional_params = _map_params_with_provider_config(
+            provider_config,
+            custom_llm_provider=custom_llm_provider,
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            base_model=base_model,
+            allowed_openai_params=allowed_openai_params,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
