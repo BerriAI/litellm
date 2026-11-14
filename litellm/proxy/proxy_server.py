@@ -19543,6 +19543,16 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         data["metadata"]["endpoint"] = str(request.url)
+        queued_tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+            request=request,
+            metadata_tags=data["metadata"].get("tags"),
+            body_tags=data.get("tags"),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if queued_tags:
+            data["metadata"]["tags"] = list(queued_tags)
+        data["metadata"]["inherited_tags"] = LiteLLMProxyRequestSetup.get_inherited_tags(user_api_key_dict)
+        data["metadata"]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
             request=request, request_data=data, metadata_key="metadata"
         )

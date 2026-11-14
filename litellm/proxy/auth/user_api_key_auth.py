@@ -149,7 +149,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.auth.resolvers.store import IdentityStore
-from litellm.proxy.auth.route_checks import QUEUED_INFERENCE_ROUTES, RouteChecks
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
@@ -3479,7 +3479,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 )
 
                 # Check 5. Token Spend is under budget
-                if RouteChecks.is_llm_api_route(route=route) or route in QUEUED_INFERENCE_ROUTES:
+                if RouteChecks.runs_inference_checks(route=route):
                     await virtual_key_max_budget_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,

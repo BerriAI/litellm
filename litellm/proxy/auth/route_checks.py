@@ -95,7 +95,7 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 )
 
 
-QUEUED_INFERENCE_ROUTES: Final = frozenset({"/queue/chat/completions"})
+_QUEUED_INFERENCE_ROUTES: Final = frozenset({"/queue/chat/completions"})
 
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
@@ -458,6 +458,10 @@ class RouteChecks:
     def is_unbilled_route(route: str) -> bool:
         resource, _, action = route.rsplit("/", 1)[-1].partition(":")
         return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+
+    @staticmethod
+    def runs_inference_checks(route: str) -> bool:
+        return route in _QUEUED_INFERENCE_ROUTES or RouteChecks.is_llm_api_route(route=route)
 
     @staticmethod
     def is_llm_api_route(route: str) -> bool:

@@ -612,6 +612,7 @@ def test_spent_mapped_tag_budget_rejects_the_next_queued_request_before_the_prov
         assert "budget" in blocked.text.lower(), blocked.text
         assert mapped.provider.drain() == ()
 
+
 def _routing_caller_tag(rig: Rig, caller_tag: CallerTag) -> tuple[Mapping[str, JsonValue], Mapping[str, str]]:
     json_metadata: Final[Mapping[str, JsonValue]] = {"metadata": json.dumps({"tags": [rig.exact_tag]})}
     match caller_tag:

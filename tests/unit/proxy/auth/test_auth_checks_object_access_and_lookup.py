@@ -4262,7 +4262,8 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
 
 
 @pytest.mark.asyncio
-async def test_reject_clientside_metadata_tags_enabled_with_tags():
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_reject_clientside_metadata_tags_enabled_with_tags(route):
     """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present."""
     from fastapi import Request
 
@@ -4290,7 +4291,7 @@ async def test_reject_clientside_metadata_tags_enabled_with_tags():
             end_user_object=None,
             global_proxy_spend=None,
             general_settings=general_settings,
-            route="/chat/completions",
+            route=route,
             llm_router=None,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
@@ -10500,12 +10501,13 @@ async def test_can_key_call_resolved_model_skips_customer_lookup_without_custome
 
 
 @pytest.mark.asyncio
-async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch):
+@pytest.mark.parametrize("route", ["/chat/completions", "/queue/chat/completions"])
+async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch, route):
     monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
     router = _router_with_priced_and_unpriced_models()
 
     with pytest.raises(ProxyException) as exc_info:
-        await _run_common_checks(model="unpriced-group", llm_router=router)
+        await _run_common_checks(model="unpriced-group", llm_router=router, route=route)
 
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing

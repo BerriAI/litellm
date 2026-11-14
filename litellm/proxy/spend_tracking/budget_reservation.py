@@ -330,7 +330,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> dict | None:
-    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+    if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None

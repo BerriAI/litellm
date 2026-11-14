@@ -307,7 +307,12 @@ def test_streamed_queue_responses_report_the_priority_the_router_queued_at(
     client, auth_as, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _queue_router(monkeypatch, default_priority=3)
-    payload: Final = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "priority": "1", "stream": True}
+    payload: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "priority": "1",
+        "stream": True,
+    }
     with auth_as():
         response: Final = client.post("/queue/chat/completions", json=payload)
     assert response.status_code == 200, response.text
@@ -326,3 +331,29 @@ def test_a_provider_bad_request_on_the_queue_route_keeps_its_own_message(
     assert error["type"] == "invalid_request_error"
     assert "context window" in error["message"].lower()
     assert "Authentication Error" not in error["message"]
+
+
+@pytest.mark.parametrize(
+    "body_tags,caller_tag", [(None, "header-tag"), (["body-tag"], "body-tag")], ids=["header_tags", "body_tags"]
+)
+def test_queued_chat_carries_key_team_and_caller_tags_and_the_budget_reservation(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_queue: MagicMock,
+    body_tags: list[str] | None,
+    caller_tag: str,
+) -> None:
+    reservation: Final = {"reserved_cost": 0.01, "callback_bound": False}
+    payload: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"tags": ["sent"]},
+        **({"tags": body_tags} if body_tags is not None else {}),
+    }
+    with auth_as(metadata={"tags": ["key-tag"]}, team_metadata={"tags": ["team-tag"]}, budget_reservation=reservation):
+        response: Final = client.post("/queue/chat/completions", json=payload, headers={"x-litellm-tags": "header-tag"})
+    assert response.status_code == 200, response.text
+    metadata: Final = patched_queue.schedule_acompletion.call_args.kwargs["metadata"]
+    assert metadata["tags"] == ["sent", "key-tag", "team-tag", caller_tag]
+    assert tuple(metadata["inherited_tags"]) == ("key-tag", "team-tag")
+    assert metadata["user_api_key_budget_reservation"] == reservation

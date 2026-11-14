@@ -9,7 +9,7 @@ from opentelemetry.context import Context
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
-from litellm.proxy.auth.route_checks import QUEUED_INFERENCE_ROUTES, RouteChecks
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
 REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
@@ -20,8 +20,7 @@ def is_baggage_mapped_route(route: str) -> bool:
 
     return (
         (
-            route in QUEUED_INFERENCE_ROUTES
-            or RouteChecks.is_llm_api_route(route)
+            RouteChecks.runs_inference_checks(route)
             or InitPassThroughEndpointHelpers.is_registered_pass_through_route(route)
         )
         and not RouteChecks.is_unbilled_route(route)
