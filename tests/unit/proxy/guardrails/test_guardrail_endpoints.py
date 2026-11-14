@@ -13,7 +13,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import JsonValue
 from pytest_mock import MockerFixture
 
+import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
@@ -4224,6 +4227,32 @@ class _BedrockGuardrailCall(NamedTuple):
     failure_hook_request: Mapping[str, object]
 
 
+class _CapturingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[list[Mapping[str, object]]] = []
+        self.failure_hook_requests: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append(kwargs["standard_logging_object"])
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged.append(kwargs["standard_logging_object"])
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.failure_hook_requests.append(request_data)
+
+
 def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = False) -> CustomGuardrail:
     return BedrockGuardrail(
         guardrail_name="bedrock-guard",
@@ -4234,6 +4263,7 @@ def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = F
         aws_secret_access_key="test-secret-key",
         async_handler=handler,
         experimental_use_latest_role_message_only=latest_user_message_only,
+        event_hook=GuardrailEventHooks.pre_call,
     )
 
 
@@ -4245,7 +4275,8 @@ async def _apply_bedrock_guardrail_over_http(
 ) -> _BedrockGuardrailCall:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.guardrails.guardrail_endpoints import router
-    from litellm.proxy.proxy_server import openai_exception_handler
+    from litellm.proxy.proxy_server import ProxyConfig, openai_exception_handler
+    from litellm.proxy.utils import ProxyLogging
 
     sent: Final[list[httpx.Request]] = []
 
@@ -4253,33 +4284,17 @@ async def _apply_bedrock_guardrail_over_http(
         sent.append(request)
         return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
 
-    registry: Final = mocker.Mock()
-    registry.get_initialized_guardrail_callback.return_value = guardrail(
-        AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    capture: Final = _CapturingLogger()
+    mocker.patch.object(
+        litellm, "callbacks", [guardrail(AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))), capture]
     )
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
-    logging_obj: Final = Logging(
-        model="guardrail",
-        messages=[],
-        stream=False,
-        call_type="pass_through_endpoint",
-        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        litellm_call_id="bedrock-guard-call",
-        function_id="bedrock-guard-call",
-    )
-    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
-    processor: Final = mocker.Mock()
-    processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"metadata": {"route": "/apply_guardrail"}}, logging_obj)
-    )
-    mocker.patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=processor)
-    proxy_logging: Final = mocker.Mock()
-    proxy_logging.post_call_success_hook = AsyncMock(return_value=None)
-    proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
-    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    mocker.patch.object(litellm, "_async_success_callback", [])
+    mocker.patch.object(litellm, "_async_failure_callback", [])
+    mocker.patch.object(litellm, "success_callback", [])
+    mocker.patch.object(litellm, "failure_callback", [])
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     mocker.patch("litellm.proxy.proxy_server.general_settings", {})
-    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
-    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
     mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
 
     app: Final = FastAPI()
@@ -4290,12 +4305,12 @@ async def _apply_bedrock_guardrail_over_http(
         response: Final = await client.post(
             "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}
         )
-    failed: Final = proxy_logging.post_call_failure_hook.await_args
+    assert len(capture.logged) == 1
     return _BedrockGuardrailCall(
         response=response,
         bedrock_payloads=tuple(json.loads(request.content) for request in sent),
-        logged=logging_obj.model_call_details.get("standard_logging_object") or {},
-        failure_hook_request=failed.kwargs["request_data"] if failed is not None else {},
+        logged=capture.logged[0],
+        failure_hook_request=capture.failure_hook_requests[0] if capture.failure_hook_requests else {},
     )
 
 

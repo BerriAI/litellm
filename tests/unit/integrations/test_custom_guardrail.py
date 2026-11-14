@@ -2094,7 +2094,13 @@ class TestGuardrailInterventionClassification:
 
         class BlockingGuardrail(CustomGuardrail):
             @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
                 raise HTTPException(status_code=400, detail="blocked by guardrail")
 
         request_data: dict = {}

@@ -341,7 +341,7 @@ class GraySwanGuardrail(CustomGuardrail):
             status_code: Final = getattr(exc, "status_code", None) or getattr(exc, "exception_status_code", None)
             self._log_guardrail_failure(
                 exc=exc,
-                request_data=request_data or {},
+                request_data=request_data,
                 start_time=start_time,
                 end_time=end_time,
                 status_code=status_code,
