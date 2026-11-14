@@ -959,6 +959,18 @@ async def test_provider_specific_params_includes_embedding_toggle():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field_name", ("api_base", "api_key"))
+async def test_provider_specific_params_exposes_generic_guardrail_connection_fields(field_name: str) -> None:
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params: Final = await get_provider_specific_params()
+    field: Final = provider_params["generic_guardrail_api"][field_name]
+
+    assert field["type"] == "string"
+    assert field["required"] is False
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_params_offers_forward_messages_as_sent_off_by_default():
     from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
 
