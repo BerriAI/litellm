@@ -203,6 +203,10 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
     {"acreate_interaction": ("model", "agent")}
 )
 
+BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
+    {"avector_store_search": MappingProxyType({"query": ("query_image",)})}
+)
+
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
@@ -240,8 +244,11 @@ def _find_missing_required_body_param(
     )
     if missing_merge_base_param is not None:
         return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    alternatives: Final = BODY_PARAM_ALTERNATIVES_BY_ROUTE.get(route_type, {})
     missing_present_params: Final = tuple(
-        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+        param
+        for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ())
+        if param not in data and not any(alternative in data for alternative in alternatives.get(param, ()))
     )
     if not missing_present_params:
         return None

@@ -99,6 +99,8 @@ ignored_function_names = [
     "_embedding",
     "_aembedding",
     "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_narrow_to_video_deployment",  # Tested through video_status and avideo_status polls in test_router_provider_endpoints.py
+    "_video_call_pin",  # Tested through the video_status pin tests and the chat video_id test in test_router_provider_endpoints.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
@@ -124,6 +126,9 @@ ignored_function_names = [
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
     "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_route_capability_pin",  # Exercised through Decisions routing tests in test_router.py
+    "_deployment_serves_route",  # Exercised through mixed-group Decisions tests in test_router.py
+    "_without_deployments_that_cannot_serve_route",  # Exercised through Decisions routing tests in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py

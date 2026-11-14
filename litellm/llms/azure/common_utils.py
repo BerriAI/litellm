@@ -101,6 +101,10 @@ def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
 
 
+def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
+    return _cached_azure_ad_token_refresh_provider(scope)
+
+
 def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
@@ -799,6 +803,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod
+    def resolve_azure_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
+    @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
         litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
@@ -815,7 +823,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
         """
 
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        api_base = BaseAzureLLM.resolve_azure_api_base(api_base)
         if api_base is None:
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"

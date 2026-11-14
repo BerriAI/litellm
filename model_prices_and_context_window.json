@@ -70745,6 +70745,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-mini": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "cache_read_input_token_cost": 8.25e-08,
         "cache_read_input_token_cost_batches": 4.125e-08,
@@ -70760,6 +70761,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-nano": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_batches": 1.1e-08,
@@ -71251,6 +71253,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-mini": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "cache_read_input_token_cost": 8.25e-08,
         "cache_read_input_token_cost_batches": 4.125e-08,
@@ -71266,6 +71269,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-nano": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_batches": 1.1e-08,

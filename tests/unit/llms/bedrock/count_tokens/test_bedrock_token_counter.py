@@ -91,6 +91,36 @@ async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("model_to_use", "runtime", "expected_hosts", "expected_tokens"),
+    (
+        ("us.anthropic.claude-sonnet-4-6", (200, {"inputTokens": 1353}), (RUNTIME_HOST,), 1353),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST), 2177),
+    ),
+)
+async def test_deployment_with_an_empty_api_base_counts_on_the_default_runtime_host(
+    model_to_use: str,
+    runtime: tuple[int, Mapping[str, object]],
+    expected_hosts: tuple[str, ...],
+    expected_tokens: int,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "api_base": ""}},
+        request_model=model_to_use,
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == expected_tokens
+    assert bedrock.posted_hosts() == expected_hosts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("model_to_use", "runtime"),
     (
         ("global.anthropic.claude-opus-4-8", (401, {"Message": "not authorized to perform: bedrock:CountTokens"})),

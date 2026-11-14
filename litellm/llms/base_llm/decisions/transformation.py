@@ -495,6 +495,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return api_key
+
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
         return next((value for value in (get_secret_str(name) for name in names) if value), None)
@@ -505,12 +510,32 @@ class BaseDecisionsConfig(ABC):
     def request_model(self, model: str) -> str:
         return model
 
-    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
         return {
             **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
             **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
             "Content-Type": "application/json",
         }
+
+    async def avalidate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
+        return self.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"

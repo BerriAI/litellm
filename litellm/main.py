@@ -27,6 +27,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
+from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
 from litellm._uuid import uuid
 
@@ -69,6 +70,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    drops_unsupported_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -80,6 +85,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
@@ -135,6 +141,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import realtime_health_check
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     CompletionDispatchContext,
@@ -197,7 +204,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -261,6 +268,7 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openai.workload_identity import build_openai_client
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -1083,6 +1091,7 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
+from litellm.responses.bridge_check import bridge_reasoning_effort  # noqa: E402  # imported at the old definition site, same as its neighbours
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -5350,7 +5359,17 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
+    drops_unsupported: Final = drops_unsupported_params(
+        cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
+    )
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        drop_params=drops_unsupported,
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5366,63 +5385,55 @@ def completion(
 
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
-        )
-        from litellm.types.llms.openai import ToolParam
 
-        # Check if MCP tools are present (following responses pattern)
-        # Cast tools to Optional[Iterable[ToolParam]] for type checking
-        tools_for_mcp: Final = cast(Iterable[ToolParam] | None, tools)
-        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools_for_mcp):
-            return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
-                model=model,
-                messages=messages,
-                functions=functions,
-                function_call=function_call,
-                timeout=timeout,
-                temperature=temperature,
-                top_p=top_p,
-                n=n,
-                stream=stream,
-                stream_options=stream_options,
-                stop=stop,
-                max_tokens=max_tokens,
-                max_completion_tokens=max_completion_tokens,
-                modalities=modalities,
-                prediction=prediction,
-                audio=audio,
-                presence_penalty=presence_penalty,
-                frequency_penalty=frequency_penalty,
-                logit_bias=logit_bias,
-                user=user,
-                response_format=response_format,
-                seed=seed,
-                tools=tools,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                deployment_id=deployment_id,
-                reasoning_effort=reasoning_effort,
-                verbosity=verbosity,
-                safety_identifier=safety_identifier,
-                service_tier=service_tier,
-                store=store,
-                prompt_cache_key=prompt_cache_key,
-                base_url=base_url,
-                api_version=api_version,
-                api_key=api_key,
-                model_list=model_list,
-                extra_headers=extra_headers,
-                thinking=thinking,
-                web_search_options=web_search_options,
-                shared_session=shared_session,
-                enable_json_schema_validation=enable_json_schema_validation,
-                **kwargs,
-            )
+        return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
+            model=model,
+            messages=messages,
+            functions=functions,
+            function_call=function_call,
+            timeout=timeout,
+            temperature=temperature,
+            top_p=top_p,
+            n=n,
+            stream=stream,
+            stream_options=stream_options,
+            stop=stop,
+            max_tokens=max_tokens,
+            max_completion_tokens=max_completion_tokens,
+            modalities=modalities,
+            prediction=prediction,
+            audio=audio,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            user=user,
+            response_format=response_format,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            deployment_id=deployment_id,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+            safety_identifier=safety_identifier,
+            service_tier=service_tier,
+            store=store,
+            prompt_cache_key=prompt_cache_key,
+            base_url=base_url,
+            api_version=api_version,
+            api_key=api_key,
+            model_list=model_list,
+            extra_headers=extra_headers,
+            thinking=thinking,
+            web_search_options=web_search_options,
+            shared_session=shared_session,
+            enable_json_schema_validation=enable_json_schema_validation,
+            **kwargs,
+        )
     api_base = kwargs.get("api_base", None)
     mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
     mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
@@ -5607,6 +5618,15 @@ def completion(
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
+        drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            drop_params=drops_unsupported,
+        )
+
         if provider_specific_header is not None:
             headers.update(
                 ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -5729,7 +5749,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -5866,7 +5886,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY, requested_tool_choice)}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs
+                    or parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    else {}
+                ),
+            },
+            control_options,
+        )
         if litellm_params.get("provider_affinity_header") is not None:
             try:
                 headers = add_provider_affinity_header(
@@ -5926,7 +5957,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
             )
@@ -6242,6 +6273,10 @@ def completion(
         )
 
 
+def _is_not_resent_failure(error: BaseException) -> bool:
+    return isinstance(error, Exception) and not is_resent_failure(error)
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6261,10 +6296,15 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6287,10 +6327,15 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -6315,10 +6360,15 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6342,10 +6392,15 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -7936,17 +7991,14 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
-    from litellm.llms.openai.common_utils import OpenAIHTTPClient
-
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-
-    # Extract api_base from kwargs
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     api_base: Final = kwargs.get("api_base", None)
 
-    openai_client = kwargs.get("client", None)
-    if openai_client is None:
-        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=OpenAIHTTPClient())
+    openai_client: Final = kwargs.get("client", None) or build_openai_client(
+        api_key=static_api_key,
+        api_base=api_base,
+        litellm_params=kwargs,
+    )
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -7969,8 +8021,7 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
@@ -7996,8 +8047,9 @@ async def amoderation(
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
         _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
-            api_key=api_key,
+            api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
         _openai_client = openai_client
@@ -8017,7 +8069,7 @@ async def amoderation(
         moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
-            api_key=api_key,
+            api_key=static_api_key,
             additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
@@ -8250,9 +8302,7 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
-        # set API KEY
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+        static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -8264,7 +8314,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
             api_base=api_base,
-            api_key=api_key,
+            api_key=static_api_key,
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
@@ -8586,6 +8636,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)
