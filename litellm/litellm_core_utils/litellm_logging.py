@@ -2983,8 +2983,11 @@ class Logging(LiteLLMLoggingBaseClass):
             },
         }
         attempt.litellm_params = attempt.model_call_details["litellm_params"]
+        attempt_start_time: Final = (
+            marker if start_time is None and isinstance(marker, datetime.datetime) else start_time
+        )
         attempt_start, attempt_end = attempt._failure_handler_helper_fn(
-            exception, traceback_exception, start_time, end_time, estimate_prompt_tokens=False
+            exception, traceback_exception, attempt_start_time, end_time, estimate_prompt_tokens=False
         )
         if attempt._should_estimate_failed_prompt():
             attempt.model_call_details[

@@ -152,6 +152,7 @@ class _FailureAttemptRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.payloads: list[StandardLoggingPayload] = []
+        self.failure_starts: list[datetime.datetime] = []
         self.successes = 0
 
     async def async_log_success_event(
@@ -171,6 +172,7 @@ class _FailureAttemptRecorder(CustomLogger):
         end_time: datetime.datetime,
     ) -> None:
         self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        self.failure_starts.append(start_time)
 
 
 class _EveryFailureAttemptRecorder(_FailureAttemptRecorder):
@@ -179,9 +181,11 @@ class _EveryFailureAttemptRecorder(_FailureAttemptRecorder):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("dynamic", [True, False])
+@pytest.mark.parametrize("omit_start_time", [False, True])
 async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_attempt(
     monkeypatch: pytest.MonkeyPatch,
     dynamic: bool,
+    omit_start_time: bool,
 ) -> None:
     normal: Final = _FailureAttemptRecorder()
     telemetry: Final = _EveryFailureAttemptRecorder()
@@ -209,14 +213,18 @@ async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_a
         logging_obj.model_call_details["api_call_start_time"] = marker
         logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
         prior_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
-        await logging_obj.async_failure_handler(error, "trace", marker, marker + datetime.timedelta(seconds=1))
+        await logging_obj.async_failure_handler(
+            error, "trace", None if omit_start_time else marker, marker + datetime.timedelta(seconds=1)
+        )
         if index > 0:
             assert logging_obj.model_call_details["standard_logging_object"] is prior_payload
             assert logging_obj.model_call_details["async_failure_logged_attempt"] == start + datetime.timedelta(
                 seconds=1
             )
         saved_payload: Final = logging_obj.model_call_details["standard_logging_object"]
-        await logging_obj.async_failure_handler(error, "trace", marker, marker + datetime.timedelta(seconds=1))
+        await logging_obj.async_failure_handler(
+            error, "trace", None if omit_start_time else marker, marker + datetime.timedelta(seconds=1)
+        )
         assert logging_obj.model_call_details["standard_logging_object"] is saved_payload
     await logging_obj.async_success_handler(
         litellm.ModelResponse(model="gpt-4o"), start, start + datetime.timedelta(seconds=5)
@@ -224,6 +232,13 @@ async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_a
     assert [p["api_base"] for p in telemetry.payloads] == [f"https://region-{i}.example/v1" for i in range(3)]
     assert [p["api_base"] for p in normal.payloads] == ["https://region-0.example/v1"]
     assert all(p["status"] == "failure" for p in telemetry.payloads)
+    first_start: Final = start if omit_start_time else start + datetime.timedelta(seconds=1)
+    assert normal.failure_starts == [first_start]
+    assert telemetry.failure_starts == [
+        first_start,
+        start + datetime.timedelta(seconds=2),
+        start + datetime.timedelta(seconds=3),
+    ]
     assert normal.successes == telemetry.successes == 1
 
 
@@ -251,14 +266,21 @@ async def test_retry_spans_preserve_request_failure_metric_count(monkeypatch: py
     monkeypatch.setattr(litellm, "_async_failure_callback", [telemetry])
     start: Final = datetime.datetime(2026, 1, 1)
     logging_obj: Final = Logging(
-        model="gpt-4o", messages=[{"role": "user", "content": "hello"}], stream=False,
-        call_type="acompletion", start_time=start, litellm_call_id="metric-attempts", function_id="fn",
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="metric-attempts",
+        function_id="fn",
     )
     error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
     for index in range(3):
         marker: Final = start + datetime.timedelta(seconds=index + 1)
         logging_obj.model_call_details["litellm_params"] = {
-            "api_base": f"https://region-{index}.example/v1", "custom_llm_provider": "openai", "metadata": {},
+            "api_base": f"https://region-{index}.example/v1",
+            "custom_llm_provider": "openai",
+            "metadata": {},
         }
         logging_obj.model_call_details["api_call_start_time"] = marker
         logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
@@ -269,7 +291,9 @@ async def test_retry_spans_preserve_request_failure_metric_count(monkeypatch: py
     assert metrics is not None
     for resource in metrics.resource_metrics:
         for scope in resource.scope_metrics:
-            duration: Final = next(metric for metric in scope.metrics if metric.name == "gen_ai.client.operation.duration")
+            duration: Final = next(
+                metric for metric in scope.metrics if metric.name == "gen_ai.client.operation.duration"
+            )
             assert sum(point.count for point in duration.data.data_points) == 1
 
 

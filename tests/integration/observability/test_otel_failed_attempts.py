@@ -224,6 +224,10 @@ def test_failed_retry_stream_has_one_span_per_upstream_attempt(retry_rig: RetryR
     )
     assert len(spans) == 5, spans
     assert all(span.get("status_code") == 2 for span in spans), spans
+    assert all(span.get("start_time_unix_nano", 0) > 0 for span in spans), spans
+    assert len({span.get("start_time_unix_nano") for span in spans}) == 5, spans
+    last_attempt: Final = max(spans, key=lambda span: span.get("start_time_unix_nano", 0))
+    assert int(str(last_attempt["attributes"].get("server.port"))) == urlsplit(retry_rig.broken_stream.url).port, spans
     ports: Final = sorted(int(str(span["attributes"].get("server.port"))) for span in spans)
     assert ports == sorted([urlsplit(retry_rig.primary.url).port] * 4 + [urlsplit(retry_rig.broken_stream.url).port]), (
         spans
