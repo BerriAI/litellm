@@ -3498,3 +3498,41 @@ def test_reading_a_dropped_budget_for_a_guardrail_logs_no_drop_warning(caplog: p
 
     assert messages == [{"role": "user", "content": "hi"}]
     assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+FAILED_TOOL_RESULT_REQUEST: Final = {
+    "model": "claude-sonnet",
+    "max_tokens": 16,
+    "messages": [
+        {"role": "user", "content": "Rename the helper"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "edit0", "name": "Edit", "input": {"file_path": "a.py"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "edit0", "content": "String not found", "is_error": True}
+            ],
+        },
+    ],
+}
+
+
+@pytest.mark.parametrize("keep_tool_errors", [True, False])
+def test_structured_messages_carry_tool_failures_only_when_asked(keep_tool_errors: bool) -> None:
+    messages: Final = AnthropicMessagesHandler().get_structured_messages(
+        FAILED_TOOL_RESULT_REQUEST, keep_tool_errors=keep_tool_errors
+    )
+    assert messages is not None
+    (tool_message,) = [message for message in messages if message["role"] == "tool"]
+    assert tool_message.get("is_error") is (True if keep_tool_errors else None)
+
+
+def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+    request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
+    )
+    assert "is_error" not in json.dumps(request["messages"], default=str)

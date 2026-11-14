@@ -207,6 +207,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -361,6 +362,7 @@ class AgenticLoopState:
     api_surface: Literal["chat_completions", "responses"] | None = field(
         default=None, metadata=wire("_agentic_loop_api_surface")
     )
+    tool_choice: Mapping[str, object] | None = field(default=None, metadata=wire("_agentic_loop_tool_choice"))
     code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
     code_interpreter_sandbox_key: str | None = field(
         default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
