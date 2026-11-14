@@ -1511,6 +1511,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
         _ = [chunk async for chunk in stream]
 
     _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+    response.aclose.assert_awaited_once()
 
 
 def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_turn(
