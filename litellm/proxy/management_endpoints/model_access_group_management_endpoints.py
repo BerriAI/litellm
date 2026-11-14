@@ -519,7 +519,7 @@ def _model_ids_to_lock(
     deployments: Sequence[_DeploymentRow], access_group: str, data: UpdateModelGroupRequest
 ) -> frozenset[str]:
     selected_model_ids: Final = frozenset(data.model_ids or ())
-    selected_model_names: Final = frozenset(() if data.model_ids else data.model_names or ())
+    selected_model_names: Final = frozenset(data.model_names or ())
     return frozenset(
         deployment.model_id
         for deployment in deployments
@@ -702,30 +702,35 @@ async def update_specific_deployments_with_access_group(
 def _selected_deployments_or_400(
     deployments: Sequence[_DeploymentRow], data: UpdateModelGroupRequest
 ) -> tuple[_DeploymentRow, ...]:
-    if data.model_ids:
-        known_model_ids: Final = frozenset(deployment.model_id for deployment in deployments)
-        unknown_model_id: Final = next(
-            (model_id for model_id in data.model_ids if model_id not in known_model_ids), None
-        )
-        if unknown_model_id is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Deployment with model_id '{unknown_model_id}' not found in Database."},
-            )
-        selected_model_ids: Final = frozenset(data.model_ids)
-        return tuple(deployment for deployment in deployments if deployment.model_id in selected_model_ids)
-    model_names: Final = data.model_names or ()
+    selected_dict: dict[str, _DeploymentRow] = {}
+    known_model_ids: Final = frozenset(deployment.model_id for deployment in deployments)
     known_model_names: Final = frozenset(deployment.model_name for deployment in deployments)
-    unknown_model_name: Final = next((name for name in model_names if name not in known_model_names), None)
-    if unknown_model_name is not None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Can't find model '{unknown_model_name}' in Database. Access group management is only supported for database models."
-            },
-        )
-    selected_model_names: Final = frozenset(model_names)
-    return tuple(deployment for deployment in deployments if deployment.model_name in selected_model_names)
+
+    if data.model_ids:
+        for mid in data.model_ids:
+            if mid not in known_model_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"Deployment with model_id '{mid}' not found in Database."},
+                )
+        for d in deployments:
+            if d.model_id in data.model_ids:
+                selected_dict[d.model_id] = d
+
+    if data.model_names:
+        for name in data.model_names:
+            if name not in known_model_names:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Can't find model '{name}' in Database. Access group management is only supported for database models."
+                    },
+                )
+        for d in deployments:
+            if d.model_name in data.model_names:
+                selected_dict[d.model_id] = d
+
+    return tuple(selected_dict.values())
 
 
 async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> object:
@@ -864,11 +869,8 @@ async def create_model_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    # If model_ids is provided, use it (more precise targeting)
-    use_model_ids: Final = has_model_ids
-
-    # Validate model_names exist in router (only if using model_names path)
-    if not use_model_ids and has_model_names:
+    # Validate model_names exist in router whenever model_names is provided
+    if has_model_names:
         assert data.model_names is not None
         missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
@@ -900,21 +902,27 @@ async def create_model_group(
                 },
             )
 
-        # Update deployments using the appropriate method
-        if use_model_ids:
+        # Update deployments using provided model_ids and/or model_names
+        updated_dict: Final[dict[str, object]] = {}  # mutable-ok: accumulator for unique deployment updates
+        if has_model_ids:
             assert data.model_ids is not None
-            updated_pairs = await update_specific_deployments_with_access_group(
+            for pair in await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
-            )
-        else:
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        if has_model_names:
             assert data.model_names is not None
-            updated_pairs = await update_deployments_with_access_group(
+            for pair in await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
-            )
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        updated_pairs: Final = tuple(updated_dict.items())
         models_updated: Final = len(updated_pairs)
 
         live_before_reload: Final = live_model_ids_snapshot()
@@ -1124,7 +1132,8 @@ async def update_access_group(
     except Exception as e:
         raise _http_error(500, f"Failed to check access group existence: {e}")
 
-    if not has_model_ids and has_model_names:
+    # Validation: Check if all new models exist whenever model_names is provided
+    if has_model_names:
         assert data.model_names is not None
         missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
