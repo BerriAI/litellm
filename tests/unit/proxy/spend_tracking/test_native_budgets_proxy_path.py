@@ -822,6 +822,9 @@ FAMILIES: Final[Mapping[str, Family]] = {
         {"model": "gpt-realtime"},
         call_type="acreate_realtime_translation_client_secret",
     ),
+    "transcriptions": Family(
+        "/v1/audio/transcriptions", {"model": "gpt-4o-transcribe"}, call_type="atranscription", upload="file"
+    ),
     "image_edit": Family(
         "/v1/images/edits", {"model": "gpt-image-1", "prompt": "a cat"}, call_type="aimage_edit", upload="image"
     ),
