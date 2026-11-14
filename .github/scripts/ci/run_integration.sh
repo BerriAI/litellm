@@ -81,7 +81,7 @@ export INTEGRATION_UPSTREAM_URL=http://127.0.0.1:8190
 export INTEGRATION_MASTER_KEY="$LITELLM_MASTER_KEY"
 export LITELLM_UI_PATH="$PWD/litellm/proxy/_experimental/out"
 if [ "$suite" = browser ]; then
-  export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
+  export LITELLM_UI_PATH="$PWD/litellm/ui/litellm-dashboard/out"
   test -f "$LITELLM_UI_PATH/index.html"
 fi
 export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"

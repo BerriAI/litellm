@@ -3665,6 +3665,7 @@ class TestLangfuseDestinationFields:
         }
         assert not LANGFUSE_REQUEST_METADATA_ATTRIBUTES & received[None].keys()
 
+    @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize(
         ("key_environment", "tracing_environment", "expected"),
         [
@@ -3675,14 +3676,18 @@ class TestLangfuseDestinationFields:
         ],
         ids=["key", "key-over-env", "env", "neither"],
     )
-    def test_a_langfuse_destination_names_the_environment_the_legacy_logger_wrote(
+    def test_a_langfuse_destination_names_its_own_environment_else_the_proxys(
         self,
         monkeypatch: pytest.MonkeyPatch,
         key_environment: str | None,
         tracing_environment: str | None,
         expected: Mapping[str, str],
+        operator_keys: bool,
     ) -> None:
         credential_less_proxy(monkeypatch)
+        if operator_keys:
+            monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+            monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
         if tracing_environment is None:
             monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
         else:
@@ -3698,22 +3703,54 @@ class TestLangfuseDestinationFields:
         assert destination is not None
         assert dict(destination.resource_attributes) == expected
 
-    def test_a_langfuse_destination_on_a_proxy_with_langfuse_keys_names_no_environment(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("tracing_environment", ["staging", None], ids=["env", "unset"])
+    def test_only_the_proxys_langfuse_exporter_names_the_proxys_environment(
+        self, monkeypatch: pytest.MonkeyPatch, tracing_environment: str | None
     ) -> None:
-        """With operator keys the older Langfuse logger never runs, so there is no environment of its to keep."""
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        if tracing_environment is None:
+            monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+        else:
+            monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        collector: Final = ExporterSpec(kind="otlp_http", endpoint="http://collector:4318", headers="x-collector=1")
+        config: Final = langfuse_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+        provider: Final = build_tracer_provider(config)
 
-        destination: Final = destination_for(
-            "langfuse_otel",
-            StandardCallbackDynamicParams(
-                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment="prod"
-            ),
-        )
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
 
-        assert destination is not None
-        assert dict(destination.resource_attributes) == {}
+        environments: Final = {
+            headers == collector.headers: exporter.get_finished_spans()[0].resource.attributes.get(
+                "langfuse.environment"
+            )
+            for headers, exporter in capture.built
+        }
+        assert environments == {True: None, False: tracing_environment}
+        assert "langfuse.environment" not in otel_providers.build_resource(config).attributes
+
+    def test_an_environment_the_proxys_resource_already_names_wins_on_the_langfuse_exporter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "staging")
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "langfuse.environment=from-resource")
+        capture: Final = _ExporterCapture()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = langfuse_preset()
+        provider: Final = build_tracer_provider(config)
+
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
+
+        assert [
+            exporter.get_finished_spans()[0].resource.attributes.get("langfuse.environment")
+            for _headers, exporter in capture.built
+        ] == ["from-resource"]
 
     @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])
@@ -3813,6 +3850,26 @@ class TestLangfuseDestinationFields:
         assert self._attributes((LANGFUSE_DEST,), len(generic), _MODEL_CALL_WITH_CONTENT) == generic, (
             "the generic attributes all survive"
         )
+
+    def test_a_span_at_its_attribute_limit_sheds_the_release_and_version_before_its_other_fields(self) -> None:
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT,
+            trace=TraceControls(release="rel-1", version="v-1"),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+        config: Final = OpenTelemetryV2Config(mapper_names=["genai", "langfuse"])
+
+        def attributes(limit: int | None) -> dict[str, object]:
+            exporter: Final = InMemorySpanExporter()
+            provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, call)
+            return dict(exporter.get_finished_spans()[0].attributes or {})
+
+        whole: Final = attributes(None)
+
+        assert LANGFUSE_REQUEST_METADATA_ATTRIBUTES & whole.keys() > {"langfuse.release", "langfuse.version"}
+        assert whole.keys() - attributes(len(whole) - 2).keys() == {"langfuse.release", "langfuse.version"}
 
     def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(
         self,

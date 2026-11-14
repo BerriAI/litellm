@@ -36,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
+from litellm.proxy.auth.customer_spend import settle_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
@@ -76,6 +77,10 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.auth.customer_hierarchy import (
+    customer_budget_scopes_from_request,
+    customer_hierarchy_ids_from_request,
+)
 from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.router import Deployment
@@ -86,6 +91,7 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
+    from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter
     from litellm.proxy.utils import ProxyLogging
 
 
@@ -102,6 +108,14 @@ class BatchAccountingOutcome:
 
 _BATCH_ACCOUNTING: Final[ContextVar[BatchAccountingOutcome | None]] = ContextVar("batch_accounting", default=None)
 _BATCH_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+class _CustomerCounterOptions(TypedDict, total=False):
+    customer_counters: ReadOnly["Sequence[BudgetCounter]"]
+
+
+def _customer_counter_options(counters: "Sequence[BudgetCounter]") -> _CustomerCounterOptions:
+    return {"customer_counters": counters} if counters else {}
 
 
 @contextmanager
@@ -483,7 +497,7 @@ class _ProxyDBLogger(CustomLogger):
 
         route_is_trackable: Final = (
             request_route is None
-            or RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.runs_inference_checks(request_route)
             or RouteChecks.is_info_route(route=request_route)
             or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
         )
@@ -674,6 +688,16 @@ class _ProxyDBLogger(CustomLogger):
 
         token: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         end_user_id: Final = None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id
+        from litellm.proxy.proxy_server import customer_accounting_counters
+
+        customer_counters: Final = (
+            await customer_accounting_counters(
+                customer_hierarchy_ids_from_request(spend_rows[0][1]),
+                customer_budget_scopes_from_request(spend_rows[0][1]),
+            )
+            if any(cost > 0 for cost, _ in spend_rows)
+            else ()
+        )
         accounting_rows: Final = tuple((cost, dict(row)) for cost, row in spend_rows)
         charged: Final = [
             await self._spend_writer().update_database(
@@ -688,6 +712,7 @@ class _ProxyDBLogger(CustomLogger):
                 end_time=datetime.now(),
                 org_id=user_api_key_dict.org_id,
                 project_id=user_api_key_dict.project_id,
+                **_customer_counter_options(customer_counters),
             )
             for row_cost, row_kwargs in accounting_rows
         ]
@@ -696,7 +721,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         if counted_rows and not ProxyUpdateSpend.disable_spend_updates():
             await self._increment_failure_spend_counters(
-                user_api_key_dict, token, end_user_id, counted_rows, start_time
+                user_api_key_dict, token, end_user_id, counted_rows, start_time, customer_counters
             )
 
     async def _increment_failure_spend_counters(
@@ -706,12 +731,15 @@ class _ProxyDBLogger(CustomLogger):
         end_user_id: str | None,
         counted_rows: Sequence[tuple[float, Mapping[str, object]]],
         start_time: datetime,
+        customer_counters: "Sequence[BudgetCounter]" = (),
     ) -> None:
         """The counters the success path raises for the same spend, sent before the client sees the error. A
         counter store slower than ``failure_counter_wait_seconds`` finishes them in the background instead of
         holding the error back. The reservation was already released, so every counter takes the full row cost."""
         increment: Final = asyncio.create_task(
-            self._raise_failure_spend_counters(user_api_key_dict, token, end_user_id, counted_rows, start_time)
+            self._raise_failure_spend_counters(
+                user_api_key_dict, token, end_user_id, counted_rows, start_time, customer_counters
+            )
         )
         self._pending_increments.add(increment)
         increment.add_done_callback(self._pending_increments.discard)
@@ -729,10 +757,11 @@ class _ProxyDBLogger(CustomLogger):
         end_user_id: str | None,
         counted_rows: Sequence[tuple[float, Mapping[str, object]]],
         start_time: datetime,
+        customer_counters: "Sequence[BudgetCounter]" = (),
     ) -> None:
         for row_cost, row_kwargs in counted_rows:
             await self._raise_row_spend_counters(
-                user_api_key_dict, token, end_user_id, row_cost, row_kwargs, start_time
+                user_api_key_dict, token, end_user_id, row_cost, row_kwargs, start_time, customer_counters
             )
         await flush_post_call_redis_batches()
 
@@ -744,6 +773,7 @@ class _ProxyDBLogger(CustomLogger):
         row_cost: float,
         row_kwargs: Mapping[str, object],
         start_time: datetime,
+        customer_counters: "Sequence[BudgetCounter]" = (),
     ) -> None:
         standard_logging_object: Final = row_kwargs.get("standard_logging_object")
         sl_object: Final = (
@@ -772,6 +802,7 @@ class _ProxyDBLogger(CustomLogger):
                 ),
                 project_id=user_api_key_dict.project_id,
                 committed_spend_scope=_committed_spend_scope(user_api_key_dict),
+                **_customer_counter_options(customer_counters),
                 **_ledger_counter_options(row_kwargs.get(ACCOUNTING_LEDGER_KWARG)),
             )
         except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
@@ -1286,6 +1317,7 @@ class _IncrementSpendCounters(Protocol):
         project_id: str | None = None,
         committed_spend_scope: EntitySpendCounterKeys | None = None,
         windows_from_ledger: bool = False,
+        customer_counters: "Sequence[BudgetCounter]" = (),
     ) -> None: ...
 
 
@@ -1339,24 +1371,34 @@ async def _update_database_and_spend_counters(
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
     write and their increments leave in a single pipeline."""
-    from litellm.proxy.proxy_server import spend_counter_store
+    from litellm.proxy.proxy_server import customer_accounting_counters, spend_counter_store
     from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
 
+    request_fields: Final = _OBJECT_MAPPING.validate_python(kwargs)
+    customer_counters: Final = (
+        await customer_accounting_counters(
+            customer_hierarchy_ids_from_request(request_fields), customer_budget_scopes_from_request(request_fields)
+        )
+        if response_cost
+        else ()
+    )
     if budget_reservation is not None:
         await _reconcile_budget_reservation_before_db_update(
             budget_reservation=budget_reservation, response_cost=response_cost
         )
-    counter_keys: Final = frozenset(
-        get_reserved_counter_keys(budget_reservation=budget_reservation)
-    ) | post_call_counter_keys(
-        token=user_api_key,
-        team_id=team_id,
-        user_id=user_id,
-        org_id=org_id,
-        end_user_id=end_user_id,
-        tags=request_tags,
-        model_access_groups=model_access_groups,
-        project_id=project_id,
+    counter_keys: Final = (
+        frozenset(counter.counter_key for counter in customer_counters)
+        | frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation))
+        | post_call_counter_keys(
+            token=user_api_key,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            end_user_id=end_user_id,
+            tags=request_tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+        )
     )
     with spend_counter_batch_scope(spend_counter_store, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
@@ -1378,6 +1420,7 @@ async def _update_database_and_spend_counters(
             model_access_groups=model_access_groups,
             project_id=project_id,
             committed_spend_scope=committed_spend_scope,
+            customer_counters=customer_counters,
         )
 
 
@@ -1400,6 +1443,7 @@ async def _update_database_and_spend_counters_in_batch(
     project_id: str | None,
     spend_writer: DBSpendUpdateWriter | None = None,
     committed_spend_scope: EntitySpendCounterKeys | None = None,
+    customer_counters: "Sequence[BudgetCounter]" = (),
 ) -> bool:
     try:
         writer: Final = spend_writer if spend_writer is not None else proxy_logging_obj.db_spend_update_writer
@@ -1422,6 +1466,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_time=end_time,
             org_id=org_id,
             project_id=project_id,
+            **_customer_counter_options(customer_counters),
         )
     except Exception:
         if budget_reservation is not None:
@@ -1440,7 +1485,14 @@ async def _update_database_and_spend_counters_in_batch(
         await _release_budget_reservation(budget_reservation=budget_reservation)
         return False
 
+    from litellm.proxy.proxy_server import spend_counter_store
+
     try:
+        await settle_customer_spend(
+            _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
+            response_cost,
+            spend_counter_store,
+        )
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,
@@ -1467,6 +1519,7 @@ async def _update_database_and_spend_counters_in_batch(
                 )
             ),
             **_ledger_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)),
+            **_customer_counter_options(customer_counters),
         )
     except Exception:
         if budget_reservation is not None:

@@ -11,6 +11,7 @@ import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as count_handler
@@ -165,6 +166,7 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     monkeypatch.setenv("LIT7658_PROVIDER_KEY", _KEY)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     params: Final = {
         "model": f"anthropic/{_MODEL}",
         "api_key": "os.environ/LIT7658_PROVIDER_KEY",

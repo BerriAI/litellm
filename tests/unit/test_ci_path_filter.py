@@ -40,8 +40,8 @@ def classify(category: str, changed: list[str]) -> str:
     return result.stdout.strip()
 
 
-DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
-CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
+DOCS = ["README.md", "litellm/anywhere.md"]
+CLIENT = ["litellm/ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
 CI = [".github/workflows/test-unit.yml"]
 
@@ -53,22 +53,22 @@ CI = [".github/workflows/test-unit.yml"]
         ("mcp-dependencies", ["uv.lock"], "run"),
         ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),
         ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
-        ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
-        ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
+        ("mcp-dependencies", ["litellm/proxy-extras/pyproject.toml"], "run"),
+        ("mcp-dependencies", ["litellm/scripts/check_mcp_sdk_install.py"], "run"),
         ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
         ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
         ("mcp-dependencies", DOCS + CLIENT, "skip"),
-        ("windows-release", ["litellm-rust/crates/inference/src/lib.rs"], "run"),
+        ("windows-release", ["litellm/rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
-        ("windows-release", ["rust-toolchain.toml"], "run"),
+        ("windows-release", ["litellm/rust/rust-toolchain.toml"], "run"),
         ("windows-release", ["pyproject.toml"], "run"),
         ("windows-release", ["uv.lock"], "run"),
         ("windows-release", ["tests/windows_tests/check_windows_wheel_install.py"], "run"),
         ("windows-release", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("windows-release", ["litellm/main.py"], "skip"),
         ("windows-release", ["tests/unit/test_utils.py"], "skip"),
-        ("windows-release", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
+        ("windows-release", ["litellm/ui/litellm-dashboard/src/App.tsx"], "skip"),
         ("windows-release", ["docs/my-website/docs/index.md"], "skip"),
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
@@ -136,9 +136,9 @@ def test_redis_compat_path_filter(changed: str, expected: str) -> None:
 
 
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
-    assert classify("client", ["ui/litellm-dashboard/README.md"]) == "run"
-    assert classify("backend", ["ui/litellm-dashboard/README.md"]) == "skip"
-    assert classify("ui", ["ui/litellm-dashboard/README.md"]) == "run"
+    assert classify("client", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
+    assert classify("backend", ["litellm/ui/litellm-dashboard/README.md"]) == "skip"
+    assert classify("ui", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
 
 
 def test_ci_config_changes_reach_every_category() -> None:

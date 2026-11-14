@@ -220,3 +220,40 @@ async def test_public_sdk_preserves_http_errors_response_and_timeout(
             else:
                 assert await search() == RESULT
     executor.call.assert_called_once_with("embedding-alias", "travel policy", {})
+
+
+QUERY_IMAGE: Final = {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="}
+
+
+def _search_with_extra_body(extra_body: dict[str, object], **search_kwargs: object) -> VectorStoreSearchResponse:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=RESULT)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        return litellm.vector_stores.search(
+            **BASE_PARAMS,
+            vector_store_id="policy_index",
+            query="travel policy",
+            custom_llm_provider="mongodb",
+            extra_body=extra_body,
+            _direct_vector_store_embedding_executor=RecordingEmbeddingExecutor(),
+            client=HTTPHandler(client=transport),
+            **search_kwargs,
+        )
+
+
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+def test_search_with_drop_params_drops_an_extra_body_query_image(
+    drop_params_source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    drop_kwargs: Final = {"drop_params": True} if drop_params_source == "request" else {}
+
+    assert _search_with_extra_body({"query_image": QUERY_IMAGE}, **drop_kwargs) == RESULT
+
+
+def test_search_with_drop_params_still_rejects_other_extra_body_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    with pytest.raises(litellm.BadRequestError, match="does not support extra_body overrides"):
+        _search_with_extra_body({"query_image": QUERY_IMAGE, "other": "value"})
