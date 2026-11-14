@@ -2030,6 +2030,7 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("transcribe", "unread-segment"),
         ("fireworks_ai", "routers"),
         ("fireworks_ai", "firerouter"),
+        ("fireworks_ai", "firerouter/kimi-k3"),
         ("azure_ai", "model_router"),
         ("azure_ai", "model-router"),
     ],
@@ -2080,6 +2081,25 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
 
     assert listed_under_known_org == [f"{provider}/model-u"]
     assert listed_under_unknown_org == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "route"),
+    [
+        ("fireworks_ai", "routers"),
+        ("azure_ai", "model_router"),
+        ("azure_ai", "model-router"),
+    ],
+)
+def test_wildcard_over_an_unknown_org_beneath_a_router_route_lists_no_catalog_id(provider: str, route: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    listed: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/{route}/unknown-org-route-missing-org/*")
+    )
+
+    assert listed == []
 
 
 def test_provider_wildcard_lists_cost_map_models_but_not_pricing_tiers() -> None:

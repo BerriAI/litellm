@@ -58,12 +58,14 @@ _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
         LlmProviders.TRANSCRIBE,
     )
 )
-_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (
-    f"{LlmProviders.FIREWORKS_AI.value}/routers/",
-    f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",
-    f"{LlmProviders.AZURE_AI.value}/model_router/",
-    f"{LlmProviders.AZURE_AI.value}/model-router/",
+_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
+    (
+        f"{LlmProviders.FIREWORKS_AI.value}/routers/",
+        f"{LlmProviders.AZURE_AI.value}/model_router/",
+        f"{LlmProviders.AZURE_AI.value}/model-router/",
+    )
 )
+_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = (f"{LlmProviders.FIREWORKS_AI.value}/{FIREROUTER}/",)
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -393,8 +395,11 @@ def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: fr
 
 
 def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
-    return provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE and not (
-        f"{provider}/{routing_prefix}".startswith(_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE)
+    route: Final = f"{provider}/{routing_prefix}"
+    return (
+        provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
+        and route not in _ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
+        and not route.startswith(_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE)
     )
 
 
