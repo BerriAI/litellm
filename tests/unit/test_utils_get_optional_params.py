@@ -147,6 +147,20 @@ def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
     assert optional_params["user"] == "end-user-1"
 
 
+def test_get_optional_params_an_allowlist_that_is_no_string_mapping_or_sequence_allowlists_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=5,
+        user="end-user-1",
+    )
+
+    assert "user" not in optional_params
+
+
 @pytest.mark.parametrize(
     "allowlist",
     [
