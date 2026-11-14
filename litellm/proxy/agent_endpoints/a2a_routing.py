@@ -27,6 +27,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.utils import get_base_model_from_metadata
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -180,8 +181,8 @@ async def route_a2a_agent_request(
     litellm_params: Final = agent.litellm_params or {}
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
-        bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
         _bill_as_agent(data, agent, litellm_params)
+        bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
         return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
@@ -192,7 +193,7 @@ async def route_a2a_agent_request(
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     _bill_as_agent(data, agent, litellm_params)
-    data.update(_agent_prices_the_client_left_unset(litellm_params, data))
+    data.update(_agent_prices_unless_the_client_set_one(litellm_params, data))
     # Inject API base and route to litellm
     data["api_base"] = card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
@@ -212,7 +213,10 @@ def _bridge_agent_request(
 
 
 def _client_sets_price(data: Mapping[str, object]) -> bool:
-    return any(data.get(key) is not None for key in _CUSTOM_PRICING_PARAMS)
+    return (
+        any(data.get(key) is not None for key in _CUSTOM_PRICING_PARAMS)
+        or get_base_model_from_metadata(model_call_details={"litellm_params": data}) is not None
+    )
 
 
 def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_params: Mapping[str, object]) -> None:
@@ -225,12 +229,12 @@ def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_par
     )
 
 
-def _agent_prices_the_client_left_unset(
+def _agent_prices_unless_the_client_set_one(
     litellm_params: Mapping[str, object], data: Mapping[str, object]
 ) -> Mapping[str, object]:
-    return {
-        key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None
-    }
+    if _client_sets_price(data):
+        return {}
+    return {key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS}
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:

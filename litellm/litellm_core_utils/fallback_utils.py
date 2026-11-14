@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 from .asyncify import run_async_function
 
@@ -46,6 +47,8 @@ async def async_completion_with_fallbacks(**kwargs):
     # Try each fallback model
     most_recent_exception_str: str | None = None
     for attempted_fallbacks, fallback in enumerate(fallbacks):
+        if attempted_fallbacks > 0 and isinstance(litellm_logging_obj, Logging):
+            litellm_logging_obj.stop_billing_as_a2a_agent()
         try:
             completion_kwargs = safe_deep_copy(base_kwargs)
             # Handle dictionary fallback configurations
