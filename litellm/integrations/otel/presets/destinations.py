@@ -56,7 +56,7 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     endpoint: Final = _langfuse_otel_endpoint(host)
     if tenant_host is None:
         return (endpoint, None)
-    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
+    if not _tenant_url_is_allowlisted(endpoint):
         _warn_host_not_allowlisted(host)
         return None
     return (endpoint, None)
