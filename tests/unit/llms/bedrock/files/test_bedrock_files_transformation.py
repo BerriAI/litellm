@@ -136,6 +136,21 @@ class TestBedrockFilesTransformation:
         assert "serviceTier" not in result[0]["modelInput"]
         assert "drop_params" not in json.dumps(result[0]["modelInput"])
 
+    def test_nova_row_level_drop_params_sends_a_guarded_system_part_as_text(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    messages=[
+                        {"role": "system", "content": [{"type": "guarded_text", "text": "be brief"}]},
+                        {"role": "user", "content": "hi"},
+                    ],
+                    drop_params=True,
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["system"] == [{"text": "be brief"}]
+
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(

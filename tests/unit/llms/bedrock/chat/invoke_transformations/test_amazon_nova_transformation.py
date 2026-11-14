@@ -1,4 +1,5 @@
 import json
+from itertools import chain
 from typing import Final
 
 import pytest
@@ -118,7 +119,7 @@ def test_tool_config_injection_point_is_neither_placed_nor_credited(local_model_
     assert GATEWAY_INJECTED_CACHE_METADATA_KEY not in metadata
 
 
-GUARDED_CONVERSATION = [
+GUARDED_CONVERSATION: Final = [
     {
         "role": "system",
         "content": [
@@ -134,7 +135,7 @@ GUARDED_CONVERSATION = [
 
 @pytest.mark.parametrize("drop_params_source", ["request", "global"])
 def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects_guard_content(
-    local_model_cost_map, monkeypatch, drop_params_source
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, drop_params_source: str
 ):
     if drop_params_source == "global":
         monkeypatch.setattr(litellm, "drop_params", True)
@@ -151,13 +152,10 @@ def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects
     ]
 
 
-def test_only_user_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map):
-    request = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
-    sent_guard_texts = [
-        block["guardContent"]["text"]["text"]
-        for block in [*request["system"], *(block for message in request["messages"] for block in message["content"])]
-        if "guardContent" in block
-    ]
+def test_only_user_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map: None):
+    request: Final = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
+    sent_blocks: Final = chain(request["system"], chain.from_iterable(message["content"] for message in request["messages"]))
+    sent_guard_texts: Final = [block["guardContent"]["text"]["text"] for block in sent_blocks if "guardContent" in block]
     assert sent_guard_texts == ["guarded user"]
     assert "guarded system" not in json.dumps(request)
     assert "guarded assistant" not in json.dumps(request)

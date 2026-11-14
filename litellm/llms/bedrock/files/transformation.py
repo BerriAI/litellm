@@ -1028,17 +1028,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             converse_config: Final = AmazonConverseConfig()
+            drop_unsupported_params: Final = optional_params.get("drop_params") is True
             mapped_params = converse_config.map_openai_params(
                 non_default_params=optional_params,
                 optional_params={},
                 model=model,
-                drop_params=optional_params.get("drop_params") is True,
+                drop_params=drop_unsupported_params,
             )
             return converse_config.transform_request(
                 model=model,
                 messages=messages,
                 optional_params=mapped_params,
-                litellm_params={},
+                litellm_params={"drop_params": drop_unsupported_params},
                 headers={},
             )
 
