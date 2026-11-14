@@ -9,7 +9,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY, X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -136,6 +136,7 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
     "litellm_call_id",
     "litellm_parent_otel_span",
     "headers",
+    SESSION_ID_GENERATED_METADATA_KEY,
 )
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -158,8 +159,9 @@ def proxy_sub_call_metadata(
 ) -> dict[str, object]:  # mutable-ok: the router writes model_group and fallback keys into the metadata it is handed
     """The parent request's auth, budget, and header fields, so a sub-call bills the same key, team, and end
     user, the router filters deployments by the caller's access groups, and header-driven logging options
-    such as message redaction apply to it. The caller's auth object goes without its budget reservation,
-    which belongs to the parent request."""
+    such as message redaction apply to it, plus the marker of a session the proxy minted, so the sub-call never
+    sends that session upstream as a provider affinity header. The caller's auth object goes without its budget
+    reservation, which belongs to the parent request."""
     if not parent_litellm_metadata:
         return {}
     carried: Final = {
@@ -182,10 +184,10 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
     """The parent request's callback params, proxy-stamped callback vars, and session and trace ids, so a sub-call
     logs in the same session and under the same message-logging and callback-disable settings as the request it
     serves. The session goes as the top-level ``litellm_session_id`` only, never as metadata ``session_id``, which
-    deployment affinity reads. Of the parent's ``proxy_server_request`` only the ``x-litellm-disable-callbacks``
-    header is carried, since dispatch reads it there: the router reads per-request routing inputs from the rest, such
-    as the Claude Code session that would pull a sub-call off its configured model, and redaction headers already ride
-    in ``proxy_sub_call_metadata``."""
+    deployment affinity and complexity router tier pins read. Of the parent's ``proxy_server_request`` only the
+    ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads per-request
+    routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its configured model,
+    and redaction headers already ride in ``proxy_sub_call_metadata``."""
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
     session: Final = _parent_session(parent_kwargs)
     parent_params: Final[ProxySubCallLoggingKwargs] = (

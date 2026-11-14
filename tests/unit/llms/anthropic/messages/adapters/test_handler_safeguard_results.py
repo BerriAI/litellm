@@ -5,9 +5,12 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -16,7 +19,8 @@ from litellm.llms.anthropic.messages.adapters.handler import (
     request_safeguards_evaluator,
 )
 from litellm.llms.anthropic.messages.safeguards import ToolUseUnderReview
-from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.router import Router
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -486,33 +490,32 @@ async def test_a_trace_id_sent_in_the_body_carries_the_classifier_and_summary_ca
     assert "The user asked to install the deps." in json.dumps(backend.calls[0]["messages"])
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "parent_ids, parent_session",
-    [
-        (
-            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
-            "claude-code-session",
-        ),
-        ({"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
-        ({}, "trace-the-parent-minted"),
-    ],
-    ids=["claude-code-session-header", "session-and-trace-sent-apart", "no-session-sent"],
-)
-async def test_the_classifier_and_summary_calls_log_in_the_parent_requests_session(
-    monkeypatch: pytest.MonkeyPatch, parent_ids: dict[str, str], parent_session: str
-) -> None:
-    await _drain_logging_worker()
-    logs: Final = _ClassifierLogs()
-    monkeypatch.setattr(litellm, "callbacks", [logs])
-    monkeypatch.setattr(litellm, "_async_success_callback", [logs])
-    router: Final = Router(
+class _SpendRows(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: Final[list[SpendLogsPayload]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.rows.append(get_logging_payload(kwargs, response_obj, start_time, end_time))
+
+
+def _classifier_and_summarizer_router(classifier_params: Mapping[str, object] | None = None) -> Router:
+    classifier: Final = _mock_deployment("classifier", '{"verdicts": {"call_main": {"flagged": false}}}')
+    return Router(
         model_list=[
-            _mock_deployment("classifier", '{"verdicts": {"call_main": {"flagged": false}}}'),
+            {**classifier, "litellm_params": classifier_params} if classifier_params else classifier,
             _mock_deployment("summarizer", "<summary>The user asked to install the deps.</summary>"),
         ],
         num_retries=0,
     )
+
+
+async def _send_parent_request(
+    router: Router,
+    general_settings: Mapping[str, object],
+    litellm_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+) -> None:
     parent_logging: Final = Logging(
         model="fireworks_ai/kimi",
         messages=list(MESSAGES),
@@ -531,10 +534,16 @@ async def test_the_classifier_and_summary_calls_log_in_the_parent_requests_sessi
             return await backend(**kwargs)
         return await router_deployment_call(**kwargs)
 
-    settings: Final = {"safeguards_classifier_model": "classifier", "context_management_summary_model": "summarizer"}
     with (
         patch("litellm.acompletion", new=agent_model_or_router_deployment),
-        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "safeguards_classifier_model": "classifier",
+                "context_management_summary_model": "summarizer",
+                **general_settings,
+            },
+        ),
         patch("litellm.token_counter", return_value=200_000),
     ):
         await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
@@ -544,7 +553,7 @@ async def test_the_classifier_and_summary_calls_log_in_the_parent_requests_sessi
             tools=[dict(BASH_TOOL)],
             stream=False,
             litellm_router=router,
-            litellm_metadata=dict(LITELLM_METADATA),
+            litellm_metadata=dict(litellm_metadata),
             litellm_logging_obj=parent_logging,
             safeguards=SAFEGUARDS,
             context_management={"edits": [{"type": "compact_20260112"}]},
@@ -552,7 +561,95 @@ async def test_the_classifier_and_summary_calls_log_in_the_parent_requests_sessi
         )
         await _drain_logging_worker()
 
-    assert {row["model_group"]: row["trace_id"] for row in logs.logged} == {
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings, parent_metadata, parent_ids, parent_session",
+    [
+        (
+            {},
+            {},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            "claude-code-session",
+        ),
+        ({}, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
+        ({}, {}, {}, "trace-the-parent-minted"),
+    ],
+    ids=["claude-code-session-header", "session-and-trace-sent-apart", "no-session-sent"],
+)
+async def test_the_classifier_and_summary_spend_rows_land_in_the_parent_requests_session(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    parent_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+    parent_session: str,
+) -> None:
+    await _drain_logging_worker()
+    spend: Final = _SpendRows()
+    monkeypatch.setattr(litellm, "callbacks", [spend])
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend])
+
+    await _send_parent_request(
+        _classifier_and_summarizer_router(), general_settings, {**LITELLM_METADATA, **parent_metadata}, parent_ids
+    )
+
+    assert {row["model_group"]: row["session_id"] for row in spend.rows} == {
         "classifier": parent_session,
         "summarizer": parent_session,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_metadata, affinity_header",
+    [
+        ({"session_id": "conversation-1"}, "conversation-1"),
+        ({"session_id": "minted-1", SESSION_ID_GENERATED_METADATA_KEY: True}, None),
+    ],
+    ids=["session-the-caller-sent", "session-the-proxy-minted"],
+)
+async def test_the_classifier_call_sends_the_parents_session_as_its_affinity_header_unless_the_proxy_minted_it(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_metadata: Mapping[str, object],
+    affinity_header: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    session: Final = str(parent_metadata["session_id"])
+    classifier_route: Final = respx_mock.post("https://classifier.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-classifier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"verdicts": {"call_main": {"flagged": false}}}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+    router: Final = _classifier_and_summarizer_router(
+        {
+            "model": "openai/gpt-5.4-mini",
+            "api_key": "sk-fake",
+            "api_base": "https://classifier.example/v1",
+            "provider_affinity_header": "x-session-affinity",
+        }
+    )
+
+    await _send_parent_request(
+        router,
+        {},
+        {**LITELLM_METADATA, **parent_metadata},
+        {"litellm_session_id": session, "litellm_trace_id": session},
+    )
+
+    assert classifier_route.call_count == 1
+    assert classifier_route.calls.last.request.headers.get("x-session-affinity") == affinity_header
