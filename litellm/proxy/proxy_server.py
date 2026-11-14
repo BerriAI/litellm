@@ -15456,6 +15456,99 @@ def _with_client_oauth_token(
     return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
+_OPAQUE_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _count_route_model_is_served(llm_router: Router, model: str, team_id: str | None) -> bool:
+    """Whether routing can pick a deployment for ``model`` on the Anthropic count route.
+
+    Mirrors route_request's servability ladder through the router's read-only registry:
+    recognized names (model_name, deployment id, model_group_alias, routing group), deployment
+    litellm model names (directly or through an alias), the early-resolve fallbacks (team routes,
+    wildcard patterns, team pattern routers, default deployment), and router-wide default
+    fallbacks, which serve any unknown name.
+    """
+    registry: Final = llm_router.registry()
+    aliased: Final = registry.resolve(model, kind="alias") or model
+    return (
+        registry.has_deployment(model)
+        or model in registry.names(kind="team_public")
+        or _has_default_fallbacks(llm_router)
+        or any(
+            _deployment_litellm_model(deployment) == aliased
+            for deployment in _OPAQUE_ITEMS.validate_python(registry.all())
+        )
+        or bool(registry.names(model, kind="route_candidates", team_id=team_id))
+    )
+
+
+def _has_default_fallbacks(llm_router: Router) -> bool:
+    fallbacks: Final = _OPAQUE_ITEMS.validate_python(llm_router.settings().as_dict().get("fallbacks") or ())
+    return any("*" in (as_str_mapping(fallback) or {}) for fallback in fallbacks)
+
+
+def _deployment_litellm_model(deployment: object) -> object:
+    fields: Final = as_str_mapping(deployment)
+    litellm_params: Final = None if fields is None else as_str_mapping(fields.get("litellm_params"))
+    return None if litellm_params is None else litellm_params.get("model")
+
+
+def _count_route_request_kwargs(user_api_key_dict: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    """Routing-only metadata carrying the caller's team, so team-scoped deployments resolve."""
+    if user_api_key_dict is None:
+        return {}
+    team_id: Final = _count_route_team_id(user_api_key_dict)
+    team_scope: Final = {"user_api_key_team_id": team_id} if team_id is not None else {}
+    return {"metadata": {"user_api_key_auth": user_api_key_dict, **team_scope}}
+
+
+def _count_route_team_id(user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
+    team_id: Final = None if user_api_key_dict is None else user_api_key_dict.team_id
+    return team_id if isinstance(team_id, str) and team_id else None
+
+
+def _resolve_count_route_model(requested: str, user_api_key_dict: UserAPIKeyAuth | None) -> str:
+    """Apply the proxy-wide alias, then the caller's key alias, as the completion routes do."""
+    global_target: Final = litellm.model_alias_map.get(requested)
+    aliased: Final = global_target if isinstance(global_target, str) and global_target else requested
+    if user_api_key_dict is None:
+        return aliased
+    key_aliases: Final = as_str_mapping(
+        cast(object, user_api_key_dict.aliases)  # cast-ok: the auth model's aliases field is declared as a bare dict
+    )
+    if key_aliases is not None and aliased in key_aliases:
+        target: Final = key_aliases[aliased]
+        return target if isinstance(target, str) and target else aliased
+    return aliased
+
+
+async def _count_route_unserved_error(
+    llm_router: Router,
+    model: str,
+    requested: str,
+    team_id: str | None,
+) -> ProxyException | None:
+    """The 404 not_found_error for a ``model`` routing cannot pick a deployment for, else None.
+
+    A model a sibling replica loaded but this replica has not is read through before the
+    rejection, the way route_request recovers from the same miss.
+    """
+    if llm_router.settings().router_general_settings.pass_through_all_models or _count_route_model_is_served(
+        llm_router, model, team_id
+    ):
+        return None
+    from litellm.proxy.common_utils.registry_read_through import model_registry_read_through
+
+    if await model_registry_read_through.attempt(model) and _count_route_model_is_served(llm_router, model, team_id):
+        return None
+    return ProxyException(
+        message=f"Model not found: {requested}",
+        type=ProxyErrorTypes.not_found_error,
+        param="model",
+        code=404,
+    )
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -16338,6 +16431,8 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    require_deployment: bool = False,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
@@ -16350,9 +16445,19 @@ async def count_request_tokens(
             call_id,
             request.model,
         )
-    routed: Final = await _routed_count_deployment(request.model, responses_request)
+    resolution_model: Final = _resolve_count_route_model(request.model, user_api_key_dict)
+    team_id: Final = _count_route_team_id(user_api_key_dict)
+    unserved: Final = (
+        None
+        if llm_router is None or not require_deployment
+        else await _count_route_unserved_error(llm_router, resolution_model, request.model, team_id)
+    )
+    if unserved is not None:
+        raise rejected_token_count(unserved, call_id, request.model)
+    routed: Final = await _routed_count_deployment(resolution_model, responses_request, user_api_key_dict)
     count: Final = _count_request_tokens(
         request=request,
+        resolution_model=resolution_model,
         routed=routed,
         call_endpoint=call_endpoint,
         messages_format=messages_format,
@@ -16379,12 +16484,15 @@ async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -
 
 
 async def _routed_count_deployment(
-    model: str, responses_request: Mapping[str, object] | None
+    model: str, responses_request: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth | None
 ) -> Mapping[str, object] | None:
     if llm_router is None:
         return None
     try:
-        return await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
+        return await llm_router.select(
+            model,
+            {**_responses_routing_kwargs(responses_request), **_count_route_request_kwargs(user_api_key_dict)},
+        )
     except Exception:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
@@ -16400,6 +16508,7 @@ def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, obj
 
 async def _count_request_tokens(
     request: TokenCountRequest,
+    resolution_model: str,
     routed: Mapping[str, object] | None,
     call_endpoint: bool,
     messages_format: TokenCountMessagesFormat,
@@ -16485,7 +16594,7 @@ async def _count_request_tokens(
         if local_count_error is None
         else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
     )
-    context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
+    context_edits: Final = _count_context_management(context_management, resolution_model, request_litellm_params)
     route: Final = (
         _messages_route(deployment_view, request.model)
         if request_messages is not None and messages_format == "anthropic"

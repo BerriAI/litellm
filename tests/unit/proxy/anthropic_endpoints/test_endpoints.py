@@ -1211,7 +1211,7 @@ def _count_on_local_model(monkeypatch: pytest.MonkeyPatch, body: Mapping[str, ob
             model_list=[
                 {
                     "model_name": "count-log-local",
-                    "litellm_params": {"model": "hosted_vllm/count-log-local", "api_base": "https://local.test/v1"},
+                    "litellm_params": {"model": "ollama/count-log-local", "api_base": "https://local.test"},
                     "model_info": {"id": "count-log-local-deployment"},
                 }
             ]
