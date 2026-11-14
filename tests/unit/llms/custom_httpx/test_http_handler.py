@@ -146,6 +146,45 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
         litellm_handler.close()
 
 
+async def _post_to(transport: httpx.MockTransport, is_async: bool, stream: bool) -> None:
+    url: Final = "https://us-central1-aiplatform.googleapis.com/v1/endpoints/openapi/chat/completions"
+    if is_async:
+        async_handler: Final = AsyncHTTPHandler(transport=transport)
+        try:
+            await async_handler.post(url, json={}, stream=stream)
+        finally:
+            await async_handler.close()
+        return
+    with httpx.Client(transport=transport) as http_client:
+        HTTPHandler(client=http_client).post(url, json={}, stream=stream)
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(True, id="async"), pytest.param(False, id="sync")])
+@pytest.mark.parametrize("stream", [pytest.param(True, id="streamed"), pytest.param(False, id="buffered")])
+async def test_a_5xx_whose_body_carries_code_429_maps_to_a_rate_limit_whether_or_not_it_streams(
+    is_async: bool, stream: bool
+) -> None:
+    body: Final = (
+        '{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).",'
+        ' "status": "RESOURCE_EXHAUSTED"}}'
+    )
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(
+            503, content=body.encode(), headers={"content-type": "application/json; charset=UTF-8"}
+        )
+    )
+    with pytest.raises(MaskedHTTPStatusError) as rejected:
+        await _post_to(transport, is_async, stream)
+
+    with pytest.raises(litellm.RateLimitError) as mapped:
+        litellm.exception_type(
+            model="meta/llama-4-maverick-17b-128e-instruct-maas",
+            original_exception=rejected.value,
+            custom_llm_provider="vertex_ai",
+        )
+    assert body in str(mapped.value), str(mapped.value)
+
+
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
     # Ensure aiohttp transport is enabled for this test
