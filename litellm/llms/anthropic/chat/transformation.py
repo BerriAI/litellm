@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    JSON_MODE_PREAMBLE_TEXT_KEY,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -3355,6 +3356,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_mode_fields: Final = {
                 **stop_reason_fields,
                 **({} if input_transformations is None else {"input_transformations": input_transformations}),
+                **({JSON_MODE_PREAMBLE_TEXT_KEY: text_content} if text_content and text_content.strip() else {}),
             }
             if json_mode_fields:
                 json_mode_message.provider_specific_fields = json_mode_fields
