@@ -1080,8 +1080,6 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Some providers (like OpenRouter) send usage/cost in a chunk after the finish_reason
-                # chunk, repeating an empty choice the caller must not see after the finish
                 if getattr(model_response, "usage", None) is not None:
                     return model_response.model_copy(
                         update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
