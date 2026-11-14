@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -55,6 +56,10 @@ class _SupportsGet(Protocol):
 
 class _SupportsItems(Protocol):
     def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _SpendLogKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
@@ -243,7 +248,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self._log(kwargs)
 
-    def _log(self, kwargs: Mapping[str, Any]) -> None:
+    def _log(self, kwargs: _SpendLogKwargs) -> None:
         try:
             payload = kwargs.get("standard_logging_object")
             if payload is None or _is_trace_ingest(payload):

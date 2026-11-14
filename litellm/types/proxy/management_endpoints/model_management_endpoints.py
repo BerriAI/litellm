@@ -42,6 +42,8 @@ class ModelGroupInfoProxy(ModelGroupInfo):
     health_status: str | None = Field(default=None)
     health_response_time: float | None = Field(default=None)
     health_checked_at: str | None = Field(default=None)
+    pass_through_path: str | None = Field(default=None)
+    pass_through_methods: tuple[str, ...] | None = Field(default=None)
     custom_tags: tuple[str, ...] | None = None
     custom_metadata: Mapping[str, str | int | float | bool] | None = None
 

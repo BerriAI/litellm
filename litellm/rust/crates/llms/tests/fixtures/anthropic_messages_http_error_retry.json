@@ -1,0 +1,623 @@
+{
+  "invalid_thinking_block_error": [
+    {
+      "name": "invalid_signature",
+      "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+      "expected": true
+    },
+    {
+      "name": "invalid_signature_in_an_error_envelope",
+      "error_text": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.3.content.3: Invalid `signature` in `thinking` block\"},\"request_id\":\"req_011Ca2EtQDxp7x6RGUY2jVn9\"}",
+      "expected": true
+    },
+    {
+      "name": "signature_not_a_string",
+      "error_text": "{\"message\":\"messages.2.content.0.thinking.signature.str: Input should be a valid string\"}",
+      "expected": true
+    },
+    {
+      "name": "signature_not_a_string_bare",
+      "error_text": "messages.4.content.1.thinking.signature.str: Input should be a valid string",
+      "expected": true
+    },
+    {
+      "name": "empty_thinking",
+      "error_text": "messages.1.content.0.thinking: each thinking block must contain thinking",
+      "expected": true
+    },
+    {
+      "name": "bound_to_a_different_conversation",
+      "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+      "expected": true
+    },
+    {
+      "name": "uppercase",
+      "error_text": "MESSAGES.1: INVALID SIGNATURE IN THINKING BLOCK",
+      "expected": true
+    },
+    {
+      "name": "signature_without_a_verdict",
+      "error_text": "thinking signature is malformed",
+      "expected": false
+    },
+    {
+      "name": "invalid_without_thinking",
+      "error_text": "Invalid `signature` in `tool_use` block",
+      "expected": false
+    },
+    {
+      "name": "model_not_found",
+      "error_text": "invalid_request_error: model not found",
+      "expected": false
+    },
+    {
+      "name": "rate_limited",
+      "error_text": "rate limit exceeded",
+      "expected": false
+    },
+    {
+      "name": "unrelated",
+      "error_text": "max_tokens: 4096 > 64000",
+      "expected": false
+    },
+    {
+      "name": "empty",
+      "error_text": "",
+      "expected": false
+    }
+  ],
+  "thinking_binding_mismatch_error": [
+    {
+      "name": "bound_elsewhere",
+      "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+      "expected": true
+    },
+    {
+      "name": "mixed_case",
+      "error_text": "The block is Bound To A Different Conversation.",
+      "expected": true
+    },
+    {
+      "name": "plain_signature",
+      "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+      "expected": false
+    }
+  ],
+  "http_error_retry": {
+    "request": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan",
+              "signature": "sig"
+            },
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "redacted_thinking",
+              "data": "opaque"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "again"
+        }
+      ]
+    },
+    "stripped_request": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "again"
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "invalid_signature",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "missing_signature",
+        "status": 400,
+        "error_text": "messages.1.content.0.thinking.signature.str: Input should be a valid string",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "empty_thinking",
+        "status": 400,
+        "error_text": "messages.1.content.0.thinking: each thinking block must contain thinking",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "unpinned_binding_mismatch",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive"
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "caller_pinned_binding",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "error"
+          }
+        },
+        "retried": false,
+        "stripped": true
+      },
+      {
+        "name": "caller_pinned_binding_other_signature_error",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "error"
+          }
+        },
+        "retried": true,
+        "stripped": true
+      },
+      {
+        "name": "not_a_400",
+        "status": 429,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": false,
+        "stripped": false
+      },
+      {
+        "name": "unrelated_400",
+        "status": 400,
+        "error_text": "max_tokens: 4096 > 64000",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": false,
+        "stripped": false
+      },
+      {
+        "name": "signature_without_thinking",
+        "status": 400,
+        "error_text": "Invalid `signature` in `tool_use` block",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "retried": false,
+        "stripped": false
+      }
+    ]
+  },
+  "claude_strict_tools_rejection": [
+    {
+      "name": "too_many_strict_tools",
+      "status": 400,
+      "error_text": "Too many strict tools (21). The maximum number of strict tools is 20.",
+      "expected": true
+    },
+    {
+      "name": "too_many_strict_tools_in_an_error_envelope",
+      "status": 400,
+      "error_text": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Too many strict tools (24). The maximum is 20.\"}}",
+      "expected": true
+    },
+    {
+      "name": "non_ascii_digits",
+      "status": 400,
+      "error_text": "Too many strict tools (٢١)",
+      "expected": true
+    },
+    {
+      "name": "optional_parameters",
+      "status": 400,
+      "error_text": "Schemas contains too many optional parameters (30)",
+      "expected": true
+    },
+    {
+      "name": "union_types",
+      "status": 400,
+      "error_text": "Schemas contains too many parameters with union types",
+      "expected": true
+    },
+    {
+      "name": "compiled_grammar_too_large",
+      "status": 400,
+      "error_text": "The compiled grammar is too large",
+      "expected": true
+    },
+    {
+      "name": "compiled_grammar_size",
+      "status": 400,
+      "error_text": "Compiled grammar size exceeds the limit",
+      "expected": true
+    },
+    {
+      "name": "custom_strict",
+      "status": 400,
+      "error_text": "tools.3.custom.strict: Extra inputs are not permitted",
+      "expected": true
+    },
+    {
+      "name": "custom",
+      "status": 400,
+      "error_text": "tools.0.custom: Extra inputs are not permitted",
+      "expected": true
+    },
+    {
+      "name": "grammar_compilation_timed_out",
+      "status": 400,
+      "error_text": "Grammar compilation timed out",
+      "expected": true
+    },
+    {
+      "name": "no_count",
+      "status": 400,
+      "error_text": "tools.0.strict: too many strict tools",
+      "expected": false
+    },
+    {
+      "name": "empty_count",
+      "status": 400,
+      "error_text": "Too many strict tools ()",
+      "expected": false
+    },
+    {
+      "name": "lowercase_grammar_timeout",
+      "status": 400,
+      "error_text": "grammar compilation timed out",
+      "expected": false
+    },
+    {
+      "name": "custom_without_separator",
+      "status": 400,
+      "error_text": "tools.0.custom.strict",
+      "expected": false
+    },
+    {
+      "name": "uppercase_schemas",
+      "status": 400,
+      "error_text": "SCHEMAS CONTAINS TOO MANY OPTIONAL PARAMETERS",
+      "expected": false
+    },
+    {
+      "name": "not_a_400",
+      "status": 429,
+      "error_text": "Too many strict tools (21). The maximum number of strict tools is 20.",
+      "expected": false
+    },
+    {
+      "name": "empty",
+      "status": 400,
+      "error_text": "",
+      "expected": false
+    }
+  ],
+  "tools_without_strict": [
+    {
+      "name": "strict_dropped_from_every_tool",
+      "tools": [
+        {
+          "name": "a",
+          "strict": true,
+          "input_schema": {}
+        },
+        {
+          "name": "b",
+          "strict": false
+        },
+        {
+          "name": "c"
+        }
+      ],
+      "expected": {
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {}
+          },
+          {
+            "name": "b"
+          },
+          {
+            "name": "c"
+          }
+        ],
+        "dropped_count": 1
+      }
+    },
+    {
+      "name": "only_a_true_strict_counts",
+      "tools": [
+        {
+          "name": "a",
+          "strict": 1
+        },
+        {
+          "name": "b",
+          "strict": "true"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "no_strict",
+      "tools": [
+        {
+          "name": "a"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "empty",
+      "tools": [],
+      "expected": null
+    },
+    {
+      "name": "non_object_tool",
+      "tools": [
+        {
+          "name": "a",
+          "strict": true
+        },
+        "b"
+      ],
+      "expected": null
+    },
+    {
+      "name": "not_a_list",
+      "tools": {
+        "name": "a",
+        "strict": true
+      },
+      "expected": null
+    },
+    {
+      "name": "null",
+      "tools": null,
+      "expected": null
+    }
+  ],
+  "strict_tools_retry": {
+    "tools": [
+      {
+        "name": "a",
+        "input_schema": {
+          "type": "object"
+        },
+        "strict": true
+      },
+      {
+        "name": "b",
+        "input_schema": {
+          "type": "object"
+        },
+        "strict": false
+      },
+      {
+        "name": "c",
+        "input_schema": {
+          "type": "object"
+        }
+      }
+    ],
+    "tools_without_strict": [
+      {
+        "name": "a",
+        "input_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "b",
+        "input_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "c",
+        "input_schema": {
+          "type": "object"
+        }
+      }
+    ],
+    "dropped": 1,
+    "cases": [
+      {
+        "name": "strict_rejection_under_drop_params",
+        "status": 400,
+        "error_text": "Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": true,
+        "retried": true,
+        "stripped": false,
+        "strict_dropped": true
+      },
+      {
+        "name": "strict_rejection_without_drop_params",
+        "status": 400,
+        "error_text": "Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": false,
+        "retried": false,
+        "stripped": false,
+        "strict_dropped": true
+      },
+      {
+        "name": "compiled_grammar_under_drop_params",
+        "status": 400,
+        "error_text": "The compiled grammar is too large",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": true,
+        "retried": true,
+        "stripped": false,
+        "strict_dropped": true
+      },
+      {
+        "name": "strict_text_on_a_429",
+        "status": 429,
+        "error_text": "Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": true,
+        "retried": false,
+        "stripped": false,
+        "strict_dropped": false
+      },
+      {
+        "name": "unrelated_400_under_drop_params",
+        "status": 400,
+        "error_text": "max_tokens: 4096 > 64000",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": true,
+        "retried": false,
+        "stripped": false,
+        "strict_dropped": false
+      },
+      {
+        "name": "thinking_rejection_keeps_strict",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": true,
+        "retried": true,
+        "stripped": true,
+        "strict_dropped": false
+      },
+      {
+        "name": "thinking_rejection_without_drop_params_keeps_strict",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": false,
+        "retried": true,
+        "stripped": true,
+        "strict_dropped": false
+      },
+      {
+        "name": "one_error_naming_both_without_drop_params",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048
+        },
+        "drops_unsupported_params": false,
+        "retried": true,
+        "stripped": true,
+        "strict_dropped": true
+      },
+      {
+        "name": "pinned_binding_mismatch_with_a_strict_rejection_under_drop_params",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "error"
+          }
+        },
+        "drops_unsupported_params": true,
+        "retried": true,
+        "stripped": true,
+        "strict_dropped": true
+      },
+      {
+        "name": "pinned_binding_mismatch_with_a_strict_rejection_without_drop_params",
+        "status": 400,
+        "error_text": "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Too many strict tools (21). The maximum number of strict tools is 20.",
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": {
+            "prefix_mismatch_behavior": "error"
+          }
+        },
+        "drops_unsupported_params": false,
+        "retried": false,
+        "stripped": true,
+        "strict_dropped": true
+      }
+    ]
+  }
+}

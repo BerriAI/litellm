@@ -136,7 +136,7 @@ def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxyS
         if disable_header is None
         else {**parent_params, "proxy_server_request": {"headers": {X_LITELLM_DISABLE_CALLBACKS: disable_header}}}
     )
-    trusted_vars: Final = _object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
+    trusted_vars: Final = object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
     if trusted_vars is None:
         return dynamic_params
     return {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
@@ -154,13 +154,13 @@ def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
 
 
 def _disable_callbacks_header(parent_kwargs: Mapping[str, object]) -> str | None:
-    parent_request: Final = _object_mapping(parent_kwargs.get("proxy_server_request"))
-    headers: Final = _object_mapping(parent_request.get("headers")) if parent_request is not None else None
+    parent_request: Final = object_mapping(parent_kwargs.get("proxy_server_request"))
+    headers: Final = object_mapping(parent_request.get("headers")) if parent_request is not None else None
     header: Final = headers.get(X_LITELLM_DISABLE_CALLBACKS) if headers is not None else None
     return header if isinstance(header, str) else None
 
 
-def _object_mapping(value: object) -> Mapping[str, object] | None:
+def object_mapping(value: object) -> Mapping[str, object] | None:
     try:
         return _OBJECT_MAPPING.validate_python(value)
     except ValidationError:

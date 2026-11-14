@@ -17,7 +17,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.proxy import proxy_server
 

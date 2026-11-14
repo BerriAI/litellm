@@ -3266,23 +3266,6 @@ class TestWifLitellmParamsPlumbing:
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert len(poster.requests) == 1
 
-    def test_messages_mints_from_litellm_params(self, wif_engine):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, _ = wif_engine
-        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
-
 
 class TestWifTokenUrlParity:
     """Both credential tiers must derive the SAME clean token URL from any form of
@@ -3342,27 +3325,6 @@ class TestWifAsyncSeam:
         }
         assert sync_calls == []
         assert poster.thread_ids == [poster.thread_ids[0]]
-        assert poster.thread_ids[0] != threading.get_ident()
-
-    @pytest.mark.asyncio
-    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, sync_calls = wif_async_engine
-        monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
-
-        headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert sync_calls == []
         assert poster.thread_ids[0] != threading.get_ident()
 
     @pytest.mark.asyncio

@@ -18,6 +18,11 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 
+MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
+_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
+    Annotated[int, Field(ge=0, le=MAX_TOOLS_LIST_CACHE_TTL_SECONDS)]
+)
+
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
@@ -25,6 +30,8 @@ def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, objec
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     if "skip_tool_output_validation" in value:
         TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "tools_list_cache_ttl_seconds" in value:
+        _TOOLS_LIST_CACHE_TTL_SECONDS.validate_python(value["tools_list_cache_ttl_seconds"], strict=True)
     return value
 
 
@@ -302,6 +309,11 @@ class MCPServer(LiteLLMBaseModel):
     @property
     def skip_tool_output_validation(self) -> bool:
         return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def tools_list_cache_ttl_seconds(self) -> int | None:
+        configured: Final[object] = (self.mcp_info or {}).get("tools_list_cache_ttl_seconds")
+        return configured if isinstance(configured, int) else None
 
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:

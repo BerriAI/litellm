@@ -78,6 +78,14 @@ class SkillHubPublication(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class SkillHubRestore(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_skill_id: str = Field(description="Current skill ID read by the editor")
+    expected_updated_at: datetime | None = Field(description="Current updated_at read by the editor, including null")
+    version: str | None = Field(None, description="Higher semantic version, or omit/null for an automatic patch bump")
+
+
 class SkillHubVersion(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -148,6 +156,8 @@ class SkillHubSubmission(LiteLLMBaseModel):
     reviewed_by: str | None
     reviewed_at: datetime | None
     rejection_reason: str | None
+    revision: int = Field(0, ge=0, description="Proposal revision used to prevent stale edits and reviews")
+    can_edit: bool = Field(False, description="Whether the caller may edit or withdraw this pending submission")
 
 
 class SkillHubSubmissionList(LiteLLMBaseModel):
@@ -165,6 +175,16 @@ class SkillHubSubmissionDetail(LiteLLMBaseModel):
     current_skill: SkillHubSkill | None
 
 
+class SkillHubSubmissionRevision(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+
+
+class SkillHubSubmissionEdit(SkillHubMetadata):
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+
+
 class SkillHubReviewResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -178,3 +198,4 @@ class SkillHubRejection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     reason: str | None = Field(None, max_length=2000)
+    expected_revision: int | None = Field(None, ge=0)

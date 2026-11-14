@@ -48,7 +48,7 @@ from litellm.types.router import (
 from litellm.utils import (
     reapply_runtime_model_cost_registrations,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 _COPILOT_TOKEN_EXPIRES_AT: Final = 4_102_444_800

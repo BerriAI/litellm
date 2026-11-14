@@ -1,11 +1,11 @@
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import Final, cast
+from typing import Final, ParamSpec, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
@@ -18,7 +18,9 @@ from fastapi import FastAPI, HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -27,6 +29,7 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
+    _IncrementSpendCounters,
     _charge_request_cost,
     _get_budget_reservation_from_metadata,
     _should_track_cost_callback,
@@ -47,6 +50,10 @@ from litellm.proxy.utils import (
 )
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 
@@ -919,6 +926,7 @@ async def test_async_post_call_failure_hook_non_llm_route():
         ("/unregistered-search", CallTypes.pass_through.value, False),
         ("/azure-search/", CallTypes.pass_through.value, True),
         ("/configured-search/indexes/docs", CallTypes.pass_through.value, True),
+        ("/queue/chat/completions", CallTypes.acompletion.value, True),
         (None, CallTypes.acompletion.value, True),
     ],
 )
@@ -2964,7 +2972,42 @@ async def _counter_values(counters: SpendCounterStore) -> dict[str, float | None
     return {key: counters.get_local(key) for key in _LIVE_COUNTERS}
 
 
+_P = ParamSpec("_P")
+
+
+def _held_until(
+    release: asyncio.Event, counting: asyncio.Future[asyncio.Task[object]], store: Callable[_P, Awaitable[None]]
+) -> Callable[_P, Awaitable[None]]:
+    async def held(*args: _P.args, **kwargs: _P.kwargs) -> None:
+        if (task := asyncio.current_task()) is not None and not counting.done():
+            counting.set_result(task)
+        await release.wait()
+        await store(*args, **kwargs)
+
+    return held
+
+
+async def _fail_request_and_finish_counting_in_background(
+    store: _IncrementSpendCounters, failure: Mapping[str, object], committed: CommittedBudgetSpend | None = None
+) -> None:
+    release: Final = asyncio.Event()
+    counting: Final[asyncio.Future[asyncio.Task[object]]] = asyncio.get_running_loop().create_future()
+    held: Final = _held_until(release, counting, store)
+    try:
+        await _fail_request(
+            ProxyDBLogger(spend_counters=lambda: held, failure_counter_wait_seconds=0), failure, committed
+        )
+        background: Final = await counting
+        release.set()
+        await background
+    finally:
+        release.set()
+        if counting.done():
+            await asyncio.wait((counting.result(),))
+
+
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("failure", "charged"),
     [
@@ -2976,7 +3019,6 @@ async def _counter_values(counters: SpendCounterStore) -> dict[str, float | None
             0.125,
         ),
         (_failure_with_billed_attempts(), 1.25),
-        ({}, 0.0),
     ],
 )
 async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
@@ -2984,10 +3026,12 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 ):
     """#35568: budget checks read the live counters, so a failure row's cost has to land there as well as in the
     spend log, or an over-budget key keeps passing until the counter is next repaired from the database."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
     for key, spend in _LIVE_COUNTERS.items():
         live_spend_counters.set_local(key, spend)
 
-    await _fail_request(ProxyDBLogger(), failure)
+    await _fail_request_and_finish_counting_in_background(increment_spend_counters, failure)
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
@@ -2995,39 +3039,83 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
 
 @pytest.mark.asyncio
+async def test_a_failure_that_cost_nothing_leaves_the_live_spend_counters_alone(live_spend_counters: SpendCounterStore):
+    for key, spend in _LIVE_COUNTERS.items():
+        live_spend_counters.set_local(key, spend)
+
+    await _fail_request(ProxyDBLogger(), {})
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(_LIVE_COUNTERS)
+
+
+_COMMITTED_COUNTERS: Final = MappingProxyType(
+    {
+        "spend:committed:key:hashed-key": 0.2,
+        "spend:committed:team:team-1": 0.3,
+        "spend:committed:user:user-1": 0.4,
+    }
+)
+_BUDGETED_KEY_AND_TEAM: Final = CommittedBudgetSpend(
+    counter_keys=EntitySpendCounterKeys.of(
+        token="hashed-key", team_id="team-1", user_id=None, org_id=None, end_user_id=None
+    )
+)
+
+
+def _committed_counter_values(counters: SpendCounterStore) -> dict[str, float | None]:
+    return {key: counters.get_local(key) for key in _COMMITTED_COUNTERS}
+
+
+def _committed_counters_after_charging_key_and_team(charged: float) -> dict[str, float]:
+    return {
+        "spend:committed:key:hashed-key": 0.2 + charged,
+        "spend:committed:team:team-1": 0.3 + charged,
+        "spend:committed:user:user-1": 0.4,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("failure", "charged"),
     [
         ({"combined_usage_object": Usage(prompt_tokens=30), "response_cost": 0.125}, 0.125),
         (_failure_with_billed_attempts(), 1.25),
-        ({"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}, 0.125),
     ],
-    ids=["recovered_stream_cost", "billed_retries", "completed_cost"],
+    ids=["recovered_stream_cost", "billed_retries"],
 )
 async def test_a_failed_charge_moves_only_the_committed_counters_auth_named_as_budgeted(
     live_spend_counters: SpendCounterStore, failure: Mapping[str, object], charged: float
 ):
     """The remaining budget gauges read the committed counters, so a charge missing from them shows as budget the
     request never left behind, until the next reseed from the database."""
-    budgeted: Final = EntitySpendCounterKeys.of(
-        token="hashed-key", team_id="team-1", user_id=None, org_id=None, end_user_id=None
-    )
-    starting: Final = {
-        "spend:committed:key:hashed-key": 0.2,
-        "spend:committed:team:team-1": 0.3,
-        "spend:committed:user:user-1": 0.4,
-    }
-    for key, spend in starting.items():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    for key, spend in _COMMITTED_COUNTERS.items():
         live_spend_counters.set_local(key, spend)
 
-    await _fail_request(ProxyDBLogger(), failure, CommittedBudgetSpend(counter_keys=budgeted))
+    await _fail_request_and_finish_counting_in_background(increment_spend_counters, failure, _BUDGETED_KEY_AND_TEAM)
 
-    assert {key: live_spend_counters.get_local(key) for key in starting} == pytest.approx(
-        {
-            "spend:committed:key:hashed-key": 0.2 + charged,
-            "spend:committed:team:team-1": 0.3 + charged,
-            "spend:committed:user:user-1": 0.4,
-        }
+    assert _committed_counter_values(live_spend_counters) == pytest.approx(
+        _committed_counters_after_charging_key_and_team(charged)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_completed_charge_moves_only_the_committed_counters_auth_named_as_budgeted(
+    live_spend_counters: SpendCounterStore,
+):
+    for key, spend in _COMMITTED_COUNTERS.items():
+        live_spend_counters.set_local(key, spend)
+
+    await _fail_request(
+        ProxyDBLogger(),
+        {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}},
+        _BUDGETED_KEY_AND_TEAM,
+    )
+
+    assert _committed_counter_values(live_spend_counters) == pytest.approx(
+        _committed_counters_after_charging_key_and_team(0.125)
     )
 
 
@@ -3061,10 +3149,11 @@ async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spen
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 async def test_a_failing_spend_counter_store_is_still_sent_every_failure_spend_row():
     counters: Final = AsyncMock(side_effect=RuntimeError("redis unavailable"))
 
-    await _fail_request(ProxyDBLogger(spend_counters=lambda: counters), _failure_with_billed_attempts())
+    await _fail_request_and_finish_counting_in_background(counters, _failure_with_billed_attempts())
 
     assert [call.kwargs["response_cost"] for call in counters.call_args_list] == [0.5, 0.25, 0.5]
 
@@ -3135,6 +3224,7 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_attributed_access_group(
     live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3153,8 +3243,10 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
         ),
     )
 
-    await _fail_request(
-        ProxyDBLogger(),
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await _fail_request_and_finish_counting_in_background(
+        increment_spend_counters,
         {
             **_failure_with_billed_attempts(),
             "metadata": {MODEL_ACCESS_GROUP_METADATA_KEY: ["pool", "premium"], "model_info": {"id": "dep-b"}},
@@ -3692,17 +3784,41 @@ def _completed_batch() -> LiteLLMBatch:
     )
 
 
+def _redacted_completed_batch() -> object:
+    return perform_redaction({}, _completed_batch())
+
+
 def _completed_video() -> VideoObject:
     return VideoObject(id="video_abc", object="video", status="completed")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "polled_job"),
-    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+    ("job_kwargs", "polled_job"),
+    [
+        ({"call_type": CallTypes.aretrieve_batch.value}, _completed_batch),
+        (
+            {
+                "call_type": CallTypes.aretrieve_batch.value,
+                POLLED_BATCH_ID_KWARG: "batch_abc",
+                POLLED_BATCH_COST_IS_FINAL_KWARG: True,
+            },
+            _redacted_completed_batch,
+        ),
+        ({"call_type": "avideo_status"}, _completed_video),
+        (
+            {
+                "call_type": "pass_through_endpoint",
+                SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+            },
+            _offload_response,
+        ),
+    ],
+    ids=["batch_retrieve", "redacted_batch_retrieve", "video_status_poll", "background_response_settling_read"],
 )
-async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
-    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+async def test_async_log_success_event_keeps_job_polls_in_process(job_kwargs, polled_job):
+    """The spend event leaves out the polled video's status and id and a background response's settlement flag,
+    which decide whether the poll charges the job and which spend row it writes."""
     producer = SpendEventProducer(
         address=UnixAddress(path="/nonexistent/spend.sock"),
         on_unavailable="drop",
@@ -3711,7 +3827,7 @@ async def test_async_log_success_event_keeps_job_polls_in_process(call_type, pol
         fallback=_no_fallback,
     )
     logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    kwargs = {**_offload_kwargs(), **job_kwargs}
     completed_job = polled_job()
 
     with (

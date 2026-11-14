@@ -49,13 +49,13 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | provider | model alias | upstream model |
 |----------|-------------|----------------|
 | openai | `openai-realtime` | `openai/gpt-realtime-2` |
-| azure | `azure-realtime` | `azure/gpt-realtime-2` (GA protocol) |
+| azure | `azure-realtime` | `azure/gpt-realtime-1.5` (GA protocol) |
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
-| vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-native-audio` |
+| vertex_ai | `vertex-realtime` | `vertex_ai/gemini-3.8-live` |
+| bedrock | `bedrock-realtime` | `bedrock/amazon.nova-2-sonic-v1:0` |
 
-Bedrock and xai (`xai/grok-4-1-fast-non-reasoning`) are supported by the proxy but
-kept commented out in `PROVIDERS` until they pass end-to-end here; re-enable them by
-uncommenting their entry.
+xai (`xai/grok-4-1-fast`) is supported by the proxy but kept commented out in
+`PROVIDERS` until it passes end-to-end here; re-enable it by uncommenting its entry.
 
 Azure realtime translation is explicitly skipped pending investigation of intermittent
 missing transcripts and does not count as qualified coverage. OpenAI translation and

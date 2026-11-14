@@ -1,11 +1,12 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import ClassVar, Final
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.utils import (
     declared_value_factory,
     has_catalog_entry,
@@ -35,6 +36,44 @@ def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_b
             ),
         )
     )
+
+
+def _effort_level(sent_effort: object) -> str | None:
+    match sent_effort:
+        case str(level) | {"effort": str(level)}:
+            return level
+        case _:
+            return None
+
+
+def _sent_effort_level(sent_params: Mapping[str, object]) -> str | None:
+    match sent_params:
+        case {"extra_body": {"reasoning_effort": sent_effort}}:
+            return _effort_level(sent_effort)
+        case {"reasoning_effort": sent_effort}:
+            return _effort_level(sent_effort)
+        case _:
+            return None
+
+
+@dataclass(slots=True)
+class DeferredReasoningDropWarnings:
+    logger: WarningLogger
+    held: tuple[tuple[str, tuple[object, ...]], ...] = ()
+
+    def warning(self, msg: str, /, *args: object) -> None:
+        self.held = (*self.held, (msg, args))
+
+    def log_unless_dropped_effort_sent(self, sent_params: Mapping[str, object]) -> None:
+        sent_effort: Final = _sent_effort_level(sent_params)
+        held: Final = self.held
+        self.held = ()
+        for msg, args in held:
+            match args:
+                case ("reasoning_effort", dropped_effort, *_) if dropped_effort == sent_effort:
+                    continue
+                case _:
+                    self.logger.warning(msg, *args)
 
 
 def _catalogue_declares_default_effort() -> bool:
@@ -330,6 +369,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         drop_params: bool,
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -364,7 +404,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             and self.refuses_reasoning_effort_level(model, requested_effort)
         ):
             if litellm.drop_params or drop_params:
-                verbose_logger.warning(
+                reasoning_drop_logger.warning(
                     refused_reasoning_effort_warning(
                         suggest_declared_levels=declared_reasoning_efforts is not None,
                         suggest_base_model=self.LOOKS_UP_BASE_MODEL

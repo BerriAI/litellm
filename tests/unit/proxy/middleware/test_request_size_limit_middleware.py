@@ -215,6 +215,7 @@ def test_an_oversized_messages_request_gets_the_anthropic_request_too_large_erro
     ("POST", "/skill-hub/skills/upload", "/skill-hub/skills/upload"),
     ("POST", "/chat/completions", "/chat/completions"),
     ("PUT", "/skill-hub/skills/example/upload", "/skill-hub/skills/{name}/upload"),
+    ("PUT", "/skill-hub/submissions/absent/upload", "/skill-hub/submissions/{submission_id}/upload"),
 ])
 async def test_chunked_upload_overflow_stops_fastapi_and_auth_multipart_parsing(
     method: str, path: str, route: str,

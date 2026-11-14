@@ -8,15 +8,21 @@ import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast, overload
 from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
+    map_finish_reason,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -145,6 +151,14 @@ def translate_developer_role_for_openai_compatible_endpoint(
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _ModelResponseStreamFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -646,7 +660,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_api_base: Final = litellm_params.get("api_base")
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
-            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            if self._targets_openai_hosted_endpoint(
+                provider if isinstance(provider, str) else None,
+                raw_api_base if isinstance(raw_api_base, str) else None,
+            )
             else drop_non_python_regex_patterns
         )
         sanitized: Final = [
@@ -808,7 +825,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: str | None = str(new_tool_calls[0]["function"].get("arguments", "")) or None
+                tool_call_function = require_attributes(
+                    subscript(new_tool_calls[0], "function"), _SupportsGetWithDefault, "get"
+                )
+                json_mode_content_str: str | None = str(tool_call_function.get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
                     finish_reason = "stop"
@@ -1086,7 +1106,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
-            kwargs: Final[dict[str, Any]] = {
+            kwargs: Final[dict[str, object]] = {
                 "id": chunk.get("id"),
                 "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
@@ -1099,6 +1119,6 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:
                 kwargs["service_tier"] = service_tier
-            return ModelResponseStream(**kwargs)
+            return ModelResponseStream(**_ModelResponseStreamFields(**kwargs))
         except Exception as e:
             raise e

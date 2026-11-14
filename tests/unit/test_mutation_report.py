@@ -1,4 +1,4 @@
-"""Tests for scripts/mutation_report.py.
+"""Tests for litellm/scripts/mutation_report.py.
 
 The report is the only thing anyone reads after a mutation run, so the one thing it
 must never do is describe a run that produced nothing as a run that killed everything.
@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / "scripts" / "mutation_report.py"
+_MODULE_PATH = _REPO_ROOT / "litellm/scripts" / "mutation_report.py"
 _spec = importlib.util.spec_from_file_location("mutation_report", _MODULE_PATH)
 report = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = report

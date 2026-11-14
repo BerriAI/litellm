@@ -22,9 +22,76 @@ from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.redis.stores.spend_counters import SpendCounterStore, user_counter, user_window_counter
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_user_window_reseeds_from_maintained_balance() -> None:
+    prisma: Final = _FakePrismaClient(row=SimpleNamespace(window_start=WINDOW_START, spend=4.5))
+    result: Final = await SpendCounterReseed.window_from_db(prisma, "User", "u", "1h", WINDOW_START)
+    assert result == 4.5
+    assert prisma.db.litellm_budgetwindowspend.where_clauses == [
+        {"entity_type_entity_id_window_duration": {"entity_type": "user", "entity_id": "u", "window_duration": "1h"}}
+    ]
+    assert prisma.db.litellm_spendlogs.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter_key, expected",
+    [(user_counter("u:window:1h"), 7.0), (user_window_counter("u", "1h"), None)],
+    ids=["user_id_that_looks_like_a_window", "user_window"],
+)
+async def test_only_a_users_own_counter_reseeds_from_the_user_row(counter_key: str, expected: float | None) -> None:
+    users: Final = _FakeFindUniqueTable(row=SimpleNamespace(spend=7.0))
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_usertable=users))
+    assert await SpendCounterReseed.from_db(prisma, counter_key) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "family,table_name,id_field",
+    (
+        ("customer_org", "litellm_customerorganizationtable", "customer_org_id"),
+        ("customer_team", "litellm_customerteamtable", "customer_team_id"),
+        ("customer_member", "litellm_customermembertable", "customer_member_id"),
+    ),
+)
+@pytest.mark.parametrize(
+    "period,reset_at,expected",
+    (
+        ("lifetime", None, 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START, 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START.replace(tzinfo=None), 4.5),
+        (WINDOW_START.isoformat(), WINDOW_START + timedelta(days=1), None),
+        (WINDOW_START.isoformat(), WINDOW_START - timedelta(days=1), None),
+        ("lifetime", WINDOW_START, None),
+        (WINDOW_START.isoformat(), None, None),
+        ("not-a-period", None, None),
+        ("2026-99-99T00:00:00+00:00", WINDOW_START, None),
+    ),
+)
+async def test_customer_counter_reseed_reads_only_the_matching_budget_period(
+    family, table_name, id_field, period, reset_at, expected
+):
+    table: Final = _FakeFindUniqueTable(
+        SimpleNamespace(spend=4.5, budget=SimpleNamespace(budget_duration="1mo", budget_reset_at=reset_at))
+    )
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(**{table_name: table}))
+    actual: Final = await SpendCounterReseed.from_db(prisma, f"spend:{family}:id:with:colons:{period}")
+    assert actual == expected
+    if period != "not-a-period":
+        assert table.where_clauses == [{id_field: "id:with:colons"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", (None, ConnectionError("database is unavailable")))
+async def test_missing_or_unavailable_customer_spend_does_not_seed_a_counter(error):
+    table: Final = _FakeFindUniqueTable(None, error)
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_customermembertable=table))
+    assert await SpendCounterReseed.from_db(prisma, "spend:customer_member:member:lifetime") is None
 
 
 class _FakeFindUniqueTable:
@@ -33,7 +100,7 @@ class _FakeFindUniqueTable:
         self._error = error
         self.where_clauses: list[dict] = []
 
-    async def find_unique(self, where: dict):
+    async def find_unique(self, where: dict, include: dict | None = None):
         self.where_clauses.append(where)
         if self._error is not None:
             raise self._error
@@ -217,7 +284,7 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Unsupported"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],

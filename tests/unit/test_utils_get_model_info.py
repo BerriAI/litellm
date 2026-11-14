@@ -14,7 +14,7 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import supports_native_structured_output
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 from unittest.mock import MagicMock, patch
 
@@ -172,7 +172,7 @@ def _enforce_bedrock_converse_models(
 
 
 def _read_whitelisted_bedrock_models() -> tuple[str, ...]:
-    path: Final = Path(__file__).resolve().parents[2] / "whitelisted_bedrock_models.txt"
+    path: Final = Path(__file__).with_name("whitelisted_bedrock_models.txt")
     return tuple(path.read_text().splitlines())
 
 
@@ -191,7 +191,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
@@ -217,7 +217,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
 
         # Check for unwhitelisted models

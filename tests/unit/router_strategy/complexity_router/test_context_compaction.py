@@ -503,3 +503,19 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
         assert calls.qsize() == 1 and stopped.is_set()
     finally:
         compaction_executor.reset(token)
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )

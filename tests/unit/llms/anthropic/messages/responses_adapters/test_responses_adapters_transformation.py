@@ -3,6 +3,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 (litellm/llms/anthropic/messages/responses_adapters/transformation.py)
 """
 
+import copy
 import json
 import os
 from collections.abc import Mapping
@@ -320,6 +321,79 @@ class TestOutputConfigStructuredOutput:
 
         assert output_format == snapshot
         assert req["output_format"] == snapshot
+
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": True}))
+    def test_strict_schema_closes_every_object_like_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, bool],
+    ) -> None:
+        """Regression for #51200: strict output schemas must be closed at every nesting level."""
+
+        def open_object(properties: Mapping[str, object], required: list[str]) -> dict[str, object]:
+            return {"type": "object", "properties": properties, "required": required, "additionalProperties": True}
+
+        def closed_object(properties: Mapping[str, object]) -> dict[str, object]:
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            }
+
+        schema: Final = {
+            **open_object(
+                {
+                    "entry": open_object({"value": {"type": "string"}, "note": {"type": "string"}}, ["value"]),
+                    "rows": {"type": "array", "items": open_object({"id": {"type": "integer"}}, [])},
+                    "choice": {"anyOf": [open_object({"a": {"type": "string"}}, []), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**open_object({"flag": {"type": "boolean"}}, []), "type": ["object", "null"]},
+                },
+                ["entry"],
+            ),
+            "$defs": {"Item": open_object({"label": {"type": "string"}}, [])},
+        }
+        output_format: Final = {"type": "json_schema", "schema": schema, **strict_options}
+        snapshot: Final = copy.deepcopy(output_format)
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        expected_schema: Final = {
+            **closed_object(
+                {
+                    "entry": closed_object({"value": {"type": "string"}, "note": {"type": "string"}}),
+                    "rows": {"type": "array", "items": closed_object({"id": {"type": "integer"}})},
+                    "choice": {"anyOf": [closed_object({"a": {"type": "string"}}), {"type": "null"}]},
+                    "ref": {"$ref": "#/$defs/Item"},
+                    "maybe": {**closed_object({"flag": {"type": "boolean"}}), "type": ["object", "null"]},
+                }
+            ),
+            "$defs": {"Item": closed_object({"label": {"type": "string"}})},
+        }
+
+        translated: Final = _ADAPTER.translate_request(request)
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert translated["text"] == {
+            "format": {"type": "json_schema", "name": "structured_output", "schema": expected_schema, "strict": True}
+        }
+        assert chat.get("response_format") == {
+            "type": "json_schema",
+            "json_schema": {"name": "structured_output", "schema": expected_schema, "strict": True},
+        }
+        assert output_format == snapshot
+
+    def test_non_strict_schema_is_forwarded_unchanged(self) -> None:
+        schema: Final = {
+            "type": "object",
+            "properties": {"entry": {"type": "object", "properties": {"value": {"type": "string"}}}},
+            "additionalProperties": True,
+        }
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == schema
 
 
 # ---------------------------------------------------------------------------

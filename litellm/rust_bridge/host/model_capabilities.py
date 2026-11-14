@@ -6,7 +6,7 @@ from typing import Final, TypeAlias
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.rust_bridge.host.model_cost import ModelCostVersion, model_cost_version
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 
 
 class _Held:

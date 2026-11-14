@@ -16,7 +16,7 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
 )
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import get_optional_params_image_gen
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 @pytest.fixture(autouse=True)

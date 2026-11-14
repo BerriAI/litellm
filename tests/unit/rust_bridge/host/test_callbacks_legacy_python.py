@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # a duck-typed logger double stands in for Logging
 
 import httpx
 import pytest
@@ -45,6 +45,16 @@ def test_native_stream_headers_reach_spend_callbacks() -> None:
     assert logger.model_call_details["response_headers"] == {"llm_provider-request-id": "req_native"}
 
 
+def test_recorded_messages_stream_keeps_the_provider_header_names() -> None:
+    logger: Final = _supplied_logger()
+    sent: Final[tuple[str, Mapping[str, str], bytes]] = ("http://upstream/v1/messages", {}, b'{"stream":true}')
+    legacy.record_response(logger, 200, [("request-id", "req_native")], "", True, sent)
+    legacy.stream_opened(logger, {"additional_headers": {"llm_provider-request-id": "req_native"}})
+
+    assert logger.stream is True
+    assert logger.model_call_details["response_headers"] == {"request-id": "req_native"}
+
+
 def test_setup_reuses_a_supplied_logger() -> None:
     supplied: Final = _supplied_logger()
     result: Final = setup(
@@ -73,7 +83,7 @@ def test_cache_hit_finalization_preserves_execution_provider_attribution(explici
     )
     prepared.logger.model_call_details.update({"cache_hit": True, "cache_key": "cached-response"})
     response: Final = ModelResponse(model="cache-test-model")
-    legacy.finalize(response, prepared.logger, prepared.kwargs, now, now)
+    legacy.finalize(response, prepared.logger, prepared.kwargs, now, now, False)
     assert prepared.logger.model_call_details["custom_llm_provider"] == "azure"
     assert prepared.logger.model_call_details["model"] == "resolved-cache-model"
     assert prepared.logger.litellm_params["metadata"]["user_api_key"] == "key-hash"
@@ -255,7 +265,7 @@ def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: 
     assert hooks.hooks == ["sync_failure"]
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm/rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:
@@ -264,7 +274,7 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
 
 
-def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_it() -> None:
+def test_messages_input_order_is_the_key_order_the_python_handler_builds_its_body_in() -> None:
     body: Final = {
         "model": "claude-sonnet-4-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -275,17 +285,19 @@ def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_
         "output_config": {"effort": "low"},
     }
 
-    logged: Final = legacy.messages_input(
-        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}}
+    order: Final = legacy.messages_input_order(
+        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}, "absent": 1}
     )
 
-    assert logged == [
-        {
-            "role": "user",
-            "content": '{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "model": "claude-sonnet-4-5", '
-            '"stream": true, "system": "brief", "output_config": {"effort": "low"}, "context_management": {"edits": []}}',
-        }
-    ]
+    assert order == (
+        "messages",
+        "max_tokens",
+        "model",
+        "stream",
+        "system",
+        "output_config",
+        "context_management",
+    )
 
 
 def _messages_logger() -> Logging:
@@ -303,13 +315,59 @@ def _messages_logger() -> Logging:
 def test_native_provider_response_is_recorded_for_logging_replay() -> None:
     logger: Final = _messages_logger()
 
-    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}')
+    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}', False, None)
 
     recorded: Final[object] = logger.model_call_details["httpx_response"]
     assert isinstance(recorded, httpx.Response)
     assert recorded.status_code == 200
     assert recorded.content == b'{"id": "msg_native"}'
     assert logger.model_call_details["response_headers"]["request-id"] == "req_native"
+
+
+def test_a_non_ascii_provider_header_is_recorded_as_httpx_decodes_it() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(logger, 200, (("x-fz-unicode", "caf\u00e9"),), '{"id": "msg_native"}', False, None)
+
+    assert logger.model_call_details["response_headers"]["x-fz-unicode"] == "caf\u00e9"
+
+
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config={"arbitrary_types_allowed": True})
+_SENT_HEADERS: Final = MappingProxyType({"x-api-key": "sk-ant", "anthropic-beta": "message-threads-2026-08-12"})
+
+
+def test_native_provider_response_carries_the_request_that_was_sent() -> None:
+    logger: Final = _messages_logger()
+    wire: Final = '{"model":"claude-sonnet-4-5","system":"caf\u00e9","temperature":1e-7}'.encode()
+
+    legacy.record_response(
+        logger, 200, (), '{"id": "msg_native"}', False, ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, wire)
+    )
+
+    recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])
+    assert recorded.request.method == "POST"
+    assert str(recorded.request.url) == "https://api.anthropic.com/v1/messages"
+    assert recorded.request.headers["anthropic-beta"] == "message-threads-2026-08-12"
+    assert recorded.request.content == wire
+    assert recorded.content == b'{"id": "msg_native"}'
+
+
+def test_native_stream_response_is_recorded_unread_like_the_python_stream() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(
+        logger,
+        200,
+        (("request-id", "req_native"),),
+        "",
+        True,
+        ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, b'{"stream":true}'),
+    )
+
+    recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])
+    assert recorded.request.headers["anthropic-beta"] == "message-threads-2026-08-12"
+    with pytest.raises(httpx.ResponseNotRead):
+        _ = recorded.content
 
 
 def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> None:
@@ -323,6 +381,76 @@ def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> No
     assert metadata["llm_api_timing_windows"] == ((1_700_000_000.0, 1_700_000_000.25),)
 
 
+@pytest.mark.asyncio
+async def test_a_retried_request_rewrites_the_logged_body_in_place_like_the_python_retry_loop() -> None:
+    logger: Final = _messages_logger()
+    metadata: Final = {"user_id": "u-1"}
+    replayed: Final = [
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]},
+        {"role": "user", "content": "again"},
+    ]
+    logged: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": replayed,
+        "metadata": metadata,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+    logger.model_call_details.update(logged)
+    retried: Final = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "again"}],
+        "metadata": {"user_id": "u-1"},
+    }
+
+    await legacy.retried_request(logger, logged, retried, ({"kind": "thinking_signature"},))
+
+    assert logged == retried
+    assert logged["metadata"] is metadata
+    assert logger.model_call_details["messages"] == [{"role": "user", "content": "again"}]
+    assert logger.model_call_details["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+class _BaselineLogger:
+    def __init__(self) -> None:
+        self.baseline_cache_context: object = object()
+        self.model_call_details: dict[str, object] = {}
+        self.invalidated: list[str] = []
+
+    async def invalidate_baseline_cache_estimate(self, reason: str) -> None:
+        self.invalidated.append(reason)
+
+
+@pytest.mark.asyncio
+async def test_a_retried_request_invalidates_the_baseline_cache_estimate() -> None:
+    logger: Final = _BaselineLogger()
+
+    await legacy.retried_request(cast(Logging, logger), {"messages": []}, {"messages": []}, ())  # cast-ok: duck-typed
+
+    assert logger.invalidated == ["retried_request"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasons", "warned"),
+    [
+        pytest.param(({"kind": "thinking_signature"},), [], id="thinking_signature"),
+        pytest.param(({"kind": "strict_tools", "dropped": 2},), [2], id="strict_tools"),
+        pytest.param(({"kind": "thinking_signature"}, {"kind": "strict_tools", "dropped": 3}), [3], id="both_reasons"),
+    ],
+)
+async def test_a_retry_that_dropped_strict_tools_warns_with_the_dropped_count(
+    monkeypatch: pytest.MonkeyPatch, reasons: tuple[Mapping[str, object], ...], warned: list[int]
+) -> None:
+    from litellm.llms.anthropic import common_utils
+
+    warnings: Final[list[int]] = []
+    monkeypatch.setattr(common_utils, "warn_claude_strict_tools_dropped", warnings.append)
+
+    await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
+
+    assert warnings == warned
+
+
 def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     logger: Final = _messages_logger()
     head: Final[dict[str, object]] = {"additional_headers": {"request-id": "req_native"}}
@@ -334,6 +462,7 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
         {"model": "anthropic/claude-sonnet-4-5", "litellm_call_id": "messages"},
         started,
         started + datetime.timedelta(milliseconds=5),
+        False,
     )
 
     assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
@@ -403,3 +532,22 @@ async def test_a_proxy_stream_abandoned_mid_cancel_bills_after_the_disconnect_cl
     await asyncio.sleep(0)
 
     assert events == ["disconnect recorded", "billed"]
+
+
+@pytest.mark.parametrize(
+    ("requested", "keeps_requested", "expected"),
+    [
+        pytest.param("false", True, "false", id="messages-keeps-a-truthy-string"),
+        pytest.param(1, True, 1, id="messages-keeps-a-truthy-int"),
+        pytest.param(False, True, True, id="messages-hook-streamed"),
+        pytest.param("false", False, True, id="other-routes-stream-true"),
+    ],
+)
+def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: bool, expected: object) -> None:
+    logger: Final = _supplied_logger()
+    logger.model_call_details["stream"] = requested
+
+    legacy.stream_opened(logger, {}, keeps_requested)
+
+    assert logger.model_call_details["stream"] == expected
+    assert logger.stream == expected

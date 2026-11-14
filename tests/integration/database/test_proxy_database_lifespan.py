@@ -121,7 +121,7 @@ def test_failed_startup_then_retry_releases_database_resources(tmp_path: Path, m
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             "LITELLM_TELEMETRY_ENABLED": "false",
             "PRISMA_HEALTH_WATCHDOG_ENABLED": "true",
-            "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "enterprise"))),
+            "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "litellm" / "enterprise"))),
             **({"DATABASE_URL_READ_REPLICA": database_url} if replica else {}),
         }
         schema: Final = subprocess.run(

@@ -448,6 +448,12 @@ def test_with_id_security_off_reads_and_cancels_add_no_rows_and_no_replayed_turn
         assert [string_value(JSON_OBJECT.validate_json(read.content)["id"]) for read in reads] == [first_id] * 3
         later_id: Final = _created_response_id(insecure, key, {"model": native, "input": "a later request"})
         assert _request_ids_for_key(insecure, key, 2) == [first_id, later_id]
+        (first_turn,) = insecure.rows(
+            'SELECT request_id, proxy_server_request, messages, call_type FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+            (first_id,),
+        )
+        assert first_turn["call_type"] == "aresponses", first_turn
+        assert object_value(first_turn["proxy_server_request"])["input"] == first_prompt, first_turn
         wire.drain()
 
         _terminal_response_id(

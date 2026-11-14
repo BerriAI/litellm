@@ -65,6 +65,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.redis.stores.router_session_pins import TierModelPin, TierSessionPin
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
@@ -520,6 +521,11 @@ _CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
     ("<environments_instructions>", "</environments_instructions>"),
     ("# agents.md instructions for ", "</instructions>"),
 )
+_OPENCODE_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<task_result>", "</task_result>"),
+    ("<subagent ", "</subagent>"),
+)
+_OPENCODE_USER_AGENT_PREFIX: Final = "opencode/"
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -528,6 +534,10 @@ _MIN_QUOTED_TURN_CHARS: Final = 120
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
+
+
+def _is_opencode_user_agent(user_agent: str) -> bool:
+    return user_agent.lower().startswith(_OPENCODE_USER_AGENT_PREFIX)
 
 
 def _message_text(content: object) -> str:
@@ -3173,17 +3183,16 @@ class ComplexityRouter(CustomLogger):
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
         if session_id is None:
             return model
-        caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
-        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
-        cache_identity: Final = (
-            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
-        )
-        cache_key: Final = (
-            "complexity_router_tier_model_affinity:v1:"
-            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
+        cache_key: Final = TierModelPin(
+            router=self.model_name,
+            tiers=self._tier_affinity_config,
+            caller=DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs),
+            session_id=session_id,
+            tier=_tier_name(tier),
+            replay_fallback=retained_model,
         )
         winner: Final = await claim_affinity_pin(
-            self.ctx.health().store,
+            self.ctx.health().session_pins,
             cache_key,
             MappingProxyType({"model": model}),
             self.config.session_affinity_ttl_seconds,
@@ -4418,12 +4427,20 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+        if self._is_codex_request(request_kwargs):
+            return _CODEX_REMINDER_MARKERS
+        if self._request_user_agent_matches(request_kwargs, _is_opencode_user_agent):
+            return _OPENCODE_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
 
     @staticmethod
     def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return ComplexityRouter._request_user_agent_matches(request_kwargs, is_codex_user_agent)
+
+    @staticmethod
+    def _request_user_agent_matches(request_kwargs: Mapping[str, object], matches: Callable[[str], bool]) -> bool:
         return any(
-            is_codex_user_agent(user_agent)
+            matches(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)
@@ -4489,13 +4506,12 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
-        # Namespace by the caller's API key hash so two different callers reusing the
-        # same client-supplied session_id can't poison each other's routing pin. Falls
-        # back to "unscoped" only when there's no authenticated caller to scope by
-        # (e.g. direct Router usage without the proxy layer).
-        caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
-        return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> TierSessionPin:
+        return TierSessionPin(
+            router=self.model_name,
+            caller=self._get_user_api_key_hash_from_request_kwargs(request_kwargs),
+            session_id=session_id,
+        )
 
     @property
     def _uses_tier_pin(self) -> bool:
@@ -4577,7 +4593,7 @@ class ComplexityRouter(CustomLogger):
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await read_affinity_pin(
-                self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds
+                self.ctx.health().session_pins, cache_key, self.config.session_affinity_ttl_seconds
             )
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
@@ -4676,10 +4692,10 @@ class ComplexityRouter(CustomLogger):
                         else floor_model
                     )
                     if escalated:
-                        await self.ctx.health().store.async_set_cache(
-                            key=cache_key,
-                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                            ttl=self.config.session_affinity_ttl_seconds,
+                        await self.ctx.health().session_pins.set(
+                            cache_key,
+                            _session_affinity_cache_value(session_model, resolved_pin_tier),
+                            self.config.session_affinity_ttl_seconds,
                         )
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
@@ -4785,13 +4801,13 @@ class ComplexityRouter(CustomLogger):
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
         if pinnable and cache_key is not None and response is not None:
-            await self.ctx.health().store.async_set_cache(
-                key=cache_key,
-                value=_session_affinity_cache_value(
+            await self.ctx.health().session_pins.set(
+                cache_key,
+                _session_affinity_cache_value(
                     response.model,
                     response.routing_decision.get("tier") if response.routing_decision is not None else None,
                 ),
-                ttl=self.config.session_affinity_ttl_seconds,
+                self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
 

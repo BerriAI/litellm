@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm._internal_context import with_service_target
+from litellm._internal_context import request_parent_otel_span, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
@@ -289,8 +289,8 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         validate_routing_strategy(routing_strategy)  # pyright: ignore[reportArgumentType]  # the strategy as given
         # `_reset_custom_routing_strategy`.
         self._custom_strategy = None
-        _ = self.__dict__.pop("get_available_deployment", None)
-        _ = self.__dict__.pop("_core_async_get_available_deployment", None)
+        self.__dict__.pop("get_available_deployment", None)
+        self.__dict__.pop("_core_async_get_available_deployment", None)
         self._sel.init_default(routing_strategy, routing_strategy_args, configured=False)
 
     def set_optional_pre_call_checks(self, optional_pre_call_checks: Iterable[object] | None) -> None:
@@ -301,7 +301,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         """``initialize_assistants_endpoint`` binds the endpoints; this core answers them from
         ``__getattr__``, so what is left to do is to drop an assigned replacement."""
         for name in _ASSISTANTS_ENDPOINTS:
-            _ = self.__dict__.pop(name, None)
+            self.__dict__.pop(name, None)
 
     def initialize_router_endpoints(self) -> None:
         """``initialize_router_endpoints``, as ``initialize_assistants_endpoint`` above."""
@@ -310,7 +310,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         )
 
         for name in (*_ROUTER_ENDPOINTS, *_generated_endpoints):
-            _ = self.__dict__.pop(name, None)
+            self.__dict__.pop(name, None)
 
     # -- pre-routing strategies --------------------------------------------------------------------
 
@@ -423,10 +423,11 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                     awaitable: Final[Awaitable[object]] = response  # pyright: ignore[reportAssignmentType]  # the endpoint's awaitable
                     response = await awaitable  # rebind-ok: awaited here
         except Exception:
-            with contextlib.suppress(Exception):
-                await async_io_token_refund_failure(
-                    self._cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
-                )
+            with (
+                contextlib.suppress(Exception),
+                request_parent_otel_span(get_parent_otel_span_from_kwargs(kwargs)),
+            ):
+                await async_io_token_refund_failure(self._usage, kwargs)
             raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         return await self.set_response_headers(
@@ -513,7 +514,9 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         if model_group is None or deployment_id is None:
             return
         model: Final = None if deployment_name is None else str(deployment_name)
-        counter: Final = UsageCounter(str(deployment_id), model, get_utc_datetime().strftime("%H-%M"), "rpm")
+        counter: Final = UsageCounter(
+            "global_router", str(deployment_id), model, get_utc_datetime().strftime("%H-%M"), "rpm"
+        )
         await self._usage.increment(counter=counter, value=1, ttl=_USAGE_TTL)
 
     # -- the plugin context ------------------------------------------------------------------------

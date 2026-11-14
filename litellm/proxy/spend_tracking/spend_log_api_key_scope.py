@@ -47,7 +47,9 @@ _API_KEY_ROWS: Final = TypeAdapter(tuple[_ApiKeyRow, ...])
 def _narrowing_keys(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...] | None:
     """None when the list cannot narrow the read: nothing known about the owner, or too many keys to help."""
     keys: Final = tuple(row.api_key for row in _API_KEY_ROWS.validate_python(rows))
-    return None if not keys or len(keys) > SPEND_LOG_API_KEY_SCOPE_MAX_KEYS else keys
+    if not keys or len(keys) > SPEND_LOG_API_KEY_SCOPE_MAX_KEYS:
+        return None
+    return keys if "" in keys else (*keys, "")
 
 
 def _daily_dates_around(start: date, end: date) -> tuple[str, str]:

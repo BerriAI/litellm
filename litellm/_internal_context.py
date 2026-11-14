@@ -36,11 +36,6 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
 _service_target: Final[ContextVar[str | None]] = ContextVar("service_target", default=None)
-# Event-metadata key under which a Redis pipeline reports the sorted, comma-joined families its ops were
-# declared under when they span more than one.
-REDIS_FAMILIES_METADATA_KEY: Final = "families"
-
-_service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
 
@@ -141,22 +136,6 @@ def with_service_target(
 
 
 @contextmanager
-def service_caller(caller: str | None) -> Generator[None]:
-    """Name the litellm code a datastore call was issued for when its own frames cannot: an operation
-    declared in one task and run in another (a batch op retried on the flush) carries the chain captured
-    where it was declared."""
-    token: Final = _service_caller.set(caller)
-    try:
-        yield
-    finally:
-        _restore(_service_caller, token)
-
-
-def current_service_caller() -> str | None:
-    return _service_caller.get()
-
-
-@contextmanager
 def mirrored_call() -> Generator[None]:
     """A silent_model mirror of a request: every litellm call inside, its retries and fallbacks included."""
     token: Final = _mirrored_call.set(True)
@@ -195,6 +174,20 @@ def set_request_parent_otel_span(span: Span) -> None:
 
 def current_request_parent_otel_span() -> Span | None:
     return _request_parent_otel_span.get()
+
+
+@contextmanager
+def request_parent_otel_span(span: Span | None) -> Generator[None]:
+    """Anchor the datastore service spans made inside this block, and by the tasks it starts, under the span an SDK
+    caller passed. A request that already anchored its own, as the proxy does at auth, keeps it."""
+    if span is None or _request_parent_otel_span.get() is not None:
+        yield
+        return
+    token: Final = _request_parent_otel_span.set(span)
+    try:
+        yield
+    finally:
+        _restore(_request_parent_otel_span, token)
 
 
 @contextmanager

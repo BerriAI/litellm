@@ -19,7 +19,7 @@ import re
 import threading
 from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -196,6 +196,26 @@ def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> str | None:
     )
 
 
+class _RequestLineFields(Protocol):
+    def get(self, key: Literal["path", "method"], default: str, /) -> str: ...
+
+
+class _ResponseStartFields(Protocol):
+    def __getitem__(self, key: Literal["status"], /) -> int: ...
+
+    def get(
+        self, key: Literal["headers"], default: Sequence[tuple[bytes, bytes]], /
+    ) -> Sequence[tuple[bytes, bytes]]: ...
+
+
+def _request_line_fields(scope: _RequestLineFields) -> _RequestLineFields:
+    return scope
+
+
+def _response_start_fields(message: _ResponseStartFields) -> _ResponseStartFields:
+    return message
+
+
 class BillableRequestMetricsMiddleware:
     """
     Pure ASGI middleware that classifies each request once and fans the result
@@ -263,7 +283,10 @@ class BillableRequestMetricsMiddleware:
             await self.app(scope, receive, send)
             return
 
-        classification: Final = classify_billable_request(scope.get("path", ""), scope.get("method", "POST"))
+        request_line: Final = _request_line_fields(scope)
+        classification: Final = classify_billable_request(
+            request_line.get("path", ""), request_line.get("method", "POST")
+        )
         if classification is None:
             await self.app(scope, receive, send)
             return
@@ -275,8 +298,9 @@ class BillableRequestMetricsMiddleware:
         async def send_wrapper(message: Message) -> None:
             nonlocal status_code, model_id
             if message["type"] == "http.response.start":
-                status_code = message["status"]
-                model_id = _extract_model_id(message.get("headers", []))
+                response_start: Final = _response_start_fields(message)
+                status_code = response_start["status"]
+                model_id = _extract_model_id(response_start.get("headers", []))
             await send(message)
 
         await self.app(scope, receive, send_wrapper)

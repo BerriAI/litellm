@@ -6,10 +6,13 @@ from functools import partial
 from typing import Final, Literal, overload
 
 from httpx._types import FileContent
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
+from litellm.litellm_core_utils.core_helpers import iter_items, keyword_arguments
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -25,6 +28,16 @@ from litellm.types.videos.main import (
 from litellm.types.videos.utils import decode_video_id_with_provider
 from litellm.utils import ProviderConfigManager, client
 from litellm.videos.utils import VideoGenerationRequestUtils
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _VideoObjectFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _CharacterObjectFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _unsupported_video_call(
@@ -204,9 +217,11 @@ def video_generation(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = VideoObject(**mock_response)
+            response: Final = VideoObject.model_validate(
+                _VideoObjectFields(**keyword_arguments(mock_response, VideoObject))
+            )
             return response
 
         # get llm provider logic
@@ -593,9 +608,11 @@ def video_remix(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = VideoObject(**mock_response)
+            response: Final = VideoObject.model_validate(
+                _VideoObjectFields(**keyword_arguments(mock_response, VideoObject))
+            )
             return response
 
         # Try to decode provider from video_id if not explicitly provided
@@ -808,8 +825,11 @@ def video_list(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
-            return [VideoObject(**item) for item in mock_response]
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
+            return [
+                VideoObject.model_validate(_VideoObjectFields(**keyword_arguments(item, VideoObject)))
+                for item in iter_items(mock_response)
+            ]
 
         # Ensure custom_llm_provider is not None - default to openai if not provided
         if custom_llm_provider is None:
@@ -1026,9 +1046,11 @@ def video_status(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
 
-            response: Final = VideoObject(**mock_response)
+            response: Final = VideoObject.model_validate(
+                _VideoObjectFields(**keyword_arguments(mock_response, VideoObject))
+            )
             return response
 
         # Try to decode provider from video_id if not explicitly provided
@@ -1173,8 +1195,10 @@ def video_create_character(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
-            return CharacterObject(**mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
+            return CharacterObject.model_validate(
+                _CharacterObjectFields(**keyword_arguments(mock_response, CharacterObject))
+            )
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -1298,8 +1322,10 @@ def video_get_character(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
-            return CharacterObject(**mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
+            return CharacterObject.model_validate(
+                _CharacterObjectFields(**keyword_arguments(mock_response, CharacterObject))
+            )
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -1430,8 +1456,8 @@ def video_edit(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
-            return VideoObject(**mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
+            return VideoObject.model_validate(_VideoObjectFields(**keyword_arguments(mock_response, VideoObject)))
 
         if custom_llm_provider is None:
             decoded: Final = decode_video_id_with_provider(video_id)
@@ -1564,8 +1590,8 @@ def video_extension(
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = json.loads(mock_response)
-            return VideoObject(**mock_response)
+                mock_response = _DECODED_JSON.validate_python(json.loads(mock_response))
+            return VideoObject.model_validate(_VideoObjectFields(**keyword_arguments(mock_response, VideoObject)))
 
         if custom_llm_provider is None:
             decoded: Final = decode_video_id_with_provider(video_id)
