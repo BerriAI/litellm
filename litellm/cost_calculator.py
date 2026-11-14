@@ -3425,7 +3425,13 @@ def _half_price_prompt_cost(
     cache_creation_tokens: Final = details["cache_creation_tokens"]
     base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
     cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
-    half_cache_read_rate: Final = (get_cost_per_unit(model_info, cache_read_cost_key, 0.0) or 0.0) / 2
+    configured_cache_read_cost: Final = model_info.get(cache_read_cost_key)
+    cache_read_cost: Final = (
+        input_cost_per_token
+        if configured_cache_read_cost is None
+        else (get_cost_per_unit(model_info, cache_read_cost_key, 0.0) or 0.0)
+    )
+    half_cache_read_rate: Final = cache_read_cost / 2
     cached_audio_rate: Final = _batch_or_half(
         _optional_batch_rate(model_info, "cache_read_input_audio_token_cost_batches", usage.prompt_tokens),
         _standard_rate(model_info, "cache_read_input_audio_token_cost", usage.prompt_tokens),

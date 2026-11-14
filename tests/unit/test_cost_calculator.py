@@ -5056,6 +5056,39 @@ def test_batch_cost_calculator_half_price_fallback_bills_cached_modality_tokens_
     assert prompt_cost == pytest.approx(expected_prompt_cost)
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(_cached_audio_batch_usage(), id="cached-audio"),
+        pytest.param(_cached_image_batch_usage(), id="cached-image"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("cache_pricing", "expected_rate"),
+    [
+        pytest.param({}, 2e-6, id="missing"),
+        pytest.param({"cache_read_input_token_cost": None}, 2e-6, id="null"),
+        pytest.param({"cache_read_input_token_cost": 0.0}, 0.0, id="free"),
+        pytest.param({"cache_read_input_token_cost": 5e-7}, 5e-7, id="priced"),
+    ],
+)
+def test_batch_cost_calculator_half_price_fallback_uses_cache_read_prices_for_cached_modalities(
+    usage: Usage, cache_pricing: ModelInfo, expected_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 0.0,
+        **cache_pricing,
+    }
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage, model="batch-pricing-fixture", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_rate / 2)
+    assert completion_cost_value == 0.0
+
+
 def test_batch_cached_image_tokens_bill_the_rows_batch_cached_image_price_on_every_row_that_has_one() -> None:
     rows: Final = _rows_with_a_batch_cached_image_price()
     assert rows, "no cost map row prices Batch cached image input"
@@ -5260,6 +5293,65 @@ def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_wh
     write_rate: Final = input_rate if expected_write_rate is None else expected_write_rate
     assert prompt_cost == pytest.approx((1000 * input_rate + 8000 * 3e-7 + 2000 * write_rate) / 2)
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
+
+
+def test_batch_cost_calculator_bills_cache_reads_at_the_input_rate_when_no_cache_read_price_is_set() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 0.0,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=600,
+            cache_creation_tokens=100,
+            text_tokens=300,
+        ),
+        cache_read_input_tokens=600,
+        cache_creation_input_tokens=100,
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model="batch-pricing-fixture",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((300 + 600 + 100) * 2e-6 / 2)
+    assert completion_cost_value == 0.0
+
+
+def test_batch_cost_calculator_preserves_explicit_zero_cache_read_price() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=600,
+            cache_creation_tokens=100,
+            text_tokens=300,
+        ),
+        cache_read_input_tokens=600,
+        cache_creation_input_tokens=100,
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model="batch-pricing-fixture",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((300 * 2e-6 + 600 * 0.0 + 100 * 2e-6) / 2)
+    assert completion_cost_value == 0.0
 
 
 def test_completion_cost_bills_interactions_api_response():
