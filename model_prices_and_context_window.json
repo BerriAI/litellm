@@ -63613,6 +63613,42 @@
         "deprecation_source": "https://docs.soniox.com/stt/models",
         "successor_model": "soniox/stt-rt-v5"
     },
+    "speechify/simba-3.5": {
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "speechify",
+        "metadata": {
+            "calculation": "$20 per 1M characters (Starter plan list price; Pro is $16 and Scale is $12 per 1M)"
+        },
+        "mode": "audio_speech",
+        "source": "https://speechify.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "speechify/simba-3.2": {
+        "input_cost_per_character": 1e-05,
+        "litellm_provider": "speechify",
+        "metadata": {
+            "calculation": "$10 per 1M characters (Starter plan pay-as-you-go rate)"
+        },
+        "mode": "audio_speech",
+        "source": "https://speechify.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "speechify/simba-3.0": {
+        "input_cost_per_character": 1e-05,
+        "litellm_provider": "speechify",
+        "metadata": {
+            "calculation": "$10 per 1M characters (Starter plan pay-as-you-go rate)"
+        },
+        "mode": "audio_speech",
+        "source": "https://speechify.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {
         "litellm_provider": "tensormesh",
         "mode": "chat",
