@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "phase_router": {
+    "base_url": "https://router.phase.xyz/v1",
+    "api_key_env": "PHASE_API_KEY",
+    "api_base_env": "PHASE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   }
 }
