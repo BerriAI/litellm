@@ -896,6 +896,7 @@ class DBSpendUpdateWriter:
                         else await customer_accounting_counters(
                             customer_hierarchy, customer_budget_scopes_from_request(request_fields)
                         ),
+                        user_id=user_id,
                     )
                     if billable_cost
                     else (),

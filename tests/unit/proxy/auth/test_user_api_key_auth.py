@@ -542,6 +542,46 @@ async def test_aaauser_personal_budgets(key_ownership):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("spend,expect_refusal", [(5.0, True), (0.5, False)], ids=["over_budget", "under_budget"])
+async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, spend, expect_refusal):
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    route: Final = "/queue/chat/completions"
+    key: Final = "sk-queued-chat-budget"
+    user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            last_refreshed_at=time.time(),
+            allowed_routes=[route],
+            max_budget=1.0,
+            spend=spend,
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
+
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
+    request._url = URL(url=route)
+
+    if not expect_refusal:
+        served: Final = await user_api_key_auth(request=request, api_key="Bearer " + key)
+        assert served.token == hash_token(key)
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + key)
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("prohibited_param", ["api_base", "base_url"])
 async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
     """

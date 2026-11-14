@@ -7,7 +7,7 @@ maps its MIME type to a Model Armor ``byteDataType``, and returns the decoded by
 guardrail hooks can submit them.
 
 ``plan_file_scans`` classifies each block: blocks with no inline bytes (``file_id`` or remote
-``gs://`` / ``http(s)`` references) and supported documents whose base64 will not decode are
+``gs://`` / ``s3://`` / ``http(s)`` references) and supported documents whose base64 will not decode are
 reported as unscannable so the guardrail hook can fail closed (blocking unless ``fail_on_error``
 is false) rather than letting an unscanned document reach the model.
 """
@@ -27,7 +27,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 MODEL_ARMOR_MAX_FILE_SIZE_BYTES: Final = 4 * 1024 * 1024
 
-_REMOTE_URI_SCHEMES: Final = ("gs://", "http://", "https://")
+_REMOTE_URI_SCHEMES: Final = ("gs://", "s3://", "http://", "https://")
 
 ModelArmorByteDataType = Literal["PDF", "WORD_DOCUMENT", "EXCEL_DOCUMENT", "POWERPOINT_DOCUMENT", "CSV", "TXT"]
 

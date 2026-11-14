@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, usage_reported_cost
 from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
 from litellm.llms.perplexity.decisions.transformation import PerplexityDecisionsConfig
 from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
@@ -40,7 +40,4 @@ class OpenRouterDecisionsConfig(BaseDecisionsConfig):
         return _ORG_IMAGE_RULES.get(_upstream_org(model), self)
 
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
-        cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
-        if not isinstance(cost, (int, float)):
-            return None
-        return float(cost)
+        return usage_reported_cost(response)
