@@ -1,5 +1,4 @@
 from collections.abc import Callable, Mapping, Sequence
-from copy import copy
 from dataclasses import dataclass
 from functools import reduce
 from typing import Annotated, Final, TypeAlias, TypeVar
@@ -10,7 +9,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -56,6 +55,15 @@ class _ToolEntry(TypedDict, total=False):
 
 _TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
 _WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=ConfigDict(strict=True))
+
+
+def declared_function_name(tool: object) -> str | None:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return None
+    function: Final = as_str_mapping(fields.get("function"))
+    name: Final = (fields if function is None else function).get("name")
+    return name if isinstance(name, str) and name else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,16 +208,26 @@ def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedPa
     return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
 
 
-def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
+_HOSTED_MCP_GATEWAY_REMEDY: Final = (
+    "To have LiteLLM run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
+    '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools")
+)
+HOSTED_MCP_BATCH_ROW_REMEDY: Final = (
+    "A batch row cannot reach the LiteLLM MCP gateway, so remove the tool from the row, or set `drop_params: true` "
+    "on the row, or on its deployment when the upload names a model, to drop it."
+)
+
+
+def tools_without_hosted_mcp(
+    tools: Sequence[_ToolT], model: str, route: str, drop_params: bool, remedy: str = _HOSTED_MCP_GATEWAY_REMEDY
+) -> Sequence[_ToolT]:
     server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
     if not server_labels:
         return tools
     named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
     if not drops_unsupported_params(drop_params):
         raise _unrunnable_mcp_error(
-            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
-            "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
-            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools"),
+            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). {remedy}',
             model=model,
             route=route,
         )
@@ -285,8 +303,72 @@ _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_too
 _ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
 
 
+def _forced_function_name(tool_choice: object) -> str | None:
+    match tool_choice:
+        case {"type": "function", "function": {"name": str() as name}}:
+            return name
+        case _:
+            return None
+
+
+def _labeled_mcp_server(tool: object) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_label": str() as server_label}:
+            return server_label
+        case _:
+            return None
+
+
+def _forces_a_dropped_mcp_tool(
+    tool_choice: object, sent_tools: Sequence[object], kept_tools: Sequence[object], functions: object
+) -> bool:
+    if _hosted_mcp_server_label(tool_choice) is not None:
+        return True
+    dropped_servers: Final = frozenset(label for label in map(_labeled_mcp_server, sent_tools) if label is not None)
+    forced: Final = _forced_function_name(tool_choice)
+    if forced not in dropped_servers:
+        return False
+    legacy_functions: Final = _TOOLS.validate_python(functions) if isinstance(functions, list) else []
+    return forced not in map(declared_function_name, (*kept_tools, *legacy_functions))
+
+
+def _cleared_tool_selection_params(kept_tools: Sequence[object], functions: object) -> frozenset[str]:
+    if kept_tools:
+        return frozenset()
+    return frozenset({"tools"}) if functions else _TOOL_SELECTION_PARAMS
+
+
+def _allowed_tool_entries(tool_choice: Mapping[str, object]) -> Sequence[object]:
+    if tool_choice.get("type") != "allowed_tools":
+        return ()
+    entries: Final = (as_str_mapping(tool_choice.get("allowed_tools")) or tool_choice).get("tools")
+    return _TOOLS.validate_python(entries) if isinstance(entries, list) else ()
+
+
+def _allowed_tools_choice(tool_choice: Mapping[str, object], entries: Sequence[object]) -> Mapping[str, object]:
+    nested: Final = as_str_mapping(tool_choice.get("allowed_tools"))
+    if nested is None:
+        return {**tool_choice, "tools": list(entries)}
+    return {**tool_choice, "allowed_tools": {**nested, "tools": list(entries)}}
+
+
+def _tool_params_narrowed_to_allowed_tools(
+    params: _ParamsT, kept_tools: Sequence[object], tool_choice: Mapping[str, object], allowed: Sequence[object]
+) -> _ParamsT:
+    if not allowed or not kept_tools:
+        return type(params)({key: value for key, value in params.items() if key not in _TOOL_SELECTION_PARAMS})
+    return type(params)(
+        {**params, "tools": list(kept_tools), "tool_choice": _allowed_tools_choice(tool_choice, allowed)}
+    )
+
+
 def tool_params_without_hosted_mcp(
-    params: _ParamsT, model: str, route: str, drop_params: bool, runs_hosted_mcp: Callable[[], bool] | None = None
+    params: _ParamsT,
+    model: str,
+    route: str,
+    drop_params: bool,
+    runs_hosted_mcp: Callable[[], bool] | None = None,
+    remedy: str = _HOSTED_MCP_GATEWAY_REMEDY,
 ) -> _ParamsT:
     tools: Final = params.get("tools")
     if not isinstance(tools, list) or not tools:
@@ -296,14 +378,23 @@ def tool_params_without_hosted_mcp(
         runs_hosted_mcp is not None and runs_hosted_mcp()
     ):
         return params
-    kept_tools: Final = tools_without_hosted_mcp(tools=sent_tools, model=model, route=route, drop_params=drop_params)
+    kept_tools: Final = tools_without_hosted_mcp(
+        tools=sent_tools, model=model, route=route, drop_params=drop_params, remedy=remedy
+    )
     if len(kept_tools) == len(sent_tools):
         return params
-    kept_params: Final = copy(params)
-    if kept_tools:
-        kept_params["tools"] = list(kept_tools)
-        return kept_params
-    dropped_keys: Final = ("tools",) if params.get("functions") else _TOOL_SELECTION_PARAMS
-    for key in dropped_keys:
-        _ = kept_params.pop(key, None)
-    return kept_params
+    tool_choice: Final = as_str_mapping(params.get("tool_choice")) or {}
+    allowed_entries: Final = _allowed_tool_entries(tool_choice)
+    still_allowed: Final = tuple(entry for entry in allowed_entries if _hosted_mcp_server_label(entry) is None)
+    if len(still_allowed) < len(allowed_entries):
+        return _tool_params_narrowed_to_allowed_tools(params, kept_tools, tool_choice, still_allowed)
+    functions: Final = params.get("functions")
+    cleared: Final = _cleared_tool_selection_params(kept_tools, functions)
+    removed: Final = (
+        cleared | {"tool_choice"}
+        if _forces_a_dropped_mcp_tool(params.get("tool_choice"), sent_tools, kept_tools, functions)
+        else cleared
+    )
+    return type(params)(
+        {key: (list(kept_tools) if key == "tools" else value) for key, value in params.items() if key not in removed}
+    )

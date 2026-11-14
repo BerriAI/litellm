@@ -2502,6 +2502,21 @@ def test_databricks_claude_sends_no_tools_when_drop_params_drops_every_hosted_mc
     assert "tool_choice" not in mapped
 
 
+def test_databricks_claude_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(mapped)
+
+
 def test_databricks_claude_still_sends_max_completion_tokens_as_max_tokens_when_dropping_a_hosted_mcp_tool(
     monkeypatch,
 ):
