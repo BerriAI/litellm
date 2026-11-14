@@ -1245,3 +1245,26 @@ def test_defs_unpacked_resolves_refs_into_both_defs_and_definitions() -> None:
         "type": "object",
         "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
     }
+
+
+def test_defs_unpacked_resolves_a_name_both_blocks_define_to_its_defs_schema() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/T"}},
+        "$defs": {"T": {"type": "string"}},
+        "definitions": {"T": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"a": {"type": "string"}}}
+
+
+def test_defs_unpacked_keeps_the_keys_next_to_a_ref() -> None:
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "description": "A city"}
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City", "description": "The capital city"}},
+        "$defs": {"City": city},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"capital": {**city, "description": "The capital city"}},
+    }
