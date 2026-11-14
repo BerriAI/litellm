@@ -564,7 +564,7 @@ def without_destination_langfuse_attributes(span: ReadableSpan, langfuse_mapped:
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     dropped: Final = (
         LANGFUSE_REQUEST_METADATA_ATTRIBUTES
-        if langfuse_mapped or not is_llm_call_span(span)
+        if langfuse_mapped or not (is_llm_call_span(span) or MCP.METHOD_NAME in attributes)
         else LangfuseMapper.LLM_CALL_ATTRIBUTES
     )
     if not (_is_litellm_span(span) and any(key in dropped for key in attributes)):

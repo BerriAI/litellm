@@ -30,11 +30,14 @@ from litellm.integrations.otel import (
     resolve_provider,
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
+from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.payloads import (
     EmbeddingOutput,
     LLMCallSpanData,
+    MCPListToolsSpanData,
+    MCPToolCallSpanData,
     RequestIdentity,
     _upstream_address_port,
 )
@@ -1377,6 +1380,16 @@ def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(reques
             TraceControls(user_id="u-header", session_id="s-header"),
         ),
         (
+            {
+                "metadata": {
+                    "headers": {"langfuse_trace_user_id": "u-mcp-header", "langfuse_session_id": "s-mcp-header"},
+                    "trace_user_id": "u-body",
+                    "session_id": "s-body",
+                },
+            },
+            TraceControls(user_id="u-mcp-header", session_id="s-mcp-header"),
+        ),
+        (
             {"litellm_metadata": {"trace_user_id": "u-anthropic", "session_id": "s-anthropic", "tags": ["x"]}},
             TraceControls(user_id="u-anthropic", session_id="s-anthropic", tags=("x",)),
         ),
@@ -1402,6 +1415,7 @@ def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(reques
     ids=[
         "body",
         "headers-beat-body",
+        "metadata-headers-beat-body-without-proxy-server-request",
         "anthropic-body",
         "non-string-tags-dropped",
         "scalar-coercion",
@@ -1420,6 +1434,29 @@ def test_llm_span_data_carries_the_caller_trace_controls():
 
     assert data.trace == controls
     assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace == TraceControls()
+
+
+def test_mcp_span_data_carries_and_maps_caller_trace_controls() -> None:
+    controls: Final = TraceControls(name="mcp-eval", user_id="u-mcp", session_id="sess-123", tags=("mcp",))
+    tool_data: Final = MCPToolCallSpanData.from_standard_logging_payload(
+        _sample_payload(call_type="call_mcp_tool"),
+        trace=controls,
+    )
+    list_data: Final = MCPListToolsSpanData.from_standard_logging_payload(
+        _sample_payload(call_type="list_mcp_tools"),
+        trace=controls,
+    )
+
+    for data in (tool_data, list_data):
+        assert data.trace == controls
+        assert LangfuseMapper().map(data) == {
+            "langfuse.trace.name": "mcp-eval",
+            "user.id": "u-mcp",
+            "session.id": "sess-123",
+            "langfuse.trace.tags": ("mcp",),
+        }
+    assert LangfuseMapper().map(MCPToolCallSpanData.from_standard_logging_payload(_sample_payload())) == {}
+    assert LangfuseMapper().map(MCPListToolsSpanData.from_standard_logging_payload(_sample_payload())) == {}
 
 
 @pytest.mark.parametrize(

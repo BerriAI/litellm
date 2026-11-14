@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -15,7 +16,7 @@ from litellm.integrations.otel.model.metadata import internal_call_origin
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str
-from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.integrations.otel.plumbing.context import mcp_message_transport_span, request_root_span
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -51,6 +52,33 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
                 )
             )
         super().log_pre_api_call(model, messages, kwargs)
+
+    def _emit_mcp_tool_call(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        if not super()._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return False
+        self._stamp_mcp_transport_trace_controls(kwargs)
+        return True
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        if not super()._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return False
+        self._stamp_mcp_transport_trace_controls(kwargs)
+        return True
+
+    def _stamp_mcp_transport_trace_controls(self, kwargs: Mapping[str, object]) -> None:
+        transport: Final = mcp_message_transport_span() or request_root_span()
+        if transport is not None and transport.is_recording():
+            transport.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
 
     def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
         return (

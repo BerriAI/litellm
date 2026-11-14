@@ -713,3 +713,111 @@ def test_failed_generation_without_a_first_chunk_has_no_completion_start_time() 
     attrs: Final = _generation_attrs(_llm_call_kwargs({"stream": True}, None), fail=True)
 
     assert COMPLETION_START_ATTR not in attrs
+
+
+def _mcp_tool_payload() -> dict[str, object]:
+    return {
+        "call_type": "call_mcp_tool",
+        "status": "success",
+        "litellm_call_id": "mcp_1",
+        "metadata": {
+            "mcp_tool_call_metadata": {
+                "name": "echo",
+                "mcp_server_name": "everything",
+                "mcp_session_id": "mcp-proto-sess",
+            },
+        },
+        "hidden_params": {},
+    }
+
+
+def _mcp_list_payload() -> dict[str, object]:
+    return {
+        "call_type": "list_mcp_tools",
+        "status": "success",
+        "litellm_call_id": "mcp_list_1",
+        "metadata": {"spend_logs_metadata": {"mcp_operation": "list_tools"}},
+        "hidden_params": {},
+    }
+
+
+def _run_mcp_request(
+    payload: Mapping[str, object],
+    metadata: Mapping[str, object],
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    logger, exporter = _logger()
+    transport: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    token: Final = otel_context.set_mcp_message_transport_span(transport)
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": payload, "litellm_params": {"metadata": metadata}},
+                None,
+                None,
+                None,
+            )
+        )
+    finally:
+        otel_context.reset_mcp_message_transport_span(token)
+        transport.end()
+    mcp_span: Final = next(
+        span for span in exporter.get_finished_spans() if span.name != LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    return _root_attrs(exporter), dict(mcp_span.attributes or {})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(_mcp_tool_payload(), id="tools-call"),
+        pytest.param(_mcp_list_payload(), id="tools-list"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("metadata", "expected_session_id"),
+    [
+        pytest.param(
+            {"session_id": "sess-123", "trace_id": "sess-123", "headers": {"x-litellm-session-id": "sess-123"}},
+            "sess-123",
+            id="x-litellm-session-id",
+        ),
+        pytest.param(
+            {"headers": {"langfuse_session_id": "sess-langfuse"}},
+            "sess-langfuse",
+            id="langfuse_session_id",
+        ),
+        pytest.param(
+            {
+                "session_id": "from-litellm-header",
+                "headers": {"langfuse_session_id": "from-langfuse-header"},
+            },
+            "from-langfuse-header",
+            id="langfuse-header-beats-session_id",
+        ),
+    ],
+)
+def test_mcp_spans_and_transport_carry_the_request_session_id(
+    payload: Mapping[str, object],
+    metadata: Mapping[str, object],
+    expected_session_id: str,
+) -> None:
+    transport_attrs, mcp_attrs = _run_mcp_request(payload, metadata)
+
+    assert transport_attrs["session.id"] == expected_session_id
+    assert mcp_attrs["session.id"] == expected_session_id
+    if payload.get("call_type") == "call_mcp_tool":
+        assert mcp_attrs["mcp.session.id"] == "mcp-proto-sess"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(_mcp_tool_payload(), id="tools-call"),
+        pytest.param(_mcp_list_payload(), id="tools-list"),
+    ],
+)
+def test_mcp_spans_without_session_id_omit_session_id(payload: Mapping[str, object]) -> None:
+    transport_attrs, mcp_attrs = _run_mcp_request(payload, {"headers": {}})
+
+    assert "session.id" not in transport_attrs
+    assert "session.id" not in mcp_attrs

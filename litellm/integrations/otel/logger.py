@@ -51,6 +51,7 @@ from litellm.integrations.otel.model.payloads import (
 )
 from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
@@ -456,7 +457,9 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPToolCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self._capture_span_content()
+            payload,
+            capture_content=self._capture_span_content(),
+            trace=caller_trace_controls(kwargs),
         )
         # A stray LLM carrier from a ``pre_call`` that mis-fired for this id would
         # otherwise linger until evicted; drop it so it's neither leaked nor closed
@@ -500,7 +503,9 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPListToolsSpanData.from_standard_logging_payload(
-            payload, capture_content=self._capture_span_content()
+            payload,
+            capture_content=self._capture_span_content(),
+            trace=caller_trace_controls(kwargs),
         )
         if data.identity.call_id:
             self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
