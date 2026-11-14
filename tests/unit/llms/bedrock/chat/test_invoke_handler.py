@@ -2324,6 +2324,11 @@ def _kimi_invoke_stream_with_usage_chunk_events(
     return (*message, {**_openai_stream_chunk({}), "choices": [], "usage": usage, metrics_field: fields[metrics_field]})
 
 
+def _kimi_output_block_stream_events(reply_id: str) -> tuple[Mapping[str, object], ...]:
+    events: Final = _kimi_invoke_stream_with_usage_chunk_events({**_INTERVENED, **_MODEL_RAN_METRICS})
+    return (*({**event, "id": reply_id} for event in events[:-1]), events[-1])
+
+
 _GUARDRAIL_STREAM_FAMILIES: Final = [
     pytest.param(
         "bedrock/invoke/us.meta.llama4-maverick-17b-instruct-v1:0", _llama_invoke_stream_events, False, id="llama"
@@ -2386,6 +2391,32 @@ def test_invoke_stream_reports_a_guardrail_block_as_content_filter(
     _assert_family_guardrailed_stream(
         list(stream), expected_finish_reason, _expected_family_usage(reports_usage_after_finish, trailing_fields)
     )
+
+
+@pytest.mark.parametrize(
+    ("reply_id", "expected_finish_reason"),
+    [
+        pytest.param("bedrock-guardrails-924", "content_filter", id="guardrail_wrote_the_reply"),
+        pytest.param("chatcmpl-2a8345ed", "stop", id="model_wrote_the_reply"),
+    ],
+)
+def test_invoke_stream_reports_an_output_block_after_the_model_ran_as_content_filter(
+    reply_id: str, expected_finish_reason: str
+) -> None:
+    raw: Final = _invoke_event_stream(_kimi_output_block_stream_events(reply_id))
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=raw, headers=_EVENT_STREAM_HEADERS)
+            )
+        )
+    )
+
+    stream: Final = litellm.completion(
+        **{**_GUARDRAIL_STREAM_REQUEST, "model": "bedrock/invoke/moonshotai.kimi-k2.5"}, client=client
+    )
+
+    _assert_family_guardrailed_stream(list(stream), expected_finish_reason, None)
 
 
 @pytest.mark.asyncio
