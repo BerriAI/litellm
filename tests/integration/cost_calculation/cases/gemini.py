@@ -2677,7 +2677,7 @@ GEMINI_EMBEDDINGS_002: Final = CostTrackingTestCase(
             "usageMetadata": {"promptTokenCount": 7, "totalTokenCount": 7},
         },
     ),
-    expected=ExactExpected(spend=3.24e-06, input_cost=3.24e-06, output_cost=0.0, prompt_tokens=3, completion_tokens=0),
+    expected=ExactExpected(spend=7.56e-06, input_cost=7.56e-06, output_cost=0.0, prompt_tokens=7, completion_tokens=0),
 )
 
 
