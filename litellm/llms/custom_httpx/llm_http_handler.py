@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     holds_a_call_the_choice_excludes,
     run_chat_completion_agentic_hooks,
+    runs_its_own_chat_completion_loop,
     with_caller_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
@@ -162,13 +163,13 @@ from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig, TwoStepFileUploadRequest
 from litellm.types.integrations.custom_logger import (
-    CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopLimitError,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
     AgenticLoopToolChoiceError,
+    bridged_from_chat_completion,
     converted_stream_requested,
     is_interception_internal_key,
 )
@@ -3446,8 +3447,7 @@ class BaseLLMHTTPHandler:
         )
 
         agentic_kwargs: Final = dict(litellm_params)
-        if agentic_kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
-            return initial_response
+        chat_completion_loop_follows: Final = bridged_from_chat_completion(agentic_kwargs)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -3459,10 +3459,15 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
             kwargs=agentic_kwargs,
             api_surface="responses",
+            skip_chat_completion_loops=chat_completion_loop_follows,
         )
 
         result: Final = final_response if final_response is not None else initial_response
-        if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
+        if (
+            not chat_completion_loop_follows
+            and converted_stream_requested(agentic_kwargs)
+            and not agentic_kwargs.get("_agentic_loop_depth")
+        ):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -6407,6 +6412,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         kwargs: dict,
         api_surface: str = "anthropic_messages",
+        skip_chat_completion_loops: bool = False,
     ) -> Any | None:
         """
         Call agentic completion hooks for all custom loggers (Anthropic Messages API).
@@ -6432,7 +6438,9 @@ class BaseLLMHTTPHandler:
         }
 
         for callback in callbacks:
-            if not isinstance(callback, CustomLogger):
+            if not isinstance(callback, CustomLogger) or (
+                skip_chat_completion_loops and runs_its_own_chat_completion_loop(callback)
+            ):
                 continue
 
             should_run: bool = False

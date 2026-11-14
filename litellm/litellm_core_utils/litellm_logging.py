@@ -3081,11 +3081,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
         back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
         parked: Final = self.deferred_success_result
-        if parked is None or self.enqueue_deferred_logging is None:
+        if parked is None or not self.unpark_success_log():
             return False
-        self.deferred_success_result = None
-        self.enqueue_deferred_logging = None
-        self._async_success_scheduled = False
         served: Final = self.served_round(parked[0])
         if served is None:
             return True
@@ -3094,6 +3091,14 @@ class Logging(LiteLLMLoggingBaseClass):
             served,
         )
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
+
+    def unpark_success_log(self) -> bool:
+        if self.deferred_success_result is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
         return True
 
     def mark_stash_billed_by_continuation(self) -> None:

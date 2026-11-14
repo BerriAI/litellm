@@ -15,6 +15,7 @@ import asyncio
 import json
 import time
 from contextlib import suppress
+from datetime import datetime, timezone
 from typing import Final, TypedDict
 from unittest.mock import MagicMock, patch
 
@@ -41,8 +42,10 @@ from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.proxy.spend_tracking.cost_finalization import prepare_response_cost
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import CallTypes
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -1380,13 +1383,19 @@ class _ModelSpendRowRecorder(CustomLogger):
         self._record(kwargs)
 
 
+def _every_round_input_tokens(loops_allowed: int) -> int:
+    return sum(_round_input_tokens(searches_done) for searches_done in range(loops_allowed + 1))
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("loops_allowed", [1, 2])
 async def test_responses_pinned_openai_chat_completion_bills_every_search_round_it_served(
+    loops_allowed: int,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
 ):
-    recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=loops_allowed + 1)
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
     )
@@ -1401,17 +1410,20 @@ async def test_responses_pinned_openai_chat_completion_bills_every_search_round_
         tools=[{"type": "web_search"}],
         api_key="sk-test",
         api_base=OPENAI_COMPATIBLE_API_BASE,
-        max_agentic_loops=1,
+        max_agentic_loops=loops_allowed,
     )
     with suppress(asyncio.TimeoutError):
         await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
 
-    assert responses_route.call_count == 2
-    assert sorted(recorder.prompt_tokens) == [_round_input_tokens(0), _round_input_tokens(1)]
+    assert responses_route.call_count == loops_allowed + 1
+    assert sum(recorder.prompt_tokens) == _every_round_input_tokens(loops_allowed)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("loops_allowed", [1, 2])
 async def test_streamed_responses_pinned_openai_chat_completion_bills_every_search_round_once(
+    loops_allowed: int,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
@@ -1431,7 +1443,7 @@ async def test_streamed_responses_pinned_openai_chat_completion_bills_every_sear
         tools=[{"type": "web_search"}],
         api_key="sk-test",
         api_base=OPENAI_COMPATIBLE_API_BASE,
-        max_agentic_loops=1,
+        max_agentic_loops=loops_allowed,
         stream=True,
     )
     assert isinstance(stream, litellm.CustomStreamWrapper)
@@ -1439,7 +1451,7 @@ async def test_streamed_responses_pinned_openai_chat_completion_bills_every_sear
     await asyncio.wait_for(recorder.streamed_reply_logged.wait(), timeout=5)
     await GLOBAL_LOGGING_WORKER.flush()
 
-    assert sorted(recorder.prompt_tokens) == [_round_input_tokens(0), _round_input_tokens(1)]
+    assert sum(recorder.prompt_tokens) == _every_round_input_tokens(loops_allowed)
 
 
 def _responses_reply_failing_after(searches_that_succeed: int):
@@ -1487,3 +1499,160 @@ async def test_responses_pinned_openai_chat_completion_bills_each_served_round_o
     await GLOBAL_LOGGING_WORKER.flush()
 
     assert sum(recorder.prompt_tokens) == sum(_round_input_tokens(served) for served in range(rounds_served))
+
+
+class _ProxyParksTheRequestSuccessLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_logging_obj: Logging | None = None
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        if self.request_logging_obj is not None or not isinstance(logging_obj, Logging):
+            return None
+        logging_obj.defer_async_logging = True
+        self.request_logging_obj = logging_obj
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rounds_served", [1, 2])
+async def test_responses_pinned_openai_chat_completion_bills_its_parked_first_round_when_a_follow_up_fails(
+    rounds_served: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    parker: Final = _ProxyParksTheRequestSuccessLog()
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=1)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), parker, recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_failing_after(rounds_served)
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.acompletion(
+            model="openai/responses/gpt-5.6",
+            messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+            tools=[{"type": "web_search"}],
+            api_key="sk-test",
+            api_base=OPENAI_COMPATIBLE_API_BASE,
+            max_agentic_loops=SEARCHES_THE_MODEL_ASKS_FOR,
+        )
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert parker.request_logging_obj is not None
+    assert sum(recorder.prompt_tokens) == sum(_round_input_tokens(served) for served in range(rounds_served))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loops_allowed", [1, 2])
+async def test_responses_pinned_openai_chat_completion_parks_one_row_billing_every_round_until_the_proxy_releases_it(
+    loops_allowed: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    parker: Final = _ProxyParksTheRequestSuccessLog()
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=loops_allowed + 1)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), parker, recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=loops_allowed,
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+    rows_before_the_proxy_releases_the_log: Final = tuple(recorder.prompt_tokens)
+    request_logging_obj: Final = parker.request_logging_obj
+    assert request_logging_obj is not None
+    prepared: Final = prepare_response_cost(request_logging_obj, response, datetime.now(timezone.utc))
+    release: Final = request_logging_obj.enqueue_deferred_logging
+    assert release is not None
+    release()
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=1)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert rows_before_the_proxy_releases_the_log == ()
+    assert prepared is not None
+    assert prepared.usage.prompt_tokens == _every_round_input_tokens(loops_allowed)
+    assert recorder.prompt_tokens == [_every_round_input_tokens(loops_allowed)]
+
+
+class _AnswersOnTheResponsesApi(CustomLogger):
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ):
+        return kwargs.get("_agentic_loop_api_surface") == "responses", {}
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools,
+        model,
+        messages,
+        response,
+        anthropic_messages_provider_config,
+        anthropic_messages_optional_request_params,
+        logging_obj,
+        stream,
+        kwargs,
+    ):
+        return AgenticLoopPlan(
+            response_override=response.model_copy(
+                update={
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_handled",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "Handled on the Responses API.", "annotations": []}
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_responses_pinned_openai_chat_completion_still_runs_agentic_hooks_that_only_handle_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), _AnswersOnTheResponsesApi()]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+    )
+
+    assert response.choices[0].message.content == "Handled on the Responses API."

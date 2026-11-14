@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_f
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+from litellm.responses.mcp.round_billing import billed_for_every_round
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -62,17 +63,18 @@ _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
 )
 
 
-def _first_round_logged_before_the_loop(logging_obj: object) -> bool:
+def _first_round_bills_itself(logging_obj: object) -> bool:
     return (
         isinstance(logging_obj, LiteLLMLoggingObject)
         and logging_obj.bridged_chat_request is not None
         and logging_obj.stream is not True
         and not is_internal_call.get()
+        and logging_obj.async_success_log_enqueued
     )
 
 
 def _follow_ups_bill_themselves(logging_obj: object, request_kwargs: Mapping[str, object]) -> bool:
-    return _first_round_logged_before_the_loop(logging_obj) and not converted_stream_requested(request_kwargs)
+    return _first_round_bills_itself(logging_obj) and not converted_stream_requested(request_kwargs)
 
 
 async def bill_first_round_on_failure(
@@ -84,9 +86,7 @@ async def bill_first_round_on_failure(
         if stream or not isinstance(logging_obj, LiteLLMLoggingObject):
             mark_agentic_followup_failure(error, rounds_served_before(error))
             raise
-        this_round: Final = (
-            None if _first_round_logged_before_the_loop(logging_obj) else logging_obj.served_round(response)
-        )
+        this_round: Final = None if _first_round_bills_itself(logging_obj) else logging_obj.served_round(response)
         served_rounds: Final = (*rounds_served_before(error), *(() if this_round is None else (this_round,)))
         mark_agentic_followup_failure(error, served_rounds)
         logging_obj.record_served_rounds_for_failure(served_rounds)
@@ -105,6 +105,14 @@ def _chat_build_plan_overridden(callback: CustomLogger) -> bool:
     return (
         type(callback).async_build_chat_completion_agentic_loop_plan
         is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+    )
+
+
+def runs_its_own_chat_completion_loop(callback: CustomLogger) -> bool:
+    lineage: Final = type(callback).__mro__
+    return any(
+        "async_should_run_chat_completion_agentic_loop" in vars(ancestor)
+        for ancestor in lineage[: lineage.index(CustomLogger)]
     )
 
 
@@ -367,6 +375,19 @@ def _followup_billing_scope(logging_obj: object, request_kwargs: Mapping[str, ob
     return internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None)
 
 
+def _billed_with_the_round_it_follows(round_served: object, follow_up: object, logging_obj: object) -> object:
+    if not (
+        isinstance(round_served, ModelResponse)
+        and isinstance(follow_up, ModelResponse)
+        and isinstance(logging_obj, LiteLLMLoggingObject)
+        and logging_obj.bridged_chat_request is not None
+    ):
+        return follow_up
+    if is_internal_call.get() or logging_obj.unpark_success_log():
+        return billed_for_every_round(round_served, None, follow_up, None)
+    return follow_up
+
+
 def _leave_pricing_to_the_request(response: object) -> None:
     hidden_params: Final = get_hidden_params(response)
     if hidden_params is not None and not served_from_cache(response):
@@ -375,6 +396,7 @@ def _leave_pricing_to_the_request(response: object) -> None:
 
 async def _execute_chat_completion_agentic_plan(
     *,
+    response: ModelResponse,
     plan: AgenticLoopPlan,
     callback: CustomLogger,
     model: str,
@@ -438,15 +460,16 @@ async def _execute_chat_completion_agentic_plan(
                     str(e),
                 )
         _leave_pricing_to_the_request(response_followup)
+        billed: Final = _billed_with_the_round_it_follows(response, response_followup, logging_obj)
         replay: Final = _converted_stream_replay(
-            response_followup,
+            billed,
             kwargs=kwargs,
             depth=depth,
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
         )
-        return response_followup if replay is None else replay
+        return billed if replay is None else replay
     finally:
         try:
             await callback.async_agentic_loop_cleanup_hook(plan=plan, kwargs=kwargs)
@@ -569,6 +592,7 @@ async def maybe_run_chat_completion_agentic_loop(
             continue
 
         return await _execute_chat_completion_agentic_plan(
+            response=response,
             plan=plan,
             callback=callback,
             model=model,
@@ -686,6 +710,7 @@ async def run_chat_completion_agentic_hooks(
             continue
 
         return await _execute_chat_completion_agentic_plan(
+            response=response,
             plan=plan,
             callback=callback,
             model=model,
