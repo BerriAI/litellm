@@ -51,6 +51,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
+    refuse_s3_media_the_key_may_not_read,
     resolve_counted_tool_fields,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
@@ -71,6 +72,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.responses.streaming_iterator import ResponsesWsFrameCheck
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -1904,6 +1906,24 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
+def _s3_media_frame_check(
+    admitted_model: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    managed_files: object,
+) -> ResponsesWsFrameCheck:
+    async def refusal(params: Mapping[str, object], /) -> str | None:
+        try:
+            await refuse_s3_media_the_key_may_not_read(
+                {**params, "model": admitted_model}, user_api_key_dict, general_settings, managed_files
+            )
+        except HTTPException as refused:
+            return str(refused.detail)
+        return None
+
+    return refusal
+
+
 async def _responses_websocket_session(
     websocket: WebSocket,
     model: str | None,
@@ -2000,7 +2020,15 @@ async def _responses_websocket_session(
         return
 
     routed_data: Final = dict(
-        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+        data,
+        user_api_key_dict=user_api_key_dict,
+        responses_ws_frame_check=_s3_media_frame_check(
+            data.get("model"),
+            user_api_key_dict,
+            general_settings,
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+        ),
+        **_routing_hints_from_first_ws_frame(first_message),
     )
     # Phase 2: route to upstream provider
     try:
