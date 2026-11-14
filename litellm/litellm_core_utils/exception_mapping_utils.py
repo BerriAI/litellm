@@ -280,6 +280,54 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+def _body_request_id(raw_body: object) -> str | None:
+    try:
+        body: Final = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+    except ValidationError:
+        return None
+
+    body_request_id: Final = body.get("request_id")
+    if isinstance(body_request_id, str) and body_request_id:
+        return body_request_id
+
+    nested_error: Final = as_str_mapping(body.get("error"))
+    if nested_error is None:
+        return None
+    nested_request_id: Final = nested_error.get("request_id")
+    return nested_request_id if isinstance(nested_request_id, str) and nested_request_id else None
+
+
+def _get_error_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    body_request_id: Final = _body_request_id(attribute_or_none(error_obj, "body"))
+    if body_request_id is not None:
+        return body_request_id
+
+    exception_request_id: Final = attribute_or_none(error_obj, "request_id")
+    if isinstance(exception_request_id, str) and exception_request_id:
+        return exception_request_id
+
+    response: Final = attribute_or_none(error_obj, "response")
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        response_body: Final = _ERROR_BODY_ADAPTER.validate_json(response.content)
+    except (ValidationError, httpx.ResponseNotRead):
+        return None
+    return _body_request_id(response_body)
+
+
+def _get_error_message_with_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    extracted_message: Final = get_error_message(error_obj=error_obj)
+    if extracted_message is None:
+        return None
+
+    request_id: Final = _get_error_request_id(error_obj)
+    if request_id is not None and request_id not in extracted_message:
+        return f"{extracted_message} (request_id: {request_id})"
+
+    return extracted_message
+
+
 def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
     raw_body: Final[object] = getattr(original_exception, "body", None)
     try:
@@ -342,7 +390,7 @@ def _map_openai_exception(
             body=dict(cyber_policy_body),
         )
     # custom_llm_provider is openai, make it OpenAI
-    message = get_error_message(error_obj=original_exception)
+    message = _get_error_message_with_request_id(error_obj=original_exception)
     if message is None:
         if hasattr(original_exception, "message"):
             message = original_exception.message
