@@ -44,6 +44,7 @@ def convert_model_response_to_streaming(
                         **cast(Choices, choice).message.model_dump(),
                     ),
                     finish_reason=choice.finish_reason,
+                    logprobs=getattr(choice, "logprobs", None),
                 )
             )
         processed_chunk: Final = ModelResponseStream(

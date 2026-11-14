@@ -48,7 +48,14 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    ChoiceLogprobs,
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    Usage,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -5492,6 +5499,40 @@ async def test_a_caller_fake_stream_sends_one_plain_request_and_replays_the_answ
     assert sent.get("stream") is not True and "stream_options" not in sent and "fake_stream" not in sent, sent
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "ok"
     assert chunks[-1].usage is not None and chunks[-1].usage.total_tokens == 2, chunks[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_replayed_fake_stream_keeps_the_token_logprobs_of_the_plain_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logprobs: Final = {"content": [{"token": "ok", "logprob": -0.25, "bytes": [111, 107], "top_logprobs": []}]}
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "logprobs": logprobs,
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    chunks: Final = await _fake_streamed_chunks("openai/gpt-5.6", asynchronous)
+
+    replayed: Final = [chunk.choices[0].logprobs for chunk in chunks if chunk.choices and chunk.choices[0].logprobs]
+    assert [ChoiceLogprobs.model_validate(item).model_dump(exclude_none=True) for item in replayed] == [logprobs], chunks
 
 
 @pytest.mark.asyncio
