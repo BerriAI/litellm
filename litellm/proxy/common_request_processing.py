@@ -1532,9 +1532,41 @@ def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     return (
         anthropic_error_sse_frame(
             status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
-            raw_message=answered.message,
+            raw_message=redact_internal_details_from_client_message(answered.message),
         ),
     )
+
+
+def _late_error_message(body: bytes, status_code: int) -> str:
+    """The message inside an upstream error body, or a readable stand-in."""
+    fallback: Final = f"upstream returned HTTP {status_code}"
+    detail: Final = body.decode("utf-8", "replace").strip()
+    if not detail:
+        return fallback
+    try:
+        parsed: Final = json.loads(detail)
+    except ValueError:
+        return detail
+    if isinstance(parsed, dict):
+        error: Final = parsed.get("error")
+        if isinstance(error, dict):
+            message: Final = error.get("message")
+            if isinstance(message, str) and message:
+                return message
+    return detail
+
+
+def _anthropic_late_body_frames(produced: Response) -> tuple[bytes, ...]:
+    """The frame an Anthropic stream ends with when the upstream answered with an error status.
+
+    The status line is already out, so the failure has to travel as an event. Anthropic
+    clients pick events by name and skip anything else, which is why the upstream body
+    cannot simply be relayed as a bare `data:` line the way OpenAI clients read it.
+    """
+    message: Final = redact_internal_details_from_client_message(
+        _late_error_message(bytes(produced.body or b""), produced.status_code)
+    )
+    return (anthropic_error_sse_frame(status_code=produced.status_code, raw_message=message).encode(),)
 
 
 def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
@@ -1556,7 +1588,7 @@ def _responses_late_body_frames(produced: object) -> tuple[bytes, ...]:
 
 OPENAI_LATE_SSE_FRAMING: Final = LateSseFraming(failure=_openai_late_failure_frames, body=_openai_late_body_frames)
 ANTHROPIC_LATE_SSE_FRAMING: Final = LateSseFraming(
-    failure=_anthropic_late_failure_frames, body=_openai_late_body_frames
+    failure=_anthropic_late_failure_frames, body=_anthropic_late_body_frames
 )
 RESPONSES_LATE_SSE_FRAMING: Final = LateSseFraming(
     failure=_responses_late_failure_frames, body=_responses_late_body_frames
