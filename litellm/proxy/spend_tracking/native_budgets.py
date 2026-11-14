@@ -177,6 +177,8 @@ _NATIVE_CALL_TYPES: Final = frozenset(
         CallTypes.aspeech,
         CallTypes.rerank,
         CallTypes.arerank,
+        CallTypes.generate_content,
+        CallTypes.agenerate_content,
     }
 )
 _NATIVE_ROUTES: Final = frozenset(
