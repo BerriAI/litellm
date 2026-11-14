@@ -209,6 +209,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
 )
 from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
+    API_KEY_UPSTREAM_PARAMS,
     PRICING_OVERRIDES_KEY,
     CallTypes,
     Choices,
@@ -18244,6 +18245,8 @@ async def model_info_v2(
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]
 
+    all_models = _strip_endpoint_urls_for_non_admin(all_models, is_admin=user_api_key_has_admin_view(user_api_key_dict))
+
     if use_stored_params is True and isinstance(modelId, str):
         return _paginate_models_response(
             all_models=await _models_with_stored_param_keys(all_models, modelId, prisma_client),
@@ -18793,6 +18796,76 @@ def _translate_model_name_for_response(model: dict) -> dict[str, object]:
     return {**model, "model_name": team_public}
 
 
+_ADMIN_ONLY_ENDPOINT_URL_FIELDS: Final = frozenset(
+    (
+        *API_KEY_UPSTREAM_PARAMS,
+        # The Azure endpoint URL, consumed as the client base_url
+        # (litellm/llms/azure/common_utils.py). Not in API_KEY_UPSTREAM_PARAMS.
+        "azure_endpoint",
+    )
+)
+
+
+def _params_for_non_admin(params: Mapping[str, object]) -> Mapping[str, object]:
+    """litellm_params with deployment endpoint URLs removed.
+
+    Drops the upstream endpoint fields, and drops `model` when its value is
+    itself a URL: some providers consume a URL-valued model as the endpoint
+    (Hugging Face treats a model starting with http(s):// as its API base),
+    and the codebase's own upstream_origins helper counts a URL in `model`
+    as an upstream origin. Ordinary model identifiers contain no "://", so
+    they pass through untouched.
+    """
+    return {
+        k: v
+        for k, v in params.items()
+        if k not in _ADMIN_ONLY_ENDPOINT_URL_FIELDS and not (k == "model" and isinstance(v, str) and "://" in v)
+    }
+
+
+def _model_info_for_non_admin(info: Mapping[str, object]) -> Mapping[str, object]:
+    """model_info with a URL-valued cost-map key removed.
+
+    The enrichment copies the backend model string into model_info.key, so a
+    URL-backed model leaks its URL there even after litellm_params.model is
+    dropped. Ordinary keys contain no "://", so they pass through untouched.
+    """
+    key: Final = info.get("key")
+    if not (isinstance(key, str) and "://" in key):
+        return info
+    return {k: v for k, v in info.items() if k != "key"}
+
+
+def _row_for_non_admin(model: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = model.get("litellm_params")
+    info: Final = model.get("model_info")
+    return {
+        **model,
+        **({"litellm_params": _params_for_non_admin(params)} if isinstance(params, Mapping) else {}),
+        **({"model_info": _model_info_for_non_admin(info)} if isinstance(info, Mapping) else {}),
+    }
+
+
+def _strip_endpoint_urls_for_non_admin(
+    models: Sequence[Mapping[str, object]], *, is_admin: bool
+) -> tuple[Mapping[str, object], ...]:
+    """Rows with deployment endpoint URLs removed unless the caller is a proxy admin.
+
+    /health shows api_base only to proxy admins (#40765). /model/info stripped
+    api_key but returned litellm_params.api_base in full, including any token
+    embedded in its query string, path, or userinfo (#51810). The stripped set
+    is the codebase's own upstream endpoint params (API_KEY_UPSTREAM_PARAMS in
+    litellm/types/utils.py) plus azure_endpoint: each one redirects the
+    outbound request to the URL it names, so each leaks the same way. A
+    URL-valued model is dropped the same way, along with the model_info.key
+    the enrichment copies it into. Proxy admins keep the full values so the
+    model editor UI keeps working.
+    """
+    if is_admin:
+        return tuple(models)
+    return tuple(_row_for_non_admin(model) for model in models)
+
+
 def _get_proxy_model_info(model: dict, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
     return _translate_model_name_for_response(
         _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
@@ -18883,6 +18956,8 @@ async def model_info_v1(
     if not isinstance(teamId, str):
         teamId = None
 
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
+
     if user_model is not None:
         # user is trying to get specific model from litellm router
         try:
@@ -18901,7 +18976,9 @@ async def model_info_v1(
             deployment_dict=_deployment_info_dict,
             excluded_keys={"litellm_credential_name"},
         )
-        return _model_info_json_response(_deployment_info_dict)
+        return _model_info_json_response(
+            _strip_endpoint_urls_for_non_admin([_deployment_info_dict], is_admin=is_admin)[0]
+        )
 
     if llm_model_list is None:
         raise HTTPException(
@@ -18965,7 +19042,7 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-        return _model_info_json_response(single_model_list)
+        return _model_info_json_response(_strip_endpoint_urls_for_non_admin(single_model_list, is_admin=is_admin))
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
@@ -19057,7 +19134,7 @@ async def model_info_v1(
     )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    return _model_info_json_response(visible_models)
+    return _model_info_json_response(_strip_endpoint_urls_for_non_admin(visible_models, is_admin=is_admin))
 
 
 @router.get(

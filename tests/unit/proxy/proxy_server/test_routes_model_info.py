@@ -2419,3 +2419,107 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert _model_names(payload) == ["openai/*"]
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /model/info hides api_base from non-admin callers (#51810)
+# ---------------------------------------------------------------------------
+
+
+def test_model_info_hides_api_base_from_non_admin_callers(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+) -> None:
+    """Non-admin callers must not see deployment endpoint URLs on /model/info,
+    /v1/model/info, or /v2/model/info, while proxy admins still do.
+
+    Regression test for #51810: the routes stripped api_key but returned
+    api_base in full, including any token embedded in its query string, path,
+    or userinfo. /health already shows api_base only to proxy admins (#40765).
+    The stripped set is the codebase's own upstream endpoint params
+    (API_KEY_UPSTREAM_PARAMS) plus azure_endpoint: base_url is the same URL
+    under its alias, sagemaker_base_url replaces api_base for SageMaker,
+    deployment_url redirects SAP deployments, and s3_endpoint_url redirects
+    Bedrock file uploads, so each leaks the same way. A URL-valued model is
+    also an endpoint URL (Hugging Face treats a model starting with http(s)://
+    as its API base), so it is dropped for non-admin callers too, along with
+    the model_info.key the enrichment copies it into, while ordinary model
+    identifiers are preserved.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    endpoint_urls: Final = {
+        "api_base": "http://127.0.0.1:9559/v1?cred=CANARY-SECRET-ABCD",
+        "base_url": "http://127.0.0.1:9559/v1?cred=CANARY-SECRET-BASE-URL",
+        "azure_endpoint": "https://example.invalid/openai?cred=CANARY-SECRET-AZURE",
+        "aws_bedrock_runtime_endpoint": "https://example.invalid/bedrock?cred=CANARY-SECRET-BEDROCK",
+        "sagemaker_base_url": "https://example.invalid/sagemaker?cred=CANARY-SECRET-SAGEMAKER",
+        "deployment_url": "https://example.invalid/sap?cred=CANARY-SECRET-SAP",
+        "s3_endpoint_url": "https://example.invalid/s3?cred=CANARY-SECRET-S3",
+    }
+    url_model: Final = "huggingface/https://example.invalid/v1?cred=CANARY-SECRET-MODEL"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cred-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    **endpoint_urls,
+                    "api_key": "placeholder",
+                },
+                "model_info": {"id": "cred-deployment"},
+            },
+            {
+                "model_name": "hf-url-model",
+                "litellm_params": {
+                    "model": url_model,
+                    "api_key": "placeholder",
+                },
+                "model_info": {"id": "hf-deployment"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    def rows_by_name(payload: dict) -> dict[str, dict]:
+        return {row["model_name"]: row for row in payload["data"]}
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER):
+        for path in ("/model/info", "/v1/model/info", "/v2/model/info"):
+            response: Final = client.get(path)
+            assert response.status_code == 200, response.text
+            assert "CANARY-SECRET" not in response.text
+            rows: Final = rows_by_name(response.json())
+            assert set(rows) == {"cred-model", "hf-url-model"}
+            params: Final = rows["cred-model"]["litellm_params"]
+            assert "api_key" not in params
+            assert params["model"] == "openai/gpt-4o"
+            for field in endpoint_urls:
+                assert field not in params
+            assert "model" not in rows["hf-url-model"]["litellm_params"]
+            assert "key" not in rows["hf-url-model"]["model_info"]
+        single: Final = client.get("/v1/model/info", params={"litellm_model_id": "cred-deployment"})
+        assert single.status_code == 200, single.text
+        assert "CANARY-SECRET" not in single.text
+        assert not (set(single.json()["data"][0]["litellm_params"]) & set(endpoint_urls))
+        single_url: Final = client.get("/v1/model/info", params={"litellm_model_id": "hf-deployment"})
+        assert single_url.status_code == 200, single_url.text
+        assert "CANARY-SECRET" not in single_url.text
+        assert "model" not in single_url.json()["data"][0]["litellm_params"]
+        assert "key" not in single_url.json()["data"][0]["model_info"]
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        for path in ("/model/info", "/v1/model/info", "/v2/model/info"):
+            response: Final = client.get(path)
+            assert response.status_code == 200, response.text
+            rows: Final = rows_by_name(response.json())
+            params: Final = rows["cred-model"]["litellm_params"]
+            for field, value in endpoint_urls.items():
+                assert params[field] == value
+            assert rows["hf-url-model"]["litellm_params"]["model"] == url_model
+            assert rows["hf-url-model"]["model_info"]["key"] == url_model
