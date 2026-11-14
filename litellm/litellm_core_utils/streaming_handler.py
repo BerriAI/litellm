@@ -476,6 +476,7 @@ class CustomStreamWrapper:
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
+        response_cost: float | None = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -530,6 +531,7 @@ class CustomStreamWrapper:
         self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
+            **({} if response_cost is None else {"response_cost": response_cost}),
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -570,7 +572,7 @@ class CustomStreamWrapper:
         # this cache must be removed.
         self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
-            "response_cost": None,
+            "response_cost": response_cost,
         }
 
         self._post_streaming_hooks: list | None = None

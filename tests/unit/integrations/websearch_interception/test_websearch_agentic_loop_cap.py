@@ -14,6 +14,7 @@ config.yaml through to the settings the loop actually reads.
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Final, TypedDict
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.proxy.spend_tracking.cost_finalization import prepare_response_cost
@@ -1352,12 +1354,16 @@ async def test_responses_pinned_openai_chat_completion_keeps_its_search_follow_u
 class _LoggedRow(TypedDict):
     call_type: ReadOnly[str]
     prompt_tokens: ReadOnly[int]
+    response_cost: ReadOnly[float]
+    cost_breakdown: ReadOnly[Mapping[str, object] | None]
 
 
 class _ModelSpendRowRecorder(CustomLogger):
     def __init__(self, rows_expected: int) -> None:
         super().__init__()
         self.prompt_tokens: Final[list[int]] = []
+        self.response_costs: Final[list[float]] = []
+        self.breakdown_totals: Final[list[object]] = []
         self._rows_expected: Final = rows_expected
         self.all_rows_logged: Final = asyncio.Event()
         self.streamed_reply_logged: Final = asyncio.Event()
@@ -1367,6 +1373,8 @@ class _ModelSpendRowRecorder(CustomLogger):
         if row["call_type"] != "acompletion":
             return
         self.prompt_tokens.append(row["prompt_tokens"])
+        self.response_costs.append(row["response_cost"])
+        self.breakdown_totals.append((row["cost_breakdown"] or {}).get("total_cost"))
         if kwargs.get("stream") is True:
             self.streamed_reply_logged.set()
         if len(self.prompt_tokens) >= self._rows_expected:
@@ -1596,24 +1604,142 @@ async def test_responses_pinned_openai_chat_completion_parks_one_row_billing_eve
     assert recorder.prompt_tokens == [_every_round_input_tokens(loops_allowed)]
 
 
+ROUND_INPUT_TOKENS_UNDER_THE_LONG_CONTEXT_TIER: Final = 200_000
+ROUND_OUTPUT_TOKENS: Final = 5
+
+
+def _long_context_round_reply(request: httpx.Request) -> httpx.Response:
+    reply: Final = _responses_reply_asking_for_another_search_until_enough_results(request)
+    return httpx.Response(
+        200,
+        json={
+            **reply.json(),
+            "usage": {
+                "input_tokens": ROUND_INPUT_TOKENS_UNDER_THE_LONG_CONTEXT_TIER,
+                "output_tokens": ROUND_OUTPUT_TOKENS,
+                "total_tokens": ROUND_INPUT_TOKENS_UNDER_THE_LONG_CONTEXT_TIER + ROUND_OUTPUT_TOKENS,
+            },
+        },
+    )
+
+
+def _gpt_5_6_price(rounds: int) -> float:
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        prompt_tokens=ROUND_INPUT_TOKENS_UNDER_THE_LONG_CONTEXT_TIER * rounds,
+        completion_tokens=ROUND_OUTPUT_TOKENS * rounds,
+    )
+    return prompt_cost + completion_cost
+
+
+def _price_of_rounds_priced_one_by_one(rounds: int) -> float:
+    one_round: Final = _gpt_5_6_price(1)
+    assert _gpt_5_6_price(rounds) != pytest.approx(rounds * one_round)
+    return rounds * one_round
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loops_allowed", [1, 2])
+async def test_responses_pinned_openai_chat_completion_prices_each_round_of_its_one_row_at_that_rounds_size(
+    loops_allowed: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    expected_cost: Final = _price_of_rounds_priced_one_by_one(loops_allowed + 1)
+    parker: Final = _ProxyParksTheRequestSuccessLog()
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=1)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), parker, recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(side_effect=_long_context_round_reply)
+
+    response: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=loops_allowed,
+    )
+    request_logging_obj: Final = parker.request_logging_obj
+    assert request_logging_obj is not None
+    prepared: Final = prepare_response_cost(request_logging_obj, response, datetime.now(timezone.utc))
+    release: Final = request_logging_obj.enqueue_deferred_logging
+    assert release is not None
+    release()
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert prepared is not None
+    assert prepared.amount == pytest.approx(expected_cost)
+    assert recorder.response_costs == [pytest.approx(expected_cost)]
+    assert recorder.breakdown_totals == [pytest.approx(expected_cost)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loops_allowed", [1, 2])
+async def test_streamed_responses_pinned_openai_chat_completion_prices_each_round_at_that_rounds_size(
+    loops_allowed: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    expected_cost: Final = _price_of_rounds_priced_one_by_one(loops_allowed + 1)
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(side_effect=_long_context_round_reply)
+
+    stream: Final = await litellm.acompletion(
+        model="openai/responses/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=loops_allowed,
+        stream=True,
+    )
+    assert isinstance(stream, litellm.CustomStreamWrapper)
+    _ = [chunk async for chunk in stream]
+    await asyncio.wait_for(recorder.streamed_reply_logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert sum(recorder.response_costs) == pytest.approx(expected_cost)
+    assert recorder.breakdown_totals == pytest.approx(recorder.response_costs)
+
+
 class _AnswersOnTheResponsesApi(CustomLogger):
     async def async_should_run_agentic_loop(
-        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
-    ):
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
         return kwargs.get("_agentic_loop_api_surface") == "responses", {}
 
     async def async_build_agentic_loop_plan(
         self,
-        tools,
-        model,
-        messages,
-        response,
-        anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params,
-        logging_obj,
-        stream,
-        kwargs,
-    ):
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        assert isinstance(response, ResponsesAPIResponse)
         return AgenticLoopPlan(
             response_override=response.model_copy(
                 update={

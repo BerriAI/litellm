@@ -2425,7 +2425,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
-        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent, litellm.CustomStreamWrapper)) and hasattr(
             priced_result, "_hidden_params"
         ):
             hidden_params: Final = result_hidden_params
@@ -3001,6 +3001,9 @@ class Logging(LiteLLMLoggingBaseClass):
         """Bill every round of a fully streamed request on the failure log when a post-call hook rejects it."""
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
+
+    def record_every_round_breakdown(self, cost_breakdown: CostBreakdown | None) -> None:
+        self.cost_breakdown = cost_breakdown
 
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves

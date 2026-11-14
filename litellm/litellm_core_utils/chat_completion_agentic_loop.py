@@ -25,11 +25,13 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
 from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
-from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.litellm_logging import UncachedPrice
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-from litellm.responses.mcp.round_billing import billed_for_every_round
+from litellm.responses.mcp.parked_stream_dispatch import SERVED_FROM_CACHE
+from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -124,6 +126,7 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
 
 _STREAM_OPTIONS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _HOOK_RESPONSE: Final = TypeAdapter(object)
+_PRICE_OF_EVERY_ROUND: Final = "agentic_loop_price_of_every_round"
 
 
 def _plan_response_override(plan: AgenticLoopPlan) -> object | None:
@@ -189,6 +192,9 @@ def _converted_stream_replay(
         return response
     if not isinstance(response, ModelResponse) or not isinstance(logging_obj, LiteLLMLoggingObject):
         return None
+    every_round: Final = _price_of_every_round(response)
+    if every_round is not None:
+        logging_obj.record_every_round_breakdown(every_round.cost_breakdown)
 
     return CustomStreamWrapper(
         completion_stream=MockResponseIterator(model_response=response),
@@ -196,6 +202,7 @@ def _converted_stream_replay(
         custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
         stream_options=_stashed_stream_options(kwargs),
+        response_cost=None if every_round is None else every_round.cost,
     )
 
 
@@ -383,9 +390,45 @@ def _billed_with_the_round_it_follows(round_served: object, follow_up: object, l
         and logging_obj.bridged_chat_request is not None
     ):
         return follow_up
-    if is_internal_call.get() or logging_obj.unpark_success_log():
-        return billed_for_every_round(round_served, None, follow_up, None)
-    return follow_up
+    if not (is_internal_call.get() or logging_obj.unpark_success_log()):
+        return follow_up
+    first_price: Final = _price_of_round(round_served, logging_obj)
+    final_price: Final = _price_of_round(follow_up, logging_obj)
+    first: Final = _priced(round_served, first_price)
+    final: Final = _priced(follow_up, final_price)
+    breakdown: Final = summed_cost_breakdown(first, first_price.cost_breakdown, final, final_price.cost_breakdown)
+    logging_obj.record_every_round_breakdown(breakdown)
+    billed: Final = billed_for_every_round(first, first_price.cost_breakdown, final, final_price.cost_breakdown)
+    billed_hidden_params: Final = get_hidden_params(billed) or {}
+    total_cost: Final = billed_hidden_params.get("response_cost")
+    set_hidden_params(
+        billed,
+        {
+            **billed_hidden_params,
+            _PRICE_OF_EVERY_ROUND: UncachedPrice(
+                cost=float(total_cost) if isinstance(total_cost, (int, float)) else None, cost_breakdown=breakdown
+            ),
+        },
+    )
+    return billed
+
+
+def _price_of_every_round(response: ModelResponse) -> UncachedPrice | None:
+    every_round: Final = (get_hidden_params(response) or {}).get(_PRICE_OF_EVERY_ROUND)
+    return every_round if isinstance(every_round, UncachedPrice) else None
+
+
+def _price_of_round(round_response: ModelResponse, logging_obj: LiteLLMLoggingObject) -> UncachedPrice:
+    every_round: Final = _price_of_every_round(round_response)
+    if every_round is not None:
+        return every_round
+    return SERVED_FROM_CACHE if served_from_cache(round_response) else logging_obj.uncached_price(round_response)
+
+
+def _priced(round_response: ModelResponse, price: UncachedPrice) -> ModelResponse:
+    priced: Final = round_response.model_copy()
+    set_hidden_params(priced, {**(get_hidden_params(round_response) or {}), "response_cost": price.cost})
+    return priced
 
 
 def _leave_pricing_to_the_request(response: object) -> None:
