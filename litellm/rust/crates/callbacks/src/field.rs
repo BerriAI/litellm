@@ -105,10 +105,9 @@ fields! {
     StandardLoggingPayloadRef = 41, Compatibility, u64;
     LoggedKeyIdentity = 42, SmallRecord, crate::record::LoggedKeyIdentity;
     LoggedModelGroup = 43, SmallRecord, crate::record::LoggedModelGroup;
-    LoggedPayloadNotAMapping = 44, SmallRecord, crate::scalar::Scalar;
-    MetadataLabels = 45, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
-    InputSequenceLength = 46, SmallRecord, crate::record::InputSequenceLength;
-    LimiterRequest = 47, SmallRecord, crate::record::LimiterRequest;
+    MetadataLabels = 44, SmallRecord, std::vec::Vec<crate::record::MetadataLabel>;
+    InputSequenceLength = 45, SmallRecord, crate::record::InputSequenceLength;
+    LimiterRequest = 46, SmallRecord, crate::record::LimiterRequest;
 }
 
 impl Field {
@@ -144,7 +143,6 @@ pub const DERIVED_ONLY: FieldSet = FieldSet::of(&[
     Field::StandardLoggingPayloadRef,
     Field::LoggedKeyIdentity,
     Field::LoggedModelGroup,
-    Field::LoggedPayloadNotAMapping,
     Field::MetadataLabels,
     Field::InputSequenceLength,
     Field::LimiterRequest,
@@ -239,7 +237,7 @@ mod tests {
     #[case::wire(Field::ProviderRequestBody, 24, "provider_request_body")]
     #[case::compatibility(Field::DeprecatedResponseObj, 29, "deprecated_response_obj")]
     #[case::typed(Field::KeyLimits, 30, "key_limits")]
-    #[case::last(Field::LimiterRequest, 47, "limiter_request")]
+    #[case::last(Field::LimiterRequest, 46, "limiter_request")]
     fn a_field_keeps_its_bit_and_its_snake_case_name(
         #[case] field: Field,
         #[case] bit: u8,

@@ -468,23 +468,18 @@
       "tier": "small_record"
     },
     {
-      "name": "logged_payload_not_a_mapping",
+      "name": "metadata_labels",
       "bit": 44,
       "tier": "small_record"
     },
     {
-      "name": "metadata_labels",
+      "name": "input_sequence_length",
       "bit": 45,
       "tier": "small_record"
     },
     {
-      "name": "input_sequence_length",
-      "bit": 46,
-      "tier": "small_record"
-    },
-    {
       "name": "limiter_request",
-      "bit": 47,
+      "bit": 46,
       "tier": "small_record"
     }
   ],
@@ -519,7 +514,6 @@
     "log_id",
     "logged_key_identity",
     "logged_model_group",
-    "logged_payload_not_a_mapping",
     "logged_request",
     "mcp_tool_call",
     "metadata_labels",

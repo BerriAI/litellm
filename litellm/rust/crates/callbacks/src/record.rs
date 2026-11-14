@@ -424,9 +424,6 @@ mod tests {
             Field::ColdStorageObjectKey => round_trip::<typed::ColdStorageObjectKey>(sample),
             Field::LoggedKeyIdentity => round_trip::<typed::LoggedKeyIdentity>(sample),
             Field::LoggedModelGroup => round_trip::<typed::LoggedModelGroup>(sample),
-            Field::LoggedPayloadNotAMapping => {
-                round_trip::<typed::LoggedPayloadNotAMapping>(sample)
-            }
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),

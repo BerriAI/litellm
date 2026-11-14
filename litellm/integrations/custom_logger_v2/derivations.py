@@ -32,7 +32,6 @@ from litellm.types.integrations.custom_logger_v2 import (
     RateLimitState,
     RateLimitStatuses,
     ReservationEntry,
-    Scalar,
     ScalarItem,
     Stringified,
     Usage,
@@ -45,7 +44,6 @@ _ABSENT: Final = object()
 _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ...]]] = TypeAdapter(
     tuple[ScalarItem, ...]
 )
-_SCALAR: Final[TypeAdapter[str | int | float | bool | Stringified]] = TypeAdapter(Scalar)
 _DERIVED_RESERVATION_MEMBERS: Final = frozenset({"rejected", "entries_is_list", "not_a_mapping"})
 _LIMITER_HEADER_PREFIX: Final = "x-ratelimit-"
 
@@ -629,13 +627,6 @@ def cold_storage_object_key(args: HookArgs) -> str | None:
     return _text(payload_metadata(args).get("cold_storage_object_key"))
 
 
-def logged_payload_not_a_mapping(args: HookArgs) -> str | int | float | bool | Stringified | None:
-    raw: Final = member(args.request, "standard_logging_object")
-    if raw is None or isinstance(raw, Mapping):
-        return None
-    return coerce_value("logged_payload_not_a_mapping", _SCALAR, raw)
-
-
 def metadata_labels(args: HookArgs) -> tuple[MetadataLabel, ...]:
     from litellm.integrations.prometheus import (
         _get_combined_custom_metadata_from_standard_logging_payload,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the metadata prometheus labels from
@@ -693,7 +684,6 @@ RECORD_TYPES: Final[Mapping[Field, object]] = MappingProxyType(
         Field.cold_storage_object_key: str,
         Field.logged_key_identity: LoggedKeyIdentity,
         Field.logged_model_group: LoggedModelGroup,
-        Field.logged_payload_not_a_mapping: Scalar,
         Field.metadata_labels: tuple[MetadataLabel, ...],
         Field.input_sequence_length: InputSequenceLength,
         Field.limiter_request: LimiterRequest,
@@ -704,7 +694,6 @@ DERIVED_LOGGING_FIELDS: Final[Mapping[Field, FieldSource]] = MappingProxyType(
     {
         Field.logged_key_identity: derived(logged_key_identity),
         Field.logged_model_group: derived(logged_model_group),
-        Field.logged_payload_not_a_mapping: derived(logged_payload_not_a_mapping),
         Field.metadata_labels: derived(metadata_labels),
         Field.deployment: derived(deployment),
         Field.request_tags: derived(request_tags),
@@ -776,7 +765,6 @@ __all__ = [
     "log_id",
     "logged_key_identity",
     "logged_model_group",
-    "logged_payload_not_a_mapping",
     "logged_request",
     "mapping",
     "mcp_tool_call",
