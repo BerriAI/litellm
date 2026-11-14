@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import io
+import itertools
 import json
 import logging
 from typing import Final
@@ -1772,11 +1773,10 @@ async def test_run_model_health_check_reports_why_a_string_configurable_clientsi
 
 
 def _deployment_states(logger: PrometheusLogger) -> dict[str, float]:
-    return {
-        sample.labels["model_id"]: sample.value
-        for metric in logger.litellm_deployment_state.collect()
-        for sample in metric.samples
-    }
+    samples: Final = itertools.chain.from_iterable(
+        metric.samples for metric in logger.litellm_deployment_state.collect()
+    )
+    return {sample.labels["model_id"]: sample.value for sample in samples}
 
 
 async def _settled_states(logger: PrometheusLogger, model_id: str) -> dict[str, float]:
@@ -1814,8 +1814,8 @@ async def test_a_probe_leaves_the_deployment_state_routed_traffic_set(
     probe_status: int,
     routed_state: float,
 ) -> None:
-    for collector in tuple(REGISTRY._collector_to_names):
-        REGISTRY.unregister(collector)
+    monkeypatch.setattr(REGISTRY, "_collector_to_names", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
+    monkeypatch.setattr(REGISTRY, "_names_to_collectors", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
     logger: Final = PrometheusLogger()
     monkeypatch.setattr(litellm, "_async_success_callback", [logger])
     monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
