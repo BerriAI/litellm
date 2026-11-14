@@ -3962,3 +3962,20 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
 )
 def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
     assert has_only_text_content(messages) is text_only
+
+
+def test_refusal_content_part_counts_as_the_text_it_replaces() -> None:
+    """An assistant refusal part is a documented OpenAI content block, so it must count instead of raising"""
+    with_text = [
+        {"role": "user", "content": "A request"},
+        {"role": "assistant", "content": [{"type": "text", "text": "I cannot help with that request."}]},
+        {"role": "user", "content": "Please suggest a safe alternative."},
+    ]
+    with_refusal = [
+        {"role": "user", "content": "A request"},
+        {"role": "assistant", "content": [{"type": "refusal", "refusal": "I cannot help with that request."}]},
+        {"role": "user", "content": "Please suggest a safe alternative."},
+    ]
+    assert token_counter_old(model="gpt-4o", messages=with_refusal) == token_counter_old(
+        model="gpt-4o", messages=with_text
+    )
