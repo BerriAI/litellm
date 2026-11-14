@@ -2,7 +2,7 @@ import inspect
 import json
 import types
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -62,6 +62,7 @@ from ..common_utils import (
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
     parse_bedrock_event_stream,
+    served_service_tier,
 )
 
 bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
@@ -237,6 +238,15 @@ async def aiter_bytes_then_close(stream: AsyncIterator[bytes], response: object)
             res = aclose()
             if inspect.isawaitable(res):
                 await res
+
+
+_StreamChunk: Final = TypeVar("_StreamChunk")
+
+
+def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _StreamChunk:
+    if served_tier is None or not isinstance(chunk, ModelResponseStream):
+        return chunk
+    return chunk.model_copy(update={"service_tier": served_tier})
 
 
 async def make_call(
@@ -873,6 +883,7 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
+        served_tier: Final = served_service_tier(response_headers)
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
@@ -881,7 +892,7 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -898,6 +909,7 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
+        served_tier: Final = served_service_tier(response_headers)
         try:
             async for chunk in iterator:
                 event_stream_buffer.add_data(chunk)
@@ -906,7 +918,7 @@ class AWSEventStreamDecoder:
                     message = self._decode_event(event, tally, request_id_headers)
                     if message:
                         _data = json.loads(message)
-                        yield self.chunk_parser(chunk_data=_data)
+                        yield _with_served_service_tier(self.chunk_parser(chunk_data=_data), served_tier)
         finally:
             await aclose_if_supported(iterator)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)

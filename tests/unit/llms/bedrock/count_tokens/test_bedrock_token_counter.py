@@ -75,6 +75,59 @@ async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() 
 
 
 @pytest.mark.asyncio
+async def test_claude_model_message_without_content_is_rejected_without_calling_runtime_or_mantle() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        "Message 0 must have a 'content' field",
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "problem"),
+    [
+        ({"role": "user"}, "Message 0 must have a 'content' field"),
+        ({"content": "hi"}, "Message 0 must have a 'role' field"),
+    ],
+)
+async def test_mantle_counted_model_rejects_a_malformed_message_without_calling_mantle(
+    message: dict[str, str], problem: str
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[message],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        problem,
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
 
@@ -326,6 +379,35 @@ async def test_runtime_count_leaves_out_the_options_only_mantle_counts(chat_para
     assert {name: mantle_body[name] for name in ("messages", "tools")} == {
         name: invoke_body[name] for name in ("messages", "tools")
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_to_use", "runtime", "posted_hosts"),
+    (
+        ("bedrock_mantle/anthropic.claude-opus-5-5", (200, {"inputTokens": 1}), (MANTLE_HOST,)),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST)),
+    ),
+)
+async def test_messages_count_options_reach_the_mantle_count(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]], posted_hosts: tuple[str, ...]
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 433}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 433)
+    assert bedrock.posted_hosts() == posted_hosts
+    assert _JSON_BODY.validate_json(bedrock.requests[-1].content)["tool_choice"] == {"type": "any"}
 
 
 @pytest.mark.asyncio
