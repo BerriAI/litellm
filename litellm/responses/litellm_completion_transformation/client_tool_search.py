@@ -12,6 +12,7 @@ from openai.types.responses.response_input_param import (
 )
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ALL_RESPONSES_API_TOOL_PARAMS,
@@ -82,7 +83,7 @@ class _LoadedTool:
     @property
     def callable_name(self) -> str:
         name: Final = str(self.spec.get("name") or "")
-        return name if self.namespace is None else f"{self.namespace}__{name}"
+        return name if self.namespace is None else chat_member_name(self.namespace, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +179,7 @@ def _callable_names(tool: object) -> tuple[str, ...]:
         return ()
     if spec.type != "namespace":
         return (spec.name,)
-    return tuple(f"{spec.name}__{member.get('name') or ''}" for member in spec.tools)
+    return tuple(chat_member_name(spec.name, str(member.get("name") or "")) for member in spec.tools)
 
 
 def _first_occurrences(loaded: Sequence[_LoadedTool], taken: frozenset[str]) -> tuple[_LoadedTool, ...]:

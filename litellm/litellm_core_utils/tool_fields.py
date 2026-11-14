@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
@@ -11,6 +12,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+
+# OpenAI has a 64-character limit for function/tool names
+# Anthropic does not have this limit, so we need to truncate long names
+OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
+TOOL_NAME_HASH_LENGTH: Final = 8
+TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -69,6 +76,31 @@ def declared_function_name(tool: object) -> str | None:
 
 def qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
+
+
+def truncate_tool_name(name: str) -> str:
+    """
+    Truncate tool names that exceed OpenAI's 64-character limit.
+
+    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
+    when multiple tools have similar long names.
+
+    Args:
+        name: The original tool name
+
+    Returns:
+        The original name if <= 64 chars, otherwise truncated with hash
+    """
+    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
+        return name
+
+    # Create deterministic hash from full name to avoid collisions
+    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
+    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+
+
+def chat_member_name(namespace: str, name: str) -> str:
+    return truncate_tool_name(qualified_member_name(namespace, name))
 
 
 @dataclass(frozen=True, slots=True)
