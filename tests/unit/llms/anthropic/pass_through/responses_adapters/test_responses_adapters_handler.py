@@ -407,7 +407,7 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
 @pytest.mark.parametrize(
     ("cache_control", "breakpoint"),
     [
-        pytest.param({**EPHEMERAL, "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
+        pytest.param({**EPHEMERAL, "ttl": "1h"}, {"mode": "explicit"}, id="1h-keeps-the-request-ttl"),
         pytest.param({**EPHEMERAL, "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
         pytest.param(EPHEMERAL, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
     ],

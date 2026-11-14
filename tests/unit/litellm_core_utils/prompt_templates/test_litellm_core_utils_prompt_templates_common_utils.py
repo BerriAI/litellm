@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -18,7 +18,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
-    cache_control_as_responses_prompt_cache_breakpoint,
     converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
@@ -2280,27 +2279,7 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
-@pytest.mark.parametrize(
-    ("cache_control", "breakpoint"),
-    [
-        pytest.param({"type": "ephemeral", "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
-        pytest.param({"type": "ephemeral", "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
-        pytest.param({"type": "ephemeral"}, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
-    ],
-)
-def test_a_responses_breakpoint_keeps_at_least_the_lifetime_the_cache_control_asked_for(
-    cache_control: dict[str, str], breakpoint: dict[str, str]
-) -> None:
-    marked: Final = {"type": "text", "text": "rules", "cache_control": cache_control}
-
-    assert cache_control_as_responses_prompt_cache_breakpoint(marked) == {
-        "type": "text",
-        "text": "rules",
-        "prompt_cache_breakpoint": breakpoint,
-    }
-
-
-def test_a_chat_completions_breakpoint_carries_no_ttl_since_chat_completions_rejects_one() -> None:
+def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
     marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 
     assert cache_control_as_prompt_cache_breakpoint(marked) == {
@@ -2310,19 +2289,10 @@ def test_a_chat_completions_breakpoint_carries_no_ttl_since_chat_completions_rej
     }
 
 
-@pytest.mark.parametrize(
-    "rename",
-    [
-        pytest.param(cache_control_as_prompt_cache_breakpoint, id="chat-completions"),
-        pytest.param(cache_control_as_responses_prompt_cache_breakpoint, id="responses"),
-    ],
-)
-def test_a_block_without_cache_control_is_returned_untouched(
-    rename: Callable[[dict[str, str]], dict[str, str]],
-) -> None:
+def test_a_block_without_cache_control_is_returned_untouched() -> None:
     unmarked: Final = {"type": "text", "text": "rules"}
 
-    assert rename(unmarked) is unmarked
+    assert cache_control_as_prompt_cache_breakpoint(unmarked) is unmarked
 
 
 def test_a_breakpoint_the_client_wrote_survives_a_message_level_mark_ttl_included() -> None:
