@@ -1654,6 +1654,143 @@ class _RetryClientHandler(AsyncHTTPHandler):
         return self._retry_client
 
 
+class _ClientBoundStream(httpx.AsyncByteStream):
+    def __init__(self, client: httpx.AsyncClient, error: Exception | None = None) -> None:
+        self.client: Final = client
+        self.error: Final = error
+        self.close_count = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self.client.is_closed:
+            raise httpx.ReadError("connection closed before reading")
+        yield b"data: first\n\n"
+        if self.error is not None:
+            raise self.error
+        yield b"data: [DONE]\n\n"
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+class _PendingClientBoundStream(_ClientBoundStream):
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        super().__init__(client)
+        self.started: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.started.set()
+        await self.release.wait()
+        yield b"data: [DONE]\n\n"
+
+
+async def _fail_connection(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("first connection failed", request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_retry_body_survives_until_consumed_and_releases_client(method: str, streaming: bool) -> None:
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=body)))
+    body: Final = _ClientBoundStream(retry)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        try:
+            response: Final = await getattr(handler, method)("https://upstream.test/stream", stream=streaming)
+            assert retry.is_closed is not streaming
+            assert await response.aread() == b"data: first\n\ndata: [DONE]\n\n"
+            assert retry.is_closed
+            assert body.close_count == 1
+            await response.aclose()
+            assert body.close_count == 1
+        finally:
+            await retry.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_retry_stream_explicit_close_releases_client(method: str) -> None:
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=body)))
+    body: Final = _ClientBoundStream(retry)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        try:
+            response: Final = await getattr(handler, method)("https://upstream.test/stream", stream=True)
+            assert not retry.is_closed
+            await response.aclose()
+            await response.aclose()
+            assert retry.is_closed
+            assert body.close_count == 1
+        finally:
+            await retry.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_retry_stream_read_error_releases_client_and_preserves_error(method: str) -> None:
+    failure: Final = httpx.ReadError("upstream truncated the body")
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=body)))
+    body: Final = _ClientBoundStream(retry, failure)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        try:
+            response: Final = await getattr(handler, method)("https://upstream.test/stream", stream=True)
+            with pytest.raises(httpx.ReadError) as raised:
+                await response.aread()
+            assert raised.value is failure
+            assert retry.is_closed
+            assert body.close_count == 1
+            await response.aclose()
+            assert body.close_count == 1
+        finally:
+            await retry.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_failed_retry_releases_client(method: str) -> None:
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        with pytest.raises(httpx.ConnectError):
+            await getattr(handler, method)("https://upstream.test/stream", stream=True)
+        assert retry.is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_buffered_retry_response_releases_client_even_when_streaming_requested(method: str) -> None:
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"done")))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        response: Final = await getattr(handler, method)("https://upstream.test/stream", stream=True)
+        assert await response.aread() == b"done"
+        assert retry.is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_retry_stream_cancellation_releases_client(method: str) -> None:
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=body)))
+    body: Final = _PendingClientBoundStream(retry)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_fail_connection)) as first:
+        handler: Final = _RetryClientHandler(first, retry)
+        try:
+            response: Final = await getattr(handler, method)("https://upstream.test/stream", stream=True)
+            reading: Final = asyncio.create_task(response.aread())
+            await body.started.wait()
+            reading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reading
+            assert retry.is_closed
+            assert body.close_count == 1
+            await response.aclose()
+            assert body.close_count == 1
+        finally:
+            await retry.aclose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
 async def test_connection_error_retry_forwards_content(method: str):

@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -256,6 +256,35 @@ def anchor_handler_to(response: httpx.Response, handler: object) -> None:
     each anchor holds it separately.
     """
     weakref.finalize(response, _drop_streaming_anchor, handler)
+
+
+class _RetryClientStream(httpx.AsyncByteStream):
+    def __init__(self, stream: httpx.AsyncByteStream, client: httpx.AsyncClient) -> None:
+        self._stream = stream
+        self._client = client
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        finally:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        if not self._client.is_closed:
+            try:
+                await self._stream.aclose()
+            finally:
+                await self._client.aclose()
+
+
+async def _hand_retry_client_to(response: httpx.Response, client: httpx.AsyncClient) -> httpx.Response:
+    if response.is_closed:
+        await client.aclose()
+    else:
+        assert isinstance(response.stream, httpx.AsyncByteStream), "An async retry must return an async stream"
+        response.stream = _RetryClientStream(response.stream, client)
+    return response
 
 
 def blocked_cookie_jar() -> CookieJar:
@@ -1046,8 +1075,9 @@ class AsyncHTTPHandler:
                     stream=stream,
                     content=content,
                 )
-            finally:
+            except BaseException:
                 await new_client.aclose()
+                raise
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1109,9 +1139,10 @@ class AsyncHTTPHandler:
                     retried.raise_for_status()
                 except httpx.HTTPStatusError as retried_error:
                     await _raise_masked_async_error(retried_error, stream)
-                return retried
-            finally:
+                return await _hand_retry_client_to(retried, new_client)
+            except BaseException:
                 await new_client.aclose()
+                raise
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1166,8 +1197,9 @@ class AsyncHTTPHandler:
                     stream=stream,
                     content=content,
                 )
-            finally:
+            except BaseException:
                 await new_client.aclose()
+                raise
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
         except httpx.HTTPStatusError as e:
@@ -1223,8 +1255,9 @@ class AsyncHTTPHandler:
                     stream=stream,
                     content=content,
                 )
-            finally:
+            except BaseException:
                 await new_client.aclose()
+                raise
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -1261,7 +1294,7 @@ class AsyncHTTPHandler:
         )
         response: Final = await client.send(req, stream=stream)
         response.raise_for_status()
-        return response
+        return await _hand_retry_client_to(response, client)
 
     # Strong references to finalizer-scheduled client-close tasks. A bare
     # create_task() result may be garbage-collected before it runs, leaving
