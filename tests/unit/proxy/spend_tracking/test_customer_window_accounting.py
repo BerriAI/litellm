@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import Sequence
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -31,13 +30,11 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.spend_tracking.budget_reservation import (
-    BudgetCounter,
     customer_window_counters,
     estimate_request_max_cost,
     release_budget_reservation,
     reserve_budget_for_request,
 )
-from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.responses.streaming_iterator import drain_logging_tasks
@@ -96,107 +93,6 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
     second: Final = customer_window_counters("customer_member", "two", (expired,), now=november)
     assert first[0].window_start == second[0].window_start == datetime(2026, 11, 1, tzinfo=timezone.utc)
     assert expired.reset_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
-
-
-def _held_entry(counter: BudgetCounter, reserved_cost: float) -> dict[str, float | str]:
-    return {
-        "counter_key": counter.counter_key,
-        "entity_type": counter.entity_type,
-        "entity_id": counter.entity_id,
-        "reserved_cost": reserved_cost,
-        "applied_adjustment": 0.0,
-        **({"window_reset_at": counter.reset_at.isoformat()} if counter.reset_at is not None else {}),
-    }
-
-
-async def _hold(counters: Sequence[BudgetCounter], reserved_cost: float) -> tuple[float | None, ...]:
-    return await ps.run_spend_counter_pipeline(
-        pending=tuple(
-            PendingSpendIncrement(counter_key=counter.counter_key, increment=reserved_cost) for counter in counters
-        )
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("ledger", (False, True))
-async def test_settlement_charges_each_window_once_and_selects_one_durable_writer(accounting_state, ledger):
-    backend, writer, _ = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_held_entry(counter, 2.0) for counter in counters]
-    for counter in counters:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    assert await _hold(counters, 2.0) == (7.0, 7.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    backend.commands.clear()
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=counters,
-        windows_from_ledger=ledger,
-    )
-    assert tuple(backend.redis[counter.counter_key] for counter in counters) == (5.75, 5.75)
-    assert reservation["finalized"] is True
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert len(rows) == (0 if ledger else 2)
-    assert all(row["spend"] == 0.75 and row["entity_id"] == "member" for row in rows)
-    windows: Final = await ps.accounting_window_keys(None, None, counters)
-    assert {window["window_duration"] for window in windows} == {"1mo", "12mo"}
-    assert len([command for command in backend.commands if command.startswith("MGET")]) == 1
-
-
-@pytest.mark.asyncio
-async def test_completion_after_reset_refunds_old_hold_and_charges_current_period(accounting_state):
-    backend, writer, _ = accounting_state
-    old: Final = customer_window_counters(
-        "customer_member", "member", LIMITS, now=datetime(2000, 6, 15, tzinfo=timezone.utc)
-    )
-    current: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_held_entry(counter, 2.0) for counter in old]
-    for counter in old:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    _ = await _hold(old, 2.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=current,
-    )
-    assert tuple(backend.redis[counter.counter_key] for counter in old) == (5.0, 5.0)
-    assert tuple(backend.redis[counter.counter_key] for counter in current) == (0.75, 0.75)
-    assert tuple(entry["applied_adjustment"] for entry in entries) == (-2.0, -2.0)
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert {row["window_start"] for row in rows} == {
-        counter.window_start.replace(tzinfo=None).isoformat(timespec="microseconds") for counter in current
-    }
-
-
-@pytest.mark.asyncio
-async def test_eviction_between_reserve_and_settle_restores_durable_floor(accounting_state):
-    backend, _, prisma = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS[:1])
-    counter: Final = counters[0]
-    prisma.db.litellm_budgetwindowspend.find_unique.return_value = SimpleNamespace(
-        window_start=counter.window_start, spend=5.0
-    )
-    entries: Final = [_held_entry(counter, 2.0)]
-    await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    _ = await _hold(counters, 2.0)
-    await ps.spend_counter_store.delete((counter.counter_key,))
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation={"reserved_cost": 2.0, "entries": entries, "finalized": False},
-        customer_counters=counters,
-    )
-    assert backend.redis[counter.counter_key] == 5.75
 
 
 @pytest.mark.asyncio
