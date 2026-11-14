@@ -171,7 +171,7 @@ class HealthCheckHelpers:
             )
         model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
-        model_params["fallbacks"] = list(probe_models[1:]) or None
+        model_params["fallbacks"] = tuple(probe_models[1:])
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
@@ -246,7 +246,7 @@ class HealthCheckHelpers:
             )
 
         if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.acompletion(**model_params)
+            return await litellm.acompletion(**{**model_params, "fallbacks": ()})
         return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
@@ -316,10 +316,10 @@ class HealthCheckHelpers:
 
         return {
             "chat": lambda: litellm.acompletion(
-                **model_params,
+                **{**model_params, "fallbacks": ()},
             ),
             "completion": lambda: litellm.atext_completion(
-                **_filter_model_params(model_params=model_params),
+                **{**_filter_model_params(model_params=model_params), "fallbacks": ()},
                 prompt=prompt or "test",
             ),
             "embedding": lambda: litellm.aembedding(

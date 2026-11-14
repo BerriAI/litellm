@@ -5932,7 +5932,6 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,

@@ -82,6 +82,7 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 
 
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
+UPSTREAM_BOUND_PARAMS: Final = frozenset((*clientside_credential_keys, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE))
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

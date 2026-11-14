@@ -439,7 +439,7 @@ async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
             filtered_model_params=filtered_model_params,
         )
         mock_alist.assert_not_called()
-        mock_acompletion.assert_called_once_with(**model_params)
+        mock_acompletion.assert_called_once_with(**model_params, fallbacks=())
 
 
 class _FakeWebsocketConnect:
@@ -1987,3 +1987,48 @@ async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_
     assert "error" not in result, result
     assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
     assert not other_hosts.called
+
+
+HEALTH_CHECK_ROUTES: Final = (
+    pytest.param(
+        "chat",
+        {"model": "openai/missing-model", "api_base": "https://deployment.example/v1"},
+        "https://deployment.example/v1/chat/completions",
+        id="chat",
+    ),
+)
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("mode", "deployment_params", "deployment_url"), HEALTH_CHECK_ROUTES)
+@pytest.mark.asyncio
+async def test_ahealth_check_reports_a_failing_deployment_whatever_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["chat", "batch"],
+    deployment_params: dict[str, str],
+    deployment_url: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
+    deployment: Final = respx_mock.post(deployment_url).mock(
+        return_value=httpx.Response(404, json={"error": {"message": "model unavailable", "type": "not_found"}})
+    )
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "healthy-fallback",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    result: Final = await ahealth_check({**deployment_params, "api_key": "sk-test"}, mode=mode)
+
+    assert "error" in result
+    assert len(deployment.calls) == 1
