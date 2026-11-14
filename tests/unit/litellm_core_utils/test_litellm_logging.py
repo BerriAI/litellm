@@ -9293,6 +9293,77 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+def test_pre_call_omits_raw_request_body_over_size_limit(logging_obj, monkeypatch):
+    """Redacting an oversized raw request blocks the event loop, so the body is omitted from the curl command."""
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.MAX_RAW_REQUEST_BODY_LOG_CHARS", 100)
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+    body = {"messages": [{"role": "user", "content": "LONG-PROMPT-CONTENT " * 20}]}
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": "https://api.openai.com/v1/chat/completions",
+            "headers": {},
+            "complete_input_dict": body,
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert "LONG-PROMPT-CONTENT" not in raw_request
+    assert "chars omitted, over MAX_RAW_REQUEST_BODY_LOG_CHARS=100" in raw_request
+    assert "https://api.openai.com/v1/chat/completions" in raw_request
+    assert logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"] == body
+
+
+def test_pre_call_omits_request_str_over_size_limit(logging_obj, monkeypatch):
+    """Oversized request_str (e.g. from Bedrock or SageMaker) is also omitted from raw request logging."""
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.MAX_RAW_REQUEST_BODY_LOG_CHARS", 100)
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+    long_request_str = "BEDROCK-RAW-PAYLOAD-" * 20
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "headers": {},
+            "request_str": long_request_str,
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert "BEDROCK-RAW-PAYLOAD-" not in raw_request
+    assert "chars omitted, over MAX_RAW_REQUEST_BODY_LOG_CHARS=100" in raw_request
+
+
+def test_pre_call_includes_request_body_under_size_limit(logging_obj, monkeypatch):
+    """Normal sized payloads under the limit are fully included and redacted."""
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.MAX_RAW_REQUEST_BODY_LOG_CHARS", 1000)
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+    body = {"messages": [{"role": "user", "content": "short prompt"}]}
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": "https://api.openai.com/v1/chat/completions",
+            "headers": {},
+            "complete_input_dict": body,
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert "short prompt" in raw_request
+    assert "chars omitted" not in raw_request
+
+
 _PRIVATE_RAW_REQUEST_ARGS: Final = {
     "api_base": "https://api.openai.com/v1/chat/completions",
     "headers": {},

@@ -58,6 +58,7 @@ from litellm.constants import (
     INTERNAL_CALLBACK_NAMES,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    MAX_RAW_REQUEST_BODY_LOG_CHARS,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
     REDACTED_BY_LITELLM,
@@ -2095,8 +2096,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 else:
                     verbose_logger.debug("\x1b[92m%s\x1b[0m\n", curl_command)
 
+    def _get_max_raw_request_body_log_chars(self) -> int:
+        if getattr(litellm, "max_raw_request_body_log_chars", None) is not None:
+            return cast(int, litellm.max_raw_request_body_log_chars)
+        return MAX_RAW_REQUEST_BODY_LOG_CHARS
+
     def _get_request_body(self, data: dict) -> str:
-        return str(data)
+        body: Final = str(data)
+        max_chars: Final = self._get_max_raw_request_body_log_chars()
+        if len(body) > max_chars:
+            return f"<{len(body)} chars omitted, over MAX_RAW_REQUEST_BODY_LOG_CHARS={max_chars}>"
+        return body
 
     def _get_request_curl_command(self, api_base: str, headers: dict | None, additional_args: dict, data: dict) -> str:
         masked_api_base: Final = self._get_masked_api_base(api_base)
@@ -2112,7 +2122,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
-            request_str: Final = additional_args.get("request_str", "")
+            request_str: str = str(additional_args.get("request_str", ""))
+            max_chars: Final = self._get_max_raw_request_body_log_chars()
+            if len(request_str) > max_chars:
+                request_str = f"<{len(request_str)} chars omitted, over MAX_RAW_REQUEST_BODY_LOG_CHARS={max_chars}>"
             curl_command += request_str
         return curl_command
 

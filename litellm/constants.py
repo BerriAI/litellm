@@ -2195,6 +2195,7 @@ MICROSOFT_USER_LAST_NAME_ATTRIBUTE: Final = str(os.getenv("MICROSOFT_USER_LAST_N
 # Maximum payload size (in bytes) to fully serialize for DEBUG logging.
 # Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG: Final = get_env_int("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)  # 100 KB
+MAX_RAW_REQUEST_BODY_LOG_CHARS: Final = get_env_int("MAX_RAW_REQUEST_BODY_LOG_CHARS", 102400)  # 100 KB
 
 # Policy template enrichment
 MAX_COMPETITOR_NAMES: Final = get_env_int("MAX_COMPETITOR_NAMES", 100)

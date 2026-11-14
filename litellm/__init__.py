@@ -190,6 +190,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 )
 log_raw_request_response: bool = False
+max_raw_request_body_log_chars: Optional[int] = None
 log_client_error_tracebacks: bool = False
 log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
