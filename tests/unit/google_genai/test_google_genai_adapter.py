@@ -194,6 +194,80 @@ def test_native_function_call_preserves_arguments_and_matching_response(args: ob
     ]
 
 
+@pytest.mark.parametrize("response_key", ["functionResponse", "function_response"])
+def test_model_turn_function_response_answers_the_preceding_call(response_key: str) -> None:
+    result: Final = {"output": "return 1"}
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(
+        [
+            {"role": "user", "parts": [{"text": "Read /tmp/a.py"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "view_file", "args": {"path": "/tmp/a.py"}}}]},
+            {"role": "model", "parts": [{response_key: {"name": "view_file", "response": result}}]},
+        ]
+    )
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert messages[2]["tool_call_id"] == messages[1]["tool_calls"][0]["id"]
+    assert json.loads(messages[2]["content"]) == result
+
+
+def test_model_turn_with_call_and_response_puts_the_result_after_the_call() -> None:
+    text: Final = "Checking the weather"
+    result: Final = {"temp": "4C"}
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(
+        [
+            {
+                "role": "model",
+                "parts": [
+                    {"text": text},
+                    {"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}},
+                    {"functionResponse": {"name": "get_weather", "response": result}},
+                ],
+            }
+        ]
+    )
+    assert [message["role"] for message in messages] == ["assistant", "tool"]
+    assert messages[0]["content"] == text
+    assert messages[1]["tool_call_id"] == messages[0]["tool_calls"][0]["id"]
+    assert json.loads(messages[1]["content"]) == result
+
+
+def test_model_turn_text_next_to_a_function_response_is_not_dropped() -> None:
+    text: Final = "Here is what the file contains"
+    result: Final = {"output": "return 1"}
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(
+        [{"role": "model", "parts": [{"text": text}, {"functionResponse": {"name": "view_file", "response": result}}]}]
+    )
+    assert [message["role"] for message in messages] == ["assistant", "tool"]
+    assert messages[0]["content"] == text
+    assert json.loads(messages[1]["content"]) == result
+
+
+def test_model_turn_function_response_keeps_its_media() -> None:
+    result: Final = {"ok": True}
+    mime: Final = "image/png"
+    data: Final = "bWVkaWE="
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(
+        [
+            {"role": "model", "parts": [{"functionCall": {"name": "screenshot", "args": {}}}]},
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "screenshot",
+                            "response": result,
+                            "parts": [{"inlineData": {"mimeType": mime, "data": data}}],
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+    assert [message["role"] for message in messages] == ["assistant", "tool"]
+    text_part, media_part = messages[1]["content"]
+    assert json.loads(text_part["text"]) == result
+    assert media_part["image_url"]["url"] == f"data:{mime};base64,{data}"
+
+
 def test_adapter_import():
     """Test that the adapter can be imported successfully"""
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
