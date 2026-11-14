@@ -13,6 +13,7 @@ from typing import Final
 import httpx
 from pydantic import JsonValue
 
+from litellm.proxy.rust_forward.supervisor import SERVING_WITHOUT_RUST
 from tests.integration._support.client import eventually
 from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_root_process
@@ -78,6 +79,18 @@ def forwarded_proxy(
     config_file: Final = directory / "config.yaml"
     config_file.write_text(json.dumps(config))
     launch_arguments, launch_environment = _launch(entry_point, config_file)
+    python: Final = (
+        (
+            sys.executable,
+            "-I",
+            "-c",
+            "import runpy\nimport sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[3] / 'litellm/runtime')!r})\n"
+            "runpy.run_module(sys.argv.pop(1), run_name='__main__')\n",
+        )
+        if entry_point is EntryPoint.GATEWAY
+        else (sys.executable, "-I", "-m")
+    )
     inherited: Final = {
         name: value for name, value in os.environ.items() if not name.startswith("DATABASE_") and name != "DIRECT_URL"
     }
@@ -85,9 +98,7 @@ def forwarded_proxy(
         proxy.log.open("wb") as output,
         subprocess.Popen(
             (
-                sys.executable,
-                "-I",
-                "-m",
+                *python,
                 entry_point.value,
                 "--host",
                 "0.0.0.0",
@@ -111,6 +122,7 @@ def forwarded_proxy(
     ):
         try:
             assert eventually(lambda: _serving(proxy.url), bool, seconds=180), proxy.log.read_text()
+            assert SERVING_WITHOUT_RUST not in proxy.log.read_text(), proxy.log.read_text()
             yield proxy
         finally:
             assert stop_root_process(process), proxy.log.read_text()
