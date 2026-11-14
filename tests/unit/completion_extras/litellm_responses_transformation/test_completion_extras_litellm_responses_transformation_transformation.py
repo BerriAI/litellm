@@ -1900,6 +1900,86 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
     assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
 
 
+@pytest.mark.parametrize(
+    ("system_len", "expect_system_in_input"),
+    [
+        # OpenAI Responses instructions max length (error text; issue #50243, 2026-11-05)
+        (1_048_576, False),
+        (1_048_576 + 1, True),
+    ],
+    ids=["at_cap_keeps_instructions", "over_cap_moves_system_into_input"],
+)
+def test_transform_request_routes_oversized_system_prompt_out_of_instructions(
+    system_len: int, expect_system_in_input: bool
+) -> None:
+    """OpenAI caps Responses instructions at 1_048_576 chars; bridge must not send over-cap text there.
+
+    Regression for #50243. Same routing as system-only / json_object: carry the joined
+    system text as the first system input item when it would exceed the cap.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        _RESPONSES_INSTRUCTIONS_MAX_LENGTH,
+    )
+
+    assert _RESPONSES_INSTRUCTIONS_MAX_LENGTH == 1_048_576
+    system_text = "a" * system_len
+    user_text = "Reply with only the word OK."
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": user_text},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    user_item = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": user_text}],
+    }
+    system_item = {
+        "type": "message",
+        "role": "system",
+        "content": [{"type": "input_text", "text": system_text}],
+    }
+    if expect_system_in_input:
+        assert result["input"] == [system_item, user_item], result
+        assert not result.get("instructions")
+    else:
+        assert result["input"] == [user_item], result
+        assert result.get("instructions") == system_text
+
+
+def test_transform_request_short_system_prompt_still_uses_instructions() -> None:
+    """Under-cap string system prompts keep the existing instructions path."""
+    system_text = "You are a helpful assistant."
+    user_text = "Hi"
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": user_text},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": user_text}],
+        }
+    ]
+    assert result.get("instructions") == system_text
+
+
 def test_transform_request_single_char_keys_not_matched():
     """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
 
