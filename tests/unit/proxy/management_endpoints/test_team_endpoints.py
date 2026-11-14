@@ -14938,6 +14938,85 @@ async def test_resolve_existing_member_user_ids_skips_the_query_when_no_user_ids
     repo.return_value.table.find_many.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_team_info_without_members_returns_an_empty_roster_and_reads_neither_memberships_nor_users():
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Platform",
+        members_with_roles=[Member(user_id="member-1", role="admin"), Member(user_id="member-2", role="user")],
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+    memberships = AsyncMock(return_value=[])
+    find_many = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(team_endpoints, "get_all_team_memberships", memberships),
+        patch.object(team_endpoints, "UserRepository") as repo,
+    ):
+        repo.return_value.table.find_many = find_many
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            include_members=False,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response["team_info"].members_with_roles == ()
+    assert list(response["team_memberships"]) == []
+    assert response["team_info"].team_alias == "Platform"
+    memberships.assert_not_awaited()
+    find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("email", "user_rows", "expected", "user_lookups"),
+    [
+        pytest.param("stored@example.com", [], "on-roster", 0, id="roster email wins without a user lookup"),
+        pytest.param(
+            "row@example.com",
+            [("outsider", "row@example.com"), ("no-email-on-roster", "row@example.com")],
+            "no-email-on-roster",
+            1,
+            id="user-row email resolves the roster member, not an outsider sharing it",
+        ),
+        pytest.param(
+            "current@example.com",
+            [("on-roster", "current@example.com")],
+            None,
+            1,
+            id="a stored roster email hides the user row's",
+        ),
+        pytest.param("nobody@example.com", [], None, 1, id="unknown email"),
+        pytest.param(None, [], None, 0, id="no email"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_roster_user_id_for_email_matches_what_team_info_shows(email, user_rows, expected, user_lookups):
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    roster = (
+        Member(user_id="on-roster", user_email="stored@example.com", role="user"),
+        Member(user_id="no-email-on-roster", role="user"),
+    )
+    find_many = AsyncMock(return_value=[_user_row(user_id, user_email) for user_id, user_email in user_rows])
+
+    with patch.object(team_endpoints, "UserRepository") as repo:
+        repo.return_value.table.find_many = find_many
+        resolved = await team_endpoints._roster_user_id_for_email(MagicMock(), roster, email)
+
+    assert resolved == expected
+    assert find_many.await_count == user_lookups
+    if user_lookups:
+        assert find_many.await_args.kwargs["where"] == {"user_email": email}
+
+
 def _user_row(user_id: str, user_email: str | None, user_alias: str | None = None) -> LiteLLM_UserTable:
     return LiteLLM_UserTable(
         user_id=user_id, user_email=user_email, user_alias=user_alias, max_budget=None, spend=0.0, models=[]
