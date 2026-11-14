@@ -871,7 +871,7 @@ class _SyncSuccessRun:
     start_time: datetime.datetime
     end_time: datetime.datetime
     complete_streaming_response: object
-    carries_stream_chunk: bool
+    logs_mid_stream_chunk: bool
     is_sync_request: bool
     for_async_request: bool
     call_details_view: Mapping[str, object]
@@ -4032,8 +4032,18 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     cache_hit=cache_hit,
                     for_async_request=for_async_request,
+                    ends_stream=False,
                     **kwargs,
                 )
+        finally:
+            self._restore_correlation_context()
+
+    def stream_end_success_handler(self, result: object, cache_hit: bool | None) -> None:
+        """The stream wrapper's one end-of-stream log, which still reaches callbacks that skip chunk logs
+        when the response builder failed and the result is a chunk carrying best-effort usage."""
+        try:
+            with post_response_phase(), outside_mirrored_call(), self._parent_otel_span_anchored():
+                self._success_handler_body(result=result, cache_hit=cache_hit, ends_stream=True)
         finally:
             self._restore_correlation_context()
 
@@ -4048,6 +4058,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
         for_async_request: bool = False,
+        ends_stream: bool = False,
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
@@ -4148,7 +4159,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 else callbacks
             )
 
-            carries_stream_chunk: Final = isinstance(result, ModelResponseStream)
+            logs_mid_stream_chunk: Final = isinstance(result, ModelResponseStream) and not ends_stream
             ## REDACT MESSAGES ##
             result = _REDACTED_RESULT.validate_python(
                 redact_message_input_output_from_logging(
@@ -4183,7 +4194,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
                 complete_streaming_response=complete_streaming_response,
-                carries_stream_chunk=carries_stream_chunk,
+                logs_mid_stream_chunk=logs_mid_stream_chunk,
                 is_sync_request=is_sync_request,
                 for_async_request=for_async_request,
                 call_details_view=MappingProxyType(prepared.details),
@@ -4251,7 +4262,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for_async_request: Final = run.for_async_request
         call_details_view: Final = run.call_details_view
         delivers_final_stream_log: Final = complete_streaming_response is not None or self._is_pass_through_call()
-        sends_success_log: Final = delivers_final_stream_log or not run.carries_stream_chunk
+        sends_success_log: Final = delivers_final_stream_log or not run.logs_mid_stream_chunk
         result = run.result  # rebind-ok: integrations swap in the assembled stream for later callbacks
         kwargs: Mapping[str, object] = run.kwargs  # rebind-ok: integrations leave their kwargs to later callbacks
         litellm_params = run.litellm_params  # rebind-ok: supabase leaves its params to later callbacks

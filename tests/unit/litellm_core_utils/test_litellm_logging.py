@@ -9,6 +9,7 @@ import os
 import sys
 import types
 import threading
+from concurrent.futures import Future
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
@@ -54,7 +55,7 @@ from litellm.types.integrations.custom_logger_v2 import Usage as V2Usage
 from litellm.types.integrations.custom_logger_v2 import UsageRecord as V2UsageRecord
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
-from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils import litellm_logging, streaming_handler
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
@@ -5404,6 +5405,45 @@ def test_a_sync_file_content_stream_calls_a_success_callback_function_once(monke
 
     assert b"".join(stream) == b"ab"
     assert calls == ["dict"]
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future[object]:
+        future: Final[Future[object]] = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+@pytest.mark.parametrize("stream_options", [None, {"include_usage": True}])
+def test_a_sync_stream_whose_response_builder_fails_calls_a_success_callback_function_once(
+    monkeypatch: pytest.MonkeyPatch, stream_options: Mapping[str, bool] | None
+):
+    calls: Final[list[str]] = []  # mutable-ok: records each call as it fires
+
+    def track_cost(
+        kwargs: Mapping[str, object], completion_response: object, start_time: dt_object, end_time: dt_object
+    ) -> None:
+        calls.append(type(completion_response).__name__)
+
+    def fail_to_build(**_: object) -> None:
+        raise ValueError("assembly failed")
+
+    monkeypatch.setattr(streaming_handler, "executor", _InlineExecutor())
+    monkeypatch.setattr(litellm, "stream_chunk_builder", fail_to_build)
+    monkeypatch.setattr(litellm, "success_callback", [track_cost])
+
+    stream: Final = litellm.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="Hello there, how are you today?",
+        stream=True,
+        stream_options=stream_options,
+    )
+    assert isinstance(stream, litellm.CustomStreamWrapper)
+    for _ in stream:
+        pass
+
+    assert calls == ["ModelResponseStream"]
 
 
 @pytest.mark.asyncio

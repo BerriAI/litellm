@@ -2493,6 +2493,7 @@ class CustomStreamWrapper:
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
+                logs_stream_end: Final = not self.sent_stream_usage
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(
                         complete_streaming_response, self.custom_llm_provider, self.chunks
@@ -2515,21 +2516,10 @@ class CustomStreamWrapper:
                         processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        _log_copy,
-                        None,
-                        None,
-                        cache_hit,
-                    )
-                else:
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        response,
-                        None,
-                        None,
-                        cache_hit,
-                    )
+                    if logs_stream_end:
+                        executor.submit(self.logging_obj.stream_end_success_handler, _log_copy, cache_hit)
+                elif logs_stream_end:
+                    executor.submit(self.logging_obj.stream_end_success_handler, response, cache_hit)
                 # Update hidden_params with final usage from
                 # stream_chunk_builder.  Some providers (e.g. OpenRouter)
                 # send usage in a chunk after finish_reason, which arrives
