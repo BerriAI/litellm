@@ -125,6 +125,16 @@ _NO_SYSTEM_PARTS: Final = {"systemInstruction": {"parts": []}}
 _TOOLS: Final = {"tools": [{"functionDeclarations": [_DECLARATION]}]}
 _TURN: Final = {"role": "user", "parts": [{"text": "Count this request"}]}
 _CONTENTS: Final = {"contents": [_TURN]}
+_PART_METADATA: Final = (
+    ("videoMetadata", {"fps": 1}),
+    ("video_metadata", {"fps": 1}),
+    ("mediaResolution", {"level": "MEDIA_RESOLUTION_LOW"}),
+    ("media_resolution", {"level": "MEDIA_RESOLUTION_LOW"}),
+    ("mediaProcessing", {"fps": 1}),
+    ("media_processing", {"fps": 1}),
+    ("speechMetadata", {"speaker": "narrator"}),
+    ("speech_metadata", {"speaker": "narrator"}),
+)
 
 
 @pytest.mark.parametrize(
@@ -138,13 +148,10 @@ _CONTENTS: Final = {"contents": [_TURN]}
         ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "inlineData": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "thought": False}}}, _NO_SYSTEM_PARTS),
-        ({"systemInstruction": {"parts": {"text": None, "videoMetadata": {"fps": 1}}}}, _NO_SYSTEM_PARTS),
-        (
-            {"systemInstruction": {"parts": {"text": None, "mediaResolution": {"level": "MEDIA_RESOLUTION_LOW"}}}},
-            _NO_SYSTEM_PARTS,
+        *(
+            ({"systemInstruction": {"parts": {"text": None, field: metadata}}}, _NO_SYSTEM_PARTS)
+            for field, metadata in _PART_METADATA
         ),
-        ({"systemInstruction": {"parts": {"text": None, "media_processing": {"fps": 1}}}}, _NO_SYSTEM_PARTS),
-        ({"systemInstruction": {"parts": {"text": None, "speechMetadata": {"speaker": "narrator"}}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": [{"thoughtSignature": "c2ln"}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": [{}]}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
