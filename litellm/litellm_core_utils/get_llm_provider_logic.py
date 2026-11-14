@@ -8,6 +8,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+    ZOOM_AI_DEFAULT_API_BASE,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
@@ -705,6 +706,11 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "soniox":
         api_base = api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
         dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
+    elif custom_llm_provider == "zoom_ai":
+        api_base = (  # rebind-ok: mirrors sibling provider branches
+            api_base or get_secret_str("ZOOM_AI_API_BASE") or ZOOM_AI_DEFAULT_API_BASE
+        )
+        dynamic_api_key = api_key or get_secret_str("ZOOM_AI_API_KEY")  # rebind-ok: mirrors sibling provider branches
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")

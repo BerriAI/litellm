@@ -467,6 +467,10 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
             ".llms.soniox.audio_transcription.transformation",
             "SonioxAudioTranscriptionConfig",
         ),
+        "ZoomAIAudioTranscriptionConfig": (
+            ".llms.zoom_ai.audio_transcription.transformation",
+            "ZoomAIAudioTranscriptionConfig",
+        ),
         "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
         "DefaultTeamSSOParams": ("litellm.types.proxy.management_endpoints.ui_sso", "DefaultTeamSSOParams"),
         "LiteLLM_UpperboundKeyGenerateParams": (
