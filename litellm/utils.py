@@ -7801,6 +7801,16 @@ def register_prompt_template(
     return litellm.custom_prompt_dict
 
 
+def _text_choice(chat_choice: StreamingChoices) -> TextChoices:
+    text_choices: Final = TextChoices()
+    delta: Final = chat_choice["delta"]
+    text_choices["text"] = delta["content"]
+    text_choices["reasoning_content"] = delta.get("reasoning_content")
+    text_choices["index"] = chat_choice["index"]
+    text_choices["finish_reason"] = chat_choice["finish_reason"]
+    return text_choices
+
+
 class TextCompletionStreamWrapper:
     def __init__(
         self,
@@ -7827,15 +7837,9 @@ class TextCompletionStreamWrapper:
             response["object"] = "text_completion"
             response["created"] = chunk.get("created", None)
             response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
-            delta: Final = chunk["choices"][0]["delta"]
-            text_choices["text"] = delta["content"]
-            text_choices["reasoning_content"] = delta.get("reasoning_content")
-            text_choices["index"] = chunk["choices"][0]["index"]
-            text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
-            response["choices"] = [text_choices]
+            response["choices"] = [_text_choice(chat_choice) for chat_choice in chunk["choices"]]
 
             # only pass usage when stream_options["include_usage"] is True
             if self.stream_options and self.stream_options.get("include_usage", False) is True:

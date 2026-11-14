@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -5651,6 +5652,61 @@ async def test_a_text_completion_fake_stream_replays_the_plain_answer_as_a_strea
     assert route.call_count == 1
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent.get("stream") is not True and "fake_stream" not in sent, sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, url, answer",
+    [
+        (
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            {
+                **_OPENAI_TEXT_ANSWER,
+                "choices": [
+                    {"text": "first", "index": 0, "logprobs": None, "finish_reason": "stop"},
+                    {"text": "second", "index": 1, "logprobs": None, "finish_reason": "stop"},
+                ],
+            },
+        ),
+        (
+            "openai/gpt-5.6",
+            "https://api.openai.com/v1/chat/completions",
+            {
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "first"}, "finish_reason": "stop"},
+                    {"index": 1, "message": {"role": "assistant", "content": "second"}, "finish_reason": "stop"},
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+        ),
+    ],
+    ids=["text_endpoint", "chat_endpoint"],
+)
+async def test_a_fake_streamed_text_completion_keeps_every_choice(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    streamed: Final = await litellm.atext_completion(
+        model=model, api_key="fake-key", prompt="hi", n=2, stream=True, fake_stream=True
+    )
+    chunks: Final = [chunk async for chunk in streamed]
+    choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+
+    assert {index: "".join(c.text or "" for c in choices if c.index == index) for index in (0, 1)} == {
+        0: "first",
+        1: "second",
+    }
 
 
 @pytest.mark.asyncio
