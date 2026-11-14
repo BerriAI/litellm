@@ -426,6 +426,7 @@ class ContextCachingEndpoints(VertexBase):
         extra_headers: dict | None = None,
         cached_content: str | None = None,
         context_caching: bool = True,
+        drop_params: bool = False,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -512,6 +513,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=target.project,
             vertex_location=target.location,
+            drop_params=drop_params,
         )
 
         cached_content_request_body["tools"] = tools
@@ -575,6 +577,7 @@ class ContextCachingEndpoints(VertexBase):
         extra_headers: dict | None = None,
         cached_content: str | None = None,
         context_caching: bool = True,
+        drop_params: bool = False,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -664,6 +667,7 @@ class ContextCachingEndpoints(VertexBase):
                 custom_llm_provider=custom_llm_provider,
                 vertex_project=target.project,
                 vertex_location=target.location,
+                drop_params=drop_params,
             )
 
             cached_content_request_body["tools"] = tools
