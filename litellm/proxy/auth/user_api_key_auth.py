@@ -4453,7 +4453,7 @@ async def _reserve_budget_after_common_checks(
             ),
             raw_body=await read_raw_json_body(request=request),
             path_params=reservation_path_params,
-            pre_call_admits=request is None or request.method != "GET",
+            pre_call_admits=request is None or request.scope.get("method") != "GET",
         )
         if request is not None:
             bind_native_request(user_api_key_auth_obj, request)
