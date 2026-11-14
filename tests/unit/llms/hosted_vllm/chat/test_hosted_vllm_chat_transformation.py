@@ -12,6 +12,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import DROP_MID_CONVERSATION_SYSTEM_ENV
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponse
@@ -555,3 +556,33 @@ def test_hosted_vllm_tools_are_rewritten_without_touching_the_callers_tool() -> 
         }
     ]
     assert tools == tools_before
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected_roles"),
+    [("true", ["system", "user", "assistant", "user"]), (None, ["system", "user", "system", "assistant", "user"])],
+    ids=["drop", "default"],
+)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_transform_messages_drops_midturn_system_only_when_flag_set(monkeypatch, flag, expected_roles, is_async):
+    if flag is None:
+        monkeypatch.delenv(DROP_MID_CONVERSATION_SYSTEM_ENV, raising=False)
+    else:
+        monkeypatch.setenv(DROP_MID_CONVERSATION_SYSTEM_ENV, flag)
+    messages = [
+        {"role": "system", "content": "You are Claude Code."},
+        {"role": "user", "content": "say hi"},
+        {"role": "system", "content": "<system-reminder>Keep answers to one sentence.</system-reminder>"},
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "say bye"},
+    ]
+    config = HostedVLLMChatConfig()
+
+    transformed = (
+        await config._transform_messages(messages, model="qwen3.8-27B", is_async=True)
+        if is_async
+        else config._transform_messages(messages, model="qwen3.8-27B")
+    )
+
+    assert [m["role"] for m in transformed] == expected_roles
