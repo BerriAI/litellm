@@ -15,6 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 TOKEN_LIMIT_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens"})
+REWRITTEN_PARAMS: Final = TOKEN_LIMIT_PARAMS | {"reasoning_effort"}
 
 
 def _is_json_object(
@@ -33,11 +34,12 @@ def _exceeds_output_limit(model: str, max_tokens: object) -> bool:
     return isinstance(max_tokens, int) and isinstance(limit, int) and max_tokens > limit
 
 
-def _accepted_effort(model: str, requested: object) -> object:
+def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
     declared: Final = declared_reasoning_efforts_for_model(model, "zai")
     if not isinstance(requested, str) or declared is None:
         return requested
-    return nearest_declared_reasoning_effort(requested, declared)
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    return None if drop_params and accepted not in declared else accepted
 
 
 def _schema_without_native_support(model: str, response_format: object) -> Mapping[str, object] | None:
@@ -116,17 +118,21 @@ class ZAIChatConfig(OpenAIGPTConfig):
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         supported_params: Final = self.get_supported_openai_params(model)
         sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
+        drops_unsupported: Final = litellm.drop_params or drop_params
         max_completion_tokens: Final = sent.get("max_completion_tokens")
         falls_back_to_max_tokens: Final = max_completion_tokens is None or (
-            (litellm.drop_params or drop_params) and _exceeds_output_limit(model, max_completion_tokens)
+            drops_unsupported and _exceeds_output_limit(model, max_completion_tokens)
         )
         max_tokens: Final = sent.get("max_tokens") if falls_back_to_max_tokens else max_completion_tokens
-        reasoning_effort: Final = sent.get("reasoning_effort")
+        requested_effort: Final = sent.get("reasoning_effort")
+        reasoning_effort: Final = (
+            None if requested_effort is None else _accepted_effort(model, requested_effort, drops_unsupported)
+        )
         return {
             **optional_params,
-            **{param: value for param, value in sent.items() if param not in TOKEN_LIMIT_PARAMS},
+            **{param: value for param, value in sent.items() if param not in REWRITTEN_PARAMS},
             **({} if max_tokens is None else {"max_tokens": max_tokens}),
-            **({} if reasoning_effort is None else {"reasoning_effort": _accepted_effort(model, reasoning_effort)}),
+            **({} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}),
         }
 
     def transform_request(
