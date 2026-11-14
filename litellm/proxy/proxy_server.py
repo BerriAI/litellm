@@ -7428,6 +7428,10 @@ class ProxyConfig:
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 elif key == "suppress_startup_output":
                     continue
+                elif key == "model_fallbacks":
+                    verbose_proxy_logger.warning(
+                        "litellm_settings.model_fallbacks has no effect on the proxy, set router_settings.fallbacks instead"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
