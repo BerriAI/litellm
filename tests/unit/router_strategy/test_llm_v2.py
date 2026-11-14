@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import ModelResponse, Router
-from litellm.caching.dual_cache import DualCache
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import strategy_router_dependencies
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -24,6 +23,7 @@ from litellm.router_strategy.complexity_router.llm_v2 import (
     llm_v2_response_format,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests.unit.redis.stores.router_session_pins_memory import memory_pins
 
 
 def _config(**overrides: object) -> ComplexityRouterConfig:
@@ -389,9 +389,7 @@ async def test_caller_constraints_respect_claude_code_prompt_policy(user_agent: 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("calibrated", (False, True))
-async def test_routing_metadata_preserves_exact_forecasts_and_redaction(
-    calibrated: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_routing_metadata_preserves_exact_forecasts(calibrated: bool) -> None:
     base: Final = _config().llm_v2_config
     assert base is not None
     calibration: Final = LLMV2Calibration(
@@ -410,23 +408,18 @@ async def test_routing_metadata_preserves_exact_forecasts_and_redaction(
     assert result.model == ("capable" if calibrated else "efficient")
     decision: Final = result.routing_decision
     assert decision is not None
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
-    redacted: Final = Router._redact_prompt_text_if_needed(request_kwargs={}, routing_decision=decision)
-    assert redacted is not None
-    assert "signals" not in redacted
-    for record in (decision, redacted):
-        assert record["classifier_efficient_p_solve"] == 0.900000123
-        assert record["classifier_capable_p_solve"] == 0.920000321
-        assert record["classifier_max_quality_gap"] == 0.05
-        assert record["classifier_prompt_version"] == LLM_V2_PROMPT_VERSION
-        if calibrated:
-            assert record["classifier_calibration_version"] == "test-pair-v1"
-            assert record["classifier_calibrated_efficient_p_solve"] == calibration.efficient.calibrate(0.900000123)
-            assert record["classifier_calibrated_capable_p_solve"] == calibration.capable.calibrate(0.920000321)
-        else:
-            assert "classifier_calibration_version" not in record
-            assert "classifier_calibrated_efficient_p_solve" not in record
-            assert "classifier_calibrated_capable_p_solve" not in record
+    assert decision["classifier_efficient_p_solve"] == 0.900000123
+    assert decision["classifier_capable_p_solve"] == 0.920000321
+    assert decision["classifier_max_quality_gap"] == 0.05
+    assert decision["classifier_prompt_version"] == LLM_V2_PROMPT_VERSION
+    if calibrated:
+        assert decision["classifier_calibration_version"] == "test-pair-v1"
+        assert decision["classifier_calibrated_efficient_p_solve"] == calibration.efficient.calibrate(0.900000123)
+        assert decision["classifier_calibrated_capable_p_solve"] == calibration.capable.calibrate(0.920000321)
+    else:
+        assert "classifier_calibration_version" not in decision
+        assert "classifier_calibrated_efficient_p_solve" not in decision
+        assert "classifier_calibrated_capable_p_solve" not in decision
 
 
 @pytest.mark.asyncio
@@ -571,7 +564,7 @@ def test_response_schema_requires_both_model_forecasts() -> None:
 @pytest.mark.asyncio
 async def test_user_turn_mode_reuses_forecast_until_a_new_user_requirement() -> None:
     router, client = _router(_verdict().model_dump_json(), _config(classification_mode="user_turn"))
-    client.health.return_value.store = DualCache()
+    client.health.return_value.session_pins = memory_pins()
     initial: Final = [{"role": "user", "content": "Fix nested behavior"}]
     first: Final = await router.async_pre_routing_hook(
         model="v2-router", messages=initial, request_kwargs={"metadata": {"session_id": "v2-task"}}

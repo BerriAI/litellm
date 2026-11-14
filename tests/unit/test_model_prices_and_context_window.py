@@ -279,6 +279,10 @@ def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
 PRIORITY_SUFFIX: Final = "_priority"
 MIN_PRIORITY_MARKUP: Final = 1.0
 MAX_PRIORITY_MARKUP: Final = 5.0
+# Vertex pricing, verified 2026-11-03: https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+VERIFIED_PRIORITY_MARKUP_MAXIMA: Final = MappingProxyType(
+    {("gemini-2.5-flash", "input_cost_per_audio_token_above_200k_tokens_priority"): 6.0}
+)
 
 
 def _rate(value: JsonValue | None) -> float | None:
@@ -312,7 +316,7 @@ def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path)
     overpriced: Final = tuple(
         f"{name}.{key} is {markup:.1f}x its standard rate"
         for name, key, markup in markups
-        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+        if not MIN_PRIORITY_MARKUP <= markup <= VERIFIED_PRIORITY_MARKUP_MAXIMA.get((name, key), MAX_PRIORITY_MARKUP)
     )
     assert overpriced == (), (
         "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
@@ -866,6 +870,67 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
     ]
 
 
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_family_cache_image_rate_tracks_azure(prices: dict, model: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["cache_read_input_image_token_cost"] > 0
+    assert azure["cache_read_input_image_token_cost"] == openai["cache_read_input_image_token_cost"]
+    assert azure["input_cost_per_image_token"] >= azure["cache_read_input_image_token_cost"]
+
+
+@pytest.mark.parametrize(
+    "model,mode",
+    (
+        ("gpt-realtime-translate", "realtime"),
+        ("gpt-live-transcribe", "audio_transcription"),
+        ("gpt-transcribe", "audio_transcription"),
+    ),
+)
+def test_azure_realtime_specialized_models_follow_openai_modes(prices: dict, model: str, mode: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["mode"] == azure["mode"] == mode
+    assert azure["supports_audio_input"] is True
+    assert set(openai.get("supported_endpoints", ())) <= set(azure.get("supported_endpoints", ()))
+
+
+_DATED_SNAPSHOT: Final = re.compile(r"(?P<alias>.+)-\d{4}-\d{2}-\d{2}")
+
+
+def _azure_realtime_snapshots_with_an_alias(prices: Mapping[str, dict]) -> tuple[tuple[str, str], ...]:
+    dated: Final = (
+        (name, _DATED_SNAPSHOT.fullmatch(name))
+        for name, entry in prices.items()
+        if name.startswith("azure/") and "/v1/realtime" in entry.get("supported_endpoints", ())
+    )
+    return tuple((name, match["alias"]) for name, match in dated if match is not None and match["alias"] in prices)
+
+
+def _realtime_ga_only(entry: dict) -> object:
+    return (entry.get("provider_specific_entry") or {}).get("realtime_ga_only")
+
+
+def test_dated_azure_realtime_models_select_the_same_protocol_as_their_alias(prices: dict):
+    snapshots: Final = _azure_realtime_snapshots_with_an_alias(prices)
+    disagreeing: Final = tuple(
+        (snapshot, alias)
+        for snapshot, alias in snapshots
+        if _realtime_ga_only(prices[snapshot]) != _realtime_ga_only(prices[alias])
+    )
+
+    assert snapshots
+    assert disagreeing == ()
+
+
+def test_model_prices_backup_is_synchronized(prices: dict):
+    backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
+
+    assert backup == prices
+
+
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
@@ -891,6 +956,30 @@ def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map
     }
     assert long_decode_rows <= main_rows, sorted(main_rows)
     assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
+
+
+def test_gemini_4_rows_share_the_gemini_3_search_allowance_in_both_cost_map_copies() -> None:
+    main_rows: Final = _search_free_requests_rows(PRICES_PATH)
+    # 5,000 free grounding requests per month shared across Gemini 3 and newer:
+    # https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon and
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing (2026-11-10)
+    gemini_4_rows: Final = {
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+        "gemini/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon-cyber-permissive",
+    }
+    assert gemini_4_rows <= main_rows.keys(), sorted(main_rows)
+    gemini_3_allowances: Final = {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True)
+        for key in ("gemini/gemini-3.8-flash", "vertex_ai/gemini-3.8-flash")
+    }
+    assert {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True) for key in gemini_4_rows
+    } == gemini_3_allowances
+    assert _search_free_requests_rows(BACKUP_PRICES_PATH) == main_rows
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
@@ -959,3 +1048,121 @@ def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblin
 def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
     assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
+
+
+def _nace_rows(path: Path) -> Mapping[str, Mapping[str, JsonValue]]:
+    prices: Final = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_json(path.read_bytes())
+    return {key: row for key, row in prices.items() if key.startswith("nace/")}
+
+
+@pytest.mark.parametrize("model", ("drex-v1.0", "drex-v1.5", "drex-latest", "drex-max"))
+def test_drex_alias_metadata_matches_the_served_version(local_model_cost_map: None, model: str) -> None:
+    alias: Final = litellm.model_cost[f"nace/{model}"]
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    for field in ("input_cost_per_token", "output_cost_per_token", "max_input_tokens", "supports_vision"):
+        assert alias.get(field) == served[field]
+    assert litellm.supports_vision(f"nace/{model}") is True
+
+
+def test_drex_max_metadata_supports_decisions_and_input_billing(local_model_cost_map: None) -> None:
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    assert served["input_cost_per_token"] > 0
+    assert served["output_cost_per_token"] == 0
+    assert (served["litellm_provider"], served["mode"]) == ("nace", "evaluation")
+    assert served["max_input_tokens"] > 0
+    assert litellm.supports_vision("nace/drex-max-v1.1") is True
+
+
+def test_nace_backup_rows_match_the_main_catalog() -> None:
+    assert {"nace/drex-max", "nace/drex-max-v1.1"} <= _nace_rows(PRICES_PATH).keys()
+    assert _nace_rows(BACKUP_PRICES_PATH) == _nace_rows(PRICES_PATH)
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_bill_web_search_like_their_anthropic_rows(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    pairs: Final = {
+        key: (row, prices[key.removeprefix("azure_ai/")])
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and key.removeprefix("azure_ai/") in prices
+    }
+    priced_pairs: Final = {
+        key: (row, bare)
+        for key, (row, bare) in pairs.items()
+        if isinstance(bare, dict) and bare.get("search_context_cost_per_query")
+    }
+    assert priced_pairs
+    drifted: Final = tuple(
+        key
+        for key, (row, bare) in priced_pairs.items()
+        if row.get("search_context_cost_per_query") != bare["search_context_cost_per_query"]
+        or row.get("supports_web_search") is not True
+    )
+    assert drifted == (), drifted
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    priced_rows: Final = {
+        key: row
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and row.get("search_context_cost_per_query")
+    }
+    assert priced_rows
+    unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
+    assert unflagged == (), unflagged
+
+
+@pytest.mark.parametrize(
+    ("model", "supports_vision", "supports_video_input", "supports_audio_input"),
+    (
+        ("deepinfra/zai-org/GLM-5.3-Flash", True, True, False),
+        ("deepinfra/XiaomiMiMo/MiMo-V2.6-Flash", True, True, True),
+        ("deepinfra/nvidia/NVIDIA-Nemotron-3.5-Super-VL", True, True, False),
+        ("deepinfra/tencent/Hy4-preview", False, False, False),
+    ),
+)
+def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
+    model: str,
+    supports_vision: bool,
+    supports_video_input: bool,
+    supports_audio_input: bool,
+    local_model_cost_map: None,
+) -> None:
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    backup: Final = TypeAdapter(dict[str, JsonValue]).validate_json(BACKUP_PRICES_PATH.read_bytes())
+    row: Final = catalog[model]
+    assert isinstance(row, dict)
+    assert row == backup[model]
+    assert (row["litellm_provider"], row["mode"]) == ("deepinfra", "chat")
+
+    max_input: Final = row["max_input_tokens"]
+    input_cost: Final = row["input_cost_per_token"]
+    output_cost: Final = row["output_cost_per_token"]
+    cache_read_cost: Final = row["cache_read_input_token_cost"]
+    assert isinstance(max_input, int) and max_input > 0
+    assert isinstance(input_cost, float) and isinstance(output_cost, float) and isinstance(cache_read_cost, float)
+    assert 0 < cache_read_cost < input_cost and output_cost > 0
+
+    bare_model: Final = model.removeprefix("deepinfra/")
+    info: Final = litellm.get_model_info(model=bare_model, custom_llm_provider="deepinfra")
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
+    assert info["cache_read_input_token_cost"] == cache_read_cost
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=1_000_000, completion_tokens=1_000_000
+    )
+    assert (prompt_cost, completion_cost) == pytest.approx((input_cost * 1_000_000, output_cost * 1_000_000))
+
+    assert litellm.supports_reasoning(model=model) is True
+    assert litellm.supports_function_calling(model=model) is True
+    assert litellm.supports_response_schema(model=model) is True
+    assert litellm.utils.supports_prompt_caching(model=model) is True
+    assert litellm.supports_vision(model=model) is supports_vision
+    assert litellm.supports_video_input(model=model) is supports_video_input
+    assert litellm.supports_audio_input(model=model) is supports_audio_input
+    assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)

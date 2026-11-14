@@ -16,6 +16,7 @@ from .max_iterations_limiter import (  # noqa: F401  # backwards-compatible pack
     PROXY_MaxIterationsHandler,
     _PROXY_MaxIterationsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
+from .message_thread_ownership import MessageThreadOwnership
 from .parallel_request_limiter import (  # noqa: F401  # backwards-compatible package export
     PROXY_MaxParallelRequestsHandler,
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
@@ -33,12 +34,13 @@ from .sensitive_data_routing import (  # noqa: F401  # backwards-compatible pack
 
 # List of all available hooks that can be enabled.
 # Defined before the enterprise import below so that any module re-imported
-# transitively through `enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
+# transitively through `litellm.enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
 PROXY_HOOKS: Final = {
     "parallel_request_limiter": PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
+    "message_thread_ownership": MessageThreadOwnership,
     "litellm_skills": SkillsInjectionHook,
     "max_iterations_limiter": PROXY_MaxIterationsHandler,
     "max_budget_per_session_limiter": PROXY_MaxBudgetPerSessionHandler,
@@ -66,7 +68,7 @@ def get_proxy_hook(
 ### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ####
 
 try:
-    from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
+    from litellm.enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
 except ImportError:
     ENTERPRISE_PROXY_HOOKS = {}
 
