@@ -2481,7 +2481,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     LangfuseOtelLogger,
                 )
 
-                LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
+                LangfuseOtelLogger.set_langfuse_otel_attributes(
+                    span,
+                    kwargs,
+                    response_obj,
+                    capture_decisions_content=(
+                        self._capture_in_span() and self.message_logging and not self.turn_off_message_logging
+                    ),
+                )
                 return
             elif self.callback_name == "weave_otel":
                 from litellm.integrations.weave.weave_otel import (

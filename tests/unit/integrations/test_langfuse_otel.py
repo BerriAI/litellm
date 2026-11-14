@@ -32,6 +32,7 @@ from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, 
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, StandardCallbackDynamicParams
 
@@ -1817,3 +1818,96 @@ def test_observation_input_carries_the_request_functions_and_tools(
     LangfuseLLMObsOTELAttributes.set_messages(span, request_kwargs)
 
     assert json.loads(str(span.attributes["langfuse.observation.input"])) == expected_input
+
+
+def _systemone_attributes(
+    response: DecisionsResponse,
+    kwargs: Mapping[str, object],
+    *,
+    capture_mode: str | None = None,
+    turn_off_message_logging: bool = False,
+    message_logging: bool = True,
+) -> Mapping[str, object]:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(skip_set_global=True, capture_message_content=capture_mode),
+        callback_name="langfuse_otel",
+        tracer_provider=provider,
+        turn_off_message_logging=turn_off_message_logging,
+        message_logging=message_logging,
+    )
+    span: Final = provider.get_tracer("systemone-langfuse-tests").start_span("litellm_request")
+    try:
+        logger.set_attributes(span, dict(kwargs), response)
+        span.end()
+        return dict(exporter.get_finished_spans()[0].attributes or {})
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "captures_answers"),
+    [(None, True), ("span_only", True), ("span_and_event", True), ("no_content", False), ("event_only", False)],
+)
+@pytest.mark.parametrize("turn_off_message_logging", [False, True])
+def test_systemone_answers_respect_message_content_capture(
+    capture_mode: str | None,
+    captures_answers: bool,
+    turn_off_message_logging: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", turn_off_message_logging)
+    response: Final = DecisionsResponse.model_validate(
+        {"answers": {"is_allowed": {"type": "noul", "noul": 0.91}}, "usage": {"input_tokens": 12, "output_tokens": 0}}
+    )
+    original: Final = response.model_dump()
+    attributes: Final = _systemone_attributes(
+        response,
+        {"call_type": "asystemone", "standard_logging_object": {"metadata": {}}, "litellm_params": {}},
+        capture_mode=capture_mode,
+    )
+
+    if captures_answers and not turn_off_message_logging:
+        assert json.loads(str(attributes["langfuse.observation.output"])) == {
+            "is_allowed": {"type": "noul", "noul": 0.91}
+        }
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+    else:
+        assert "langfuse.observation.output" not in attributes
+        assert "langfuse.trace.output" not in attributes
+        assert "is_allowed" not in json.dumps(dict(attributes))
+    assert {key: value for key, value in attributes.items() if key.startswith("llm.token_count.")} == {
+        "llm.token_count.prompt": 12,
+        "llm.token_count.completion": 0,
+        "llm.token_count.total": 12,
+    }
+    assert response.model_dump() == original
+
+
+@pytest.mark.parametrize("opt_out", ["request", "header", "callback", "legacy"])
+@pytest.mark.parametrize("routed_metadata", [False, True])
+def test_systemone_answers_respect_message_logging_opt_outs(opt_out: str, routed_metadata: bool) -> None:
+    response: Final = DecisionsResponse.model_validate(
+        {"answers": {"is_allowed": {"type": "noul", "noul": 0.91}}, "usage": {"input_tokens": 12, "output_tokens": 0}}
+    )
+    attributes: Final = _systemone_attributes(
+        response,
+        {
+            "call_type": "asystemone",
+            "standard_logging_object": {"metadata": {}},
+            "standard_callback_dynamic_params": {"turn_off_message_logging": True} if opt_out == "request" else {},
+            "litellm_params": {
+                "metadata": {"headers": {"litellm-enable-message-redaction": "true"}} if opt_out == "header" else {},
+                **({"litellm_metadata": {"model_group": "decision-test"}} if routed_metadata else {}),
+            },
+        },
+        capture_mode="span_only",
+        turn_off_message_logging=opt_out == "callback",
+        message_logging=opt_out != "legacy",
+    )
+
+    assert "langfuse.observation.output" not in attributes
+    assert "langfuse.trace.output" not in attributes
+    assert "is_allowed" not in json.dumps(dict(attributes))

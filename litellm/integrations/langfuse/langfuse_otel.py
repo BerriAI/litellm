@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -163,7 +164,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj, *, capture_decisions_content: bool = False):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -175,7 +176,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         #########################################################
         # Set Langfuse specific attributes
         #########################################################
-        LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
+        LangfuseOtelLogger._set_langfuse_specific_attributes(
+            span=span, kwargs=kwargs, response_obj=response_obj, capture_decisions_content=capture_decisions_content
+        )
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
@@ -250,7 +253,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _observation_output(response_obj: _Gettable | None) -> str | None:
+    def _observation_output(
+        response_obj: _Gettable | DecisionsResponse | None, *, capture_decisions_content: bool = False
+    ) -> str | None:
+        if isinstance(response_obj, DecisionsResponse):
+            return safe_dumps(dict(response_obj.answers)) if capture_decisions_content else None
         if not response_obj or not hasattr(response_obj, "get"):
             return None
         return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
@@ -288,7 +295,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         return tuple(dict.fromkeys(candidates))
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj):
+    def _set_langfuse_specific_attributes(
+        span: Span, kwargs: Mapping[str, object], response_obj, *, capture_decisions_content: bool = False
+    ):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
@@ -297,7 +306,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         values (lists/dicts) are serialised to JSON strings for OTEL
         compatibility.
         """
-        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.arize._utils import safe_set_attribute, should_redact_span_content
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         dynamic_params: Final = as_str_mapping(kwargs.get("standard_callback_dynamic_params"))
@@ -329,7 +338,10 @@ class LangfuseOtelLogger(OpenTelemetry):
                 serialize_langfuse_datetime(completion_start_time),
             )
 
-        output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
+        output_json: Final = LangfuseOtelLogger._observation_output(
+            response_obj,
+            capture_decisions_content=capture_decisions_content and not should_redact_span_content(kwargs),
+        )
         if output_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, output_json)
 
