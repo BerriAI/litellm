@@ -5,6 +5,7 @@ Tests for POST /session/logout and revoke_ui_session_keys
 
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +15,11 @@ from fastapi import HTTPException, Request, Response
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy._types import LiteLLM_VerificationToken, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_VerificationToken, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.login_utils import authenticate_user
 from litellm.proxy.management_endpoints.session_endpoints import (
+    end_earlier_ui_sessions,
     revoke_ui_session_keys,
     session_logout,
 )
@@ -321,19 +323,35 @@ async def test_revoke_ui_session_keys_noop_without_db():
     assert revoked == 0
 
 
+_FIRST_SIGN_IN: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 class _SessionKeyTable:
     """In-memory UI session key rows; ``mint`` stands in for the key a login writes."""
 
     def __init__(self) -> None:
         self.rows: list[LiteLLM_VerificationToken] = []
+        self.names: dict[str, str] = {}
         self.logins = 0
+        self.mint_fails = False
 
     async def mint(self, **key_fields: object) -> dict[str, object]:
+        if self.mint_fails:
+            raise RuntimeError("key write failed")
         self.logins += 1
-        token_id: Final = f"session-{self.logins}"
+        name: Final = f"session-{self.logins}"
+        raw_key: Final = f"sk-{name}"
         user_id: Final = cast(str, key_fields["user_id"])
-        self.rows.append(LiteLLM_VerificationToken(token=token_id, team_id=UI_SESSION_TOKEN_TEAM_ID, user_id=user_id))
-        return {"token": f"sk-{token_id}", "user_id": user_id}
+        self.add(name, hash_token(raw_key), user_id, _FIRST_SIGN_IN + timedelta(seconds=self.logins))
+        return {"token": raw_key, "user_id": user_id}
+
+    def add(self, name: str, hashed: str, user_id: str, created_at: datetime) -> None:
+        self.names[hashed] = name
+        self.rows.append(
+            LiteLLM_VerificationToken(
+                token=hashed, team_id=UI_SESSION_TOKEN_TEAM_ID, user_id=user_id, created_at=created_at
+            )
+        )
 
     async def find_many(self, where: Mapping[str, object]) -> list[LiteLLM_VerificationToken]:
         return [row for row in self.rows if row.user_id == where["user_id"] and row.team_id == where["team_id"]]
@@ -343,8 +361,8 @@ class _SessionKeyTable:
         self.rows = [row for row in self.rows if row.token not in ended]
         return len(ended)
 
-    def tokens(self) -> list[str | None]:
-        return [row.token for row in self.rows]
+    def tokens(self) -> list[str]:
+        return [self.names[cast(str, row.token)] for row in self.rows]
 
 
 def _session_db(table: _SessionKeyTable) -> ExitStack:
@@ -415,7 +433,9 @@ async def _password_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPat
         )
 
 
-async def _sso_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPatch) -> None:
+async def _sso_login(
+    table: _SessionKeyTable, monkeypatch: pytest.MonkeyPatch, ui_access_mode: str | None = None
+) -> None:
     request: Final = MagicMock(spec=Request)
     request.scope = {}
     request.base_url = "http://localhost:4000/"
@@ -442,7 +462,7 @@ async def _sso_login(table: _SessionKeyTable, monkeypatch: pytest.MonkeyPatch) -
             request=request,
             received_response=None,
             generic_client_id="cid",
-            ui_access_mode=None,
+            ui_access_mode=ui_access_mode,
         )
 
 
@@ -487,11 +507,54 @@ async def test_allow_multiple_sessions_setting_keeps_every_session(
 async def test_a_login_leaves_other_users_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
     table: Final = _SessionKeyTable()
-    table.rows.append(
-        LiteLLM_VerificationToken(token="other-user-session", team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-456")
-    )
+    table.add("other-user-session", "other-hash", "user-456", _FIRST_SIGN_IN)
 
     with _session_db(table):
         await _password_login(table, monkeypatch)
 
     assert table.tokens() == ["other-user-session", "session-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_sso_sign_in_keeps_the_earlier_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    table: Final = _SessionKeyTable()
+
+    with _session_db(table):
+        await _sso_login(table, monkeypatch)
+        with pytest.raises(HTTPException) as refused:
+            await _sso_login(table, monkeypatch, ui_access_mode="admin_only")
+
+    assert refused.value.status_code == 401
+    assert table.tokens() == ["session-1", "session-2"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_key_write_keeps_the_earlier_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    table: Final = _SessionKeyTable()
+
+    with _session_db(table):
+        await _password_login(table, monkeypatch)
+        table.mint_fails = True
+        with pytest.raises(RuntimeError, match="key write failed"):
+            await _password_login(table, monkeypatch)
+
+    assert table.tokens() == ["session-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finishing_order", [("sk-session-1", "sk-session-2"), ("sk-session-2", "sk-session-1")])
+async def test_overlapping_sign_ins_keep_only_the_newer_session(
+    finishing_order: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_UI_ALLOW_MULTIPLE_SESSIONS", raising=False)
+    table: Final = _SessionKeyTable()
+    await table.mint(user_id=USER_ID)
+    await table.mint(user_id=USER_ID)
+
+    with _session_db(table):
+        for new_key in finishing_order:
+            await end_earlier_ui_sessions(USER_ID, new_key)
+
+    assert table.tokens() == ["session-2"]
