@@ -479,6 +479,40 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
 
 
 @pytest.mark.asyncio
+async def test_a_background_health_check_probe_leaves_its_deployment_idle(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.health_check import _run_model_health_check
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = _least_busy_router()
+    probed: Final = router.get_model_list()[0]
+
+    for _ in range(3):
+        assert await _run_model_health_check(json.loads(json.dumps(probed))) == {}
+    for _ in range(10):
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+    routed: Final = await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
+
+    assert probed["model_info"]["id"] == "1"
+    assert routed._hidden_params["model_id"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_router_spreads_requests_that_start_together(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
