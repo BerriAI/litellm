@@ -2,8 +2,9 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from collections.abc import Mapping
-from typing import Final
+import asyncio
+from collections.abc import Coroutine, Mapping
+from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -16,6 +17,23 @@ from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 
 _SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_StepT: Final = TypeVar("_StepT")
+
+
+async def finish_despite_cancellation(step: Coroutine[object, object, _StepT]) -> _StepT:
+    """Runs a store round trip and the bookkeeping that records it to the end even when the caller is cancelled,
+    so a reservation the store applied is never left unrecorded, then lets the cancellation continue."""
+    task: Final = asyncio.create_task(step)
+    cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until the step finishes
+    while not task.done():
+        try:
+            _ = await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+    result: Final = task.result()
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:

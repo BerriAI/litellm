@@ -82,7 +82,7 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._support.clock_loops import AutojumpClockLoop
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, scope_key
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, ReplyHeldRedis, scope_key
 
 
 class TimeController:
@@ -8466,6 +8466,68 @@ async def test_pre_call_cancelled_before_its_acquire_reply_arrives_leaves_the_sl
     held = get_request_stash().parallel_slot
     assert held is not None
     assert list(redis.slots.values()) == [{held["slot_id"]}]
+
+
+async def _admit_then_fail_as_disconnected(handler, auth) -> None:
+    """The proxy's 499 path: a cancelled pre-call is followed by the failure hook in the same request."""
+    try:
+        await _admit(handler, auth)
+    except asyncio.CancelledError:
+        await handler.async_post_call_failure_hook(
+            request_data={},
+            original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+            user_api_key_dict=auth,
+        )
+        raise
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_tpm_reservation_reply_arrives_gets_the_tokens_back():
+    redis = ReplyHeldRedis()
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-cancelled-tpm"), tpm_limit=1000)
+    tokens = scope_key(RateLimitScope("api_key", auth.api_key), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[tokens] > 0
+    assert redis.count(tokens) == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_before_its_project_token_reservation_reply_arrives_gets_the_tokens_back():
+    redis = ReplyHeldRedis()
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cancelled-project-io"),
+        project_id="proj",
+        project_metadata={"model_itpm_limit": {"test-model": 1000}, "model_otpm_limit": {"test-model": 1000}},
+    )
+    input_tokens = scope_key(RateLimitScope("model_per_project_itpm", "proj:test-model"), "tokens")
+    output_tokens = scope_key(RateLimitScope("model_per_project_otpm", "proj:test-model"), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[input_tokens] > 0
+    assert [redis.count(input_tokens), redis.count(output_tokens)] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_cancelled_while_refunding_a_refused_requests_tpm_reservation_refunds_it_once():
+    redis = ReplyHeldRedis(hold="refund", refuse_key="model_per_project_otpm")
+    handler = _handler_with_redis(redis.fakes)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cancelled-refund"),
+        tpm_limit=1000,
+        project_id="proj",
+        project_metadata={"model_otpm_limit": {"test-model": 1000}},
+    )
+    tokens = scope_key(RateLimitScope("api_key", auth.api_key), "tokens")
+
+    await redis.cancel_once_applied(_admit_then_fail_as_disconnected(handler, auth))
+
+    assert redis.reserved[tokens] > 0
+    assert redis.count(tokens) == 0
 
 
 @pytest.mark.asyncio

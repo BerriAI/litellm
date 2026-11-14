@@ -7,6 +7,7 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2243,6 +2244,86 @@ async def test_enqueued_limit_rejects_when_allowance_is_exhausted():
 
     assert exc.value.status_code == 429
     assert "Batch enqueued token limit exceeded for api_key" in str(exc.value.detail)
+
+
+class _EnqueuedTokenRedis:
+    """Counts a reservation when the reserve script runs and holds its reply until ``deliver_reply`` is set."""
+
+    def __init__(self) -> None:
+        self.counters: dict[str, int] = {}
+        self.reserved = asyncio.Event()
+        self.deliver_reply = asyncio.Event()
+
+    def async_register_script(self, script: str):
+        if "INCRBY" in script:
+            return self._reserve
+        if "DECRBY" in script:
+            return self._refund
+        return self._record
+
+    async def _reserve(self, keys, args):
+        amount, limit = int(args[0]), int(args[2])
+        enqueued = self.counters.get(keys[0], 0)
+        if enqueued + amount > limit:
+            return (0, enqueued)
+        self.counters[keys[0]] = enqueued + amount
+        self.reserved.set()
+        await self.deliver_reply.wait()
+        return (1, enqueued + amount)
+
+    async def _refund(self, keys, args):
+        self.counters[keys[0]] = self.counters.get(keys[0], 0) - int(args[0])
+        return 1
+
+    async def _record(self, keys, args):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_batch_cancelled_before_its_enqueued_reservation_reply_arrives_gets_the_tokens_back():
+    from litellm import DualCache
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache
+    from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+
+    redis = _EnqueuedTokenRedis()
+    internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis, default_in_memory_ttl=60))
+    limiter = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache, rate_limit_store=FakeRateLimits(connected=False).store()
+    )
+    batch_limiter = PROXY_BatchRateLimiter(internal_usage_cache=internal_usage_cache, parallel_request_limiter=limiter)
+    user = UserAPIKeyAuth(
+        api_key="sk-enqueued-cancelled", models=["*"], metadata={"batch_enqueued_token_limit": 100000}
+    )
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    async def disconnected_submission() -> None:
+        data = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        try:
+            await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user, cache=internal_usage_cache.dual_cache, data=data, call_type="acreate_batch"
+            )
+        except asyncio.CancelledError:
+            await limiter.async_post_call_failure_hook(
+                request_data=data,
+                original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+                user_api_key_dict=user,
+            )
+            raise
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        task = asyncio.create_task(disconnected_submission())
+        await asyncio.wait_for(redis.reserved.wait(), timeout=2)
+        enqueued = tuple(redis.counters.values())
+        task.cancel()
+        await asyncio.sleep(0)
+        redis.deliver_reply.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+    assert enqueued and all(tokens > 0 for tokens in enqueued)
+    assert set(redis.counters.values()) == {0}
 
 
 @pytest.mark.asyncio

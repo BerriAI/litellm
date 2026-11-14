@@ -6,6 +6,7 @@ batch under a per-minute RPM/TPM budget. Scopes that configure `tpd_limit`
 are charged against a 24h token window instead of their minute counters.
 """
 
+import asyncio
 import base64
 import json
 import time
@@ -31,6 +32,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types.llms.openai import ChatCompletionUserMessage, LiteLLMBatchCreateRequest
+from tests.unit.redis.stores.fake_rate_limits import ReplyHeldRedis, scope_key
 
 
 class _Clock:
@@ -69,6 +71,38 @@ async def test_batch_over_rpm_and_tpm_but_under_tpd_is_accepted():
     assert await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens") == 500
     assert await _counter(internal_usage_cache, rate_limiter, "api_key", api_key, "requests") == 0
     assert await _counter(internal_usage_cache, rate_limiter, "api_key", api_key, "tokens") == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_cancelled_before_its_tpd_reservation_reply_arrives_gets_the_tokens_back():
+    redis = ReplyHeldRedis()
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()), rate_limit_store=redis.fakes.store()
+    )
+    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    assert batch_limiter is not None
+    auth = UserAPIKeyAuth(api_key=hash_token("tpd-cancelled"), tpd_limit=1000)
+    daily_tokens = scope_key(RateLimitScope("api_key_tpd", auth.api_key), "tokens")
+
+    async def disconnected_submission() -> None:
+        try:
+            await batch_limiter._check_and_increment_batch_counters(
+                user_api_key_dict=auth,
+                data={},
+                batch_usage=BatchFileUsage(total_tokens=500, request_count=50),
+            )
+        except asyncio.CancelledError:
+            await rate_limiter.async_post_call_failure_hook(
+                request_data={},
+                original_exception=HTTPException(status_code=499, detail="Client disconnected the request"),
+                user_api_key_dict=auth,
+            )
+            raise
+
+    await redis.cancel_once_applied(disconnected_submission())
+
+    assert redis.reserved[daily_tokens] == 500
+    assert redis.count(daily_tokens) == 0
 
 
 @pytest.mark.asyncio
