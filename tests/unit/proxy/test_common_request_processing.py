@@ -57,7 +57,7 @@ from litellm.proxy.common_request_processing import (
     FirstChunkSseFraming,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
-    _await_llm_call_cancelling_on_disconnect,
+    await_llm_call_cancelling_on_disconnect,
     _bill_partial_streamed_spend_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
@@ -6880,7 +6880,7 @@ class TestCancelOnDisconnect:
         llm_call.cancel()
 
         with pytest.raises(asyncio.CancelledError):
-            await _await_llm_call_cancelling_on_disconnect(request, llm_call)
+            await await_llm_call_cancelling_on_disconnect(request, llm_call)
 
     async def _drive_base_process_llm_request(self, monkeypatch, general_settings: dict, llm_call, request: Request):
         from litellm.proxy._types import UserAPIKeyAuth

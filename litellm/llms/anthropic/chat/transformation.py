@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     map_finish_reason,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     invalid_type_message,
@@ -645,6 +646,22 @@ def tools_without_unsupported_tool_search(
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
+def mapped_max_output_tokens(cost_map_key: str) -> int | None:
+    row: Final = object_mapping(litellm.model_cost.get(cost_map_key)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
+    match row.get("max_output_tokens"):
+        case int() as max_tokens:
+            return max_tokens
+        case _:
+            return None
+
+
+def _own_max_output_tokens(model: str) -> int | None:
+    try:
+        return get_max_tokens(model)
+    except Exception:
+        return None
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -691,7 +708,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
+    def get_config(
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
+    ):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
@@ -699,26 +722,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             config["max_tokens"] = (
                 configured_max_output_tokens
                 if configured_max_output_tokens is not None
-                else cls.get_max_tokens_for_model(model)
+                else cls.get_max_tokens_for_model(model, custom_llm_provider)
             )
 
         return config
 
     @staticmethod
-    def get_max_tokens_for_model(model: str | None = None) -> int:
+    def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model.
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
+        Get the max output tokens for a given model from its own cost-map row, then from its
+        unversioned id's row (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the
+        serving host's row (e.g. vertex_ai/claude-3-5-haiku@20241022).
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if no row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-        try:
-            max_tokens: Final = get_max_tokens(model)
-            if max_tokens is None:
-                return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-            return max_tokens
-        except Exception:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        own_max_tokens: Final = _own_max_output_tokens(model)
+        if own_max_tokens is not None:
+            return own_max_tokens
+        unversioned_model, version_separator, _ = model.partition("@")
+        unversioned_max_tokens: Final = mapped_max_output_tokens(unversioned_model) if version_separator else None
+        if unversioned_max_tokens is not None:
+            return unversioned_max_tokens
+        host_max_tokens: Final = (
+            None if custom_llm_provider is None else mapped_max_output_tokens(f"{custom_llm_provider}/{model}")
+        )
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if host_max_tokens is None else host_max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -2681,7 +2710,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else None
         )
         config: Final[Mapping[str, object]] = MappingProxyType(
-            litellm.AnthropicConfig.get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            litellm.AnthropicConfig.get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=self._resolved_provider,
+            )
         )
         for k, v in config.items():
             if (
