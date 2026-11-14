@@ -6737,6 +6737,16 @@ def _is_not_resent_failure(error: BaseException) -> bool:
     return isinstance(error, Exception) and not is_resent_failure(error)
 
 
+class _RetryCallState(Protocol):
+    kwargs: Mapping[str, object]
+
+
+def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
+    logging_obj: Final = retry_state.kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.carry_failed_attempt_usage()
+
+
 class _RetryOutcome(Protocol):
     def exception(self) -> BaseException | None: ...
 
@@ -6844,6 +6854,7 @@ def _run_completion_retries(
             plan.num_retries, retry_strategy, first_attempt_is_a_retry=plan.initial_exception is not None
         ),
         stop=tenacity.stop_after_attempt(plan.num_retries),
+        before=_carry_failed_attempt,
         retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
     )
@@ -6876,6 +6887,7 @@ async def _run_acompletion_retries(
             plan.num_retries, retry_strategy, first_attempt_is_a_retry=plan.initial_exception is not None
         ),
         stop=tenacity.stop_after_attempt(plan.num_retries),
+        before=_carry_failed_attempt,
         retry=tenacity.retry_if_exception(_build_retry_predicate(plan.retry_policy)),
         reraise=True,
     )
@@ -6987,12 +6999,14 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
@@ -7019,12 +7033,14 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries),
+            before=_carry_failed_attempt,
             retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )

@@ -160,7 +160,10 @@ from litellm.integrations.custom_guardrail import (
     merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
+from litellm.integrations.custom_logger_v2.call import CallFacts
+from litellm.integrations.custom_logger_v2.dispatcher import HookResult
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
+from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import (
     PROXY_REQUEST_KEYS,
     Admit,
@@ -175,6 +178,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import (
     MERGEABLE_FIELDS,
+    Abort,
     InvalidPatchError,
     MergeField,
     Patch,
@@ -315,6 +319,14 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+from litellm.proxy.v2_proxy_fields import (
+    DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+    DERIVED_POST_CALL_SUCCESS_FIELDS,
+    DERIVED_RESPONSE_HEADERS_FIELDS,
+    PRE_CALL_SOURCES,
+    post_call_facts,
+    proxy_call_facts,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -2136,13 +2148,46 @@ def hook_fields(kwargs: object, run: HookRun[_T], slot: Field) -> HookRunFields[
     return HookRunFields(KwargsFields(kwargs, PROXY_REQUEST_KEYS), run, slot)
 
 
+def v2_abort_error(abort: Abort) -> Exception:
+    return abort.exception or HTTPException(
+        status_code=abort.status,
+        detail={"error": abort.message},
+        headers=dict(abort.headers or {}),
+    )
+
+
+def raise_v2_abort(result: HookResult) -> HookResult:
+    if isinstance(result.outcome, Abort):
+        raise v2_abort_error(result.outcome)
+    return result
+
+
+def _keep_v2_abort(run: HookRun[Exception], abort: Abort) -> None:
+    error: Final = v2_abort_error(abort)
+    if isinstance(error, HTTPException):
+        run.keep_first(error)
+        return
+    verbose_proxy_logger.error(
+        "[Non-Blocking] Error in async_post_call_failure_hook callback: %s", error, exc_info=error
+    )
+
+
 async def run_hook_subscribers(
     subscribers: HookSubscribers,
     fields: Mapping[Field, object],
     binding: Callable[[object, object], Awaitable[None] | None],
+    on_abort: Callable[[Abort], None] | None = None,
+    call: Callable[[], CallFacts] | None = None,
 ) -> None:
-    if subscribers.entries:
-        _ = kwargs_after(await run_subscribers(subscribers, fields, binding))
+    if not subscribers.entries:
+        return
+    result: Final = await run_subscribers(
+        subscribers, fields, binding, call=None if call is None or not subscribers.has_v2 else call()
+    )
+    if on_abort is not None and isinstance(result.outcome, Abort):
+        on_abort(result.outcome)
+        return
+    _ = kwargs_after(raise_v2_abort(result))
 
 
 class ProxyLogging:
@@ -2402,7 +2447,7 @@ class ProxyLogging:
         # global lists. The manager dedupes, so this is idempotent with
         # ``function_setup``.
         for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
+            if isinstance(callback, CustomLogger | CustomLoggerV2):
                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
@@ -3533,16 +3578,26 @@ class ProxyLogging:
             subscribers: Final = hook_subscribers(
                 Hook.pre_call, caps.hook_callbacks, include_v2=not run.guardrails_only
             )
+            request_fields: Final = KwargsFields(run.latest, PROXY_REQUEST_KEYS)
             try:
                 result: Final = await run_subscribers(
                     subscribers,
-                    KwargsFields(run.latest, PROXY_REQUEST_KEYS),
+                    with_sources(
+                        request_fields,
+                        PRE_CALL_SOURCES,
+                        HookArgs(auth=run.user_api_key_dict, request=run.latest, call_type=run.call_type),
+                    )
+                    if subscribers.has_v2
+                    else request_fields,
                     partial(self._pre_call_start, run),
                     between=partial(self._pre_call_deferred_reroute, run),
+                    call=proxy_call_facts(run.latest, run.call_type, run.user_api_key_dict, run.endpoint_type.value)
+                    if subscribers.has_v2
+                    else None,
                 )
             finally:
                 run.settle_parallel()
-            run.latest = _request_dict(kwargs_after(result))
+            run.latest = _request_dict(kwargs_after(raise_v2_abort(result)))
             run.raise_parallel_flow_change()
 
             if run.latest is not None:
@@ -3969,7 +4024,9 @@ class ProxyLogging:
         def start(callback: object, request: object) -> Awaitable[object] | None:
             return self._start_during_call(callback, request, user_api_key_dict, call_type, guardrails_only)
 
-        _ = kwargs_after(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        _ = kwargs_after(
+            raise_v2_abort(await run_subscribers(subscribers, KwargsFields(data, PROXY_REQUEST_KEYS), start))
+        )
         return data
 
     def _start_during_call(
@@ -4329,8 +4386,14 @@ class ProxyLogging:
             return run.transformed
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_failure, callbacks, admit=Admit.every_entry),
-            hook_fields(request_data, run, Field.error),
+            with_sources(
+                hook_fields(request_data, run, Field.error),
+                DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+                HookArgs(auth=user_api_key_dict, request=request_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+            ),
             partial(self._post_call_failure_one, run, request_data, user_api_key_dict, redacted_traceback_str),
+            on_abort=partial(_keep_v2_abort, run),
+            call=partial(post_call_facts, request_data, user_api_key_dict, logging_obj),
         )
         return run.transformed
 
@@ -4624,17 +4687,24 @@ class ProxyLogging:
         if not any(isinstance(callback, CustomLoggerV2) for callback in other_callbacks):
             await self._post_call_without_v2(run, guardrails, guardrail_callbacks, other_callbacks)
             return run.response
-        fields: Final = hook_fields(data, run, Field.response)
+        fields: Final = with_sources(
+            hook_fields(data, run, Field.response),
+            DERIVED_POST_CALL_SUCCESS_FIELDS,
+            HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+        )
+        facts: Final = partial(post_call_facts, data, user_api_key_dict)
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_success, guardrail_callbacks),
             fields,
             partial(self._post_call_guardrail_start, run, guardrails),
+            call=facts,
         )
         run.raise_flow_change()
         await run_hook_subscribers(
             hook_subscribers(Hook.post_call_success, other_callbacks),
             fields,
             partial(self._post_call_logger, run, data, user_api_key_dict),
+            call=facts,
         )
         return run.response
 
@@ -4854,7 +4924,11 @@ class ProxyLogging:
             litellm_call_info: Final = self._build_litellm_call_info(data=data, response=response)
             await run_hook_subscribers(
                 hook_subscribers(Hook.response_headers, litellm.callbacks, admit=Admit.every_entry),
-                hook_fields(data, HookRun(response=merged_headers), Field.response_headers),
+                with_sources(
+                    hook_fields(data, HookRun(response=merged_headers), Field.response_headers),
+                    DERIVED_RESPONSE_HEADERS_FIELDS,
+                    HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+                ),
                 partial(
                     self._response_headers_one,
                     merged_headers,
@@ -4864,6 +4938,7 @@ class ProxyLogging:
                     request_headers,
                     litellm_call_info,
                 ),
+                call=partial(post_call_facts, data, user_api_key_dict),
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error in post_call_response_headers_hook: %s", str(e))
