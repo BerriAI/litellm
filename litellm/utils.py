@@ -4648,7 +4648,7 @@ def pre_process_non_default_params(
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
     provider_config: BaseConfig | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Pre-process non-default params to a standardized format
     """
@@ -4719,9 +4719,9 @@ _TOOL_LIST: Final = TypeAdapter(list[object])
 
 def pre_process_optional_params(
     passed_params: dict, non_default_params: dict, custom_llm_provider: str, model: str, drop_params: bool | None
-) -> dict:
+) -> dict[str, object]:
     """For .completion(), preprocess optional params"""
-    optional_params: dict = {}
+    optional_params: dict[str, object] = {}
 
     common_auth_dict: Final = litellm.common_cloud_provider_auth_params
     if custom_llm_provider in common_auth_dict["providers"]:

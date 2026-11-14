@@ -3,13 +3,18 @@ Tests for Vertex AI rerank transformation functionality.
 Based on the test patterns from other rerank providers and the current Vertex AI implementation.
 """
 
+import base64
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import responses
+import respx
 
+import litellm
 from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from litellm.types.rerank import RerankResponse
 
@@ -646,3 +651,54 @@ class TestVertexAIRerankTransform:
         second_call = mock_ensure_access_token.call_args_list[1]
         assert first_call.kwargs["credentials"] == "path/to/credentials.json"
         assert second_call.kwargs["credentials"] == "path/to/credentials.json"
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def _rank_request_headers(credential: str) -> httpx.Headers:
+    with (
+        patch("litellm.disable_aiohttp_transport", True),
+        responses.RequestsMock(assert_all_requests_are_fired=False) as token_http,
+        respx.mock as rank_http,
+    ):
+        token_http.post(
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "rank-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        rank_http.post(url__regex=r"https://discoveryengine\.googleapis\.com/.*:rank").respond(
+            200, json={"records": [{"id": "0", "score": 0.9}]}
+        )
+        litellm.rerank(
+            model="vertex_ai/semantic-ranker-default@latest",
+            query="billing labels",
+            documents=["labels show cost per team"],
+            vertex_credentials=credential,
+            vertex_project="rank-project",
+            metadata={"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"},
+            headers={"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"},
+            caching=False,
+            num_retries=0,
+        )
+        return rank_http.calls.last.request.headers
+
+
+def test_rerank_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential: Final = json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": "rank-principal",
+            "client_secret": "synthetic-client-secret",
+            "refresh_token": "synthetic-refresh-rank-principal",
+        }
+    )
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _rank_request_headers(credential)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", ("user_api_key_alias", "user_api_key_team_alias"))
+    setting_on: Final = _rank_request_headers(credential)
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"
