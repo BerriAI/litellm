@@ -1026,7 +1026,7 @@ class OpenAIError(openai.OpenAIError):
 class UnsupportedParamsError(BadRequestError):
     def __init__(
         self,
-        message,
+        message: str,
         llm_provider: str | None = None,
         model: str | None = None,
         status_code: int = 400,
@@ -1045,6 +1045,7 @@ class UnsupportedParamsError(BadRequestError):
             num_retries=num_retries,
         )
         self.message = f"litellm.UnsupportedParamsError: {message}"
+        self.args = (self.message,)
 
 
 LITELLM_EXCEPTION_TYPES: Final = [

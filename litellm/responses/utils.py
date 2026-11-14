@@ -9,6 +9,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -225,7 +226,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=[*supported_params, *(allowed_openai_params or ())],
+            supported_params=[*supported_params, *allowed_openai_param_names(allowed_openai_params)],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -252,7 +253,7 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=list(allowed_openai_params or ()),
+            allowed_openai_params=allowed_openai_params,
         )
 
     @staticmethod

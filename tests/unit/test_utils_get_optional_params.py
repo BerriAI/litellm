@@ -127,6 +127,18 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["reasoning_effort"] == reasoning_effort
 
 
+def test_get_optional_params_reads_a_bare_string_allowlist_as_one_param_name(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params="user",
+        user="end-user-1",
+    )
+
+    assert optional_params["user"] == "end-user-1"
+
+
 def test_allowed_openai_params_does_not_forward_unset_params():
     """
     Regression test for https://github.com/BerriAI/litellm/issues/25697
@@ -1903,6 +1915,7 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
         )
 
     assert rejection.value.response.status_code == rejection.value.status_code == 400
+    assert rejection.value.args == (rejection.value.message,)
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -55,15 +55,17 @@ class TestResponsesAPIRequestUtils:
 
         assert result == {"temperature": 0.7, "custom_flag": "on"}
 
-    def test_get_optional_params_responses_api_treats_a_bare_string_allowlist_like_chat_completions(self):
+    def test_get_optional_params_responses_api_reads_a_bare_string_allowlist_as_one_param_name(self):
         result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model="gpt-4o",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
-            response_api_optional_params=ResponsesAPIOptionalRequestParams({"temperature": 0.7}),
-            allowed_openai_params="temperature",
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params="custom_flag",
         )
 
-        assert result == {"temperature": 0.7}
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
 
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""

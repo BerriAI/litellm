@@ -67,6 +67,19 @@ def as_object_list(value: object) -> Sequence[object] | None:
         return None
 
 
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
