@@ -70,8 +70,16 @@ async def test_token_counting_routes_are_exempt_from_budget_reservation(route):
 
 
 @pytest.mark.asyncio
+async def test_non_exempt_llm_route_still_reserves_budget():
+    reservation: Final = await _reserve("/v1/responses")
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] > 0
+
+
+@pytest.mark.asyncio
 async def test_reservation_carries_the_admission_input_token_count():
-    reservation: Final = await _reserve("/v1/chat/completions")
+    reservation: Final = await _reserve("/v1/responses")
     expected: Final = litellm.token_counter(model="gpt-4o", text="hello")
 
     assert reservation is not None
@@ -137,7 +145,7 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
 
 @pytest.mark.asyncio
 async def test_reservation_starts_unbound_to_any_callback():
-    reservation: Final = await _reserve("/v1/chat/completions")
+    reservation: Final = await _reserve("/v1/responses")
 
     assert reservation is not None
     assert reservation["callback_bound"] is False
@@ -199,7 +207,7 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 
     reservation: Final = await reserve_budget_for_request(
         request_body={"model": "gpt-4o", "input": "hello"},
-        route="/v1/chat/completions",
+        route="/v1/responses",
         llm_router=None,
         valid_token=UserAPIKeyAuth(token="hashed-org-project", org_id="org-budgeted", project_id="project-budgeted"),
         team_object=None,

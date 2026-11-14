@@ -169,6 +169,8 @@ _NATIVE_CALL_TYPES: Final = frozenset(
         CallTypes.embedding,
         CallTypes.anthropic_messages,
         CallTypes.aanthropic_messages,
+        CallTypes.responses,
+        CallTypes.aresponses,
     }
 )
 

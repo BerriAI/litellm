@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.websockets import WebSocket
 
 import litellm
 from litellm.caching import DualCache
@@ -18,7 +19,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object, cache_team_object
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket_for_model
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints
@@ -193,6 +194,50 @@ async def test_an_over_budget_key_is_refused_by_auth_like_python(proxy: Proxy) -
 
     assert refusals[0][0] == "budget_exceeded"
     assert refusals[1] == refusals[0]
+
+
+async def _websocket_session_held(proxy: Proxy, native: bool) -> tuple[object, Mapping[str, float]]:
+    _use_native(proxy, native)
+    await cache_key_object(
+        hashed_token=TOKEN,
+        user_api_key_obj=UserAPIKeyAuth(token=TOKEN, max_budget=1.0, spend=0.0),
+        user_api_key_cache=proxy.cache,
+        proxy_logging_obj=None,
+    )
+
+    async def receive() -> Mapping[str, object]:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Mapping[str, object]) -> None:
+        return None
+
+    websocket: Final = WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"authorization", f"Bearer {API_KEY}".encode())],
+            "client": ("127.0.0.1", 1),
+            "server": ("proxy", 4000),
+            "scheme": "ws",
+        },
+        receive,
+        send,
+    )
+    auth: Final = await user_api_key_auth_websocket_for_model(websocket, "gpt-4o")
+    reservation: Final = auth.budget_reservation
+    entries: Final = None if reservation is None else reservation.get("entries")
+    return entries, dict(proxy.store.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_session_holds_its_admission_at_connect_like_python(proxy: Proxy) -> None:
+    python: Final = await _websocket_session_held(proxy, native=False)
+    native: Final = await _websocket_session_held(proxy, native=True)
+
+    assert python[1][KEY_COUNTER] > 0.0, "the flag-off run must hold the admission at connect"
+    assert native == python
 
 
 RACERS: Final = 24
@@ -529,6 +574,7 @@ REFUSED_ROUTES: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
     "chat_completions": ("/v1/chat/completions", BODY),
     "anthropic_pass_through": (PASS_THROUGH, MESSAGES_BODY),
     "messages": ("/v1/messages", MESSAGES_BODY),
+    "responses": ("/v1/responses", {"model": "gpt-4o", "input": "hello", "max_output_tokens": 100}),
     "text_completions": ("/v1/completions", {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "max_tokens": 10}),
 }
 

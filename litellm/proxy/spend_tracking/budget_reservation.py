@@ -344,6 +344,7 @@ async def reserve_budget_for_request(
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
+    pre_call_admits: bool = True,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -388,7 +389,7 @@ async def reserve_budget_for_request(
     # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
-    if native_owner_reserves() and native_budget_route(route):
+    if pre_call_admits and native_owner_reserves() and native_budget_route(route):
         return await _native_budget_plan(
             request_body=request_body,
             route=route,
