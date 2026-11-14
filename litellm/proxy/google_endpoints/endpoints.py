@@ -1,10 +1,11 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.types import DecoratedCallable
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
@@ -26,6 +27,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.types.interactions import CancelInteractionResult, DeleteInteractionResult, InteractionsAPIResponse
 from litellm.types.llms.vertex_ai import GenerateContentResponseBody, TokenCountDetailsResponse
 
 
@@ -468,18 +470,29 @@ async def _google_count_tokens(
 # ============================================================
 
 
-@router.post(
-    "/v1beta/interactions",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
-@router.post(
-    "/interactions",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
+_INTERACTIONS_COLLECTIONS: Final = ("/interactions", "/v1/interactions", "/v1beta/interactions")
+
+
+def _interactions_route(
+    method: str, suffix: str, response: type[BaseModel]
+) -> Callable[[DecoratedCallable], DecoratedCallable]:
+    def register(endpoint: DecoratedCallable) -> DecoratedCallable:
+        for collection in _INTERACTIONS_COLLECTIONS:
+            router.add_api_route(
+                f"{collection}{suffix}",
+                endpoint,
+                methods=[method],
+                dependencies=[Depends(user_api_key_auth)],
+                response_class=ORJSONResponse,
+                responses={200: {"model": response}},
+                tags=["interactions"],
+            )
+        return endpoint
+
+    return register
+
+
+@_interactions_route("POST", "", InteractionsAPIResponse)
 async def create_interaction(
     request: Request,
     fastapi_response: Response,
@@ -558,18 +571,7 @@ def _interaction_model_group(request: Request) -> str | None:
     return request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
 
 
-@router.get(
-    "/v1beta/interactions/{interaction_id}",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
-@router.get(
-    "/interactions/{interaction_id}",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
+@_interactions_route("GET", "/{interaction_id}", InteractionsAPIResponse)
 async def get_interaction(
     request: Request,
     interaction_id: str,
@@ -627,18 +629,7 @@ async def get_interaction(
         )
 
 
-@router.delete(
-    "/v1beta/interactions/{interaction_id}",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
-@router.delete(
-    "/interactions/{interaction_id}",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
+@_interactions_route("DELETE", "/{interaction_id}", DeleteInteractionResult)
 async def delete_interaction(
     request: Request,
     interaction_id: str,
@@ -696,18 +687,7 @@ async def delete_interaction(
         )
 
 
-@router.post(
-    "/v1beta/interactions/{interaction_id}/cancel",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
-@router.post(
-    "/interactions/{interaction_id}/cancel",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["interactions"],
-)
+@_interactions_route("POST", "/{interaction_id}/cancel", CancelInteractionResult)
 async def cancel_interaction(
     request: Request,
     interaction_id: str,

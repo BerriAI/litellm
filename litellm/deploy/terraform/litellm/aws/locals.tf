@@ -87,7 +87,7 @@ locals {
     "/v1/memory/*",
     "/queue/chat/*",
     "/v1beta/*",
-    "/interactions/*",
+    "/interactions", "/interactions/*", "/v1/interactions", "/v1/interactions/*",
     "/anthropic/*", "/azure/*", "/azure_ai/*", "/azure_speech/*", "/aws/*", "/bedrock/*", "/comprehendmedical*", "/transcribe*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",

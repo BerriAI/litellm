@@ -570,10 +570,13 @@ class LiteLLMRoutes(enum.Enum):
         # Google Interactions API
         "/interactions",
         "/v1beta/interactions",
+        "/v1/interactions",
         "/interactions/{interaction_id}",
         "/v1beta/interactions/{interaction_id}",
+        "/v1/interactions/{interaction_id}",
         "/interactions/{interaction_id}/cancel",
         "/v1beta/interactions/{interaction_id}/cancel",
+        "/v1/interactions/{interaction_id}/cancel",
         # Google Managed Agents API
         "/v1beta/agents",
         "/v1beta/agents/{name}",

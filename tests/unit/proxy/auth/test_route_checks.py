@@ -1140,6 +1140,9 @@ def test_virtual_key_openai_models_grant_does_not_reach_gemini_v1_inference(allo
         ("/v1/*", "/v1/models/gemini-text:streamGenerateContent"),
         ("/v1", "/v1/models/gemini-text:countTokens"),
         ("google_routes", "/v1/models/gemini-text:generateContent"),
+        ("google_routes", "/v1/interactions"),
+        ("google_routes", "/v1/interactions/abc123"),
+        ("llm_api_routes", "/v1/interactions/abc123/cancel"),
     ],
 )
 def test_virtual_key_grant_that_names_the_route_reaches_gemini_v1_routes(allowed_route: str, route: str) -> None:

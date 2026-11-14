@@ -6,6 +6,7 @@ import pytest
 
 from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from litellm.proxy._types import LiteLLMRoutes
 
 _INGRESS_TEMPLATE: Final = (
     Path(__file__).parents[4] / "litellm" / "deploy" / "helm" / "litellm" / "templates" / "ingress.yaml"
@@ -43,6 +44,10 @@ _GATEWAY_ONLY_PREFIXES: Final = sorted(
     - _PREFIXES_AN_INGRESS_CANNOT_ROUTE
 )
 _GATEWAY_ONLY_EXACT_PATHS: Final = sorted(GATEWAY_EXACT_PATHS - BACKEND_EXACT_PATHS)
+
+
+def _gateway_keeps(path: str) -> bool:
+    return path in GATEWAY_EXACT_PATHS or any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)
 
 
 def _routed_to_gateway_by_chart_prefix(path: str) -> bool:
@@ -92,3 +97,8 @@ def test_gateway_prefix_groups_list_each_prefix_once() -> None:
 @pytest.mark.parametrize("group", _CHART_PREFIX_GROUPS, ids=lambda group: " ".join(group))
 def test_each_gateway_prefix_group_lists_its_shorter_prefix_first(group: tuple[str, ...]) -> None:
     assert len(group[0]) <= len(group[-1]), f"{group} would order its ALB rule by the longer prefix"
+
+
+@pytest.mark.parametrize("route", LiteLLMRoutes.google_routes.value)
+def test_gateway_keeps_every_google_genai_route(route: str) -> None:
+    assert _gateway_keeps(route)

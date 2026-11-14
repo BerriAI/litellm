@@ -97,6 +97,7 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/v1/messages", (BillableCategory.LLM, "/v1/messages")),
         ("/interactions", (BillableCategory.LLM, "/interactions")),
         ("/v1beta/interactions", (BillableCategory.LLM, "/v1beta/interactions")),
+        ("/v1/interactions", (BillableCategory.LLM, "/v1/interactions")),
         ("/v1/videos", (BillableCategory.LLM, "/videos")),
         ("/v1/videos/video_123/remix", (BillableCategory.LLM, "/remix")),
         ("/v1/ocr", (BillableCategory.LLM, "/ocr")),
@@ -163,6 +164,8 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1beta/interactions/int_123",
         "/interactions/int_123/cancel",
         "/v1beta/interactions/int_123/cancel",
+        "/v1/interactions/int_123",
+        "/v1/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
         "/opensearch/docs/_doc",

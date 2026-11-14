@@ -86,6 +86,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Google data plane (v1beta is the Google AI Studio version)
     "/v1beta/",
     "/interactions",
+    "/v1/interactions",
     # Provider passthrough
     "/anthropic/",
     "/azure/",

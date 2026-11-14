@@ -21992,6 +21992,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/interactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Interaction
+         * @description Create a new interaction using Google's Interactions API.
+         *
+         *     Per OpenAPI spec: POST /{api_version}/interactions
+         *
+         *     Supports both model interactions and agent interactions:
+         *     - Model: Provide `model` parameter (e.g., "gemini-2.5-flash")
+         *     - Agent: Provide `agent` parameter (e.g., "deep-research-pro-preview-12-2025")
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
+         *             "model": "gemini/gemini-2.5-flash",
+         *             "input": "Hello, how are you?"
+         *         }'
+         *     ```
+         */
+        post: operations["create_interaction_v1_interactions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/interactions/{interaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Interaction
+         * @description Get an interaction by ID.
+         *
+         *     Per OpenAPI spec: GET /{api_version}/interactions/{interaction_id}
+         */
+        get: operations["get_interaction_v1_interactions__interaction_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Interaction
+         * @description Delete an interaction by ID.
+         *
+         *     Per OpenAPI spec: DELETE /{api_version}/interactions/{interaction_id}
+         */
+        delete: operations["delete_interaction_v1_interactions__interaction_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/interactions/{interaction_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Interaction
+         * @description Cancel an interaction by ID.
+         *
+         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
+         */
+        post: operations["cancel_interaction_v1_interactions__interaction_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/live/sessions": {
         parameters: {
             query?: never;
@@ -30719,6 +30803,18 @@ export interface components {
             status: "cancelled";
         };
         /**
+         * CancelInteractionResult
+         * @description Result of cancelling an interaction.
+         */
+        CancelInteractionResult: {
+            /** Id */
+            id?: string | null;
+            /** Status */
+            status?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * CancelRunResponse
          * @description Response from cancelling a run
          */
@@ -34173,6 +34269,21 @@ export interface components {
              */
             object: string;
         };
+        /**
+         * DeleteInteractionResult
+         * @description Result of deleting an interaction.
+         */
+        DeleteInteractionResult: {
+            /** Id */
+            id?: string | null;
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** DeleteJWTKeyMappingRequest */
         DeleteJWTKeyMappingRequest: {
             /** Id */
@@ -36414,6 +36525,52 @@ export interface components {
             text_tokens?: number | null;
             /** Video Tokens */
             video_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InteractionsAPIResponse
+         * @description Response from the Interactions API.
+         *
+         *     Wraps the API response with LiteLLM-specific hidden params.
+         *
+         *     Schema notes:
+         *     - New schema (Api-Revision: 2026-05-20, default): response contains ``steps``.
+         *     - Legacy schema (Api-Revision: 2026-05-07, removed June 8 2026): response contains ``outputs``.
+         *     Both fields are kept here so callers work with either schema.
+         */
+        InteractionsAPIResponse: {
+            /** Agent */
+            agent?: string | null;
+            /** Continuation Token */
+            continuation_token?: string | null;
+            /** Created */
+            created?: string | null;
+            /** Id */
+            id?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Object
+             * @default interaction
+             */
+            object: string | null;
+            /** Outputs */
+            outputs?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Status */
+            status?: string | null;
+            /** Steps */
+            steps?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Updated */
+            updated?: string | null;
+            /** Usage */
+            usage?: {
+                [key: string]: unknown;
+            } | null;
         } & {
             [key: string]: unknown;
         };
@@ -67461,7 +67618,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
                 };
             };
         };
@@ -67483,7 +67640,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
                 };
             };
             /** @description Validation Error */
@@ -67514,7 +67671,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteInteractionResult"];
                 };
             };
             /** @description Validation Error */
@@ -67545,7 +67702,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CancelInteractionResult"];
                 };
             };
             /** @description Validation Error */
@@ -87102,6 +87259,119 @@ export interface operations {
             };
         };
     };
+    create_interaction_v1_interactions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
+                };
+            };
+        };
+    };
+    get_interaction_v1_interactions__interaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_interaction_v1_interactions__interaction_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteInteractionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_interaction_v1_interactions__interaction_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelInteractionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     websocket_live_sessions_websocket_endpoint_get_2: {
         parameters: {
             query?: never;
@@ -91897,7 +92167,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
                 };
             };
         };
@@ -91919,7 +92189,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InteractionsAPIResponse"];
                 };
             };
             /** @description Validation Error */
@@ -91950,7 +92220,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteInteractionResult"];
                 };
             };
             /** @description Validation Error */
@@ -91981,7 +92251,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CancelInteractionResult"];
                 };
             };
             /** @description Validation Error */

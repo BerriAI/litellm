@@ -3,6 +3,7 @@ Test for google_endpoints/endpoints.py
 """
 
 import asyncio
+import itertools
 import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -227,10 +228,12 @@ _VERTEX_COLLECTION_URL: Final = (
 _VERTEX_INTERACTION_URL: Final = f"{_VERTEX_COLLECTION_URL}/{_INTERACTION_ID}"
 _GEMINI_INTERACTION_URL: Final = f"https://generativelanguage.googleapis.com/v1beta/interactions/{_INTERACTION_ID}"
 _INTERACTION: Final = {"id": _INTERACTION_ID, "object": "interaction", "status": "cancelled"}
-_BY_ID_CALLS: Final = (
-    ("GET", f"/v1beta/interactions/{_INTERACTION_ID}", ""),
-    ("DELETE", f"/v1beta/interactions/{_INTERACTION_ID}", ""),
-    ("POST", f"/v1beta/interactions/{_INTERACTION_ID}/cancel", "/cancel"),
+_INTERACTIONS_COLLECTIONS: Final = ("/v1beta/interactions", "/v1/interactions")
+_BY_ID_CALLS: Final = tuple(
+    (method, f"{collection}/{_INTERACTION_ID}{suffix}", suffix)
+    for collection, (method, suffix) in itertools.product(
+        _INTERACTIONS_COLLECTIONS, (("GET", ""), ("DELETE", ""), ("POST", "/cancel"))
+    )
 )
 _BY_ID_ROUTES: Final = tuple((method, path) for method, path, _ in _BY_ID_CALLS)
 
@@ -472,14 +475,13 @@ def _completed_deep_research(respx_mock: respx.MockRouter) -> respx.Route:
     )
 
 
+@pytest.mark.parametrize("collection", _INTERACTIONS_COLLECTIONS)
 def test_routed_create_with_an_agent_sends_the_agent_with_the_deployment_credentials_and_bills_the_agent(
-    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter, collection: str
 ) -> None:
     upstream: Final = _completed_deep_research(respx_mock)
 
-    response: Final = interactions_proxy.post(
-        "/v1beta/interactions", json=_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP)
-    )
+    response: Final = interactions_proxy.post(collection, json=_deep_research_create(_VERTEX_DEEP_RESEARCH_GROUP))
 
     assert response.status_code == 200, response.text
     assert json.loads(upstream.calls.last.request.content) == {
@@ -600,6 +602,7 @@ def test_a_key_allowed_the_agent_deployment_runs_the_agent(
         ),
     ),
 )
+@pytest.mark.parametrize("collection", _INTERACTIONS_COLLECTIONS)
 def test_a_restricted_key_cannot_run_an_agent_it_was_not_given_the_deployment_for(
     interactions_proxy: TestClient,
     respx_mock: respx.MockRouter,
@@ -608,10 +611,11 @@ def test_a_restricted_key_cannot_run_an_agent_it_was_not_given_the_deployment_fo
     teams: tuple[LiteLLM_TeamTableCachedObj, ...],
     model_group: str,
     status_code: int,
+    collection: str,
 ) -> None:
     with _cached_key(key, *teams) as authorization:
         response: Final = interactions_proxy.post(
-            "/v1beta/interactions", json=_deep_research_create(model_group), headers={"authorization": authorization}
+            collection, json=_deep_research_create(model_group), headers={"authorization": authorization}
         )
 
     assert response.status_code == status_code, response.text
@@ -619,14 +623,15 @@ def test_a_restricted_key_cannot_run_an_agent_it_was_not_given_the_deployment_fo
     assert not google_oauth.calls
 
 
+@pytest.mark.parametrize("collection", _INTERACTIONS_COLLECTIONS)
 def test_routed_create_without_an_agent_still_sends_the_deployment_model(
-    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter, collection: str
 ) -> None:
     upstream: Final = respx_mock.post(_VERTEX_COLLECTION_URL).mock(
         return_value=httpx.Response(200, json={"id": _INTERACTION_ID, "object": "interaction", "status": "completed"})
     )
 
-    response: Final = interactions_proxy.post("/v1beta/interactions", json={"model": _VERTEX_GROUP, "input": "Hi"})
+    response: Final = interactions_proxy.post(collection, json={"model": _VERTEX_GROUP, "input": "Hi"})
 
     assert response.status_code == 200, response.text
     assert json.loads(upstream.calls.last.request.content) == {"model": "gemini-4-argon", "input": "Hi"}
